@@ -1,14 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSessionState } from "./agent-session.js";
 import {
   closePiMcp,
   isOrkestratorMcpTool,
+  mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
   piMcpExtension,
   preparePiMcp,
+  publicPiMcpConfig,
   publicPiMcpServers,
   setPiMcpTimeoutsForTests,
   setPiMcpTransportForTests,
@@ -216,8 +219,13 @@ describe("Pi MCP client", () => {
       resolveLate = resolve;
     });
     let closed = 0;
+    let connecting!: () => void;
+    const connectStarted = new Promise<void>((resolve) => {
+      connecting = resolve;
+    });
     setPiMcpTransportForTests({
       async connect() {
+        connecting();
         await late;
         return connectionFor([{ name: "slow" }], {
           async close() {
@@ -230,6 +238,9 @@ describe("Pi MCP client", () => {
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     const preparing = preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+    // Detach once the connect is genuinely in flight. A detach that lands
+    // before the connect starts never starts it at all (mcp-lifecycle.test.ts).
+    await connectStarted;
 
     await closePiMcp(state);
     resolveLate!();
@@ -253,6 +264,82 @@ describe("Pi MCP client", () => {
 
     await closePiMcp(state);
     expect(mcpConnectionNeedsRefresh(state)).toBe(false);
+  });
+
+  test("reports a saved configuration change, ignoring excluded project files", async () => {
+    setPiMcpTransportForTests(fakeTransport());
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-key-"));
+    const state = newSessionState();
+    await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+    expect(await mcpConfigNeedsRefresh(state)).toBe(false);
+
+    // Project resources are off for this session, so its project file is not read.
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(
+      join(root, ".pi", "mcp.json"),
+      JSON.stringify({ mcpServers: { p: { command: "x" } } }),
+    );
+    expect(await mcpConfigNeedsRefresh(state)).toBe(false);
+
+    await writeFile(
+      join(root, "mcp.json"),
+      JSON.stringify({ mcpServers: { added: { url: "https://a.example/mcp" } } }),
+    );
+    expect(await mcpConfigNeedsRefresh(state)).toBe(true);
+
+    await closePiMcp(state);
+    expect(await mcpConfigNeedsRefresh(state)).toBe(false);
+  });
+
+  test("exposes the digests of the files the attached generation was built from", async () => {
+    setPiMcpTransportForTests(fakeTransport());
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-evidence-"));
+    const state = newSessionState();
+    await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    const before = Date.now();
+    await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+    // No attached generation yet: nothing has loaded, so there is no evidence.
+    expect(publicPiMcpConfig(state)).toBeUndefined();
+
+    state.session = {} as never;
+    const digest = `sha256:${createHash("sha256")
+      .update(await readFile(join(root, "mcp.json")))
+      .digest("base64url")}`;
+    const exposed = publicPiMcpConfig(state)!;
+    expect(exposed.sources).toEqual({ user: digest, project: "excluded" });
+    expect(exposed.fingerprint).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Date.parse(exposed.builtAt)).toBeGreaterThanOrEqual(before - 1);
+    // Content-free: no path and no server body.
+    expect(JSON.stringify(exposed)).not.toContain(root);
+    expect(JSON.stringify(exposed)).not.toContain("mcpServers");
+
+    // The evidence names the generation, not the file now: an edit changes
+    // nothing until the next rebuild.
+    await writeFile(
+      join(root, "mcp.json"),
+      JSON.stringify({ mcpServers: { a: { command: "x" } } }),
+    );
+    expect(publicPiMcpConfig(state)?.sources.user).toBe(digest);
+
+    await closePiMcp(state);
+    expect(publicPiMcpConfig(state)).toBeUndefined();
+  });
+
+  test("reports the project file when the session loads project resources", async () => {
+    setPiMcpTransportForTests(fakeTransport());
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-project-"));
+    const state = newSessionState();
+    state.policy = { projectResources: true } as never;
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+    state.session = {} as never;
+    expect(publicPiMcpConfig(state)?.sources).toEqual({
+      user: "absent",
+      project: expect.stringMatching(/^sha256:[A-Za-z0-9_-]{43}$/),
+    });
+    await closePiMcp(state);
   });
 
   test("caps the tools registered from one server", async () => {

@@ -1208,9 +1208,23 @@ describe("failure, dispatch, wait and pr blocks", () => {
           dispatchId: "dispatch-1",
           startedAt: now,
           idlePolls: 0,
+          progressAt: now,
+          lastProbeAt: now,
+          progressDigest: "a".repeat(64),
         }),
       ),
     ).toBe(true);
+    for (const invalid of [
+      { progressAt: "invalid" },
+      { lastProbeAt: "invalid" },
+      { progressDigest: "unbounded transcript" },
+    ]) {
+      expect(
+        isLoopedReviewWorkflow(
+          withWait({ dispatchId: "dispatch-1", startedAt: now, idlePolls: 0, ...invalid }),
+        ),
+      ).toBe(false);
+    }
     expect(
       isLoopedReviewWorkflow(
         withWait({

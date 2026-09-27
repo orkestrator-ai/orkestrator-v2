@@ -8,7 +8,13 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 
 export default defineConfig({
   testDir: import.meta.dirname,
-  testMatch: ["browser-gateway.spec.ts", "design-canvas.spec.ts"],
+  testMatch: [
+    "browser-gateway.spec.ts",
+    "design-canvas.spec.ts",
+    "native-draft-attachments.spec.ts",
+    "web-annotations-gateway.spec.ts",
+    "cli-ui.spec.ts",
+  ],
   fullyParallel: false,
   workers: 1,
   timeout: 120_000,

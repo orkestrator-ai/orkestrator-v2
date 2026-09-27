@@ -162,6 +162,22 @@ export class MultiReviewProgressTracker {
     };
   }
 
+  /**
+   * Epoch milliseconds at which the next probe of this session is allowed.
+   * `0` for a session never probed by this process, which is due immediately.
+   * Lets a caller skip transcript-dependent work — and a scheduler sleep —
+   * until the probe can actually run, instead of asking every tick.
+   */
+  nextProbeAt(sessionId: string): number {
+    const existing = this.entries.get(sessionId);
+    return existing ? existing.probedAt + this.probeIntervalMs : 0;
+  }
+
+  /** True when {@link observe} would read the transcript right now. */
+  isProbeDue(sessionId: string): boolean {
+    return this.now() >= this.nextProbeAt(sessionId);
+  }
+
   /** Drop a settled session so its fingerprint cannot outlive the workflow. */
   forget(sessionId: string): void {
     this.entries.delete(sessionId);

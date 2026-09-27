@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
+import { holdSdkPromptOpen } from "./session-manager-persistence.js";
 
 import {
   MAX_IMAGE_ATTACHMENT_BYTES,
@@ -55,6 +56,51 @@ describe("Claude startup failure diagnostics", () => {
     );
     expect(claudeStartupFailureMessage("bypass_root")).toContain("non-root user");
   });
+
+  test("surfaces a numbered startup failure without a prompt uuid", async () => {
+    const session = createSession("numbered-startup-failure");
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Start Claude");
+    const call = await nextQueryCall();
+    call.push({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result_index: 0,
+      startup_failure_reason: "cli_version_too_old",
+      errors: ["CLI version unsupported"],
+    });
+    call.finish();
+    const guidance = claudeStartupFailureMessage("cli_version_too_old");
+    await expect(prompt).rejects.toThrow(guidance);
+    expect(session.messages.some((message) => message.content === guidance)).toBe(true);
+  });
+});
+
+test("a held iterable consumes the prompt uuid slot on its first message", async () => {
+  const controller = new AbortController();
+  async function* input(): AsyncIterable<SDKUserMessage> {
+    yield {
+      type: "user",
+      uuid: "already-stamped",
+      parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "first" }] },
+    };
+    yield {
+      type: "user",
+      parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "second" }] },
+    };
+  }
+  const held = holdSdkPromptOpen(input(), controller.signal, "generated-prompt-id");
+  const iterator = held.prompt[Symbol.asyncIterator]();
+  try {
+    expect((await iterator.next()).value.uuid).toBe("already-stamped");
+    expect((await iterator.next()).value.uuid).toBeUndefined();
+  } finally {
+    held.close();
+    await iterator.return?.();
+  }
 });
 
 describe("sendPrompt", () => {
@@ -74,6 +120,8 @@ describe("sendPrompt", () => {
           content: [{ type: "text", text: "Inspect the implementation" }],
         },
         parent_tool_use_id: null,
+        // The client uuid every result answering this prompt echoes.
+        uuid: expect.any(String),
       },
     ]);
   });
@@ -116,9 +164,11 @@ describe("sendPrompt", () => {
     const originalCredentialFile = process.env[credentialFileEnv];
     const originalGitHubToken = process.env.GITHUB_TOKEN;
     const originalGhToken = process.env.GH_TOKEN;
+    const originalMcpToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
     process.env[credentialFileEnv] = credentialFile;
     process.env.GITHUB_TOKEN = "stale-bridge-token";
     process.env.GH_TOKEN = "stale-bridge-token";
+    process.env.GITHUB_PERSONAL_ACCESS_TOKEN = "stale-mcp-token";
 
     try {
       await writeFile(credentialFile, "managed-query-token");
@@ -127,9 +177,19 @@ describe("sendPrompt", () => {
       expect(call.options.env).toMatchObject({
         GITHUB_TOKEN: "managed-query-token",
         GH_TOKEN: "managed-query-token",
+        GITHUB_PERSONAL_ACCESS_TOKEN: "managed-query-token",
       });
       expect(process.env.GITHUB_TOKEN).toBe("stale-bridge-token");
       expect(process.env.GH_TOKEN).toBe("stale-bridge-token");
+      expect(process.env.GITHUB_PERSONAL_ACCESS_TOKEN).toBe("stale-mcp-token");
+
+      await writeFile(credentialFile, "");
+      const { call: clearedCall } = await runPromptWithMessages([
+        { type: "result", subtype: "success" },
+      ]);
+      expect(clearedCall.options.env?.GITHUB_TOKEN).toBeUndefined();
+      expect(clearedCall.options.env?.GH_TOKEN).toBeUndefined();
+      expect(clearedCall.options.env?.GITHUB_PERSONAL_ACCESS_TOKEN).toBeUndefined();
     } finally {
       if (originalCredentialFile === undefined) delete process.env[credentialFileEnv];
       else process.env[credentialFileEnv] = originalCredentialFile;
@@ -137,6 +197,8 @@ describe("sendPrompt", () => {
       else process.env.GITHUB_TOKEN = originalGitHubToken;
       if (originalGhToken === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = originalGhToken;
+      if (originalMcpToken === undefined) delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+      else process.env.GITHUB_PERSONAL_ACCESS_TOKEN = originalMcpToken;
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -2763,8 +2825,10 @@ describe("sendPrompt", () => {
     );
 
     const sdkMessages = (await readSdkPrompt(call)) as Array<{
+      uuid?: string;
       message: { content: Array<Record<string, unknown>> };
     }>;
+    expect(sdkMessages[0].uuid).toBeString();
     expect(sdkMessages[0].message.content).toEqual([expect.objectContaining({ type: "image" })]);
   });
 
@@ -3433,7 +3497,7 @@ describe("sendPrompt", () => {
 
     const promptPromise = sendPrompt(session.id, "hello");
     const call = await nextQueryCall();
-    call.push({ type: "system", subtype: "status" });
+    call.push({ type: "system", subtype: "notification", key: "k", text: "FYI", priority: "low" });
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
@@ -4543,7 +4607,7 @@ describe("sendPrompt", () => {
       process.env.CWD || process.cwd(),
       process.env,
       undefined,
-      false,
+      "user",
     );
     expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(process.env.CWD || process.cwd(), false);
     expect(call.options.settingSources).toEqual(["user"]);
@@ -4595,5 +4659,73 @@ describe("sendPrompt", () => {
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await prompt;
+  });
+});
+
+describe("selected commands and local command results", () => {
+  test("sends the provider text while the transcript keeps the typed prompt", async () => {
+    const typed = "/Review src/a.ts\n  second line\t";
+    const canonical = "/review src/a.ts\n  second line\t";
+    const { session, call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      { providerPrompt: canonical },
+      typed,
+    );
+    const sdkPrompt = (await readSdkPrompt(call)) as Array<{
+      message: { content: Array<{ type: string; text?: string }> };
+    }>;
+    expect(sdkPrompt[0]?.message.content).toEqual([{ type: "text", text: canonical }]);
+    expect(session.messages[0]).toMatchObject({ role: "user", content: typed });
+  });
+
+  test("a local command's output becomes a durable assistant row and settles the turn", async () => {
+    const { session } = await runPromptWithMessages(
+      [
+        {
+          type: "system",
+          subtype: "local_command_output",
+          content: "Total cost: $0.01",
+          uuid: "local-output-1",
+          session_id: "sdk-local",
+        },
+        { type: "result", subtype: "success", result: "Total cost: $0.01" },
+      ],
+      { requestId: "local-command-request" },
+      "/cost",
+    );
+    const replies = session.messages.filter((message) => message.role === "assistant");
+    expect(replies).toEqual([
+      expect.objectContaining({ id: "local-command:local-output-1", content: "Total cost: $0.01" }),
+    ]);
+    // Kept in the overlay that survives eviction and restart.
+    expect(session.localTranscript?.map((message) => message.id)).toContain(
+      "local-command:local-output-1",
+    );
+    expect(session.status).toBe("idle");
+    expect(getPromptDispatchState(session.id, "local-command-request")).toBe("already-processed");
+  });
+
+  test("a result-only local command is shown from the SDK's own result text", async () => {
+    const { session } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success", result: "Context: 12k of 200k tokens" }],
+      undefined,
+      "/context",
+    );
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "Context: 12k of 200k tokens",
+    });
+  });
+
+  test("an ordinary model reply is not duplicated from the result text", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "assistant-1",
+        message: { content: [{ type: "text", text: "Done." }] },
+      },
+      { type: "result", subtype: "success", result: "Done." },
+    ]);
+    expect(session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   });
 });

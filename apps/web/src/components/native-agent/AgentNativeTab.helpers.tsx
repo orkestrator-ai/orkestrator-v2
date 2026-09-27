@@ -512,7 +512,7 @@ export function UnassignedNativeAgentComposer({
     sessionKey,
     updateStoreDraft,
   ]);
-  useNativeComposeDraftPersistence(
+  const draftRestoreGeneration = useNativeComposeDraftPersistence(
     "agent-native",
     environmentId,
     sessionKey,
@@ -712,6 +712,12 @@ export function UnassignedNativeAgentComposer({
    * capabilities rather than trusting the persisted namespace: a bridge that
    * rejects the whole prompt would otherwise fail a send the composer had no
    * way to explain.
+   *
+   * It runs when the capabilities change and once more when persistence
+   * applies a restored draft. An undecided draft (no saved platform) is kept
+   * whole by restoration, so without the second trigger a file could sit in an
+   * image-only default composer until the provider happened to change. The
+   * filter is idempotent, so the write it causes cannot re-trigger it.
    */
   const attachmentCapabilities = selectedAdapter?.capabilities.attachments;
   useEffect(() => {
@@ -720,7 +726,7 @@ export function UnassignedNativeAgentComposer({
     const supported = retainSupportedAttachments(current.attachments, attachmentCapabilities);
     if (supported.length === current.attachments.length) return;
     updateDraft(sessionKey, { attachments: supported });
-  }, [attachmentCapabilities, sessionKey, updateDraft]);
+  }, [attachmentCapabilities, draftRestoreGeneration, sessionKey, updateDraft]);
   const handleImageRejected = useCallback(
     () => toast.error("Images are not supported by this agent"),
     [],

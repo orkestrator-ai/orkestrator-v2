@@ -14,7 +14,22 @@ import type {
 import { PROVIDER } from "./config.js";
 import { contextWindowForModelId } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
-import { sessionIsWorking, turnTokenTotal, type JsonObject, type SessionState } from "./state.js";
+import {
+  ownedWork,
+  sessionIsWorking,
+  turnTokenTotal,
+  type JsonObject,
+  type SessionState,
+} from "./state.js";
+
+/**
+ * Present while a permanent close has begun and its removal is not yet
+ * published. A client must not read such a session as an ordinary live one:
+ * it accepts no new work, and it is about to be gone.
+ */
+function closingMarker(state: SessionState): { closing: true } | Record<string, never> {
+  return state.closed ? { closing: true } : {};
+}
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
@@ -34,6 +49,7 @@ export function publicSession(state: SessionState): JsonObject {
     ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
+    ...closingMarker(state),
   };
 }
 
@@ -55,6 +71,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     ...(readiness ? { readiness } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
+    ...closingMarker(state),
   };
 }
 
@@ -79,11 +96,12 @@ export function messageWindow(state: SessionState, fromIndex: number | null): Js
   };
 }
 
-export function parseFromIndex(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
+/**
+ * `fromIndex` shares one grammar with every other bridge's `/messages` route:
+ * canonical nonnegative safe decimal, anything else is `null` (the retained
+ * window). See `parseTranscriptFromIndex` in the protocol package.
+ */
+export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/transcript-window";
 
 /**
  * Liveness for the backend's activity sweep.
@@ -93,9 +111,21 @@ export function parseFromIndex(value: string | null): number | null {
  * build pipeline advances past a turn that has not finished. An errored
  * session is not special-cased — every path that fails a turn also settles its
  * children, so `error` with children still registered would be a real claim.
+ *
+ * A closing session answers `working` for as long as anything it owned is
+ * still in flight — a run being cancelled, an attach, a claimed prompt, a
+ * recovered run, a rewind — because until the close has seen them settle
+ * something may still write to the workspace. Once nothing is left it answers
+ * `idle`, which is then literally true, marked `closing` so the answer cannot
+ * be mistaken for an ordinary idle session that will take the next prompt.
+ * It never answers `missing` before the removal is published: the backend
+ * acts on that by dropping its mapping, and a failed publication would leave
+ * a session a restart reopens with no tab pointing at it.
  */
 export function publicActivity(state: SessionState): JsonObject {
-  return { activity: sessionIsWorking(state) ? "working" : "idle" };
+  if (!state.closed) return { activity: sessionIsWorking(state) ? "working" : "idle" };
+  const working = sessionIsWorking(state) || state.dispatching || ownedWork(state).length > 0;
+  return { activity: working ? "working" : "idle", closing: true };
 }
 
 /**

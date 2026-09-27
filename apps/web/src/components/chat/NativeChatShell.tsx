@@ -169,6 +169,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
     scrollerRef?: (el: HTMLElement | Window | null) => void;
   };
   virtuosoRef: RefObject<VirtuosoHandle | null>;
+  /** Message id to highlight briefly after a jump to it. */
+  highlightedMessageId?: string | null;
 }
 
 /**
@@ -227,6 +229,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   scrollToBottom,
   scrollProps,
   virtuosoRef,
+  highlightedMessageId = null,
 }: NativeChatShellProps<TMessage>) {
   const [showLog, setShowLog] = useState(false);
   const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
@@ -441,6 +444,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         <VirtualizedMessageList
           messages={messages}
           computeItemKey={(_index, message) => message.id}
+          highlightedItemKey={highlightedMessageId}
           resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={(_index, message, previous) => (
             <NativeMessage

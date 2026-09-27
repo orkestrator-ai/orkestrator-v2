@@ -1,5 +1,6 @@
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
   isResourceChange,
   type ResourceChange,
@@ -7,6 +8,7 @@ import {
   type ScopedResourceSnapshotBatchEntry,
 } from "@orkestrator/protocol/resource-events";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { CommandContext } from "./commands-context.js";
 import {
   parseStoredDesktopConnections,
   isResourceGeneration,
@@ -422,46 +424,28 @@ export function registerProjectCommands(
     );
   });
   register("remove_project", async ({ projectId }, context) => {
-    const { storage } = context;
     const id = asString(projectId, "projectId");
-    const coordinator =
-      typeof storage.getCoordinatorWorkspace === "function"
-        ? await storage.getCoordinatorWorkspace(id)
-        : undefined;
-    if (coordinator) {
-      context.controlMcp?.revokeCoordinatorCredentials(coordinator.id);
-      for (const conversation of coordinator.conversations) {
-        if (!conversation.agent) continue;
-        const runtimeId = coordinatorRuntimeId(coordinator.id, conversation.id);
-        await Promise.resolve(
-          commands.get(localServerStopCommandName(conversation.agent))?.(
-            { environmentId: runtimeId },
-            context,
-          ),
-        ).catch(() => undefined);
-        const key = nativeAgentSessionStorageKey(
-          runtimeId,
-          conversation.agent,
-          conversation.logicalSessionKey,
-        );
-        const session = await storage.getNativeAgentSession(key);
-        if (session) {
-          await storage.invalidateNativeAgentSession(key, session.providerSessionId);
-        }
-      }
-    }
-    if (typeof storage.deleteAgentMailByProject === "function") {
-      await storage.deleteAgentMailByProject(id);
-    }
-    await context.coordinators?.removeProject(id);
-    return storage.removeProject(id);
+    await cleanupProjectForRemoval(id, context, commands);
+    return context.storage.removeProject(id);
   });
   register("get_project", ({ projectId }, { storage }) =>
     storage.getProject(asString(projectId, "projectId")),
   );
-  register("update_project", ({ projectId, updates }, { storage }) =>
-    storage.updateProject(asString(projectId, "projectId"), parseUpdateObject(updates)),
-  );
+  register("update_project", async ({ projectId, updates }, { storage }) => {
+    const parsedUpdates = parseUpdateObject(updates);
+    if (
+      parsedUpdates.gitUrl !== undefined &&
+      !isGitRemoteUrl(asString(parsedUpdates.gitUrl, "updates.gitUrl"))
+    ) {
+      // Existing projects can use local-path remotes. An unrelated settings
+      // change must not force the user to replace a previously accepted URL.
+      const existing = await storage.getProject(asString(projectId, "projectId"));
+      if (existing?.gitUrl !== String(parsedUpdates.gitUrl).trim()) {
+        throw new Error("Git URL must be an HTTPS, SSH, or git@ remote URL");
+      }
+    }
+    return storage.updateProject(asString(projectId, "projectId"), parsedUpdates);
+  });
   register("reorder_projects", ({ projectIds }, { storage }) =>
     storage.reorderProjects(asStringArray(projectIds)),
   );
@@ -481,9 +465,7 @@ export function registerProjectCommands(
     }
     return storage.arrangeProjects(asStringArray(args.projectIds), folders);
   });
-  register("validate_git_url", ({ url }) =>
-    /^(https?:\/\/|git@|ssh:\/\/).+/.test(asString(url, "url").trim()),
-  );
+  register("validate_git_url", ({ url }) => isGitRemoteUrl(asString(url, "url")));
   register("get_git_remote_url", async ({ path: repoPath }) => {
     // Reads the raw config value rather than `remote get-url`, which applies
     // `insteadOf` rewrites and can therefore hand back an embedded credential.
@@ -989,4 +971,48 @@ export function registerProjectCommands(
       );
     },
   );
+}
+
+/**
+ * Everything a project registration owns outside projects.json: coordinator
+ * credentials and conversation servers, their native sessions, agent mail and
+ * the coordinator workspace. Shared by `remove_project` and the public
+ * `project.remove` action so both clean up identically.
+ */
+export async function cleanupProjectForRemoval(
+  id: string,
+  context: CommandContext,
+  commands: RegistryDependencies["commands"],
+): Promise<void> {
+  const { storage } = context;
+  const coordinator =
+    typeof storage.getCoordinatorWorkspace === "function"
+      ? await storage.getCoordinatorWorkspace(id)
+      : undefined;
+  if (coordinator) {
+    context.controlMcp?.revokeCoordinatorCredentials(coordinator.id);
+    for (const conversation of coordinator.conversations) {
+      if (!conversation.agent) continue;
+      const runtimeId = coordinatorRuntimeId(coordinator.id, conversation.id);
+      await Promise.resolve(
+        commands.get(localServerStopCommandName(conversation.agent))?.(
+          { environmentId: runtimeId },
+          context,
+        ),
+      ).catch(() => undefined);
+      const key = nativeAgentSessionStorageKey(
+        runtimeId,
+        conversation.agent,
+        conversation.logicalSessionKey,
+      );
+      const session = await storage.getNativeAgentSession(key);
+      if (session) {
+        await storage.invalidateNativeAgentSession(key, session.providerSessionId);
+      }
+    }
+  }
+  if (typeof storage.deleteAgentMailByProject === "function") {
+    await storage.deleteAgentMailByProject(id);
+  }
+  await context.coordinators?.removeProject(id);
 }

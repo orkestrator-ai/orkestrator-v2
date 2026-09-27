@@ -201,7 +201,7 @@ exit 1
       path.join(process.cwd(), "docker", "workspace-setup.sh"),
       "utf8",
     );
-    const start = workspaceSetup.indexOf('TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"');
+    const start = workspaceSetup.indexOf('TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"');
     const end = workspaceSetup.indexOf("\nprint_workspace_disk_status()", start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -227,6 +227,29 @@ exit 1
     );
     expect(values.status).toBe(0);
     expect(values.stdout.trim().split("\n")).toEqual([
+      "https://github.com/",
+      "https://github.com",
+      "git@github.com:",
+    ]);
+
+    const conflictingEnv = { ...env, GH_TOKEN: "gh-preferred-token" };
+    const configured = spawnSync("bash", ["-c", credentialSetup], {
+      env: conflictingEnv,
+      encoding: "utf8",
+    });
+    expect(configured.status).toBe(0);
+    const preferred = spawnSync(
+      "git",
+      [
+        "config",
+        "--global",
+        "--get-all",
+        "url.https://x-access-token:gh-preferred-token@github.com/.insteadOf",
+      ],
+      { env: conflictingEnv, encoding: "utf8" },
+    );
+    expect(preferred.status).toBe(0);
+    expect(preferred.stdout.trim().split("\n")).toEqual([
       "https://github.com/",
       "https://github.com",
       "git@github.com:",

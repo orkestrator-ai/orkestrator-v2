@@ -10,6 +10,7 @@ import {
   validateRelativeFilePath,
   writeConfinedFile,
 } from "./path-safety.js";
+import { recurringWorkMetrics, spawnWorkUnit } from "./recurring-work-metrics.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -114,6 +115,9 @@ async function runCommandBytes(
   args: string[] = [],
   options: RunCommandOptions = {},
 ): Promise<ExecBufferResult> {
+  // The one boundary every `runCommand` spawn crosses, so each process is
+  // counted exactly once and charged to whichever recurring job caused it.
+  recurringWorkMetrics.work(spawnWorkUnit(command, args));
   try {
     const execPromise = execFileAsync(command, args, {
       cwd: options.cwd,
@@ -126,6 +130,7 @@ async function runCommandBytes(
     // there is no payload so non-TTY CLIs cannot hang waiting for EOF.
     execPromise.child.stdin?.end(options.stdin);
     const { stdout, stderr } = await execPromise;
+    recurringWorkMetrics.bytes(stdout.length);
     return {
       stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout),
       stderr: Buffer.isBuffer(stderr) ? stderr : Buffer.from(stderr),

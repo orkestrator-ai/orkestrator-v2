@@ -54,6 +54,9 @@ function createHarness() {
     onWarning: (message, error) => warnings.push({ message, error }),
     now: () => new Date(clock.value).toISOString(),
     monotonicNow: () => clock.value,
+    // No jitter: these lifecycle tests assert exact cadences. Jitter and
+    // startup staggering are covered in pr-monitor-policy.test.ts.
+    random: () => 0,
     schedule: (callback, delayMs) => {
       const id = nextTimerId++;
       timers.set(id, { callback, delayMs });
@@ -180,10 +183,14 @@ function createHarness() {
       emitted
         .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && !e.payload.removed)
         .map((e) => e.payload),
+    // Revision metadata is covered by pr-monitor-revisions.test.ts; these
+    // lifecycle tests assert the removal itself.
     removalEvents: () =>
       emitted
         .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.removed === true)
-        .map((e) => e.payload),
+        .map(
+          ({ payload: { generation: _generation, revision: _revision, ...removal } }) => removal,
+        ),
     transitions: () =>
       emitted
         .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.transition)

@@ -53,6 +53,17 @@ describe("resolveBrowserAddress", () => {
     expect(() => resolveBrowserAddress(" ")).toThrow("Enter a backend-local address");
   });
 
+  test("service-tab URIs are refused by this legacy resolver, never rewritten to a port", () => {
+    // Clients that predate preview services use this resolver for saved tabs:
+    // a service tab shows an unsupported error and keeps its stored target.
+    for (const saved of [
+      "orkestrator-preview://service/inst_1/env-a/svc_fixture_web_0001/app",
+      "orkestrator-preview://intent/env-a/terminal?url=http%3A%2F%2Flocalhost%3A3000%2F",
+    ]) {
+      expect(() => resolveBrowserAddress(saved)).toThrow("backend-local HTTP");
+    }
+  });
+
   test("supports IPv6 loopback and the default HTTP port", () => {
     expect(resolveBrowserAddress("[::1]:4173/app").displayUrl).toBe("http://[::1]:4173/app");
     expect(resolveBrowserAddress("localhost").displayUrl).toBe("http://localhost/");

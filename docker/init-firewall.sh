@@ -2,15 +2,10 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
-# Read Docker's original container configuration from PID 1. The node account
-# is allowed to invoke this exact script through sudo so the entrypoint can set
-# up networking, but it must not be able to widen the policy by replacing its
-# own environment first.
-container_env() {
-    tr '\0' '\n' < "${ORKESTRATOR_PID1_ENVIRON:-/proc/1/environ}" | sed -n "s/^$1=//p" | head -n 1
-}
-NETWORK_MODE="$(container_env NETWORK_MODE)"
-ALLOWED_DOMAINS="$(container_env ALLOWED_DOMAINS)"
+# The root entrypoint captures Docker's initial policy before dropping to node.
+# A caller's environment and PID 1 memory are both controlled by node.
+IFS= read -r NETWORK_MODE < /etc/orkestrator/network-mode
+IFS= read -r ALLOWED_DOMAINS < /etc/orkestrator/allowed-domains
 
 # Check network mode - if full, skip firewall entirely
 if [ "${NETWORK_MODE:-restricted}" = "full" ]; then
@@ -104,7 +99,9 @@ while read -r cidr; do
         exit 1
     fi
     echo "Adding GitHub range $cidr"
-    ipset add allowed-domains "$cidr"
+    # The bootstrap above already added api.github.com's own /32, which the
+    # published ranges usually repeat verbatim.
+    ipset add -exist allowed-domains "$cidr"
 done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 
 # Parse ALLOWED_DOMAINS environment variable (comma-separated)

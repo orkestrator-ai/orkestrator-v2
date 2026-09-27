@@ -15,6 +15,7 @@ import {
 function createHarness() {
   const windows: FakeBrowserWindow[] = [];
   const webContentsListeners = new Map<string, (event: any) => void>();
+  const listenersAtLoad: string[][] = [];
   const menu = {
     buildFromTemplate: mock((template: MenuItemConstructorOptions[]) => ({
       template,
@@ -25,21 +26,33 @@ function createHarness() {
 
   class FakeBrowserWindow {
     readonly webContents = {
+      mainFrame: {},
       on: mock((event: string, listener: (event: any) => void) => {
         webContentsListeners.set(event, listener);
       }),
       setWindowOpenHandler: mock((_handler: () => { action: "deny" }) => undefined),
       openDevTools: mock(() => undefined),
     };
-    readonly loadFile = mock(async (_filePath: string) => undefined);
-    readonly loadURL = mock(async (_url: string) => undefined);
+    readonly loadFile = mock(async (_filePath: string) => {
+      listenersAtLoad.push(Array.from(webContentsListeners.keys()));
+    });
+    readonly loadURL = mock(async (_url: string) => {
+      listenersAtLoad.push(Array.from(webContentsListeners.keys()));
+    });
 
     constructor(readonly options: BrowserWindowConstructorOptions) {
       windows.push(this);
     }
   }
 
-  return { FakeBrowserWindow, menu, writeClipboardText, webContentsListeners, windows };
+  return {
+    FakeBrowserWindow,
+    listenersAtLoad,
+    menu,
+    writeClipboardText,
+    webContentsListeners,
+    windows,
+  };
 }
 
 describe("createMainWindow", () => {
@@ -92,6 +105,14 @@ describe("createMainWindow", () => {
     );
     expect(harness.windows[0].loadURL).not.toHaveBeenCalled();
     expect(harness.windows[0].webContents.openDevTools).not.toHaveBeenCalled();
+    expect(harness.listenersAtLoad[0]).toEqual(
+      expect.arrayContaining([
+        "preload-error",
+        "did-fail-load",
+        "render-process-gone",
+        "console-message",
+      ]),
+    );
   });
 
   test("uses hiddenInset and a traffic-light gutter only on darwin", async () => {

@@ -47,6 +47,11 @@ interface VirtualizedMessageListProps<TMessage> {
     scrollerRef?: (el: HTMLElement | Window | null) => void;
   };
   virtuosoRef: RefObject<VirtuosoHandle | null>;
+  /**
+   * Item key (as returned by `computeItemKey`) of a row to highlight briefly,
+   * e.g. the message a "open full conversation" link jumped to.
+   */
+  highlightedItemKey?: string | null;
   find?: {
     isActive: boolean;
     getSearchText: (message: TMessage) => string;
@@ -146,6 +151,7 @@ export function VirtualizedMessageList<TMessage>({
   emptyState,
   scrollProps,
   virtuosoRef,
+  highlightedItemKey = null,
   find,
   annotation,
 }: VirtualizedMessageListProps<TMessage>) {
@@ -326,13 +332,18 @@ export function VirtualizedMessageList<TMessage>({
         itemContent={(index, data) => {
           const isCurrentFindMessage =
             chatFind.isOpen && chatFind.currentMatch?.itemIndex === index;
+          const isHighlighted =
+            highlightedItemKey !== null && computeItemKey(index, data) === highlightedItemKey;
           return (
             <div
               data-chat-message-index={index}
+              data-conversation-target={isHighlighted ? "true" : undefined}
               className={cn(
-                "rounded-sm",
+                "rounded-sm transition-colors duration-700 motion-reduce:transition-none",
                 isCurrentFindMessage &&
                   "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
+                isHighlighted &&
+                  "bg-sky-500/10 outline outline-2 outline-offset-[-2px] outline-sky-500/50",
               )}
             >
               {renderMessage(
@@ -354,6 +365,13 @@ export function VirtualizedMessageList<TMessage>({
         totalListHeightChanged={scrollProps.totalListHeightChanged}
         restoreStateFrom={scrollProps.restoreStateFrom}
         scrollerRef={scrollProps.scrollerRef}
+        // A tool block can be thousands of pixels tall. Using it as Virtuoso's
+        // default probe height overestimates new text/tool rows, briefly pushes
+        // visible history out of the window, then remounts it after measurement.
+        // 320px is near a representative mixed transcript row while still far
+        // below those outliers; it also bounds the cold-fill render count.
+        // Measured and restored rows retain their real heights.
+        defaultItemHeight={320}
         increaseViewportBy={{ top: 400, bottom: 200 }}
         style={{ height: "100%" }}
         className="py-4"

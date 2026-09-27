@@ -30,8 +30,19 @@ export function publicSession(state: SessionState): JsonObject {
     composer: state.sessionConfig.composer,
     ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
+    ...publicCommandRevision(state),
     runtime: publicRuntime(state),
   };
+}
+
+/**
+ * The command inventory revision, identical to `revision` on
+ * `GET /session/:id/commands`. It advances on every pushed replacement, so a
+ * backend polling status can notice a push and re-read the catalogue for a
+ * tab that is not looking. Absent until any inventory is known.
+ */
+export function publicCommandRevision(state: SessionState): { commandRevision?: number } {
+  return state.commandsRevision === undefined ? {} : { commandRevision: state.commandsRevision };
 }
 
 /** Mutation acknowledgement; transcript hydration has its own bounded route. */
@@ -118,11 +129,12 @@ export function messageWindow(state: SessionState, fromIndex: number | null): Js
   };
 }
 
-export function parseFromIndex(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
+/**
+ * `fromIndex` shares one grammar with every other bridge's `/messages` route:
+ * canonical nonnegative safe decimal, anything else is `null` (the retained
+ * window). See `parseTranscriptFromIndex` in the protocol package.
+ */
+export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/transcript-window";
 
 export function publicApprovals(state: SessionState): unknown[] {
   return [...state.approvals.values()].map(({ id, title, options, requestedAt, expiresAt }) => ({

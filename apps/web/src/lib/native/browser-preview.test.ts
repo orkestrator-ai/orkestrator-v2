@@ -1,22 +1,23 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type {
   BrowserPreviewAttachInput,
+  BrowserPreviewCaptureCapabilities,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import {
   attachBrowserPreview,
-  cancelBrowserPreviewAnnotation,
   destroyBrowserPreview,
-  getBrowserPreviewAnnotationStatus,
+  getBrowserPreviewCaptureApi,
+  getBrowserPreviewCaptureCapabilities,
   goBackBrowserPreview,
   goForwardBrowserPreview,
+  hasBrowserPreviewCapture,
   hasNativeBrowserPreview,
   navigateBrowserPreview,
   openBrowserPreviewDevTools,
   reloadBrowserPreview,
   setBrowserPreviewBounds,
   setBrowserPreviewVisible,
-  startBrowserPreviewAnnotation,
 } from "./browser-preview";
 
 const originalOrkestrator = window.orkestrator;
@@ -48,9 +49,6 @@ describe("native browser preview wrapper", () => {
       goForward: mock(async () => current),
       reload: mock(async () => current),
       openDevTools: mock(async () => current),
-      startAnnotation: mock(async () => ({ status: "active" as const })),
-      getAnnotationStatus: mock(async () => ({ status: "active" as const })),
-      cancelAnnotation: mock(async () => undefined),
       destroy: mock(async () => {}),
     };
     window.orkestrator = { browserPreview } as Window["orkestrator"];
@@ -70,9 +68,6 @@ describe("native browser preview wrapper", () => {
     await goForwardBrowserPreview("browser-1");
     await reloadBrowserPreview("browser-1");
     await openBrowserPreviewDevTools("browser-1");
-    await startBrowserPreviewAnnotation("browser-1");
-    await getBrowserPreviewAnnotationStatus("browser-1");
-    await cancelBrowserPreviewAnnotation("browser-1");
     await destroyBrowserPreview("browser-1");
 
     expect(browserPreview.attach).toHaveBeenCalledWith(input);
@@ -83,9 +78,9 @@ describe("native browser preview wrapper", () => {
     expect(browserPreview.goForward).toHaveBeenCalledWith("browser-1");
     expect(browserPreview.reload).toHaveBeenCalledWith("browser-1");
     expect(browserPreview.openDevTools).toHaveBeenCalledWith("browser-1");
-    expect(browserPreview.startAnnotation).toHaveBeenCalledWith("browser-1");
-    expect(browserPreview.getAnnotationStatus).toHaveBeenCalledWith("browser-1");
-    expect(browserPreview.cancelAnnotation).toHaveBeenCalledWith("browser-1");
+    // The legacy page-side comment/annotation surface no longer exists.
+    expect(hasBrowserPreviewCapture()).toBe(false);
+    expect(getBrowserPreviewCaptureApi()).toBeNull();
     expect(browserPreview.destroy).toHaveBeenCalledWith("browser-1");
   });
 
@@ -117,12 +112,56 @@ describe("native browser preview wrapper", () => {
     await expect(goForwardBrowserPreview("browser-1")).rejects.toThrow(unavailable);
     await expect(reloadBrowserPreview("browser-1")).rejects.toThrow(unavailable);
     await expect(openBrowserPreviewDevTools("browser-1")).rejects.toThrow(unavailable);
-    await expect(startBrowserPreviewAnnotation("browser-1")).rejects.toThrow(
-      "Browser preview annotations are unavailable",
-    );
-    await expect(getBrowserPreviewAnnotationStatus("browser-1")).rejects.toThrow(
-      "Browser preview annotations are unavailable",
-    );
-    await expect(cancelBrowserPreviewAnnotation("browser-1")).resolves.toBeUndefined();
+    expect(getBrowserPreviewCaptureApi()).toBeNull();
+  });
+
+  test("feature-detects the trusted capture surface", () => {
+    const capture = {
+      startCapture: mock(async () => ({ status: "inactive" as const })),
+    } as unknown as NonNullable<
+      NonNullable<NonNullable<Window["orkestrator"]>["browserPreview"]>["capture"]
+    >;
+    window.orkestrator = { browserPreview: { capture } } as unknown as Window["orkestrator"];
+    expect(hasBrowserPreviewCapture()).toBe(true);
+    expect(getBrowserPreviewCaptureApi()).toBe(capture);
+  });
+
+  test("reads desktop capture capabilities, with a version 1 fallback", async () => {
+    type CaptureApi = NonNullable<
+      NonNullable<NonNullable<Window["orkestrator"]>["browserPreview"]>["capture"]
+    >;
+    window.orkestrator = undefined;
+    await expect(getBrowserPreviewCaptureCapabilities()).resolves.toBeNull();
+
+    const legacy = { startCapture: mock(async () => ({ status: "inactive" as const })) };
+    window.orkestrator = {
+      browserPreview: { capture: legacy as unknown as CaptureApi },
+    } as unknown as Window["orkestrator"];
+    await expect(getBrowserPreviewCaptureCapabilities()).resolves.toMatchObject({
+      contractVersion: 1,
+      modes: ["element", "text", "region", "page"],
+      features: { showOnPage: false, responsiveSets: null },
+    });
+
+    const capabilities: BrowserPreviewCaptureCapabilities = {
+      contractVersion: 2,
+      modes: ["element", "page"],
+      features: {
+        keyboardSelection: true,
+        recapture: true,
+        receipts: true,
+        resultCapture: { stability: true, masks: true },
+        regionCrop: false,
+        responsiveSets: { maxWidths: 4, minWidth: 320, maxWidth: 2560 },
+        livePins: true,
+        showOnPage: true,
+        expiredNotices: true,
+      },
+    };
+    const current = { ...legacy, getCaptureCapabilities: mock(async () => capabilities) };
+    window.orkestrator = {
+      browserPreview: { capture: current as unknown as CaptureApi },
+    } as unknown as Window["orkestrator"];
+    await expect(getBrowserPreviewCaptureCapabilities()).resolves.toEqual(capabilities);
   });
 });

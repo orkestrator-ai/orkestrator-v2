@@ -1,4 +1,5 @@
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
   fs,
   os,
@@ -1298,6 +1299,7 @@ export async function stopEnvironmentOnce(
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   await stopEnvironmentReviewValidation(environmentId, context);
+  await stopEnvironmentExecWorkers(environmentId, context);
   // Discovery runs inside the environment, so its cached result stops being
   // meaningful the moment the environment does.
   invalidateDiscovery(environment.id);
@@ -1307,6 +1309,9 @@ export async function stopEnvironmentOnce(
   //
   // A stopped environment cannot honour a post-setup agent launch, and the
   // renderer cannot clear the intent for an environment it no longer mounts.
+  // Revoke preview access before the target disappears so a host port Docker
+  // later reuses can never inherit this environment's authorization.
+  context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   if (environment.containerId) {
     await assertDockerContainerOwned(environment.containerId, context);
     await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
@@ -1363,7 +1368,11 @@ export async function recreateEnvironmentOnce(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment?.containerId) return;
   await assertDockerContainerOwned(environment.containerId, context);
+  // Commands running in the container are cancelled (and recorded as such)
+  // before the container they run in is removed.
+  await stopEnvironmentExecWorkers(environment.id, context);
   invalidateDiscovery(environment.id);
+  context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   // Recreate is the user's repair action for a container that is already
   // broken, so a failing `rm -f` must not be the thing that makes it
   // unrepairable. Drop the reference and build a fresh container anyway; the

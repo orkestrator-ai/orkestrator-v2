@@ -2132,6 +2132,35 @@ describe("native review", () => {
     expect(h.runtime.getJournal().get("review-turn-review")).toBeUndefined();
   });
 
+  test("a native review interrupted by a restart reports a failure without a request id", async () => {
+    const { h, sessionId } = await reviewableSession({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [{ id: "turn-review", status: "interrupted", items: [] }],
+        }),
+      }),
+    });
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" })).toEqual({
+      outcome: "accepted",
+      turnId: "turn-review",
+    });
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error:
+        "Codex restarted before this turn finished, so its work stopped partway. Send a message to continue.",
+    });
+    expect(h.runtime.getRegistry().getSession(sessionId)?.restartFailure).toEqual({
+      turnId: "turn-review",
+    });
+    expect(h.runtime.getJournal().get("review-turn-review")).toBeUndefined();
+  });
+
   test("review-start rejection after a child crash preserves the recovering phase", async () => {
     const { h, sessionId } = await reviewableSession(
       {

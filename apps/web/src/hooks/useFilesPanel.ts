@@ -5,11 +5,57 @@ import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores
 import { useUIStore, useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { resolveComparisonRef } from "@/lib/diff-baseline";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
+import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
 export const MAX_EXTERNAL_FILE_DROP_BYTES = 8 * 1024 * 1024;
 export const MAX_EXTERNAL_FILE_DROP_COUNT = 20;
+
+/** What the panel last applied for one view, per environment snapshot key. */
+type AppliedView = { key: string; stamp: WorktreeReadStamp };
+
+/**
+ * Whether the backend has announced a newer file list or tree than the one
+ * the panel holds. Only comparable when the panel's last read was served by
+ * the same owner generation; otherwise polling remains the only trigger.
+ */
+export function isAnnouncedNewer(
+  announced: { targetGeneration: number; revision: number },
+  ownerGeneration: string | null,
+  applied: WorktreeReadStamp | undefined,
+): boolean {
+  if (!applied || !ownerGeneration) return false;
+  if (applied.generation !== ownerGeneration) return true;
+  if (applied.targetGeneration !== announced.targetGeneration) return true;
+  return announced.revision > applied.revision;
+}
+
+function sameStamp(a: WorktreeReadStamp | undefined, b: WorktreeReadStamp): boolean {
+  return (
+    a !== undefined &&
+    a.generation === b.generation &&
+    a.environmentId === b.environmentId &&
+    a.targetGeneration === b.targetGeneration &&
+    a.revision === b.revision &&
+    a.freshness === b.freshness &&
+    a.watched === b.watched
+  );
+}
+
+/** Omits the options argument entirely for an ordinary read (older call shape). */
+function readOptionArgs(
+  options: backend.SnapshotReadOptions | undefined,
+): [] | [backend.SnapshotReadOptions] {
+  return options?.refresh ? [options] : [];
+}
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
 
 export function encodeBytesAsBase64(bytes: Uint8Array): string {
   const chunkSize = 32 * 1024;
@@ -75,7 +121,17 @@ function formatBatchFailure(completed: number, total: number, message: string): 
  * Hook for managing files panel data loading.
  * Loads git changes and file tree data from the active environment.
  * Supports both containerized (Docker) and local (worktree) environments.
- * Auto-refreshes every 5 seconds when the panel is open.
+ * Auto-refreshes every 5 seconds when the panel is open and the document is
+ * visible (scheduled by the shared read coordinator).
+ *
+ * On a current backend the panel also subscribes to the worktree snapshot
+ * revisions (subscribe before hydrating, bounded; see
+ * `useWorktreeSnapshotRevisions`) and re-reads the file list or tree as soon
+ * as the backend announces a revision newer than the one it shows — including
+ * list changes that leave the diff counts identical. The 5 s poll stays: it is
+ * the only trigger for legacy backends and unwatched targets (containers), and
+ * the backend answers it for a quiet watched worktree from valid watched state
+ * without rescanning.
  */
 export function useFilesPanel() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -136,6 +192,20 @@ export function useFilesPanel() {
   const activeSnapshotKeyRef = useRef(environmentSnapshotKey);
   activeSnapshotKeyRef.current = environmentSnapshotKey;
   const [fileActionPending, setFileActionPending] = useState<string | null>(null);
+  // Owner stamps of the list and tree the panel last applied (state, so an
+  // announcement that raced an in-flight read is re-checked when it lands).
+  const [appliedChangesView, setAppliedChangesView] = useState<AppliedView | null>(null);
+  const [appliedTreeView, setAppliedTreeView] = useState<AppliedView | null>(null);
+  const recordView = useCallback(
+    (view: "changes" | "tree", key: string, stamp: WorktreeReadStamp | undefined) => {
+      if (!stamp) return;
+      const update = (previous: AppliedView | null) =>
+        previous?.key === key && sameStamp(previous.stamp, stamp) ? previous : { key, stamp };
+      if (view === "changes") setAppliedChangesView(update);
+      else setAppliedTreeView(update);
+    },
+    [],
+  );
 
   // Digest of the last snapshot written to the store, per data type. The 5s
   // auto-refresh nearly always returns identical data; comparing a cheap digest
@@ -203,7 +273,7 @@ export function useFilesPanel() {
 
   // Load git changes from environment (silent mode for auto-refresh)
   const loadChanges = useCallback(
-    (silent = false): Promise<void> => {
+    (silent = false, options?: backend.SnapshotReadOptions): Promise<void> => {
       if (!isAvailable) {
         publishChanges(environmentSnapshotKey, []);
         return Promise.resolve();
@@ -236,9 +306,18 @@ export function useFilesPanel() {
               worktreePath,
               comparisonRef,
               knownDigest,
+              ...readOptionArgs(options),
             );
           } else if (containerId) {
-            snapshot = await backend.getGitStatusSnapshot(containerId, comparisonRef, knownDigest);
+            snapshot = await backend.getGitStatusSnapshot(
+              containerId,
+              comparisonRef,
+              knownDigest,
+              ...readOptionArgs(options),
+            );
+          }
+          if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
+            recordView("changes", environmentSnapshotKey, snapshot.view);
           }
           if (
             !snapshot.unchanged &&
@@ -276,13 +355,14 @@ export function useFilesPanel() {
       comparisonRef,
       environmentSnapshotKey,
       publishChanges,
+      recordView,
       setLoadingChanges,
     ],
   );
 
   // Load file tree from environment (silent mode for auto-refresh)
   const loadFileTree = useCallback(
-    (silent = false): Promise<void> => {
+    (silent = false, options?: backend.SnapshotReadOptions): Promise<void> => {
       if (!isAvailable) {
         publishFileTree(environmentSnapshotKey, []);
         return Promise.resolve();
@@ -309,9 +389,20 @@ export function useFilesPanel() {
               ? treeDigestRef.current.digest
               : undefined;
           if (isLocalEnvironment && worktreePath) {
-            snapshot = await backend.getLocalFileTreeSnapshot(worktreePath, knownDigest);
+            snapshot = await backend.getLocalFileTreeSnapshot(
+              worktreePath,
+              knownDigest,
+              ...readOptionArgs(options),
+            );
           } else if (containerId) {
-            snapshot = await backend.getFileTreeSnapshot(containerId, knownDigest);
+            snapshot = await backend.getFileTreeSnapshot(
+              containerId,
+              knownDigest,
+              ...readOptionArgs(options),
+            );
+          }
+          if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
+            recordView("tree", environmentSnapshotKey, snapshot.view);
           }
           if (
             !snapshot.unchanged &&
@@ -347,18 +438,25 @@ export function useFilesPanel() {
       containerId,
       environmentSnapshotKey,
       publishFileTree,
+      recordView,
       setLoadingTree,
     ],
   );
 
-  // Refresh data based on active tab (manual refresh shows loading indicator)
-  const refresh = useCallback(() => {
-    if (activeTab === "changes") {
-      return loadChanges(false);
-    } else {
-      return Promise.all([loadFileTree(false), loadChanges(false)]).then(() => undefined);
-    }
-  }, [activeTab, loadChanges, loadFileTree]);
+  // Load data for the active tab, showing the loading indicator. Joins an
+  // equivalent snapshot request already in flight.
+  const loadVisible = useCallback(
+    (options?: backend.SnapshotReadOptions) => {
+      if (activeTab === "changes") {
+        return loadChanges(false, options);
+      } else {
+        return Promise.all([loadFileTree(false, options), loadChanges(false, options)]).then(
+          () => undefined,
+        );
+      }
+    },
+    [activeTab, loadChanges, loadFileTree],
+  );
 
   // Silent refresh for auto-refresh (no loading indicator)
   const silentRefresh = useCallback(() => {
@@ -368,6 +466,31 @@ export function useFilesPanel() {
       return Promise.all([loadFileTree(true), loadChanges(true)]).then(() => undefined);
     }
   }, [activeTab, loadChanges, loadFileTree]);
+
+  // The 5 s auto-refresh is owned by the shared read coordinator: one timer
+  // per environment/tab key, paused while the document is hidden,
+  // reconciled once on return. The store is global, so equivalent mounts
+  // share one read. The open/tab/target read below and post-mutation reads
+  // stay direct.
+  const filesRead = useCoordinatedRead({
+    key: { resource: "files-panel", target: environmentSnapshotKey, options: activeTab },
+    enabled: isAvailable,
+    readOnSubscribe: false,
+    demand: { active: isOpen && isAvailable, intervalMs: AUTO_REFRESH_INTERVAL },
+    read: async (context) => {
+      if (!context.explicit) return silentRefresh();
+      // An explicit refresh needs a post-click observation, so it must not
+      // join a snapshot request that started earlier — here or in the
+      // backend, which the refresh flag asks for a scan after the click.
+      await Promise.all([loadingChangesRef.current?.promise, loadingTreeRef.current?.promise]);
+      return loadVisible({ refresh: true });
+    },
+  });
+  const refreshExplicitly = filesRead.refresh;
+  // Manual refresh shows the loading indicator and always reads afresh.
+  const refresh = useCallback(async () => {
+    await refreshExplicitly();
+  }, [refreshExplicitly]);
 
   const refreshAllFilesData = useCallback(async () => {
     if (activeSnapshotKeyRef.current !== environmentSnapshotKey) return;
@@ -683,27 +806,63 @@ export function useFilesPanel() {
     [isAvailable, selectedEnvironmentId, refreshAllFilesData],
   );
 
+  // Announced revisions: subscribe (and hydrate) only while the panel is open.
+  useWorktreeSnapshotRevisions({ enabled: isOpen });
+  const announced = useWorktreeSnapshotStore((state) =>
+    selectedEnvironmentId ? state.entries.get(selectedEnvironmentId) : undefined,
+  );
+  const ownerGeneration = useWorktreeSnapshotStore((state) => state.generation);
+
+  // Re-read exactly the view whose announced revision is newer than what the
+  // panel shows. A hidden document skips this: the coordinator reconciles once
+  // on return. Revisions for a different baseline are ignored until the
+  // panel's own comparison ref catches up.
+  useEffect(() => {
+    if (!isOpen || !isAvailable || !announced || documentHidden()) return;
+    if (announced.comparisonRef !== comparisonRef) return;
+    const changesView =
+      appliedChangesView?.key === environmentSnapshotKey ? appliedChangesView.stamp : undefined;
+    if (
+      isAnnouncedNewer(
+        { targetGeneration: announced.targetGeneration, revision: announced.fileListRevision },
+        ownerGeneration,
+        changesView,
+      )
+    ) {
+      void loadChanges(true);
+    }
+    if (activeTab === "changes") return;
+    const treeView =
+      appliedTreeView?.key === environmentSnapshotKey ? appliedTreeView.stamp : undefined;
+    if (
+      isAnnouncedNewer(
+        { targetGeneration: announced.targetGeneration, revision: announced.treeRevision },
+        ownerGeneration,
+        treeView,
+      )
+    ) {
+      void loadFileTree(true);
+    }
+  }, [
+    announced,
+    ownerGeneration,
+    appliedChangesView,
+    appliedTreeView,
+    isOpen,
+    isAvailable,
+    activeTab,
+    comparisonRef,
+    environmentSnapshotKey,
+    loadChanges,
+    loadFileTree,
+  ]);
+
   // Load data when panel opens, tab changes, or environment changes
   useEffect(() => {
     if (isOpen && isAvailable) {
-      refresh();
+      void loadVisible();
     }
-  }, [isOpen, activeTab, isAvailable, containerId, worktreePath, refresh]);
-
-  // Auto-refresh when panel is open and environment is available
-  useEffect(() => {
-    if (!isOpen || !isAvailable) {
-      return;
-    }
-
-    const intervalId = setInterval(() => {
-      silentRefresh();
-    }, AUTO_REFRESH_INTERVAL);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [isOpen, isAvailable, containerId, worktreePath, silentRefresh]);
+  }, [isOpen, activeTab, isAvailable, containerId, worktreePath, loadVisible]);
 
   // Clear data when environment becomes unavailable
   useEffect(() => {

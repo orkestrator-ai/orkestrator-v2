@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
 import { fixPath } from "./core/fix-path.js";
+import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
@@ -11,6 +12,8 @@ import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
+import { publishInstanceDescriptor } from "./instance-descriptor.js";
+import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
 
 assertSupportedPlatform();
 // Before any other startup work: a rejection thrown while the backend is still
@@ -62,6 +65,7 @@ const backend = new OrkestratorBackend({
 await backend.init();
 
 gateway = new OrkestratorGateway({
+  previews: backend.previews,
   backend,
   dataDir: options.dataDir,
   rendererRoot: options.rendererRoot,
@@ -90,6 +94,15 @@ if (!gatewayInfo) {
     "No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --allow-non-tailscale-bind for local development.",
   );
 }
+
+// The gateway's own listeners can never become preview targets.
+backend.previews?.reservePorts(
+  "gateway",
+  [
+    gatewayInfo.port,
+    gatewayInfo.browserUrl ? Number(new URL(gatewayInfo.browserUrl).port) : 0,
+  ].filter((port) => port > 0),
+);
 
 let info = gatewayInfo;
 if (managedWebClient) {
@@ -131,11 +144,29 @@ if (managedWebClient) {
   }
 }
 
+// Private preview origins are optional: a missing domain or certificate only
+// disables browser publication and never blocks the backend from serving.
+const previewPublication = backend.previews
+  ? new PreviewPublicationManager({ runtime: backend.previews, logger: console })
+  : null;
+await previewPublication?.start().catch((error: unknown) => {
+  console.warn(
+    `[previews] Private preview publication did not start: ${error instanceof Error ? error.message : String(error)}`,
+  );
+});
+
+let removeInstanceDescriptor: (() => Promise<void>) | null = null;
 const stop = createBackendShutdownHandler({
   stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,
   stopManagedWebClient: managedWebClient ? () => managedWebClient!.shutdown() : undefined,
-  stopGateway: () => gateway.stop(),
-  stopBackend: () => backend.shutdown(),
+  stopGateway: async () => {
+    await previewPublication?.dispose().catch(() => undefined);
+    await gateway.stop();
+  },
+  stopBackend: async () => {
+    await removeInstanceDescriptor?.().catch(() => undefined);
+    await backend.shutdown();
+  },
   warn: (message) => console.warn(message),
   exit: (code) => process.exit(code),
 });
@@ -154,6 +185,41 @@ startReparentWatchdog({
     void stop("SIGTERM");
   },
 });
+
+// Publish the installed-instance descriptor that operator clients resolve
+// (`orkestrator --connection …`). It is additive to the readiness line below
+// and carries no credential; a failure to write it never blocks serving.
+try {
+  const identity = (
+    await backend.invoke<{
+      ok?: boolean;
+      result?: { backend?: { installationId?: string; generation?: string } };
+    }>("public_action", {
+      schemaVersion: PUBLIC_API_SCHEMA_VERSION,
+      action: "capabilities",
+      actionVersion: 1,
+      input: {},
+    })
+  ).result?.backend;
+  if (identity?.installationId && identity.generation) {
+    removeInstanceDescriptor = await publishInstanceDescriptor({
+      installationId: identity.installationId,
+      generation: identity.generation,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      url: info.url,
+      ...(info.browserUrl && info.browserUrl !== info.url ? { browserUrl: info.browserUrl } : {}),
+      authFile: info.authFile,
+      dataDir: options.dataDir,
+      appVersion: process.env.ORKESTRATOR_VERSION ?? "development",
+      publicApiSchemaVersion: PUBLIC_API_SCHEMA_VERSION,
+    });
+  }
+} catch (error) {
+  console.warn(
+    `[Backend] Could not publish the instance descriptor: ${error instanceof Error ? error.message : String(error)}`,
+  );
+}
 
 // Machine-readable startup means both serving and lifecycle handling are ready.
 // Install signal handling and parent-death detection first so a supervisor

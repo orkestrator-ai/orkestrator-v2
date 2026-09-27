@@ -116,6 +116,17 @@ describe("GET /commands", () => {
     expect(mockDiscoverSlashCommands).toHaveBeenCalledWith("/fake/project");
   });
 
+  test("stays a legacy display list, never an executable enhanced catalogue", async () => {
+    mockDiscoverSlashCommands.mockImplementationOnce(async () => ["/review - Review changes"]);
+
+    const res = await app.request("/commands");
+    expect(res.status).toBe(200);
+
+    // Old clients read `commands: string[]`. No catalogue version, status or
+    // row identity: nothing here may be executed as a selected command.
+    expect(await res.json()).toEqual({ commands: ["/review - Review changes"] });
+  });
+
   test("falls back to process.cwd() when CWD env is unset", async () => {
     delete process.env.CWD;
     mockDiscoverSlashCommands.mockImplementationOnce(async () => []);

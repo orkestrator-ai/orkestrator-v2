@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { __testing as commandTesting } from "./commands.js";
 import { OrkestratorBackend } from "./index.js";
+import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
@@ -33,6 +34,54 @@ function fakeAgentTools(
     revokeEnvironment: mock(() => undefined),
   };
 }
+
+test("activity transition events name their session and carry the observer stamp", async () => {
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const backend = new OrkestratorBackend({
+    dataDir: path.join(os.tmpdir(), `ork-backend-activity-stamp-${randomUUID()}`),
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: (event, payload) => events.push({ event, payload }),
+    agentTools: fakeAgentTools(),
+  });
+  const transition = (
+    backend as unknown as {
+      nativeAgents: {
+        options: { onActivityTransition?: (event: Record<string, unknown>) => void };
+      };
+    }
+  ).nativeAgents.options.onActivityTransition;
+
+  transition?.({
+    environmentId: "env-1",
+    sessionKey: "private-storage-key",
+    providerSessionId: "private-provider-id",
+    previousState: "idle",
+    state: "working",
+    agent: "cursor",
+    logicalSessionKey: "env-env-1:tab-1",
+    observation: { generation: "observer-1", revision: 7 },
+  });
+
+  // Additive and content-free: the addressable session and the stamp a client
+  // uses to invalidate exactly that view and to detect a missed transition.
+  expect(events).toEqual([
+    {
+      event: "native-agent-session-activity",
+      payload: {
+        environment_id: "env-1",
+        previous_state: "idle",
+        state: "working",
+        agent: "cursor",
+        logical_session_key: "env-env-1:tab-1",
+        generation: "observer-1",
+        revision: 7,
+      },
+    },
+  ]);
+  await backend.shutdown();
+});
 
 test("activity transition events omit backend-only provider session identifiers", async () => {
   const events: Array<{ event: string; payload: unknown }> = [];
@@ -883,6 +932,8 @@ describe("native-agent activity reconciliation lifecycle", () => {
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
+      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
+      keyedActivityJobs: false,
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1065,6 +1116,8 @@ describe("native-agent activity reconciliation lifecycle", () => {
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
+      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
+      keyedActivityJobs: false,
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1142,6 +1195,8 @@ describe("native-agent activity reconciliation lifecycle", () => {
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
+      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
+      keyedActivityJobs: false,
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1214,6 +1269,8 @@ describe("native-agent activity reconciliation lifecycle", () => {
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
+      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
+      keyedActivityJobs: false,
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1248,6 +1305,112 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await Promise.resolve();
       // Two init calls, one interval: three reconciles, not four.
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(3);
+    } finally {
+      await backend.shutdown().catch(() => undefined);
+      restore();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs the activity bundle as named due jobs with elapsed maintenance deadlines", async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-activity-jobs-"));
+    const time = new ManualTime(0);
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+      keyedActivityJobs: true,
+      activityJobClock: { now: time.now, timers: time.timerFactory },
+    });
+    const internals = backend as unknown as {
+      commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+      promptQueues: { drainAll: () => Promise<void> };
+      agentMail: {
+        refreshPresence: () => Promise<void>;
+        drainInjects: () => Promise<void>;
+      };
+      coordinators: {
+        reconcileWorkflowNotifications: () => Promise<void>;
+        reconcileWorkerDelegations: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    let activityGate: Promise<void> | null = null;
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => {
+      if (activityGate) await activityGate;
+    });
+    internals.promptQueues.drainAll = mock(async () => undefined);
+    internals.agentMail.refreshPresence = mock(async () => undefined);
+    internals.agentMail.drainInjects = mock(async () => undefined);
+    internals.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
+    internals.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
+    const renames = mock(async () => undefined);
+    internals.commands.set("reconcile_pending_environment_renames", renames);
+    const teardowns = mock(async () => ({ completed: 0 }));
+    internals.commands.set("reconcile_tab_teardowns", teardowns);
+    const { intervals, restore } = controlledIntervals();
+
+    try {
+      await backend.init();
+      await backend.init();
+      // No 2 s bundle and no 60 s tab timer: the jobs own those cadences.
+      expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
+      expect(intervals.filter((interval) => interval.delay === 60_000)).toHaveLength(0);
+      const startup = {
+        activity: (internals.nativeAgents.reconcileAgentActivity as ReturnType<typeof mock>).mock
+          .calls.length,
+        presence: (internals.agentMail.refreshPresence as ReturnType<typeof mock>).mock.calls
+          .length,
+        repair: (internals.coordinators.reconcileWorkflowNotifications as ReturnType<typeof mock>)
+          .mock.calls.length,
+        teardowns: teardowns.mock.calls.length,
+      };
+
+      // A hung activity sweep no longer holds back presence refreshes, which
+      // must keep renewing the 4 s presence TTL every 2 s.
+      let release!: () => void;
+      activityGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await time.advance(10_000);
+      expect(
+        (internals.nativeAgents.reconcileAgentActivity as ReturnType<typeof mock>).mock.calls
+          .length - startup.activity,
+      ).toBe(1);
+      expect(
+        (internals.agentMail.refreshPresence as ReturnType<typeof mock>).mock.calls.length -
+          startup.presence,
+      ).toBe(5);
+      release();
+      activityGate = null;
+
+      // Maintenance runs on its own elapsed 60 s deadline, once per minute.
+      await time.advance(50_000);
+      expect(
+        (internals.coordinators.reconcileWorkflowNotifications as ReturnType<typeof mock>).mock
+          .calls.length - startup.repair,
+      ).toBe(1);
+      expect(teardowns.mock.calls.length - startup.teardowns).toBe(1);
+      await time.advance(60_000);
+      expect(teardowns.mock.calls.length - startup.teardowns).toBe(2);
+
+      await backend.shutdown();
+      const afterShutdown = teardowns.mock.calls.length;
+      await time.advance(120_000);
+      expect(teardowns.mock.calls.length).toBe(afterShutdown);
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();
@@ -1337,7 +1500,10 @@ test("shutdown clears backend-owned PR watch state before a new backend starts",
     await first.shutdown();
     second = new OrkestratorBackend(options);
     await second.init();
-    await expect(second.invoke<{ entries: unknown[] }>("get_pr_monitor_state")).resolves.toEqual({
+    // The snapshot is also stamped with the new service's generation/revision.
+    await expect(
+      second.invoke<{ entries: unknown[] }>("get_pr_monitor_state"),
+    ).resolves.toMatchObject({
       entries: [],
     });
   } finally {

@@ -39,6 +39,11 @@ export const MAX_TABS = MAX_TABS_PER_ENVIRONMENT;
 // Options for creating a tab
 export interface CreateTabOptions {
   canvasId?: string;
+  /**
+   * Design canvas placement: an adjacent split (default) or a tab in the
+   * current pane. A split falls back to the current pane at maximum depth.
+   */
+  designPlacement?: "split" | "current";
   /** Caller-owned ID used to bind durable backend work to the tab before it mounts. */
   tabId?: string;
   /** Focus an existing caller-owned tab instead of treating its id as a collision. */

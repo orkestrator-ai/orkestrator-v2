@@ -50,8 +50,15 @@ export type PortProtocol = "tcp" | "udp";
 
 export interface PortMapping {
   containerPort: number;
+  /** A fixed host port (1-65535), or 0 when `hostPortMode` is "auto". */
   hostPort: number;
   protocol: PortProtocol;
+  /**
+   * "auto": Docker assigns an ephemeral loopback host port at creation, so
+   * environments never compete for 3000/5173. Preview services follow the
+   * actual binding. Absent means a fixed `hostPort`.
+   */
+  hostPortMode?: "auto";
 }
 
 export type DefaultAgent = AgentPlatform;
@@ -181,6 +188,12 @@ export interface Environment {
   projectId: string;
   /** Idempotency key for an externally requested environment launch. */
   controlRequestId?: string;
+  /**
+   * SHA-256 of the canonical creation intent that first used
+   * `controlRequestId`. Absent on legacy records, which cannot detect a
+   * changed payload and converge as before.
+   */
+  controlRequestFingerprint?: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
   /**
@@ -235,6 +248,8 @@ export interface Environment {
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
+  /** Last backend-observed native session completion, even if another session is working. */
+  agentSessionCompletedAt?: string;
   /** Backend-owned aggregate agent activity shared by every frontend. */
   agentActivityState?: AgentActivityState;
   /** Last-write-wins timestamp for the aggregate activity snapshot. */
@@ -361,6 +376,7 @@ export type ClientEnvironment = Omit<
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
   | "controlRequestId"
+  | "controlRequestFingerprint"
   | "branchRevision"
 > & {
   /**
@@ -500,6 +516,11 @@ export interface PersistedNativeAgentPendingDispatch {
   promptSuggestions?: boolean;
   model?: string;
   reasoningEffort?: string;
+  /**
+   * The resolved command intent. A retry reuses it verbatim, so a command
+   * that was selected (or typed and resolved) can never come back as text.
+   */
+  command?: import("@orkestrator/protocol/native-agent").NativeAgentCommandIntent;
   createdAt: string;
 }
 
@@ -555,8 +576,22 @@ export interface PersistedNativeAgentSession {
   pendingSteer?: PersistedNativeAgentPendingSteer;
   /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
   openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;
+  /**
+   * Bounded, content-free outcomes of recent turns keyed by the request id that
+   * started them, recorded from provider status reads the backend already
+   * makes. Lets observers settle a turn as failed without reading transcripts.
+   */
+  turnOutcomes?: PersistedNativeAgentTurnOutcome[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersistedNativeAgentTurnOutcome {
+  requestId: string;
+  outcome: "completed" | "failed";
+  /** Bounded provider error detail for a failed turn. */
+  error?: string;
+  observedAt: string;
 }
 
 /** Content-free exact-once interaction records owned by backend workflows. */
@@ -619,6 +654,12 @@ export interface PersistedPromptQueue {
     claimedAt: string;
     expiresAt: string;
   };
+  /**
+   * Bounded tombstones for backend-authored items (typed `origin`) that left
+   * `messages` without being reserved or claimed — i.e. removed or replaced
+   * before dispatch. Lets the owner tell "removed" from "already sent".
+   */
+  removedOrigins?: Array<{ requestId: string; removedAt: string }>;
   updatedAt: string;
   revision: number;
 }
@@ -791,6 +832,17 @@ export interface AppConfig {
      * affect attempts admitted after the change only.
      */
     workflowResultTools?: import("@orkestrator/protocol/workflow-results").WorkflowResultToolsSettings;
+    /**
+     * Backend-owned rollout gate and kill switch for MCP configuration
+     * management. Absent means everything enabled. Turning it off never edits
+     * a saved provider file.
+     */
+    mcpManagement?: import("@orkestrator/protocol/mcp-management").McpManagementRolloutSettings;
+    /**
+     * Backend rollout switch for web annotations (`enabled` / `read-only` /
+     * `disabled`). `ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it.
+     */
+    webAnnotations?: import("@orkestrator/protocol/web-annotations").WebAnnotationRolloutSettings;
   };
   repositories: Record<string, RepositoryConfig>;
 }

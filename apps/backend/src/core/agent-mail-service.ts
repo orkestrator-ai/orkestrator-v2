@@ -11,6 +11,7 @@ import type {
   MailboxDescriptor,
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 const OBSERVED_PRESENCE_TTL_MS = 4_000;
 
@@ -206,10 +207,16 @@ export class AgentMailService {
   }
 
   refreshPresence(): Promise<void> {
-    if (this.presenceTask) return this.presenceTask;
-    const task = this.refreshPresenceOnce().finally(() => {
-      if (this.presenceTask === task) this.presenceTask = null;
-    });
+    recurringWorkMetrics.requested("mail-presence");
+    if (this.presenceTask) {
+      recurringWorkMetrics.coalesced("mail-presence");
+      return this.presenceTask;
+    }
+    const task = recurringWorkMetrics
+      .observe("mail-presence", () => this.refreshPresenceOnce())
+      .finally(() => {
+        if (this.presenceTask === task) this.presenceTask = null;
+      });
     this.presenceTask = task;
     return task;
   }
@@ -264,7 +271,9 @@ export class AgentMailService {
 
   drainInjects(options?: { includeDeferred?: boolean }): Promise<void> {
     const includeDeferred = options?.includeDeferred !== false;
+    recurringWorkMetrics.requested("mail-injection");
     if (this.drainTask) {
+      recurringWorkMetrics.coalesced("mail-injection");
       this.drainRequested = true;
       if (includeDeferred) this.drainIncludeDeferred = true;
       return this.drainTask;
@@ -275,7 +284,7 @@ export class AgentMailService {
         const deferred = this.drainIncludeDeferred;
         this.drainRequested = false;
         this.drainIncludeDeferred = false;
-        await this.drainInjectsOnce(deferred);
+        await recurringWorkMetrics.observe("mail-injection", () => this.drainInjectsOnce(deferred));
       } while (this.drainRequested);
     })().finally(() => {
       this.drainTask = null;

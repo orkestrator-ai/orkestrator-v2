@@ -1000,12 +1000,32 @@ describe("remote gateway", () => {
       }
     ).agentTestSessions;
     const entry = [...sessions.values()][0]!;
-    entry.expiresAt = Date.now() + 40;
+    // Capture the production expiry callback without letting a deliberately
+    // tiny session lifetime race the real loopback handshake. Only the long
+    // session timer is intercepted; networking and the harness poll remain on
+    // real time.
+    const originalSetTimeout = globalThis.setTimeout;
+    let runCredentialExpiry: (() => void) | undefined;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      if (typeof handler === "function" && (delay ?? 0) > 60_000) {
+        runCredentialExpiry = () => handler(...args);
+        return originalSetTimeout(handler, 24 * 60 * 60 * 1_000, ...args);
+      }
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof globalThis.setTimeout;
 
-    const stream = await openEventStream(gateway, info, "", {
-      authorization: "",
-      cookie,
-    });
+    let stream: Awaited<ReturnType<typeof openEventStream>>;
+    try {
+      stream = await openEventStream(gateway, info, "", {
+        authorization: "",
+        cookie,
+      });
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+    expect(runCredentialExpiry).toBeDefined();
+    entry.expiresAt = Date.now() - 1;
+    runCredentialExpiry!();
     // Wait on the client-side signal, which is the later of the two: the gateway
     // clears its own map synchronously inside `close()`, so asserting the abort
     // straight after that would race the socket teardown reaching this process.

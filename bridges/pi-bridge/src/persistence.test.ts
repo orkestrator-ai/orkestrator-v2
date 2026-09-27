@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSessionState } from "./agent-session.js";
 import { drainPersistence, loadPersistedState, schedulePersist } from "./persistence.js";
+import {
+  buildCommandCatalogue,
+  publishCommandCatalogue,
+  resolveCommandSelection,
+} from "./commands.js";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { clientSessionKeys, sessions, type PersistedState } from "./state.js";
 
 let directory: string;
@@ -368,4 +374,91 @@ test("preserves the read-only review restriction across bridge restart", async (
   clientSessionKeys.clear();
   await loadPersistedState();
   expect(sessions.get(state.id)?.readOnly).toBe(true);
+});
+
+test("restores the command list as stale, with no path, and still validates a selection", async () => {
+  const path = "/home/someone/.pi/agent/prompts/review.md";
+  const state = newSessionState("commands-key");
+  publishCommandCatalogue(
+    state,
+    buildCommandCatalogue({
+      promptTemplates: [
+        {
+          name: "review",
+          description: "Review",
+          content: "Review $@",
+          filePath: path,
+          sourceInfo: { path, source: "local", scope: "user", origin: "top-level" },
+        },
+      ],
+    } as unknown as AgentSession),
+  );
+  const row = state.slashCommands[0]!;
+  sessions.set(state.id, state);
+  schedulePersist();
+  await drainPersistence();
+
+  const raw = await readFile(join(directory, "state.json"), "utf8");
+  expect(raw).not.toContain(path);
+
+  sessions.clear();
+  clientSessionKeys.clear();
+  await loadPersistedState();
+  const restored = sessions.get(state.id)!;
+  expect(restored.slashCommands).toEqual([row]);
+  // Resources may have changed while the bridge was down; the next attach
+  // re-reads them and only then is the list authoritative again.
+  expect(restored.commandCatalogue.status).toBe("stale");
+  expect(
+    resolveCommandSelection(restored, {
+      id: row.id!,
+      name: row.name,
+      executionKind: "provider-prompt",
+      bindingRevision: row.bindingRevision!,
+      arguments: "x",
+    }),
+  ).toMatchObject({ ok: true, kind: "template", text: "/review x" });
+});
+
+test("drops restored command rows that do not name a Pi binding", async () => {
+  await writeState({
+    version: 1,
+    provider: "pi",
+    sessions: [
+      {
+        id: "restored-commands",
+        status: "idle",
+        messages: [],
+        revision: 1,
+        structured: [],
+        promptJournal: [],
+        commands: [
+          {
+            name: "/review",
+            id: "pi:template:review",
+            executionKind: "provider-prompt",
+            source: "template",
+          },
+          // The id names a different command than the row claims.
+          {
+            name: "/deploy",
+            id: "pi:template:review2",
+            executionKind: "provider-prompt",
+            source: "template",
+          },
+          {
+            name: "/steer",
+            id: "orkestrator:steer",
+            executionKind: "session-action",
+            source: "orkestrator",
+          },
+          { name: "has space", id: "pi:template:x", executionKind: "provider-prompt" },
+        ],
+      },
+    ],
+  });
+  await loadPersistedState();
+  expect(sessions.get("restored-commands")?.slashCommands.map((command) => command.id)).toEqual([
+    "pi:template:review",
+  ]);
 });

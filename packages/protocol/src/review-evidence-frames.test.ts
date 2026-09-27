@@ -99,6 +99,29 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
     expect(isReviewValidationDiscoveryPrompt(userRequest)).toBe(false);
   });
 
+  test("scopes discovered validation to the change using the repository's agent instructions", () => {
+    const body = reviewValidationDiscoveryBody("main");
+    expect(body).toContain("AGENTS.md");
+    expect(body).toContain("in the directories that contain changed paths");
+    expect(body).toContain("Select validation proportionate to the change.");
+    expect(body).toContain("Some suites are only needed in some situations");
+    expect(body).toContain("when a change's reach is uncertain");
+    expect(body).toContain(
+      "Summarize deliberately omitted suites and why in one concise limitation.",
+    );
+  });
+
+  test("still recognizes an unframed transcript of the earlier full-suite discovery body", () => {
+    const earlier = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}
+
+${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
+
+1. Inspect the current Git status and changes. Commit only relevant safe changes using the repository's commit conventions and hooks. Never skip hooks, force a clean tree, delete unrelated files, push, merge, rebase, reset, switch branches, or create a worktree. Do not implement features or fix validation failures. If unrelated or sensitive changes prevent a clean worktree, report the limitation.
+2. Discover validation requirements afresh from the CURRENT repository: instructions, directory structure, changed paths, CI workflows, manifests, task definitions, toolchain configuration, and relevant scripts.`;
+
+    expect(isReviewValidationDiscoveryPrompt(earlier)).toBe(true);
+  });
+
   test("recognizes the current kickoff producer even when the frame is still present", () => {
     const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
       reviewValidationDiscoveryBody("main"),

@@ -257,6 +257,7 @@ async function withService(
     abortGraceMs?: number;
     launchReconcileIntervalMs?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
+    keyedQueueScheduling?: boolean;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -302,6 +303,9 @@ async function withService(
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
     ...(setup.abortGraceMs === undefined ? {} : { abortGraceMs: setup.abortGraceMs }),
+    ...(setup.keyedQueueScheduling === undefined
+      ? {}
+      : { keyedQueueScheduling: setup.keyedQueueScheduling }),
     ...(setup.launchReconcileIntervalMs === undefined
       ? {}
       : { launchReconcileIntervalMs: setup.launchReconcileIntervalMs }),
@@ -1378,11 +1382,13 @@ describe("NativeAgentService", () => {
     );
   });
 
+  // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=native-queues).
   test("runs launch and queue work from the background timer", async () => {
     await withService(
       {
         prefix: "orkestrator-native-launch-timer-body-",
         launchReconcileIntervalMs: 40,
+        keyedQueueScheduling: false,
       },
       async ({ service }) => {
         const internal = service as unknown as {
@@ -1412,6 +1418,7 @@ describe("NativeAgentService", () => {
       await withService(
         {
           prefix: "orkestrator-native-launch-interval-",
+          keyedQueueScheduling: false,
           ...(launchReconcileIntervalMs === undefined ? {} : { launchReconcileIntervalMs }),
         },
         async ({ service }) => {

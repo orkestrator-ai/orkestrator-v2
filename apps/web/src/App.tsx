@@ -16,6 +16,7 @@ import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
+import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
@@ -337,6 +338,8 @@ function App() {
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
       setActiveConnectionId(list.activeConnectionId);
+      // Presentation reads are keyed by server identity; a switch resets them.
+      setReadCoordinatorConnection(list.activeConnectionId);
       setConnectionScopeResolved(true);
       setLocalBackendUnavailableMessage(
         list.activeConnectionId === LOCAL_CONNECTION_ID && list.localAvailable === false

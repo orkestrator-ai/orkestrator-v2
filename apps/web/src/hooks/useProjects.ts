@@ -230,11 +230,12 @@ export function useProjects() {
   );
 
   const updateProject = useCallback(
-    async (project: { id: string; name: string; localPath: string | null }) => {
+    async (project: { id: string; name: string; gitUrl?: string; localPath: string | null }) => {
       invalidateProjectSnapshots();
       try {
         const updated = await backend.updateProject(project.id, {
           name: project.name,
+          ...(project.gitUrl !== undefined ? { gitUrl: project.gitUrl } : {}),
           localPath: project.localPath,
         });
         updateProjectInStore(project.id, updated);

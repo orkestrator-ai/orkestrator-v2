@@ -1,6 +1,7 @@
 import * as shared from "./native-agent-service-shared.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import {
+  PROVIDER_RETIREMENT_GRACE_MS,
   ABSENT_BRIDGE_RECHECK_MS,
   ACP_SESSION_CREATE_ATTEMPTS,
   ACP_SESSION_CREATE_RETRY_BASE_MS,
@@ -109,7 +110,9 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
+import type { ProviderMcpConfigEvidenceRead } from "./agent-provider-contract.js";
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
   coordinatorRuntimeEnvironment,
@@ -118,6 +121,65 @@ import {
 } from "./coordinator-runtime.js";
 
 export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation {
+  /**
+   * Forget a closed provider session's in-memory registration on the cached
+   * provider, if one exists. Never resolves or starts a bridge: tab teardown
+   * calls this after the provider-side close was confirmed, and only when no
+   * other logical tab still maps to the same provider session.
+   */
+  releaseProviderSession(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): void {
+    this.providers.get(`${environmentId}\0${agent}`)?.releaseSession?.(providerSessionId);
+  }
+
+  /**
+   * Tab close through the provider, so the provider's own close runs: for
+   * OpenCode that settles workflow-turn ownership, restores temporary reviewer
+   * permissions and rejects pending requests before forgetting the session.
+   *
+   * Never starts a bridge. The cached provider is used only while it still
+   * points at the running bridge; a restarted bridge gets a fresh provider,
+   * cached like any other. `not-running` means no bridge answers, so the
+   * caller keeps its durable intent.
+   */
+  async closeProviderSessionIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): Promise<"closed" | "not-running" | "unsupported"> {
+    this.assertAcceptingWork();
+    const cacheKey = `${environmentId}\0${agent}`;
+    const input = { environmentId, agent, logicalSessionKey: "tab-close" };
+    let provider: NativeAgentRuntimeProvider | undefined;
+    if (this.options.provider) {
+      this.absentBridgeUntil.delete(cacheKey);
+      provider = await this.observeProvider(input);
+    } else {
+      const environment = await this.assertEnvironmentLive(environmentId);
+      const connection = await this.observeBridgeConnection(agent, environment);
+      if (!connection) return "not-running";
+      const identity = this.bridgeConnectionIdentity(connection);
+      const cached = this.providers.get(cacheKey);
+      if (cached && this.providerConnections.get(cacheKey) === identity) {
+        provider = cached;
+      } else {
+        this.assertAcceptingWork();
+        provider = createNativeAgentProvider(connection, {
+          autoAnswerRequests: false,
+          stageImages: (images) => this.stageImages(environmentId, images),
+        });
+        this.cacheProvider(cacheKey, provider, identity);
+      }
+    }
+    if (!provider) return "not-running";
+    if (!provider.closeSession) return "unsupported";
+    await provider.closeSession(providerSessionId);
+    return "closed";
+  }
+
   protected async provider(
     input: EnsureNativeAgentSessionInput,
   ): Promise<NativeAgentRuntimeProvider> {
@@ -153,6 +215,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       // questions. Answering them here would run a command the user never saw
       // and cancel the card that exists to answer it.
       autoAnswerRequests: false,
+      onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
       // Read per call rather than per provider: providers are cached for the
       // life of a bridge connection, so a settings edit would otherwise not
@@ -176,7 +239,12 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     provider: NativeAgentRuntimeProvider,
     connectionIdentity?: string,
   ): void {
-    this.providers.set(cacheKey, provider);
+    const previousIdentity = this.providerConnections.get(cacheKey);
+    this.installProvider(cacheKey, provider);
+    if (connectionIdentity !== previousIdentity && this.providers.get(cacheKey) === provider) {
+      // Same object, new bridge coordinates: still a new provider generation.
+      this.observations.replaceGroupGeneration(cacheKey);
+    }
     if (connectionIdentity) {
       this.providerConnections.set(cacheKey, connectionIdentity);
     } else {
@@ -221,7 +289,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       const provider = await this.options.provider(input, environment);
       await this.assertEnvironmentLive(input.environmentId);
       this.assertAcceptingWork();
-      this.providers.set(cacheKey, provider);
+      this.installProvider(cacheKey, provider);
       this.providerConnections.delete(cacheKey);
       return provider;
     }
@@ -234,14 +302,142 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     this.assertAcceptingWork();
     const provider = createNativeAgentProvider(connection, {
       autoAnswerRequests: false,
+      onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
     });
     this.cacheProvider(cacheKey, provider, this.bridgeConnectionIdentity(connection));
     return provider;
   }
 
+  /**
+   * Reload MCP configuration in an environment's *already running* bridge.
+   *
+   * Resolves the provider the way the activity sweep does, so it never starts
+   * a bridge, and calls a session-free bridge route, so it neither touches a
+   * session's liveness nor re-attaches an idle thread — and it still works
+   * after a bridge restart forgot every session. `not-running` is an answer:
+   * a process that is not running reads the saved file when it starts.
+   */
+  async reloadMcpConfigurationIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+  ): Promise<"reloaded" | "not-running" | "unsupported"> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "mcp-configuration-reload",
+    });
+    if (!provider) return "not-running";
+    if (!provider.reloadMcpConfiguration) return "unsupported";
+    return provider.reloadMcpConfiguration();
+  }
+
+  /**
+   * Which saved MCP configuration a session's live runtime was built from,
+   * for the MCP apply scheduler only.
+   *
+   * Observation-only on every hop: the persisted mapping supplies the
+   * provider session id, the provider is resolved the way the activity sweep
+   * resolves it (never starting a bridge), and the bridge route read is
+   * `/runtime-health`, which touches no liveness, hydrates no transcript and
+   * re-attaches nothing. The answer is never projected to a renderer.
+   */
+  async mcpConfigEvidenceIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): Promise<ProviderMcpConfigEvidenceRead> {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return { state: "none" };
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    if (!provider) return { state: "not-running" };
+    if (!provider.mcpConfigEvidence) return { state: "none" };
+    const evidence = await provider.mcpConfigEvidence(session.providerSessionId);
+    return evidence ? { state: "evidence", evidence } : { state: "none" };
+  }
+
+  /**
+   * Put a provider in the cache, retiring whatever it replaces.
+   *
+   * A replacement is a new observation generation for the group: any read in
+   * flight against the previous provider is fenced, and the group is due.
+   */
+  protected installProvider(cacheKey: string, provider: NativeAgentRuntimeProvider): void {
+    const previous = this.providers.get(cacheKey);
+    this.providers.set(cacheKey, provider);
+    this.cancelProviderRetirement(provider);
+    if (previous === provider) return;
+    this.observations.replaceGroupGeneration(cacheKey);
+    if (previous) this.retireProvider(previous);
+  }
+
+  protected isProviderCached(provider: NativeAgentRuntimeProvider): boolean {
+    for (const cached of this.providers.values()) if (cached === provider) return true;
+    return false;
+  }
+
+  /**
+   * Dispose a provider nothing should use any more, safely.
+   *
+   * Never while a prompt it sent is inside the at-most-once window (its
+   * `dispose()` would abort that request and park a turn that may have run),
+   * never while it is still cached under another key, and only after a grace
+   * period so a projection read or an interaction answer already in flight
+   * on it can finish. What this prevents is the duplicate observer: an
+   * evicted OpenCode provider keeps its event subscription until disposed.
+   */
+  protected retireProvider(provider: NativeAgentRuntimeProvider): void {
+    if (this.stopped || this.disposedProviders.has(provider)) return;
+    if (this.isProviderCached(provider) || this.retiringProviders.has(provider)) return;
+    this.retiringProviders.set(provider, null);
+    this.scheduleProviderRetirement(provider);
+  }
+
+  /** Arm the grace timer once no dispatch is in flight on the provider. */
+  protected scheduleProviderRetirement(provider: NativeAgentRuntimeProvider): void {
+    if (!this.retiringProviders.has(provider) || this.retiringProviders.get(provider)) return;
+    if (this.providerDispatchCounts.has(provider)) return; // re-armed when it settles
+    const timer = setTimeout(
+      () => void this.finishProviderRetirement(provider),
+      Math.max(0, this.options.providerRetirementGraceMs ?? PROVIDER_RETIREMENT_GRACE_MS),
+    );
+    timer.unref?.();
+    this.retiringProviders.set(provider, timer);
+  }
+
+  protected cancelProviderRetirement(provider: NativeAgentRuntimeProvider): void {
+    const timer = this.retiringProviders.get(provider);
+    if (timer) clearTimeout(timer);
+    this.retiringProviders.delete(provider);
+  }
+
+  protected async finishProviderRetirement(provider: NativeAgentRuntimeProvider): Promise<void> {
+    if (!this.retiringProviders.has(provider)) return;
+    if (this.providerDispatchCounts.has(provider)) {
+      // A dispatch reached it during the grace period; wait for that instead.
+      this.retiringProviders.set(provider, null);
+      return;
+    }
+    this.retiringProviders.delete(provider);
+    if (this.isProviderCached(provider) || this.disposedProviders.has(provider)) return;
+    this.disposedProviders.add(provider);
+    try {
+      await provider.dispose?.();
+    } catch (error) {
+      console.warn(
+        "[native-agent] Retiring an obsolete provider failed:",
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
+  }
+
   /** Forget a provider whose environment is gone, along with its observer state. */
   protected forgetProviderState(cacheKey: string): void {
+    const previous = this.providers.get(cacheKey);
+    if (previous) this.cancelProviderRetirement(previous);
+    this.observations.replaceGroupGeneration(cacheKey);
     this.providers.delete(cacheKey);
     this.providerConnections.delete(cacheKey);
     this.absentBridgeUntil.delete(cacheKey);
@@ -273,6 +469,8 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     if (this.providers.get(cacheKey) !== provider) return;
     this.providers.delete(cacheKey);
     this.providerConnections.delete(cacheKey);
+    this.observations.replaceGroupGeneration(cacheKey);
+    this.retireProvider(provider);
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */
@@ -331,7 +529,12 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     // Unlike observer eviction, an absent environment is safe to dispose only
     // after any provider call that passed the pre-dispatch liveness fence has
     // settled. Active providers remain cached for the next sweep to prune.
-    await Promise.allSettled(stale.map(([, provider]) => provider.dispose?.()));
+    await Promise.allSettled(
+      stale.map(([, provider]) => {
+        this.disposedProviders.add(provider);
+        return provider.dispose?.();
+      }),
+    );
   }
 
   protected trackScan(task: Promise<void>): Promise<void> {
@@ -401,11 +604,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       ? input.logicalSessionKey.slice(prefix.length)
       : "";
     const agentMcp =
-      (input.agent === "claude" ||
-        input.agent === "codex" ||
-        input.agent === "pi" ||
-        input.agent === "cursor" ||
-        input.agent === "grok") &&
+      nativeAgentCapabilities(input.agent).agentTools === true &&
       input.owner?.kind === "environment" &&
       tabId &&
       environment &&
@@ -534,6 +733,29 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     }
     if (record.mode === "plan" || record.mode === "build") return record.mode;
     return record.mode === undefined ? "build" : "plan";
+  }
+
+  /**
+   * The mode actually sent with a queued prompt. Backend-authored prompts may
+   * ask to leave the session's own mode untouched (`preserveSessionMode`):
+   * several providers persist a prompt's mode on the session, so sending the
+   * `build` default would silently change a mode the user chose.
+   */
+  protected queueDispatchMode(
+    agent: BuildPipelineAgent,
+    message: unknown,
+  ): ProviderExecutionMode | undefined {
+    if (
+      message &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      (message as Record<string, unknown>).preserveSessionMode === true &&
+      (message as Record<string, unknown>).mode === undefined &&
+      (message as Record<string, unknown>).planModeEnabled === undefined
+    ) {
+      return undefined;
+    }
+    return this.queueExecutionMode(agent, message);
   }
 
   protected async bridgeConnection(

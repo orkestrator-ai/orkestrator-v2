@@ -20,6 +20,8 @@
  * round trip every fifteen seconds per environment.
  */
 
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+
 export interface GitFetchSchedulerOptions {
   /** Runs a git command; injected so tests need neither git nor a network. */
   run: (args: string[], timeoutMs: number) => Promise<{ stdout: string }>;
@@ -28,6 +30,8 @@ export interface GitFetchSchedulerOptions {
   now?: () => number;
   fetchTimeoutMs?: number;
   resolveTimeoutMs?: number;
+  /** Content-free cost accounting; defaults to the process-wide recorder. */
+  metrics?: RecurringWorkMetrics;
 }
 
 /** A base branch that moves on the order of minutes does not need fetching faster. */
@@ -45,6 +49,7 @@ export class GitFetchScheduler {
   private readonly now: () => number;
   private readonly fetchTimeoutMs: number;
   private readonly resolveTimeoutMs: number;
+  private readonly metrics: RecurringWorkMetrics;
   /** worktree path -> shared git dir, so the resolve runs once per worktree. */
   private readonly commonDirs = new Map<string, Promise<string>>();
   /** `${commonDir}\0${ref}` -> last fetch. */
@@ -56,6 +61,7 @@ export class GitFetchScheduler {
     this.now = options.now ?? (() => Date.now());
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? 60_000;
     this.resolveTimeoutMs = options.resolveTimeoutMs ?? 10_000;
+    this.metrics = options.metrics ?? recurringWorkMetrics;
   }
 
   /**
@@ -64,19 +70,28 @@ export class GitFetchScheduler {
    * whatever refs are already local, which is what the caller did before.
    */
   async ensureFetched(worktreePath: string, ref: string): Promise<void> {
+    this.metrics.requested("git-fetch-local");
     const key = `${await this.resolveCommonDir(worktreePath)}\0${ref}`;
     const existing = this.fetches.get(key);
 
     if (existing?.inFlight) {
+      this.metrics.coalesced("git-fetch-local");
       if (existing.invalidatedWhileInFlight) {
         return existing.inFlight.then(() => this.ensureFetched(worktreePath, ref));
       }
       return existing.inFlight;
     }
-    if (existing && this.now() - existing.completedAt < this.ttlMs) return;
+    if (existing && this.now() - existing.completedAt < this.ttlMs) {
+      this.metrics.cacheHit("git-fetch-local");
+      return;
+    }
+    this.metrics.cacheMiss("git-fetch-local");
 
     const record: FetchRecord = { completedAt: existing?.completedAt ?? 0 };
-    const attempt = this.run(["-C", worktreePath, "fetch", "origin", ref], this.fetchTimeoutMs)
+    const attempt = this.metrics
+      .observe("git-fetch-local", () =>
+        this.run(["-C", worktreePath, "fetch", "origin", ref], this.fetchTimeoutMs),
+      )
       .then(
         () => undefined,
         () => undefined,

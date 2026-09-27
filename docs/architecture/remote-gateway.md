@@ -29,6 +29,16 @@ Do not run a standalone backend alongside Electron against the same data
 directory. Do not use Tailscale Funnel; the backend is intended to stay
 private to the tailnet.
 
+The published package runs the same service with `orkestrator serve` (the
+bare `orkestrator --host …` forms keep working). Its client commands
+(`orkestrator project list`, `environment start`, …) attach to an
+already-running backend through `POST /__orkestrator/invoke` with the bearer
+token, using one versioned command, `public_action`; they never start a
+backend. Once serving, every backend publishes a mode-0600
+`<data dir>/backend-instance.json` naming its endpoint, generation and the
+path of its auth file (never the token). See
+[public-cli.md](public-cli.md).
+
 ## Connecting `orkestrator.dev`
 
 Both devices must be on the same Tailscale network. The hosted client requires
@@ -129,6 +139,23 @@ The hosted origins that must be allowed are `https://orkestrator.dev` and
 - Do not put the gateway token in a URL, screenshot, log, or chat.
 - The token lasts for the current browser tab unless **Remember token** is
   enabled.
+
+## Service previews
+
+Browser tabs can preview registered services through a scoped desktop tunnel
+(`/__orkestrator/preview/tunnel` on this gateway) or through private HTTPS
+preview origins served by a separate listener. Both are off by default. See
+[browser-previews.md](browser-previews.md) for setup, limits, and the rollback
+procedure.
+
+- Preview credentials authenticate only their one service. They never
+  authenticate the app, the backend API, the event stream, or the legacy
+  loopback proxy.
+- Rotating the gateway token revokes all active preview access.
+- The legacy loopback proxy (`/__orkestrator/browser/loopback/<port>/`) is
+  unchanged for older clients.
+- `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` (`0`/`1`)
+  override the stored preview settings.
 
 ## Troubleshooting
 

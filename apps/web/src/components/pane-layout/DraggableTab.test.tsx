@@ -1006,7 +1006,12 @@ describe("DraggableTab tooltip and context menu structure", () => {
       />,
     );
     fireEvent.contextMenu(screen.getByText("Claude 1"));
-    const openEvents: unknown[] = [];
+    const openEvents: Array<{
+      environmentId: string;
+      tabId: string;
+      mode: string;
+      restoreFocusTo?: HTMLElement | null;
+    }> = [];
     const recordOpenEvent = (event: Event) => {
       openEvents.push((event as CustomEvent).detail);
     };
@@ -1018,10 +1023,13 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.contextMenu(screen.getByText("Claude 1"));
     fireEvent.click(screen.getByText("Inbox settings…"));
     window.removeEventListener("orkestrator:open-agent-mail", recordOpenEvent);
-    expect(openEvents).toEqual([
+    expect(openEvents.map(({ restoreFocusTo: _restoreFocusTo, ...detail }) => detail)).toEqual([
       { environmentId: "env-1", tabId: "tab-claude", mode: "compose" },
       { environmentId: "env-1", tabId: "tab-claude", mode: "settings" },
     ]);
+    for (const event of openEvents) {
+      expect(event.restoreFocusTo?.contains(screen.getByText("Claude 1"))).toBe(true);
+    }
   });
 
   test("opens the global composer from the tab context menu", async () => {

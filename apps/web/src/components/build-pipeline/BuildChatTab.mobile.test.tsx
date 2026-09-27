@@ -185,10 +185,27 @@ function renderPipeline(next: BuildPipeline) {
       isActive
     />,
   );
+  expandStageGroups();
 }
 
 function renderTab() {
   renderPipeline(pipeline);
+}
+
+/**
+ * Open every folded phase in the stage rail.
+ *
+ * Settled phases fold to a summary, which unmounts their stage tabs. Tests
+ * about a stage's transcript, badges or keyboard behaviour rather than the
+ * rail's folding open them all first. The headers are found in the DOM, not
+ * the accessibility tree, so this also works while a phone hides the rail.
+ */
+function expandStageGroups() {
+  for (const header of Array.from(
+    document.querySelectorAll<HTMLElement>('[data-stage-group][aria-expanded="false"]'),
+  )) {
+    fireEvent.click(header);
+  }
 }
 
 /** The mobile switcher, scoped so its tabs never collide with the stage tabs. */
@@ -207,7 +224,12 @@ function viewTabs() {
 function stageTab(name: string): HTMLElement | null {
   const list = screen.queryByRole("tablist", { name: "Build stages" });
   if (!list) return null;
-  return within(list).queryByRole("tab", { name: new RegExp(name) });
+  const ids = (list.getAttribute("aria-owns") ?? "").split(" ").filter(Boolean);
+  return (
+    ids
+      .map((id) => document.getElementById(id))
+      .find((tab) => tab?.getAttribute("aria-label")?.match(new RegExp(name))) ?? null
+  );
 }
 
 /** The options behind the transcript on screen right now. */

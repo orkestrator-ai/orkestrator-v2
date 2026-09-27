@@ -7,7 +7,11 @@
  * restart, an idle detach or a crashed child all recover without the renderer
  * seeing anything other than a session that was briefly connecting.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import {
   Agent,
   type AgentOptions,
@@ -20,6 +24,8 @@ import {
 import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
+import { schedulePersist } from "./persistence.js";
+import { finishTombstonesForAgent, hasTombstoneForAgent } from "./session-close.js";
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
@@ -27,6 +33,7 @@ import {
   cursorMcpServers,
   hostOrkestratorCustomTools,
   mcpConnectionKey,
+  retireMcpObservations,
   type AgentMcpConnection,
 } from "./mcp.js";
 import {
@@ -37,9 +44,11 @@ import {
 import { boundTranscript, chargeTranscript } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
 import {
+  assertSessionOpen,
   clientSessionKeys,
   isObject,
   nonBlank,
+  SessionClosedError,
   sessionCreations,
   sessions,
   type BridgeMessage,
@@ -89,6 +98,7 @@ export function newSessionState(
     structured: new Map(),
     promptJournal: new Map(),
     steerJournal: new Map(),
+    steerJournalBytes: 0,
     activeSubagentDescriptors: new Map(),
     subagentLimitExceeded: false,
     todos: [],
@@ -123,6 +133,14 @@ export async function createSession(
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
     if (existing) {
+      // A closing session is never handed back: the caller would be given an
+      // id whose close is already in flight. Once the close settles the key
+      // is released and a deliberate create gets a new session.
+      if (existing.closed) {
+        throw new SessionConflictError(
+          "This Cursor session is closing; retry once the close completes",
+        );
+      }
       if (policy) existing.policy = resolveCursorExecutionPolicy(policy);
       // The boundary of a session that already exists is moved by the caller
       // of this function, which owns the HTTP status a conflicting move
@@ -161,10 +179,60 @@ export async function createSession(
  * config route and the explicit attach route, so that race is ordinary
  * concurrency rather than a corner case.
  */
-export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
+export async function ensureAgent(
+  state: SessionState,
+  options: { atTurnStart?: boolean } = {},
+): Promise<SDKAgent> {
+  // A closing session attaches nothing. Checked here rather than at each
+  // route so no future caller can forget it.
+  assertSessionOpen(state);
   if (state.agent && (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)) {
-    await detachAgent(state);
+    // A rotated tab token detaches whatever the turn state. If the saved MCP
+    // files also changed, this detach is adopting a configuration change too,
+    // and a failed resume must not quietly become a new conversation — the
+    // branch below never sees it, because the agent is already gone.
+    const agent = state.agent;
+    const attached = attachedConfigKeys.get(state);
+    const configChanged =
+      attached !== undefined && attached !== (await cursorMcpConfigFingerprint(state));
+    // The fingerprint read yields. Only a caller that still sees the agent it
+    // read, still on the old credential, owns this detach.
+    if (
+      state.agent === agent &&
+      (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)
+    ) {
+      if (configChanged) {
+        markConfigResumePending(state, true);
+        retireMcpObservations(state);
+      }
+      await detachAgent(state);
+    }
   }
+  // A saved MCP configuration change is adopted only between turns: the SDK
+  // reads settings sources when an agent is created or resumed, so the live
+  // agent is released and resumed on the same conversation. The prompt path
+  // has already claimed `dispatching` for the turn it is starting.
+  const idle = state.status !== "running" && (options.atTurnStart || !state.dispatching);
+  const agent = state.agent;
+  if (agent && !state.attaching && idle) {
+    const attached = attachedConfigKeys.get(state);
+    // The fingerprint read yields. A concurrent caller may have detached this
+    // agent and started the replacement attach meanwhile; detaching again
+    // would tear down the agent that attach is about to publish. Only a caller
+    // that still sees the agent it read, with no attach in flight, owns it.
+    if (
+      attached !== undefined &&
+      attached !== (await cursorMcpConfigFingerprint(state)) &&
+      state.agent === agent &&
+      !state.attaching &&
+      (options.atTurnStart || (state.status !== "running" && !state.dispatching))
+    ) {
+      markConfigResumePending(state, true);
+      retireMcpObservations(state);
+      await detachAgent(state);
+    }
+  }
+  assertSessionOpen(state);
   if (state.agent) return state.agent;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -244,7 +312,130 @@ function cursorAllowedTools(
   return Array.from(tools);
 }
 
+let configHomeForTests: string | undefined;
+
+/** Point the configuration fingerprint at a temporary home; never the operator's. */
+export function setCursorMcpConfigHomeForTests(home?: string): void {
+  configHomeForTests = home;
+}
+
+/** Fingerprints of the MCP files each attached agent was created from. */
+const attachedConfigKeys = new WeakMap<SessionState, string>();
+/** The per-file digests behind each attached agent's fingerprint, and when they were read. */
+const attachedConfigRevisions = new WeakMap<
+  SessionState,
+  CursorMcpConfigRevision & { builtAt: string }
+>();
+let fingerprintForTests: ((state: SessionState) => Promise<string>) | undefined;
+
+export function setCursorMcpFingerprintForTests(
+  fingerprint?: (state: SessionState) => Promise<string>,
+): void {
+  fingerprintForTests = fingerprint;
+}
+/**
+ * Record that a session was detached to adopt a configuration change. Its next
+ * attach must resume the same conversation: silently starting a new one to
+ * apply a settings edit would drop the model's context without the user
+ * choosing it. Persisted with the session, so a bridge restart between the
+ * detach and a successful resume cannot turn the next failed resume into a
+ * fresh conversation.
+ */
+function markConfigResumePending(state: SessionState, pending: boolean): void {
+  if ((state.configResumePending === true) === pending) return;
+  if (pending) state.configResumePending = true;
+  else delete state.configResumePending;
+  schedulePersist();
+}
+
+/**
+ * Content-free identity of the MCP files an agent was created from.
+ *
+ * Each source is `sha256:<base64url>` of the file's exact bytes, `absent`, or
+ * `excluded` when the session's policy does not load it — so the backend,
+ * which knows what it wrote, can tell whether an attached agent picked a save
+ * up. Never a path and never a server body: the files hold headers and env.
+ */
+export interface CursorMcpConfigRevision {
+  /** One opaque value over both sources; `read-only` for a coordinator. */
+  fingerprint: string;
+  sources: {
+    /** `~/.cursor/mcp.json`. */
+    user: string;
+    /** `<cwd>/.cursor/mcp.json`. */
+    project: string;
+  };
+}
+
+async function fileDigest(file: string): Promise<string> {
+  try {
+    return `sha256:${createHash("sha256")
+      .update(await readFile(file))
+      .digest("base64url")}`;
+  } catch {
+    return "absent";
+  }
+}
+
+/**
+ * Per-file digests of the MCP files a session's settings sources read.
+ * Read-only coordinators load no settings sources, so their configuration
+ * never changes and both sources are `excluded`.
+ */
+export async function cursorMcpConfigRevision(
+  state: SessionState,
+): Promise<CursorMcpConfigRevision> {
+  const policy = resolveCursorExecutionPolicy(state.readOnly ? undefined : state.policy);
+  if (state.readOnly || policy.id === "coordinator-read-only") {
+    return { fingerprint: "read-only", sources: { user: "excluded", project: "excluded" } };
+  }
+  const [user, project] = await Promise.all([
+    fileDigest(join(configHomeForTests ?? homedir(), ".cursor", "mcp.json")),
+    policy.projectResources
+      ? fileDigest(join(workingDirectory, ".cursor", "mcp.json"))
+      : Promise.resolve("excluded"),
+  ]);
+  return {
+    fingerprint: createHash("sha256")
+      .update(`user=${user}\u0000project=${project}`)
+      .digest("base64url"),
+    sources: { user, project },
+  };
+}
+
+/** Fingerprint of the MCP files a session's settings sources read. */
+export async function cursorMcpConfigFingerprint(state: SessionState): Promise<string> {
+  if (fingerprintForTests) return fingerprintForTests(state);
+  return (await cursorMcpConfigRevision(state)).fingerprint;
+}
+
+/**
+ * Which saved MCP configuration the attached agent was created from, for
+ * `/session/:id/runtime-health`. Absent while no agent is attached: a
+ * detached session has loaded nothing, which is how the backend tells "not
+ * yet applied" from "applied". Content-free digests only.
+ */
+export function publicCursorMcpConfig(
+  state: SessionState,
+): (CursorMcpConfigRevision & { builtAt: string }) | undefined {
+  if (!state.agent) return undefined;
+  const revision = attachedConfigRevisions.get(state);
+  return revision ? structuredClone(revision) : undefined;
+}
+
 async function attach(state: SessionState): Promise<SDKAgent> {
+  // Fingerprint before reading any configuration, so an edit racing this
+  // attach is seen as a change at the next boundary rather than missed.
+  // `builtAt` is taken before the read too: a lower bound on when the bytes
+  // behind the reported digests were read.
+  const builtAt = new Date().toISOString();
+  const revision = fingerprintForTests ? undefined : await cursorMcpConfigRevision(state);
+  const configKey = revision?.fingerprint ?? (await cursorMcpConfigFingerprint(state));
+  const recordAttachedConfig = () => {
+    attachedConfigKeys.set(state, configKey);
+    if (revision) attachedConfigRevisions.set(state, { ...revision, builtAt });
+    else attachedConfigRevisions.delete(state);
+  };
   const sessionPolicy = state.policy;
   const policy = resolveCursorExecutionPolicy(
     state.readOnly
@@ -295,6 +486,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         httpFallback: policy.sandbox === "container",
       })
     : undefined;
+  if (state.closed) {
+    await hosted?.close().catch(() => undefined);
+    throw new SessionClosedError();
+  }
   state.hostedMcpClose = hosted?.close;
   state.hostedMcpTools = hosted?.customTools;
   state.mcpServerNames = hosted ? ["orkestrator"] : allowHttpMcp ? Object.keys(mcpServers) : [];
@@ -336,6 +531,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   state.agentLocalOptions = options.local;
 
   try {
+    // Closed while the workspace warmed: nothing may be created for it.
+    assertSessionOpen(state);
     // A session that already ran holds an agent id, and resuming it is what
     // keeps the model's own context across a bridge restart. A resume that fails
     // is not fatal: the id may name an agent the store no longer has, and a new
@@ -345,17 +542,36 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     // Keep its store record intact, but create a usable first-run handle under
     // the current policy. This also repairs placeholders restored after exit.
     if (state.agentId && !(await hasUnusedInitialRun(state.agentId))) {
+      // A close a previous process left unfinished for this same conversation
+      // cancels every run it finds; it has to finish before this attach can
+      // start one. Its failure refuses the attach — it is not a reason to
+      // abandon the conversation for a new one.
+      if (hasTombstoneForAgent(state.agentId)) {
+        await finishTombstonesForAgent(state.agentId);
+        assertSessionOpen(state);
+      }
       try {
         const resumed = await cursorAgent.resume(state.agentId, options);
+        await disposeIfClosed(state, resumed);
         state.agent = resumed;
+        recordAttachedConfig();
+        markConfigResumePending(state, false);
         schedulePlanAccountRefresh();
         return resumed;
-      } catch {
+      } catch (error) {
+        if (error instanceof SessionClosedError) throw error;
+        if (state.configResumePending) {
+          throw new Error(
+            "Cursor could not reopen this conversation with the updated MCP configuration. The conversation was kept; retry, or start a new session to use the new servers.",
+            { cause: error },
+          );
+        }
         state.agentId = undefined;
       }
     }
 
     const created = await cursorAgent.create({ ...options, name: "Orkestrator" });
+    await disposeIfClosed(state, created);
     // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
     // state somehow lost its id), the replacement starts its cumulative token
     // and cost counters from zero; retaining the previous agent's floor would
@@ -365,6 +581,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     if (clearAgentScopedUsage(state)) state.revision += 1;
     state.agent = created;
     state.agentId = created.agentId;
+    recordAttachedConfig();
+    markConfigResumePending(state, false);
     schedulePlanAccountRefresh();
     return created;
   } catch (error) {
@@ -378,6 +596,21 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     ]);
     throw error;
   }
+}
+
+/**
+ * Dispose an agent that finished attaching after its session was closed.
+ *
+ * The close could not recall the create or resume it raced, so the result is
+ * owned here: installed on a closed session it would be a live agent nothing
+ * will ever release. A failed dispose is observed and still refuses the attach.
+ */
+async function disposeIfClosed(state: SessionState, agent: SDKAgent): Promise<void> {
+  if (!state.closed) return;
+  await Promise.resolve()
+    .then(() => agent[Symbol.asyncDispose]())
+    .catch(() => undefined);
+  throw new SessionClosedError();
 }
 
 let warnedLegacyPolicy = false;
@@ -490,6 +723,8 @@ export async function detachAgent(state: SessionState): Promise<void> {
   const hostedMcpClose = state.hostedMcpClose;
   state.agent = null;
   state.attachedMcpKey = undefined;
+  attachedConfigKeys.delete(state);
+  attachedConfigRevisions.delete(state);
   state.workspaceWarmRelease = undefined;
   state.hostedMcpClose = undefined;
   state.hostedMcpTools = undefined;
@@ -501,8 +736,30 @@ export async function detachAgent(state: SessionState): Promise<void> {
   ]);
 }
 
-/** Restore the checkpoint captured immediately before the selected user turn. */
+/**
+ * Restore the checkpoint captured immediately before the selected user turn.
+ *
+ * Owned work: a permanent close waits for a rewind in flight (it rewrites the
+ * provider's store and cannot be recalled halfway), and a closing session
+ * starts none. A close that arrives before the first write wins.
+ */
 export async function rewindSessionHistory(state: SessionState, messageId: string): Promise<void> {
+  assertSessionOpen(state);
+  if (state.rewinding) throw new SessionConflictError("A Cursor rewind is already in progress");
+  const work = rewindOwned(state, messageId);
+  const owned: Promise<void> = work.then(
+    () => undefined,
+    () => undefined,
+  );
+  state.rewinding = owned;
+  try {
+    await work;
+  } finally {
+    if (state.rewinding === owned) state.rewinding = undefined;
+  }
+}
+
+async function rewindOwned(state: SessionState, messageId: string): Promise<void> {
   if (!state.agentId) throw new Error("This Cursor session has no persisted conversation");
   if (state.status === "running" || state.dispatching) {
     throw new Error("The Cursor session is already running");
@@ -533,6 +790,9 @@ export async function rewindSessionHistory(state: SessionState, messageId: strin
   if (!targetRun || !checkpoint) throw new Error("Cursor has no checkpoint for that message");
   const agent = await store.agents.get({ agentId: state.agentId });
   if (!agent) throw new Error("Cursor no longer has this agent");
+  // The last point at which nothing has been rewritten. Past it the rewind
+  // runs to its end and the close waits for it.
+  assertSessionOpen(state);
   await store.agents.update({
     agent: {
       ...agent,
@@ -740,6 +1000,11 @@ export async function resumeSession(
   const requestedPolicyKey = resumePolicyKey(policy);
   const requestedMcpKey = mcpConnectionKey(agentMcp);
   const existing = Array.from(sessions.values()).find((state) => state.agentId === agentId);
+  if (existing?.closed) {
+    throw new SessionConflictError(
+      "This Cursor session is closing; retry once the close completes",
+    );
+  }
   if (existing) {
     if (
       resumePolicyKey(existing.policy) !== requestedPolicyKey ||
@@ -767,6 +1032,10 @@ export async function resumeSession(
   }
 
   const operation = (async () => {
+    // A restored close of this same conversation cancels every run of it that
+    // it finds. Finished first, so it can never cancel the run this adoption
+    // recovers or the next prompt starts.
+    if (hasTombstoneForAgent(agentId)) await finishTombstonesForAgent(agentId);
     const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
     state.agentId = agentId;
     state.agentMcp = agentMcp;
@@ -857,6 +1126,10 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   // workflow-result invocation without an executor.
   await ensureAgent(state);
   state.activeRun = active;
+  state.activeRunRecovered = true;
+  // What the steer fence judges a recovered run by: one created after the
+  // fence last overflowed cannot be a run whose history it dropped.
+  state.activeRunCreatedAt = active.createdAt;
   state.status = "running";
   state.turnStartedAt = active.createdAt;
   state.cancelTurn = () => active.cancel();
@@ -880,12 +1153,49 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       state.error = error instanceof Error ? error.message : "Cursor run recovery failed";
     } finally {
       unsubscribe();
-      if (state.activeRun === active) state.activeRun = undefined;
+      if (state.activeRun === active) {
+        state.activeRun = undefined;
+        state.activeRunRecovered = undefined;
+        state.activeRunCreatedAt = undefined;
+      }
       state.cancelTurn = undefined;
       state.recoveringRun = undefined;
       state.revision += 1;
     }
   })();
+}
+
+/**
+ * Cancel any run of `agentId` still executing after the session that owned it
+ * was closed by a previous bridge process. Never rejects.
+ *
+ * `unknown` means the store could not be read — not evidence of a live run.
+ * `running` means one was found and did not acknowledge cancellation.
+ */
+export async function cancelSurvivingRuns(
+  agentId: string,
+  cancelTimeoutMs: number,
+): Promise<"none" | "cancelled" | "running" | "unknown"> {
+  let runs: Run[];
+  try {
+    runs = await listAllRuns(agentId);
+  } catch {
+    return "unknown";
+  }
+  const running = runs.filter((run) => run.status === "running");
+  if (running.length === 0) return "none";
+  const stopped = await Promise.all(
+    running.map((run) =>
+      withTimeout(
+        Promise.resolve().then(() => run.cancel()),
+        cancelTimeoutMs,
+      ).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  return stopped.every(Boolean) ? "cancelled" : "running";
 }
 
 function applyRecoveredStreamEvent(state: SessionState, event: unknown): void {

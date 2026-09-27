@@ -47,16 +47,25 @@ describe("monorepo orchestration scripts", () => {
 
   test("desktop build and development scripts propagate failures and clean children", () => {
     const build = read("apps/desktop/scripts/build.ts");
+    const bundle = read("apps/desktop/scripts/electron-bundle.ts");
     const dev = read("apps/desktop/scripts/dev.ts");
     const lifecycle = read("apps/desktop/scripts/dev/lifecycle.ts");
-    expect(build).toContain("result.status !== 0");
+    expect(build).toContain("result.status ?? 1");
     expect(build).toContain('run("bunx", ["tsc", "--noEmit"');
-    expect(build).toContain("const result = await Bun.build");
-    expect(build).toContain('path.join(packageRoot, "electron/main.ts")');
-    expect(build).toContain('path.join(packageRoot, "electron/preload.ts")');
-    expect(build).toContain('external: ["electron"]');
-    expect(build).toContain('target: "node"');
+    expect(build).toContain("dependencies.bundle ?? bundleElectron");
+    expect(build).toContain("if (!result.success)");
+    expect(bundle).toContain("Bun.build(");
+    expect(bundle).toContain('"electron/main.ts"');
+    expect(bundle).toContain('"electron/preload.ts"');
+    expect(bundle).toContain('external: ["electron"]');
+    expect(bundle).toContain('target: "node"');
     expect(build).toContain("rmSync(output");
+    // Development must bundle like production: a `tsc` emit leaves workspace
+    // imports pointing at raw `.ts` sources that Electron's Node cannot run.
+    expect(lifecycle).toContain('spawnSync("bunx", ["tsc", "--noEmit"');
+    expect(lifecycle).toContain(
+      "await compileElectronForDevelopment(profile.logDir, dependencies)",
+    );
     expect(dev).toContain("await startDevelopment");
     expect(dev).toContain("process.exitCode = 1");
     expect(lifecycle).toContain("killOwnedChild(electron");
@@ -211,24 +220,15 @@ describe("monorepo orchestration scripts", () => {
     );
   });
 
-  test("bridge suites carry the root preload harness Turbo's package cwd would drop", () => {
-    // Turbo runs each script from its own package, and Bun reads `bunfig.toml`
-    // from the invocation directory without walking up. Anything the root
-    // bunfig preloads — the happy-dom registration, the git-config isolation,
-    // `CODEX_BRIDGE_NO_SERVER`, the bounded diagnostics — therefore has to be
-    // named explicitly, or bridge tests silently run without it and the codex
-    // suite binds a real port.
-    const preloads = (Bun.TOML.parse(read("bunfig.toml")) as { test?: { preload?: string[] } }).test
-      ?.preload;
-    expect(preloads?.length).toBeGreaterThan(0);
-
+  test("bridge suites use the node preload without registering a browser DOM", () => {
+    // Bridge tests exercise HTTP/process code. Happy DOM replaces Bun's native
+    // fetch/Response classes and forces loopback tests to swap them back.
     for (const bridge of BRIDGE_MANIFESTS) {
       const scripts =
         (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
-      for (const preload of preloads ?? []) {
-        // `./tests/setup.ts` at the root is `../../tests/setup.ts` from a bridge.
-        expect(scripts["test:bridge"]).toContain(`--preload ${preload.replace(/^\.\//, "../../")}`);
-      }
+      expect(scripts["test:bridge"]).toContain("--preload ../../tests/setup-node.ts");
+      expect(scripts["test:bridge"]).not.toContain("register-dom");
+      expect(scripts["test:bridge"]).not.toContain("tests/setup.ts");
     }
   });
 
@@ -244,6 +244,25 @@ describe("monorepo orchestration scripts", () => {
     // `build` stays cacheable: it is the expensive dependency, and replaying it
     // does not weaken any assertion.
     expect(turbo.tasks?.build?.cache).not.toBe(false);
+  });
+
+  test("source-only workspace tests can overlap required production builds", () => {
+    for (const configPath of [
+      "apps/web/turbo.json",
+      "apps/web-public/turbo.json",
+      "apps/desktop/turbo.json",
+      "packages/protocol/turbo.json",
+    ]) {
+      const config = JSON.parse(read(configPath)) as {
+        tasks?: Record<string, { dependsOn?: string[] }>;
+      };
+      expect(config.tasks?.["test:workspace"]?.dependsOn, configPath).toEqual([]);
+    }
+
+    // These two suites consume built artifacts and inherit the root edge.
+    expect(read("apps/backend/tests/standalone.test.ts")).toContain("apps/backend/dist/main.js");
+    expect(read("packages/cli/tests/cli.test.ts")).toContain("dist");
+    expect(read("scripts/test-all.ts")).toContain('"build",\n        "test:workspace"');
   });
 
   test("the aggregate runner relays interrupts to its detached groups", () => {
@@ -288,7 +307,7 @@ describe("monorepo orchestration scripts", () => {
     // stack through their own configs and whose tests need Bun types the shared
     // project deliberately does not load.
     const playwright = read("e2e/playwright.config.ts");
-    expect(playwright).toContain('testIgnore: "agent-testing/**"');
+    expect(playwright).toContain('testIgnore: ["agent-testing/**", "preview/**"]');
 
     const shared = JSON.parse(read("e2e/tsconfig.json")) as { exclude?: string[] };
     expect(shared.exclude).toContain("agent-testing");

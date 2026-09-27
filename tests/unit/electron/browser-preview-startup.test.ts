@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../../../apps/desktop/electron/browser-preview-manager";
 import {
+  configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
@@ -440,5 +441,93 @@ describe("browser preview startup wiring", () => {
     activate?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onCreateError).toHaveBeenCalledWith(failure);
+  });
+
+  test("handles quit-time activate before startup and ahead of window checks", async () => {
+    let activate!: () => void;
+    let startupComplete = false;
+    let quitting = false;
+    let windowCount = 1;
+    let finishCreation!: () => void;
+    const createWindow = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCreation = resolve;
+        }),
+    );
+    const relaunch = mock(() => undefined);
+    registerBrowserPreviewWindowActivation({
+      onActivate: (listener) => {
+        activate = listener;
+      },
+      handleActivate: () => {
+        if (quitting) {
+          relaunch();
+          return true;
+        }
+        return !startupComplete;
+      },
+      getWindowCount: () => windowCount,
+      createWindow,
+      onCreateError: () => undefined,
+    });
+
+    activate(); // Startup still owns the first window.
+    expect(createWindow).not.toHaveBeenCalled();
+    windowCount = 0;
+    quitting = true;
+    activate(); // Reopen during an asynchronous startup step.
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    quitting = false;
+    startupComplete = true;
+    activate();
+    await Promise.resolve();
+    expect(createWindow).toHaveBeenCalledTimes(1);
+    quitting = true;
+    windowCount = 1;
+    activate(); // Existing window and in-flight creation cannot hide a reopen.
+    expect(relaunch).toHaveBeenCalledTimes(2);
+    finishCreation();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+});
+
+describe("configurePreviewServiceSession", () => {
+  test("reconfiguring a reused service session consults the latest manager", () => {
+    type RequestHandler = (
+      webContents: unknown,
+      permission: string,
+      callback: (granted: boolean) => void,
+      details: { isMainFrame: boolean; requestingUrl: string },
+    ) => void;
+    let requestHandler: RequestHandler | null = null;
+    let checkHandler: (() => boolean) | null = null;
+    const serviceSession = {
+      setPermissionCheckHandler: mock((handler: () => boolean) => {
+        checkHandler = handler;
+      }),
+      setPermissionRequestHandler: mock((handler: RequestHandler) => {
+        requestHandler = handler;
+      }),
+    };
+    const destroyed = { consumeClipboardWriteUserActivation: mock(() => false) };
+    const current = { consumeClipboardWriteUserActivation: mock(() => true) };
+    configurePreviewServiceSession(serviceSession as never, () => destroyed);
+    // A connection switch back, or a reopened window in the same slot, reuses the partition.
+    configurePreviewServiceSession(serviceSession as never, () => current);
+
+    const request = (permission: string) => {
+      let granted: boolean | null = null;
+      requestHandler!({}, permission, (value) => (granted = value), {
+        isMainFrame: true,
+        requestingUrl: "http://127.0.0.1:41001/",
+      });
+      return granted;
+    };
+    expect(request("clipboard-sanitized-write")).toBe(true);
+    expect(current.consumeClipboardWriteUserActivation).toHaveBeenCalledTimes(1);
+    expect(destroyed.consumeClipboardWriteUserActivation).not.toHaveBeenCalled();
+    expect(request("camera")).toBe(false);
+    expect(checkHandler!()).toBe(false);
   });
 });

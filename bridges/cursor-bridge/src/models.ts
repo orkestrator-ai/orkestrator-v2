@@ -122,10 +122,13 @@ const FAST_PARAMETER = "fast";
  * - `grok-4-6`: 500,000 (xAI; Cursor's Grok 4.6 model page).
  * - `claude-opus-5`, `claude-sonnet-5`, `claude-sonnet-4-6`: 1,000,000
  *   (Anthropic context-window docs: 1M is both the default and the maximum).
+ * - `claude-opus-5-5`: 1,000,000 (Claude Code 2.1.280's model catalogue lists
+ *   it with a native 1M window; it is that release's default Opus).
  */
 const KNOWN_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
   ["grok-4-6", 500_000],
   ["claude-opus-5", 1_000_000],
+  ["claude-opus-5-5", 1_000_000],
   ["claude-sonnet-5", 1_000_000],
   ["claude-sonnet-4-6", 1_000_000],
 ]);

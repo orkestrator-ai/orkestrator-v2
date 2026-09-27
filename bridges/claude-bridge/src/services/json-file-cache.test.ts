@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   getJsonFileReadCohortStateForTesting,
   readJsonFileCached,
   readJsonSliceCached,
+  readJsonSliceCachedWithDigest,
   setJsonFileCacheBeforeStatForTesting,
 } from "./json-file-cache.js";
 
@@ -36,6 +38,35 @@ describe("json file cache", () => {
     // Same object: the file was parsed once, which is the whole point.
     expect(second).toBe(first);
     expect(getJsonFileParseCount(file)).toBe(1);
+  });
+
+  test("digests the exact bytes parsed, once, and serves the digest from cache", async () => {
+    const text = JSON.stringify({ mcpServers: { a: { command: "a" } } });
+    await writeFile(file, text);
+    const expected = createHash("sha256").update(text).digest("base64url");
+    const select = (parsed: { mcpServers?: unknown }) => parsed.mcpServers;
+
+    const first = await readJsonSliceCachedWithDigest(file, "mcpServers", select);
+    const second = await readJsonSliceCachedWithDigest(file, "mcpServers", select);
+
+    expect(first).toEqual({ value: { a: { command: "a" } }, digest: expected });
+    expect(second.digest).toBe(expected);
+    expect(getJsonFileParseCount(file)).toBe(1);
+    // The plain reader shares the entry and still answers only the value.
+    expect(await readJsonSliceCached(file, "mcpServers", select)).toEqual({ a: { command: "a" } });
+  });
+
+  test("a missing file has no digest; a malformed one does", async () => {
+    const select = (parsed: { value?: unknown }) => parsed.value;
+    expect(await readJsonSliceCachedWithDigest(file, "value", select)).toEqual({
+      value: null,
+      digest: null,
+    });
+    await writeFile(file, "{ nope");
+    expect(await readJsonSliceCachedWithDigest(file, "value", select)).toEqual({
+      value: null,
+      digest: createHash("sha256").update("{ nope").digest("base64url"),
+    });
   });
 
   test("re-reads after the file changes", async () => {

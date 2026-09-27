@@ -4,5 +4,5 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["scripts/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "scenarios/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }

@@ -1,72 +1,76 @@
 /**
- * Installs the browser-preview inspector in the preview's page world.
+ * Selection-only capture runtime installed in the preview page.
  *
  * The runtime owns its overlays inside the preview because a WebContentsView is
- * composited above the React renderer. The host polls the small, bounded result
- * through executeJavaScript and captures the preview only after submission, so
- * the screenshot contains the selected-element highlight.
+ * composited above the React renderer. It never collects comments: its only
+ * output is a selected target and bounded, untrusted page evidence, reported
+ * with the host-assigned capture id and a per-install nonce. Electron main
+ * polls the bounded status, prepares a coherent screenshot, and spools it.
+ *
+ * Every function passed to the page is serialized with `toString`, so the
+ * installer must not reference module-level bindings.
  */
-function installBrowserPreviewAnnotationRuntime(sessionId: string): void {
-  const runtimeKey = "__orkestratorBrowserAnnotationRuntime__";
-  const rootAttribute = "data-orkestrator-annotation-ui";
-  const runtimeWindow = window as unknown as Window & Record<string, unknown>;
-  const previous = runtimeWindow[runtimeKey] as { destroy?: () => void } | undefined;
+import type { BrowserPreviewCaptureMode } from "@orkestrator/protocol/browser-preview";
+import { browserPreviewAnchorKit } from "./browser-preview-anchor-script.js";
+
+export const BROWSER_PREVIEW_CAPTURE_RUNTIME_KEY = "__orkestratorCaptureRuntime__";
+/** Upper bound on any JSON string the runtime returns to main. */
+export const BROWSER_PREVIEW_CAPTURE_STATUS_MAX_CHARS = 65_536;
+export const BROWSER_PREVIEW_CAPTURE_PROBE_MAX_CHARS = 16_384;
+
+export interface BrowserPreviewCaptureRuntimeConfig {
+  captureId: string;
+  nonce: string;
+  mode: BrowserPreviewCaptureMode;
+  /**
+   * Recapture: start on the previous target. Element and text targets are
+   * resolved with the anchor kit (only a match is used); a region starts as
+   * the previous rectangle. The user still confirms with Enter or a click.
+   */
+  initialTarget?: Record<string, unknown> | null;
+}
+
+function installBrowserPreviewCaptureRuntime(
+  kitFactory: typeof browserPreviewAnchorKit,
+  config: {
+    key: string;
+    maxChars: number;
+    captureId: string;
+    nonce: string;
+    mode: "element" | "text" | "region" | "page";
+    initialTarget: Record<string, unknown> | null;
+  },
+): string {
+  const host = window as unknown as Record<string, unknown>;
+  const previous = host[config.key] as { destroy?: () => void } | undefined;
   previous?.destroy?.();
 
-  const clampText = (value: string | null | undefined, length: number): string =>
-    (value ?? "").replace(/\s+/g, " ").trim().slice(0, length);
-  const escapeCss = (value: string): string => {
-    if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
-    return value.replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
-  };
-  const selectorFor = (element: Element): string => {
-    const tag = element.tagName.toLowerCase();
-    if (element.id) return `${tag}#${escapeCss(element.id)}`;
-    const testId = element.getAttribute("data-testid");
-    if (testId) return `${tag}[data-testid="${escapeCss(testId)}"]`;
-    const parent = element.parentElement;
-    if (!parent) return tag;
-    const siblings = Array.from(parent.children).filter(
-      (candidate) => candidate.tagName === element.tagName,
-    );
-    return siblings.length > 1 ? `${tag}:nth-of-type(${siblings.indexOf(element) + 1})` : tag;
-  };
-  const cssPathFor = (element: Element): string => {
-    const parts: string[] = [];
-    let current: Element | null = element;
-    while (current && parts.length < 32) {
-      const selector = selectorFor(current);
-      parts.unshift(selector);
-      if (current.id || current === document.documentElement) break;
-      current = current.parentElement;
-    }
-    return parts.join(" > ");
-  };
-  const xpathFor = (element: Element): string => {
-    const parts: string[] = [];
-    let current: Element | null = element;
-    while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 32) {
-      const tag = current.tagName.toLowerCase();
-      const parent: Element | null = current.parentElement;
-      const sameTag = parent
-        ? Array.from(parent.children).filter((candidate) => candidate.tagName === current!.tagName)
-        : [];
-      const index = sameTag.length > 1 ? `[${sameTag.indexOf(current) + 1}]` : "";
-      parts.unshift(`${tag}${index}`);
-      current = parent;
-    }
-    return `/${parts.join("/")}`;
-  };
-  const isInspectorNode = (target: EventTarget | null): boolean =>
-    target instanceof Element && Boolean(target.closest(`[${rootAttribute}]`));
+  const kit = kitFactory();
+  const UI = kit.UI_ATTRIBUTE;
+  const MIN_REGION = 8;
+  type Rect = { x: number; y: number; width: number; height: number };
+  type Status = "selecting" | "selected" | "cancelled" | "error";
 
-  const makeNode = <T extends keyof HTMLElementTagNameMap>(tag: T): HTMLElementTagNameMap[T] => {
-    const node = document.createElement(tag);
-    node.setAttribute(rootAttribute, "");
+  let status: Status = "selecting";
+  let errorCode: string | null = null;
+  let selection: Record<string, unknown> | null = null;
+  let selectedElement: Element | null = null;
+  let selectedRange: Range | null = null;
+  let regionRect: Rect | null = null;
+  let candidate: Element | null = null;
+  const downStack: Element[] = [];
+  let frame: number | null = null;
+  const cleanups: Array<() => void> = [];
+  const hiddenPins: Array<{ element: HTMLElement; visibility: string }> = [];
+
+  const makeNode = (): HTMLDivElement => {
+    const node = document.createElement("div");
+    node.setAttribute(UI, "");
     return node;
   };
-
-  const highlight = makeNode("div");
+  const font =
+    "500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  const highlight = makeNode();
   Object.assign(highlight.style, {
     position: "fixed",
     zIndex: "2147483645",
@@ -78,342 +82,888 @@ function installBrowserPreviewAnnotationRuntime(sessionId: string): void {
     display: "none",
     boxSizing: "border-box",
   });
-
-  const tooltip = makeNode("div");
+  const tooltip = makeNode();
   Object.assign(tooltip.style, {
     position: "fixed",
     zIndex: "2147483646",
     pointerEvents: "none",
-    minWidth: "230px",
     maxWidth: "360px",
-    padding: "10px 12px",
+    padding: "6px 9px",
     color: "#f8fbff",
     background: "rgba(9, 20, 43, 0.96)",
     border: "1px solid rgba(92, 154, 255, 0.45)",
-    borderRadius: "9px",
-    boxShadow: "0 14px 34px rgba(0,0,0,0.35)",
-    font: "500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    borderRadius: "7px",
+    boxShadow: "0 10px 26px rgba(0,0,0,0.35)",
+    font,
     display: "none",
     boxSizing: "border-box",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   });
-
-  const panel = makeNode("form");
-  Object.assign(panel.style, {
+  const hint = makeNode();
+  Object.assign(hint.style, {
     position: "fixed",
     zIndex: "2147483647",
-    width: "min(360px, calc(100vw - 24px))",
-    padding: "14px",
+    pointerEvents: "none",
+    left: "50%",
+    bottom: "14px",
+    transform: "translateX(-50%)",
+    padding: "6px 12px",
     color: "#f8fbff",
-    background: "rgba(8, 17, 36, 0.98)",
-    border: "1px solid rgba(92, 154, 255, 0.55)",
-    borderRadius: "12px",
-    boxShadow: "0 20px 48px rgba(0,0,0,0.45)",
-    font: "500 13px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    display: "none",
+    background: "rgba(9, 20, 43, 0.92)",
+    borderRadius: "999px",
+    font,
     boxSizing: "border-box",
+    whiteSpace: "nowrap",
   });
-  panel.innerHTML = [
-    '<div data-title style="font-weight:650;font-size:13px;margin-bottom:8px"></div>',
-    '<textarea data-comment rows="4" maxlength="2000" placeholder="What should the agent change or investigate?" style="display:block;width:100%;resize:vertical;min-height:84px;max-height:180px;box-sizing:border-box;border-radius:8px;border:1px solid rgba(148,163,184,.38);background:#0f1b31;color:#fff;padding:9px 10px;font:400 13px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none"></textarea>',
-    '<div data-error style="min-height:18px;padding-top:4px;color:#fda4af;font-size:11px"></div>',
-    '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px"><button data-cancel type="button" style="border:1px solid rgba(148,163,184,.35);background:transparent;color:#dbeafe;border-radius:7px;padding:7px 10px;font:600 12px ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer">Cancel</button><button data-submit type="submit" style="border:1px solid #5ca0ff;background:#2684ff;color:white;border-radius:7px;padding:7px 11px;font:650 12px ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer">Add annotation</button></div>',
-  ].join("");
+  const regionOverlay = makeNode();
+  Object.assign(regionOverlay.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "2147483644",
+    cursor: "crosshair",
+    background: "rgba(9, 20, 43, 0.12)",
+    touchAction: "none",
+    display: "none",
+  });
+  // Element mode: a transparent, inspector-owned layer takes every pointer
+  // event, so the page's own listeners (even window capture-phase ones that
+  // were registered before this runtime) see the overlay as the target rather
+  // than the element under the pointer.
+  const pickOverlay = makeNode();
+  Object.assign(pickOverlay.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "2147483643",
+    cursor: "default",
+    background: "transparent",
+    touchAction: "none",
+    display: "none",
+  });
+  // Screen-reader announcement of the keyboard candidate; visually hidden.
+  const announcer = makeNode();
+  announcer.setAttribute("role", "status");
+  announcer.setAttribute("aria-live", "polite");
+  Object.assign(announcer.style, {
+    position: "fixed",
+    width: "1px",
+    height: "1px",
+    overflow: "hidden",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+    pointerEvents: "none",
+  });
+  const regionBox = makeNode();
+  Object.assign(regionBox.style, {
+    position: "fixed",
+    zIndex: "2147483645",
+    pointerEvents: "none",
+    border: "2px dashed #2684ff",
+    background: "rgba(38, 132, 255, 0.08)",
+    boxSizing: "border-box",
+    display: "none",
+  });
+  const masks: HTMLElement[] = [];
 
-  const commentInput = panel.querySelector<HTMLTextAreaElement>("[data-comment]")!;
-  const title = panel.querySelector<HTMLElement>("[data-title]")!;
-  const error = panel.querySelector<HTMLElement>("[data-error]")!;
-  const cancelButton = panel.querySelector<HTMLButtonElement>("[data-cancel]")!;
-  document.documentElement.append(highlight, tooltip, panel);
-
-  let hovered: Element | null = null;
-  let selected: Element | null = null;
-  let status: "active" | "cancelled" | "submitted" = "active";
-  let submitted: { comment: string; element: Record<string, unknown> } | null = null;
-
-  const describe = (element: Element): Record<string, unknown> => {
-    const computed = getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    const attributes: Record<string, string> = {};
-    for (const attribute of Array.from(element.attributes).slice(0, 16)) {
-      attributes[attribute.name.slice(0, 100)] = attribute.value.slice(0, 300);
-    }
-    const hierarchy: Array<Record<string, unknown>> = [];
-    let ancestor: Element | null = element;
-    while (ancestor && hierarchy.length < 8) {
-      hierarchy.unshift({
-        tagName: ancestor.tagName.toLowerCase().slice(0, 100),
-        selector: selectorFor(ancestor).slice(0, 400),
-        id: clampText(ancestor.id, 200) || null,
-        classNames: Array.from(ancestor.classList)
-          .slice(0, 4)
-          .map((className) => className.slice(0, 60)),
-        role: clampText(ancestor.getAttribute("role"), 200) || null,
-        ariaLabel: clampText(ancestor.getAttribute("aria-label"), 200) || null,
-        testId: clampText(ancestor.getAttribute("data-testid"), 200) || null,
-      });
-      ancestor = ancestor.parentElement;
-    }
-    const styleProperties = [
-      "color",
-      "background-color",
-      "font-family",
-      "font-size",
-      "font-weight",
-      "font-style",
-      "line-height",
-      "letter-spacing",
-      "text-align",
-      "text-decoration",
-      "display",
-      "position",
-      "z-index",
-      "box-sizing",
-      "width",
-      "height",
-      "margin",
-      "padding",
-      "border",
-      "border-radius",
-      "opacity",
-      "visibility",
-      "overflow",
-      "flex",
-      "grid-template-columns",
-      "align-items",
-      "justify-content",
-    ];
-    const styles: Record<string, string> = {};
-    for (const property of styleProperties) {
-      styles[property] = computed.getPropertyValue(property).slice(0, 200);
-    }
-    return {
-      pageUrl: location.href.slice(0, 2000),
-      pageTitle: document.title.slice(0, 500),
-      viewport: {
-        width: window.innerWidth,
-        height: window.innerHeight,
-        devicePixelRatio: window.devicePixelRatio,
-      },
-      tagName: element.tagName.toLowerCase().slice(0, 100),
-      selector: selectorFor(element).slice(0, 1000),
-      cssPath: cssPathFor(element).slice(0, 4000),
-      xpath: xpathFor(element).slice(0, 4000),
-      id: clampText(element.id, 500) || null,
-      classNames: Array.from(element.classList)
-        .slice(0, 20)
-        .map((className) => className.slice(0, 100)),
-      role: clampText(element.getAttribute("role"), 500) || null,
-      ariaLabel: clampText(element.getAttribute("aria-label"), 500) || null,
-      testId: clampText(element.getAttribute("data-testid"), 500) || null,
-      text: clampText(element.textContent, 2000),
-      outerHtml: element.outerHTML.slice(0, 6000),
-      attributes,
-      rect: {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-        left: rect.left,
-      },
-      styles,
-      hierarchy,
-    };
+  const hints: Record<string, string> = {
+    element:
+      "Click an element or use the keyboard · ↑ parent · ↓ child · ←/→ siblings · Enter select · Esc cancel",
+    text: "Select text, then release or press Enter · Esc cancel",
+    region:
+      "Drag a region, or press Enter for one · arrows move · Shift+arrows resize · Enter capture · Esc cancel",
+    page: "Capturing page…",
+  };
+  hint.textContent = hints[config.mode] ?? "";
+  document.documentElement.append(
+    pickOverlay,
+    highlight,
+    tooltip,
+    regionOverlay,
+    regionBox,
+    hint,
+    announcer,
+  );
+  const announce = (text: string): void => {
+    announcer.textContent = text.slice(0, 300);
   };
 
-  const positionFor = (element: Element): void => {
-    const rect = element.getBoundingClientRect();
-    Object.assign(highlight.style, {
+  const place = (node: HTMLElement, rect: Rect): void => {
+    Object.assign(node.style, {
       display: "block",
-      left: `${Math.max(0, rect.left)}px`,
-      top: `${Math.max(0, rect.top)}px`,
+      left: `${rect.x}px`,
+      top: `${rect.y}px`,
       width: `${Math.max(0, rect.width)}px`,
       height: `${Math.max(0, rect.height)}px`,
     });
-    const tag = element.tagName.toLowerCase();
-    const computed = getComputedStyle(element);
-    tooltip.replaceChildren();
-    const summary = document.createElement("div");
-    Object.assign(summary.style, {
-      display: "flex",
-      justifyContent: "space-between",
-      gap: "18px",
-    });
-    const strong = document.createElement("strong");
-    strong.style.fontWeight = "700";
-    strong.textContent = tag;
-    const dimensions = document.createElement("span");
-    dimensions.style.color = "#dbeafe";
-    dimensions.textContent = `${Math.round(rect.width)}×${Math.round(rect.height)}`;
-    summary.append(strong, dimensions);
-    const details = document.createElement("div");
-    Object.assign(details.style, {
-      display: "grid",
-      gridTemplateColumns: "48px minmax(0,1fr)",
-      gap: "3px 10px",
-      marginTop: "5px",
-      color: "#a9b7d0",
-    });
-    const tooltipRows: Array<[string, string]> = [
-      ["color", computed.color],
-      ["font", `${computed.fontSize} ${computed.fontFamily}`],
-    ];
-    for (const [label, value] of tooltipRows) {
-      const labelNode = document.createElement("span");
-      labelNode.textContent = label;
-      const valueNode = document.createElement("span");
-      Object.assign(valueNode.style, {
-        color: "#f8fbff",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      });
-      valueNode.textContent = value;
-      details.append(labelNode, valueNode);
-    }
-    tooltip.append(summary, details);
-    tooltip.style.display = selected ? "none" : "block";
-    const tooltipWidth = 300;
-    const left = Math.min(Math.max(8, rect.left), Math.max(8, innerWidth - tooltipWidth - 8));
-    const preferredTop = rect.top - 82;
-    tooltip.style.left = `${left}px`;
-    tooltip.style.top = `${preferredTop >= 8 ? preferredTop : Math.min(innerHeight - 90, rect.bottom + 8)}px`;
   };
-
-  const placePanel = (element: Element): void => {
-    const rect = element.getBoundingClientRect();
-    const width = Math.min(360, innerWidth - 24);
-    const left = Math.min(Math.max(12, rect.left), innerWidth - width - 12);
-    const preferredTop = rect.bottom + 10;
-    const top = preferredTop + 190 <= innerHeight ? preferredTop : Math.max(12, rect.top - 200);
-    panel.style.left = `${left}px`;
-    panel.style.top = `${top}px`;
+  // Only the user may drive selection. The page shares this DOM and can
+  // dispatch synthetic clicks and keys, but it cannot forge `isTrusted`, so
+  // every selection listener ignores events the browser did not generate.
+  const listen = (
+    target: EventTarget,
+    type: string,
+    listener: (event: Event) => void,
+    capture = true,
+  ): void => {
+    const trusted = (event: Event): void => {
+      if (event.isTrusted !== true) return;
+      listener(event);
+    };
+    target.addEventListener(type, trusted, capture);
+    cleanups.push(() => target.removeEventListener(type, trusted, capture));
   };
-
-  const onPointerMove = (event: PointerEvent): void => {
-    if (selected || isInspectorNode(event.target)) return;
-    const target = document.elementFromPoint(event.clientX, event.clientY);
-    if (!target || isInspectorNode(target)) return;
-    hovered = target;
-    positionFor(target);
+  const stopInteraction = (): void => {
+    for (const cleanup of cleanups.splice(0)) cleanup();
+    if (frame !== null) window.cancelAnimationFrame?.(frame);
+    frame = null;
   };
-  const onClick = (event: MouseEvent): void => {
-    if (isInspectorNode(event.target)) return;
-    const target = hovered ?? document.elementFromPoint(event.clientX, event.clientY);
-    if (!target || isInspectorNode(target)) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    selected = target;
-    positionFor(target);
-    title.textContent = `Annotate <${target.tagName.toLowerCase()}>`;
-    error.textContent = "";
-    panel.style.display = "block";
-    placePanel(target);
-    commentInput.focus();
-  };
-  const cancel = (): void => {
-    status = "cancelled";
-    removeInspector();
-  };
-  const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    if (selected) {
-      selected = null;
-      panel.style.display = "none";
-      commentInput.value = "";
-      error.textContent = "";
-      tooltip.style.display = hovered ? "block" : "none";
-      return;
-    }
-    cancel();
-  };
-  const onViewportChange = (): void => {
-    const target = selected ?? hovered;
-    if (!target || !target.isConnected) return;
-    positionFor(target);
-    if (selected) placePanel(selected);
-  };
-
-  panel.addEventListener("submit", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const comment = commentInput.value.trim();
-    if (!selected || !comment) {
-      error.textContent = "Write a short note before adding the annotation.";
-      commentInput.focus();
-      return;
-    }
-    submitted = { comment: comment.slice(0, 2000), element: describe(selected) };
-    status = "submitted";
-    panel.style.display = "none";
+  const viewportState = () => ({
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    scroll: { x: window.scrollX, y: window.scrollY },
+    devicePixelRatio: window.devicePixelRatio,
+  });
+  const complete = (payload: Record<string, unknown>): void => {
+    selection = {
+      ...payload,
+      title: (document.title ?? "").slice(0, 500),
+      ...viewportState(),
+    };
+    status = "selected";
     tooltip.style.display = "none";
-    positionFor(selected);
-  });
-  cancelButton.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    selected = null;
-    panel.style.display = "none";
-    commentInput.value = "";
-    error.textContent = "";
-    tooltip.style.display = hovered ? "block" : "none";
-  });
-  document.addEventListener("pointermove", onPointerMove, true);
-  document.addEventListener("click", onClick, true);
-  document.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("scroll", onViewportChange, true);
-  window.addEventListener("resize", onViewportChange);
-
-  function removeInspector(): void {
-    document.removeEventListener("pointermove", onPointerMove, true);
-    document.removeEventListener("click", onClick, true);
-    document.removeEventListener("keydown", onKeyDown, true);
-    window.removeEventListener("scroll", onViewportChange, true);
-    window.removeEventListener("resize", onViewportChange);
-    highlight.remove();
-    tooltip.remove();
-    panel.remove();
-  }
-  const destroy = (): void => {
-    removeInspector();
-    if (runtimeWindow[runtimeKey] === runtime) delete runtimeWindow[runtimeKey];
+    hint.textContent = "Capturing…";
+    stopInteraction();
   };
+  const fail = (code: string): void => {
+    status = "error";
+    errorCode = code;
+    stopInteraction();
+    hint.remove();
+  };
+
+  // -- Element mode ---------------------------------------------------------
+  /** The page element under a point, skipping inspector-owned overlays. */
+  const elementAt = (x: number, y: number): Element | null => {
+    try {
+      const stack = document.elementsFromPoint?.(x, y) ?? [];
+      for (let index = 0; index < Math.min(stack.length, 32); index += 1) {
+        const element = stack[index]!;
+        if (!kit.isInspectorNode(element)) return element;
+      }
+    } catch {
+      // Fall back to a single hit test below.
+    }
+    const previous = pickOverlay.style.pointerEvents;
+    pickOverlay.style.pointerEvents = "none";
+    try {
+      const element = document.elementFromPoint(x, y);
+      return element && !kit.isInspectorNode(element) ? element : null;
+    } catch {
+      return null;
+    } finally {
+      pickOverlay.style.pointerEvents = previous;
+    }
+  };
+  const selectable = (element: Element | null): element is Element =>
+    Boolean(element) &&
+    element !== document.documentElement &&
+    element !== document.body &&
+    !kit.isInspectorNode(element);
+  const initialTargetElement = (): Element | null => {
+    const initial = config.initialTarget;
+    if (!initial || initial.kind !== "element") return null;
+    try {
+      const resolution = kit.resolveTarget(initial, kit.createBudget(20_000, 60));
+      return resolution.state === "matched" ? resolution.element : null;
+    } catch {
+      return null;
+    }
+  };
+  /** Keyboard start: the previous target, the focused element, or the element at the centre. */
+  const startingCandidate = (): Element | null => {
+    const resolved = initialTargetElement();
+    if (selectable(resolved)) return resolved;
+    const active = document.activeElement;
+    if (selectable(active)) return active;
+    const centre = elementAt(window.innerWidth / 2, window.innerHeight / 2);
+    if (selectable(centre)) return centre;
+    const first = document.body?.firstElementChild ?? null;
+    return selectable(first) ? first : null;
+  };
+  const siblingOf = (element: Element, direction: -1 | 1): Element | null => {
+    let current: Element | null =
+      direction === 1 ? element.nextElementSibling : element.previousElementSibling;
+    for (let step = 0; current && step < 200; step += 1) {
+      if (!kit.isInspectorNode(current)) return current;
+      current = direction === 1 ? current.nextElementSibling : current.previousElementSibling;
+    }
+    return null;
+  };
+  const showCandidate = (): void => {
+    frame = null;
+    if (!candidate || !candidate.isConnected || status !== "selecting") return;
+    const rect = kit.rectOf(candidate);
+    place(highlight, rect);
+    const width = Math.round(rect.width);
+    const heightValue = Math.round(rect.height);
+    tooltip.textContent = `${kit.hoverLabel(candidate)} · ${width}×${heightValue}`;
+    tooltip.style.display = "block";
+    const left = Math.min(Math.max(8, rect.x), Math.max(8, window.innerWidth - 368));
+    const above = rect.y - 34;
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${above >= 8 ? above : Math.min(window.innerHeight - 34, rect.y + rect.height + 8)}px`;
+  };
+  const scheduleCandidate = (): void => {
+    if (frame !== null) return;
+    if (typeof window.requestAnimationFrame !== "function") {
+      showCandidate();
+      return;
+    }
+    frame = window.requestAnimationFrame(showCandidate);
+  };
+  const selectElement = (element: Element): void => {
+    if (kit.isInspectorNode(element)) return;
+    let described: ReturnType<typeof kit.describeElement>;
+    try {
+      described = kit.describeElement(element);
+    } catch {
+      fail("capture-failed");
+      return;
+    }
+    selectedElement = element;
+    place(highlight, kit.rectOf(element));
+    highlight.style.borderColor = "#f59e0b";
+    complete(described as unknown as Record<string, unknown>);
+  };
+  const suppress = (event: Event): void => {
+    if (kit.isInspectorNode(event.target as Node | null)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  /** Stop the page from seeing the event at all: window capture is the earliest listener point. */
+  const swallow = (event: Event): void => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  const moveTo = (next: Element | null, fromKeyboard: boolean): void => {
+    if (!next || next === candidate) return;
+    candidate = next;
+    scheduleCandidate();
+    if (fromKeyboard) announce(kit.hoverLabel(next));
+  };
+  const installElementMode = (): void => {
+    pickOverlay.style.display = "block";
+    listen(window, "pointermove", (event) => {
+      const pointer = event as PointerEvent;
+      const target = elementAt(pointer.clientX, pointer.clientY);
+      if (!target || target === candidate) return;
+      downStack.length = 0;
+      moveTo(target, false);
+    });
+    for (const type of [
+      "pointerdown",
+      "mousedown",
+      "pointerup",
+      "mouseup",
+      "touchstart",
+      "touchend",
+      "dblclick",
+      "auxclick",
+      "contextmenu",
+    ]) {
+      listen(window, type, swallow);
+    }
+    listen(window, "click", (event) => {
+      swallow(event);
+      const mouse = event as MouseEvent;
+      const pointTarget = elementAt(mouse.clientX, mouse.clientY);
+      const chosen =
+        candidate && pointTarget && (candidate === pointTarget || candidate.contains(pointTarget))
+          ? candidate
+          : (pointTarget ?? candidate);
+      if (chosen) selectElement(chosen);
+    });
+    listen(window, "keydown", (event) => {
+      const key = (event as KeyboardEvent).key;
+      if (key === "Escape") {
+        swallow(event);
+        cancel();
+        return;
+      }
+      const navigation = [
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "[",
+        "]",
+        "Enter",
+      ].includes(key);
+      if (!navigation) return;
+      swallow(event);
+      if (!candidate || !candidate.isConnected) {
+        downStack.length = 0;
+        moveTo(startingCandidate(), true);
+        if (key !== "Enter") return;
+      }
+      if (!candidate) return;
+      if (key === "ArrowUp" || key === "[") {
+        const parent: Element | null = candidate.parentElement;
+        if (selectable(parent)) {
+          downStack.push(candidate);
+          moveTo(parent, true);
+        }
+      } else if (key === "ArrowDown" || key === "]") {
+        let next = downStack.pop() ?? null;
+        if (!next || !candidate.contains(next)) {
+          next = null;
+          const children = candidate.children;
+          for (let index = 0; index < Math.min(children.length, 200); index += 1) {
+            const child = children[index]!;
+            if (!kit.isInspectorNode(child)) {
+              next = child;
+              break;
+            }
+          }
+        }
+        moveTo(next, true);
+      } else if (key === "ArrowLeft" || key === "ArrowRight") {
+        downStack.length = 0;
+        moveTo(siblingOf(candidate, key === "ArrowRight" ? 1 : -1), true);
+      } else if (key === "Enter") {
+        selectElement(candidate);
+      }
+    });
+    listen(window, "scroll", scheduleCandidate);
+    listen(window, "resize", scheduleCandidate);
+    // Keyboard users start with a visible candidate; no hover is needed.
+    const first = startingCandidate();
+    if (first) moveTo(first, true);
+  };
+
+  // -- Text mode ------------------------------------------------------------
+  const checkTextSelection = (): void => {
+    if (status !== "selecting") return;
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      if (kit.isSensitiveElement(active))
+        hint.textContent = "Sensitive fields can't be captured · Esc cancel";
+      return;
+    }
+    const current = window.getSelection?.();
+    if (!current || current.rangeCount === 0 || current.isCollapsed) return;
+    const range = current.getRangeAt(0).cloneRange();
+    let described: ReturnType<typeof kit.describeRange>;
+    try {
+      described = kit.describeRange(range);
+    } catch {
+      fail("capture-failed");
+      return;
+    }
+    if ("error" in described) {
+      if (described.error === "sensitive") {
+        hint.textContent = "Sensitive fields can't be captured · Esc cancel";
+      } else if (described.error === "unsupported") {
+        hint.textContent = "This text can't be captured; try Region · Esc cancel";
+      }
+      return;
+    }
+    selectedRange = range;
+    place(highlight, kit.rectOf(range));
+    highlight.style.borderColor = "#f59e0b";
+    complete(described as unknown as Record<string, unknown>);
+  };
+  const installTextMode = (): void => {
+    listen(window, "mouseup", () => {
+      window.setTimeout(checkTextSelection, 0);
+    });
+    // Selection gestures stay native; activating links and buttons does not.
+    listen(window, "click", suppress);
+    const initial = config.initialTarget;
+    if (initial && initial.kind === "text-range") {
+      // Recapture: preselect the previous quote when it still resolves uniquely.
+      try {
+        const resolution = kit.resolveTarget(initial, kit.createBudget(20_000, 60));
+        const current = window.getSelection?.();
+        if (resolution.state === "matched" && resolution.range && current) {
+          current.removeAllRanges();
+          current.addRange(resolution.range);
+          place(highlight, kit.rectOf(resolution.range));
+          announce("Previous text selected. Press Enter to capture it.");
+        }
+      } catch {
+        // The user selects again.
+      }
+    }
+    listen(window, "keydown", (event) => {
+      const key = (event as KeyboardEvent).key;
+      if (key === "Escape") {
+        suppress(event);
+        cancel();
+      } else if (key === "Enter") {
+        suppress(event);
+        checkTextSelection();
+      }
+    });
+  };
+
+  // -- Region mode ----------------------------------------------------------
+  const normalizedRect = (x1: number, y1: number, x2: number, y2: number): Rect => {
+    const left = Math.max(0, Math.min(x1, x2));
+    const top = Math.max(0, Math.min(y1, y2));
+    const right = Math.min(window.innerWidth, Math.max(x1, x2));
+    const bottom = Math.min(window.innerHeight, Math.max(y1, y2));
+    return {
+      x: Math.round(left),
+      y: Math.round(top),
+      width: Math.round(Math.max(0, right - left)),
+      height: Math.round(Math.max(0, bottom - top)),
+    };
+  };
+  let dragStart: { x: number; y: number } | null = null;
+  let drafted: Rect | null = null;
+  const confirmRegion = (): void => {
+    if (!drafted || drafted.width < MIN_REGION || drafted.height < MIN_REGION) return;
+    regionRect = { ...drafted };
+    regionOverlay.style.background = "transparent";
+    regionOverlay.style.pointerEvents = "none";
+    regionBox.style.borderStyle = "solid";
+    regionBox.style.borderColor = "#f59e0b";
+    complete({
+      target: {
+        kind: "region",
+        label: `Region ${regionRect.width}×${regionRect.height}`,
+        rect: regionRect,
+        imageRect: null,
+      },
+      evidence: null,
+      redaction: { attributesRemoved: 0, valuesMasked: 0, urlParametersRemoved: 0 },
+    });
+  };
+  /** A keyboard-created region: centred, a third of the viewport, at least the minimum. */
+  const defaultRegion = (): Rect => {
+    const width = Math.max(MIN_REGION, Math.round(Math.min(360, window.innerWidth / 3)));
+    const height = Math.max(MIN_REGION, Math.round(Math.min(240, window.innerHeight / 3)));
+    const x = Math.round((window.innerWidth - width) / 2);
+    const y = Math.round((window.innerHeight - height) / 2);
+    return normalizedRect(x, y, x + width, y + height);
+  };
+  const installRegionMode = (): void => {
+    regionOverlay.style.display = "block";
+    const initial = config.initialTarget;
+    const initialRect = initial && initial.kind === "region" ? (initial.rect as Rect | null) : null;
+    if (
+      initialRect &&
+      [initialRect.x, initialRect.y, initialRect.width, initialRect.height].every(Number.isFinite)
+    ) {
+      const next = normalizedRect(
+        initialRect.x,
+        initialRect.y,
+        initialRect.x + initialRect.width,
+        initialRect.y + initialRect.height,
+      );
+      if (next.width >= MIN_REGION && next.height >= MIN_REGION) {
+        drafted = next;
+        place(regionBox, drafted);
+      }
+    }
+    listen(regionOverlay, "pointerdown", (event) => {
+      const pointer = event as PointerEvent;
+      event.preventDefault();
+      dragStart = { x: pointer.clientX, y: pointer.clientY };
+      drafted = normalizedRect(dragStart.x, dragStart.y, dragStart.x, dragStart.y);
+      place(regionBox, drafted);
+      try {
+        regionOverlay.setPointerCapture?.(pointer.pointerId);
+      } catch {
+        // Capture is best effort; the overlay still covers the viewport.
+      }
+    });
+    listen(regionOverlay, "pointermove", (event) => {
+      if (!dragStart) return;
+      const pointer = event as PointerEvent;
+      drafted = normalizedRect(dragStart.x, dragStart.y, pointer.clientX, pointer.clientY);
+      place(regionBox, drafted);
+    });
+    listen(regionOverlay, "pointerup", (event) => {
+      if (!dragStart) return;
+      const pointer = event as PointerEvent;
+      drafted = normalizedRect(dragStart.x, dragStart.y, pointer.clientX, pointer.clientY);
+      dragStart = null;
+      if (drafted.width < MIN_REGION || drafted.height < MIN_REGION) {
+        drafted = null;
+        regionBox.style.display = "none";
+        return;
+      }
+      place(regionBox, drafted);
+    });
+    listen(regionOverlay, "dblclick", (event) => {
+      event.preventDefault();
+      confirmRegion();
+    });
+    for (const type of ["click", "wheel", "contextmenu"]) {
+      listen(regionOverlay, type, (event) => event.preventDefault());
+    }
+    listen(window, "keydown", (event) => {
+      const keyboard = event as KeyboardEvent;
+      const key = keyboard.key;
+      if (key === "Escape") {
+        suppress(event);
+        cancel();
+        return;
+      }
+      if (key === "Enter") {
+        suppress(event);
+        if (!drafted) {
+          // Keyboard-only: the first Enter proposes a region, the next confirms it.
+          drafted = defaultRegion();
+          place(regionBox, drafted);
+          announce(
+            `Region ${drafted.width} by ${drafted.height}. Arrows move, Shift+arrows resize, Enter captures.`,
+          );
+          return;
+        }
+        confirmRegion();
+        return;
+      }
+      if (!key.startsWith("Arrow")) return;
+      suppress(event);
+      if (!drafted) {
+        drafted = defaultRegion();
+        place(regionBox, drafted);
+      }
+      const step = keyboard.altKey ? 1 : 10;
+      const dx = key === "ArrowLeft" ? -step : key === "ArrowRight" ? step : 0;
+      const dy = key === "ArrowUp" ? -step : key === "ArrowDown" ? step : 0;
+      const next = keyboard.shiftKey
+        ? normalizedRect(
+            drafted.x,
+            drafted.y,
+            drafted.x + drafted.width + dx,
+            drafted.y + drafted.height + dy,
+          )
+        : normalizedRect(
+            drafted.x + dx,
+            drafted.y + dy,
+            drafted.x + dx + drafted.width,
+            drafted.y + dy + drafted.height,
+          );
+      if (next.width >= MIN_REGION && next.height >= MIN_REGION) {
+        drafted = next;
+        place(regionBox, drafted);
+        announce(`Region ${next.width} by ${next.height} at ${next.x}, ${next.y}.`);
+      }
+    });
+  };
+
+  // -- Lifecycle ------------------------------------------------------------
+  const restorePins = (): void => {
+    for (const { element, visibility } of hiddenPins.splice(0))
+      element.style.visibility = visibility;
+  };
+  const removeMasks = (): void => {
+    for (const mask of masks.splice(0)) mask.remove();
+  };
+  const teardown = (): void => {
+    stopInteraction();
+    restorePins();
+    removeMasks();
+    for (const node of [
+      pickOverlay,
+      highlight,
+      tooltip,
+      hint,
+      regionOverlay,
+      regionBox,
+      announcer,
+    ]) {
+      node.remove();
+    }
+  };
+  const destroy = (): void => {
+    teardown();
+    if (host[config.key] === runtime) delete host[config.key];
+  };
+  /** Restore the page at once but stay registered so main reads `cancelled`, then destroys. */
+  function cancel(): void {
+    status = "cancelled";
+    teardown();
+  }
+
+  const probe = () => {
+    let connected = true;
+    let rect: Rect | null = null;
+    if (selectedElement) {
+      connected = selectedElement.isConnected;
+      rect = kit.rectOf(selectedElement);
+    } else if (selectedRange) {
+      connected =
+        selectedRange.startContainer.isConnected && selectedRange.endContainer.isConnected;
+      rect = kit.rectOf(selectedRange);
+    } else if (regionRect) {
+      rect = { ...regionRect };
+    }
+    return {
+      captureId: config.captureId,
+      nonce: config.nonce,
+      connected,
+      rect,
+      ...viewportState(),
+      sensitive: kit.sensitiveRects(),
+    };
+  };
+  const waitForPaint = (): Promise<void> =>
+    new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      const request = window.requestAnimationFrame?.bind(window);
+      if (request) request(() => request(finish));
+      window.setTimeout(finish, 150);
+    });
+  /** Leave only the selected-target highlight, mask sensitive fields, and wait for paint. */
+  const prepare = async (captureId: string) => {
+    if (captureId !== config.captureId || status !== "selected") return null;
+    tooltip.style.display = "none";
+    hint.style.display = "none";
+    regionOverlay.style.background = "transparent";
+    announcer.textContent = "";
+    if (hiddenPins.length === 0) {
+      const layers = document.querySelectorAll<HTMLElement>("[data-orkestrator-pins]");
+      for (let index = 0; index < Math.min(layers.length, 8); index += 1) {
+        const layer = layers[index]!;
+        hiddenPins.push({ element: layer, visibility: layer.style.visibility });
+        layer.style.visibility = "hidden";
+      }
+    }
+    if (selectedElement?.isConnected) place(highlight, kit.rectOf(selectedElement));
+    else if (selectedRange) place(highlight, kit.rectOf(selectedRange));
+    else if (!regionRect) highlight.style.display = "none";
+    removeMasks();
+    const current = probe();
+    for (const rect of current.sensitive) {
+      const mask = makeNode();
+      Object.assign(mask.style, {
+        position: "fixed",
+        zIndex: "2147483647",
+        pointerEvents: "none",
+        background: "#1f2328",
+        boxSizing: "border-box",
+      });
+      place(mask, rect);
+      masks.push(mask);
+      document.documentElement.append(mask);
+    }
+    await waitForPaint();
+    return current;
+  };
+  const statusValue = () => ({
+    v: 1,
+    captureId: config.captureId,
+    nonce: config.nonce,
+    mode: config.mode,
+    status,
+    ...(status === "selected" && selection ? { selection } : {}),
+    ...(status === "error" ? { error: { code: errorCode ?? "capture-failed" } } : {}),
+  });
+
+  /**
+   * Bounded stability window for result captures: wait for web fonts and for
+   * layout to stay quiet (no page mutations, no change in the target rect or
+   * document size) for `quietMs`, at most `deadlineMs` in total.
+   */
+  const settle = async (captureId: string, deadlineMs: number, quietMs: number) => {
+    if (captureId !== config.captureId || status !== "selected") return null;
+    const started = Date.now();
+    const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+    let fontsReady = true;
+    const fonts = (document as Document & { fonts?: { ready?: Promise<unknown> } }).fonts;
+    if (fonts?.ready && typeof fonts.ready.then === "function") {
+      fontsReady = await Promise.race([
+        fonts.ready.then(
+          () => true,
+          () => false,
+        ),
+        sleep(deadlineMs).then(() => false),
+      ]);
+    }
+    let mutated = false;
+    let observer: MutationObserver | null = null;
+    const Observer = (window as unknown as { MutationObserver?: typeof MutationObserver })
+      .MutationObserver;
+    if (typeof Observer === "function") {
+      observer = new Observer((records) => {
+        if (records.length > 16 || records.some((record) => !kit.isInspectorNode(record.target))) {
+          mutated = true;
+        }
+      });
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+    }
+    const layoutKey = (): string => {
+      const current = probe();
+      const root = document.documentElement;
+      return JSON.stringify([
+        current.rect,
+        current.viewport,
+        current.scroll,
+        root.scrollWidth,
+        root.scrollHeight,
+      ]);
+    };
+    let last = layoutKey();
+    let quietSince = Date.now();
+    let quiet = false;
+    try {
+      while (Date.now() - started < deadlineMs) {
+        await sleep(Math.min(50, quietMs));
+        const key = layoutKey();
+        if (key !== last || mutated) {
+          last = key;
+          mutated = false;
+          quietSince = Date.now();
+        } else if (Date.now() - quietSince >= quietMs) {
+          quiet = true;
+          break;
+        }
+      }
+    } finally {
+      observer?.disconnect();
+    }
+    return {
+      captureId: config.captureId,
+      nonce: config.nonce,
+      stable: quiet && fontsReady,
+      fontsReady,
+      waitedMs: Math.round(Date.now() - started),
+    };
+  };
+
   const runtime = {
-    getStatus: () => (submitted ? { status, sessionId, ...submitted } : { status, sessionId }),
+    status: statusValue,
+    prepare,
+    settle,
+    probe: (captureId: string) =>
+      captureId === config.captureId && status === "selected" ? probe() : null,
     destroy,
   };
-  runtimeWindow[runtimeKey] = runtime;
-}
+  host[config.key] = runtime;
 
-export function browserPreviewAnnotationStartScript(sessionId: string): string {
-  return `(${installBrowserPreviewAnnotationRuntime.toString()})(${JSON.stringify(sessionId)});`;
-}
-
-export const BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT = `(() => {
   try {
-    const runtime = window.__orkestratorBrowserAnnotationRuntime__;
-    const value = runtime && typeof runtime.getStatus === "function"
-      ? runtime.getStatus()
-      : { status: "inactive" };
+    if (config.mode === "element") installElementMode();
+    else if (config.mode === "text") installTextMode();
+    else if (config.mode === "region") installRegionMode();
+    else {
+      complete({
+        target: { kind: "page", label: "Whole page" },
+        evidence: null,
+        redaction: { attributesRemoved: 0, valuesMasked: 0, urlParametersRemoved: 0 },
+      });
+      hint.style.display = "none";
+    }
+  } catch {
+    fail("capture-failed");
+  }
+  const encoded = JSON.stringify(statusValue());
+  return encoded.length <= config.maxChars
+    ? encoded
+    : JSON.stringify({
+        ...statusValue(),
+        selection: undefined,
+        status: "error",
+        error: { code: "too-large" },
+      });
+}
+
+const KEY = BROWSER_PREVIEW_CAPTURE_RUNTIME_KEY;
+
+export function browserPreviewCaptureStartScript(
+  config: BrowserPreviewCaptureRuntimeConfig,
+): string {
+  const payload = {
+    key: KEY,
+    maxChars: BROWSER_PREVIEW_CAPTURE_STATUS_MAX_CHARS,
+    captureId: config.captureId,
+    nonce: config.nonce,
+    mode: config.mode,
+    initialTarget: config.initialTarget ?? null,
+  };
+  return `/*orkestrator:capture-start*/(${installBrowserPreviewCaptureRuntime.toString()})(${browserPreviewAnchorKit.toString()}, ${JSON.stringify(payload)});`;
+}
+
+export const BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT = `/*orkestrator:capture-status*/(() => {
+  try {
+    const runtime = window.${KEY};
+    if (!runtime || typeof runtime.status !== "function") return JSON.stringify({ status: "inactive" });
+    const value = runtime.status();
     const encoded = JSON.stringify(value);
-    return encoded.length <= 65536
-      ? encoded
-      : JSON.stringify({
-          status: "error",
-          sessionId: typeof value?.sessionId === "string" ? value.sessionId : "",
-          message: "The selected element contains too much page data. Try a smaller element.",
-        });
+    if (typeof encoded === "string" && encoded.length <= ${BROWSER_PREVIEW_CAPTURE_STATUS_MAX_CHARS}) return encoded;
+    return JSON.stringify({
+      v: 1,
+      captureId: String(value && value.captureId).slice(0, 200),
+      nonce: String(value && value.nonce).slice(0, 200),
+      mode: String(value && value.mode).slice(0, 20),
+      status: "error",
+      error: { code: "too-large" },
+    });
   } catch {
     return JSON.stringify({ status: "inactive" });
   }
 })();`;
 
-export const BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT = `(() => {
+export function browserPreviewCapturePrepareScript(captureId: string): string {
+  return `/*orkestrator:capture-prepare*/(async () => {
   try {
-    window.__orkestratorBrowserAnnotationRuntime__?.destroy?.();
+    const runtime = window.${KEY};
+    if (!runtime || typeof runtime.prepare !== "function") return null;
+    const encoded = JSON.stringify(await runtime.prepare(${JSON.stringify(captureId)}));
+    return typeof encoded === "string" && encoded.length <= ${BROWSER_PREVIEW_CAPTURE_PROBE_MAX_CHARS} ? encoded : null;
+  } catch {
+    return null;
+  }
+})();`;
+}
+
+/** Result captures: bounded font/layout stability window before the screenshot. */
+export function browserPreviewCaptureSettleScript(
+  captureId: string,
+  options: { deadlineMs: number; quietMs: number },
+): string {
+  return `/*orkestrator:capture-settle*/(async () => {
+  try {
+    const runtime = window.${KEY};
+    if (!runtime || typeof runtime.settle !== "function") return null;
+    const encoded = JSON.stringify(await runtime.settle(${JSON.stringify(captureId)}, ${Number(options.deadlineMs)}, ${Number(options.quietMs)}));
+    return typeof encoded === "string" && encoded.length <= 1024 ? encoded : null;
+  } catch {
+    return null;
+  }
+})();`;
+}
+
+export function browserPreviewCaptureProbeScript(captureId: string): string {
+  return `/*orkestrator:capture-probe*/(() => {
+  try {
+    const runtime = window.${KEY};
+    if (!runtime || typeof runtime.probe !== "function") return null;
+    const encoded = JSON.stringify(runtime.probe(${JSON.stringify(captureId)}));
+    return typeof encoded === "string" && encoded.length <= ${BROWSER_PREVIEW_CAPTURE_PROBE_MAX_CHARS} ? encoded : null;
+  } catch {
+    return null;
+  }
+})();`;
+}
+
+export const BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT = `/*orkestrator:capture-cancel*/(() => {
+  try {
+    window.${KEY}?.destroy?.();
   } catch {}
 })();`;

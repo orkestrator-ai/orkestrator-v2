@@ -8,6 +8,10 @@ Cursor/Grok receive the Orkestrator MCP server at launch. Pi reports a live
 `GET /session/:id/mcp` inventory. Still open: Claude `~/.claude.json` parse
 leftover, count-only fallbacks, lifecycle polish, browser QA.
 
+Persistent configuration management (add/edit/remove of saved servers), which
+this step excluded, is now documented in
+[mcp-management.md](../../architecture/mcp-management.md).
+
 ## Goal
 
 Launch configuration is no longer the gap. Cursor's SDK bridge injects

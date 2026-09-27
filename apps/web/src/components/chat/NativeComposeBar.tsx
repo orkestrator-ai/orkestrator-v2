@@ -6,10 +6,17 @@ import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "@/components/chat/compose-metrics";
-import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import {
+  MentionableInput,
+  type MentionableInputComboboxAria,
+  type MentionableInputRef,
+} from "@/components/chat/MentionableInput";
 import { cn } from "@/lib/utils";
 import type { FileMention } from "@/types";
-import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
+import {
+  transcriptAnnotationSourceLabel,
+  type TranscriptAnnotation,
+} from "@/lib/chat/transcript-annotations";
 
 export interface NativeComposeAttachment {
   id: string;
@@ -32,6 +39,8 @@ export interface NativeComposeBarProps {
   onRemoveAttachment: (id: string) => void;
   annotations?: readonly TranscriptAnnotation[];
   onClearAnnotations?: () => void;
+  /** Open the web annotation thread a migrated legacy browser note now lives in. */
+  onOpenMigratedAnnotation?: (annotationId: string) => void;
   inputRef: RefObject<MentionableInputRef | null>;
   inputContainerRef: RefObject<HTMLDivElement | null>;
   text: string;
@@ -39,6 +48,8 @@ export interface NativeComposeBarProps {
   onTextAndMentionsChange: (text: string, mentions: FileMention[]) => void;
   onCursorPositionChange: (position: number, text: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  /** Completion-popup semantics while a menu such as `/` owns the input. */
+  inputComboboxAria?: MentionableInputComboboxAria;
   placeholder: string;
   disabled?: boolean;
   isSending?: boolean;
@@ -67,8 +78,9 @@ export function NativeComposeBar({
   layout = "bottom",
   attachments,
   onRemoveAttachment,
-  annotations = [],
+  annotations: allAnnotations = [],
   onClearAnnotations,
+  onOpenMigratedAnnotation,
   inputRef,
   inputContainerRef,
   text,
@@ -76,6 +88,7 @@ export function NativeComposeBar({
   onTextAndMentionsChange,
   onCursorPositionChange,
   onKeyDown,
+  inputComboboxAria,
   placeholder,
   disabled = false,
   isSending = false,
@@ -92,6 +105,16 @@ export function NativeComposeBar({
   onSend,
   footer,
 }: NativeComposeBarProps) {
+  // Migrated legacy browser notes are links to their thread, never prompt content.
+  const annotations = allAnnotations.filter((annotation) => !annotation.migratedTo);
+  const migrated = allAnnotations.filter((annotation) => annotation.migratedTo);
+  const onlyDesignAnnotations =
+    annotations.length > 0 && annotations.every((annotation) => annotation.source === "design");
+  const annotationPillLabel = onlyDesignAnnotations
+    ? annotations.length === 1
+      ? "Design context"
+      : `${annotations.length} design contexts`
+    : `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
   return (
     <>
       <div
@@ -101,8 +124,27 @@ export function NativeComposeBar({
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >
-        {attachments.length > 0 || annotations.length > 0 ? (
+        {attachments.length > 0 || annotations.length > 0 || migrated.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-2">
+            {migrated.map((annotation) => (
+              <div
+                key={annotation.id}
+                data-testid="compose-migrated-annotation"
+                className="flex h-9 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-3 text-xs text-muted-foreground"
+              >
+                <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Browser note moved to a web annotation thread</span>
+                {onOpenMigratedAnnotation ? (
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:text-foreground"
+                    onClick={() => onOpenMigratedAnnotation(annotation.migratedTo!)}
+                  >
+                    Open note
+                  </button>
+                ) : null}
+              </div>
+            ))}
             {annotations.length > 0 ? (
               <Tooltip delayDuration={250}>
                 <TooltipTrigger asChild>
@@ -111,16 +153,18 @@ export function NativeComposeBar({
                     className="flex h-9 items-center gap-1.5 rounded-full border border-blue-400/30 bg-blue-500/10 px-3 text-sm text-blue-100 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.04)]"
                   >
                     <MessageSquareText className="h-4 w-4 text-blue-300" aria-hidden="true" />
-                    <span>
-                      {annotations.length} annotation{annotations.length === 1 ? "" : "s"}
-                    </span>
+                    <span>{annotationPillLabel}</span>
                     {onClearAnnotations ? (
                       <button
                         type="button"
                         onClick={onClearAnnotations}
                         disabled={disabled || isSending}
                         className="-mr-1 ml-0.5 rounded-full p-0.5 text-blue-200/70 transition-colors hover:bg-blue-400/15 hover:text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label="Remove all annotations"
+                        aria-label={
+                          onlyDesignAnnotations
+                            ? `Remove ${annotations.length === 1 ? "design context" : "all design contexts"}`
+                            : "Remove all annotations"
+                        }
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -143,9 +187,7 @@ export function NativeComposeBar({
                         <div className="min-w-0 space-y-1.5">
                           <div>
                             <p className="text-xs font-medium text-muted-foreground">
-                              {annotation.source === "browser"
-                                ? "Browser element"
-                                : "Selected text"}
+                              {transcriptAnnotationSourceLabel(annotation.source)}
                             </p>
                             <p className="mt-0.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-foreground">
                               {annotation.text}
@@ -204,6 +246,7 @@ export function NativeComposeBar({
             onChange={onTextAndMentionsChange}
             onCursorChange={onCursorPositionChange}
             onKeyDown={onKeyDown}
+            comboboxAria={inputComboboxAria}
             placeholder={placeholder}
             disabled={disabled || isSending}
             minHeight={COMPOSE_MIN_INPUT_HEIGHT}

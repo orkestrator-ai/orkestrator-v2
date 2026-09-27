@@ -25,3 +25,38 @@ Object.defineProperty(globalThis, NATIVE_WEB_PLATFORM_KEY, {
   value: nativeWebPlatform,
   configurable: true,
 });
+
+// Bun's `expect` prints a failing value by walking its whole object graph, and
+// a Happy DOM node reaches the document, the window, and every other node from
+// there. One failing `expect(document.activeElement).toBe(input)` built a
+// ~400 MB message and blocked the event loop for ~30 s; inside a `waitFor`,
+// that single failed poll outlasted every timeout (flake 0161). Nodes print as
+// a short, bounded description instead. Bun's formatter and `console.log` both
+// honour this hook; Testing Library's own `prettyDOM` output is unaffected.
+const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+const MAX_INSPECTED_TEXT = 60;
+
+function describeNodeForInspection(node: Node): string {
+  const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
+  const snippet = text.length > MAX_INSPECTED_TEXT ? `${text.slice(0, MAX_INSPECTED_TEXT)}…` : text;
+  if (node.nodeType === 1) {
+    const element = node as Element;
+    const attributes = ["id", "role", "aria-label", "name", "type", "data-testid"]
+      .map((name) => [name, element.getAttribute(name)] as const)
+      .filter((entry): entry is readonly [string, string] => entry[1] !== null)
+      .map(([name, value]) => ` ${name}=${JSON.stringify(value.slice(0, MAX_INSPECTED_TEXT))}`)
+      .join("");
+    const connected = element.isConnected ? "" : " (detached)";
+    return `<${element.tagName.toLowerCase()}${attributes}>${snippet ? ` ${JSON.stringify(snippet)}` : ""}${connected}`;
+  }
+  if (node.nodeType === 9) return "#document";
+  return `${node.nodeName}${snippet ? ` ${JSON.stringify(snippet)}` : ""}`;
+}
+
+Object.defineProperty(globalThis.Node.prototype, INSPECT_CUSTOM, {
+  configurable: true,
+  writable: true,
+  value(this: Node) {
+    return describeNodeForInspection(this);
+  },
+});

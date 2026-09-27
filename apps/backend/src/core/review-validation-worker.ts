@@ -23,6 +23,13 @@ const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString());
 const { root, directory, run } = input;
 const statePath = path.join(directory, "state.json");
 const cancelPath = path.join(directory, "cancel");
+// Per-command tombstones written by the "stop-command" control action. Plan IDs
+// are restricted to [A-Za-z0-9_-], so they are safe file-name suffixes.
+const commandCancelPath = id => path.join(directory, "cancel-command-" + id);
+const STOPPED_BY_USER = "Stopped by the user before it completed; validation is incomplete";
+const STOPPED_BEFORE_START = "Stopped by the user before it started; validation is incomplete";
+// Commands the user stopped individually. The rest of the run continues.
+const stoppedCommands = new Set();
 const lockPath = path.join(path.dirname(directory), ".validation-lock");
 const active = new Map();
 const createScheduler = (${HOST_TEST_SCHEDULER_SOURCE});
@@ -58,6 +65,14 @@ function killTree(child, signal) {
 function stop(reason) {
   stopping = true;
   for (const job of active.values()) job.stop(reason);
+}
+function stopRequestedCommands() {
+  for (const result of run.results) {
+    if (stoppedCommands.has(result.id) || !fs.existsSync(commandCancelPath(result.id))) continue;
+    stoppedCommands.add(result.id);
+    // A queued command has no process yet; its admission loop observes the set.
+    active.get(result.id)?.stop(STOPPED_BY_USER);
+  }
 }
 // Use the shared guard; evidence stores the failure without leaking the rejected
 // value (which could contain command output) into application diagnostics.
@@ -148,19 +163,26 @@ async function execute(cmd, index) {
       const workers = Math.max(1, Math.min(suiteBudget, profile.workers ?? (cmd.weight === 2 ? suiteBudget : Math.max(1, Math.floor(suiteBudget / 2)))));
       ticket = scheduler.enqueue({ owner, workers, memoryMiB: Math.max(1, Math.min(capacity.memoryMiB, profile.memoryMiB ?? workers * 1024)), resources });
       tickets.add(ticket);
-      persist();
+      let published = false;
       while (true) {
         const status = scheduler.poll(ticket);
         result.queueReason = status.queueReason;
+        // Publish the queued state together with its reason, never before it.
+        if (!published) {
+          published = true;
+          persist();
+        }
         if (status.state === "running") break;
         result.queuedMs = Date.now() - queuedAt;
         if (stopping) throw new Error("Validation was cancelled while queued");
+        if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
         if (result.queuedMs >= QUEUE_TIMEOUT_MS) throw new Error("Host capacity wait expired; command did not run");
         await delay(100);
       }
     }
     result.queuedMs = Date.now() - queuedAt;
     if (stopping) throw new Error("Validation was cancelled before execution");
+    if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
     if (!headMatches()) {
       run.error = "Repository HEAD changed while validation was queued; rediscover against the current snapshot";
       stop(run.error);
@@ -254,9 +276,24 @@ async function execute(cmd, index) {
       }
     };
     const timeout = cooperative ? setInterval(updateClock, 100) : setTimeout(() => stopJob("Validation command timed out"), cmd.timeoutMs);
+    // Silence is ambiguous for compilers and integration tests, so only exact
+    // repository profiles that require output as a lifecycle signal opt into
+    // this watchdog. The environment can tune an opted-in profile for a run,
+    // but cannot silently add the policy to an arbitrary discovered command.
+    const profileNoProgressMs = profile.noProgressTimeoutMs;
+    const noProgressMs = profileNoProgressMs === undefined ? undefined : Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS) || profileNoProgressMs));
+    let lastOutputAt = performance.now();
+    const noProgress = cooperative || noProgressMs === undefined ? undefined : setInterval(() => {
+      if (performance.now() - lastOutputAt >= noProgressMs)
+        stopJob("Validation command produced no output for " + noProgressMs + "ms; command may be stuck in a foreground service; validation is incomplete");
+    }, Math.min(1000, noProgressMs / 4));
     child.on("error", () => stopJob("Validation command could not start"));
     [child.stdout, child.stderr].forEach((source, i) => source.on("data", chunk => {
       if (failure) return;
+      if (chunk.length > 0) {
+        lastOutputAt = performance.now();
+        result.lastOutputAt = new Date().toISOString();
+      }
       const stream = streams[i];
       const remaining = Math.max(0, Math.min(MAX_STREAM_BYTES - stream.bytes, MAX_TOTAL_BYTES - totalBytes));
       const bytes = chunk.subarray(0, remaining);
@@ -272,6 +309,7 @@ async function execute(cmd, index) {
     }));
     child.on("close", code => {
       clearTimeout(timeout);
+      if (noProgress) clearInterval(noProgress);
       updateClock();
       // Clean up descendants even if their parent exited without waiting for them.
       killTree(child, "SIGKILL");
@@ -326,6 +364,7 @@ async function main() {
   const heartbeat = setInterval(() => {
     try {
       if (fs.existsSync(cancelPath)) stop("Validation was cancelled");
+      stopRequestedCommands();
       persist();
     } catch { stop("Validation state could not be persisted"); }
   }, 500);
@@ -399,6 +438,13 @@ async function main() {
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
         const cmd = commands[index];
+        if (stoppedCommands.has(cmd.id)) {
+          // Dependents observe a prerequisite that did not pass and are skipped.
+          Object.assign(run.results[index], { status: "incomplete", limitation: STOPPED_BEFORE_START });
+          pending.delete(index);
+          persist();
+          continue;
+        }
         const coveringIndex = coveredBy.get(index);
         if (coveringIndex !== undefined) {
           const covering = run.results[coveringIndex];
@@ -435,7 +481,7 @@ async function main() {
     if (stopping) stop("Validation was cancelled");
     await Promise.all(tasks);
     if (stopping) {
-      for (const i of pending) Object.assign(run.results[i], { status: "skipped", limitation: "Validation was cancelled" });
+      for (const i of pending) Object.assign(run.results[i], { status: "incomplete", limitation: "Validation was cancelled before this command started" });
       run.status = run.error && run.error !== schedulingLimitation ? "failed" : "cancelled";
     } else if (!headMatches()) {
       run.status = "failed";
@@ -490,8 +536,29 @@ function read() {
   }
   return state.run;
 }
+const UNSETTLED = ["pending", "queued", "running"];
 async function main() {
   confinedDirectory(directory);
+  if (input.action === "stop-command") {
+    // Stops one command and lets the rest of the run continue. The tombstone is
+    // environment-owned, so the request survives backend restarts; the worker
+    // records the command as incomplete with its partial output.
+    const id = input.resultId;
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(id) || !input.run.plan.commands.some(cmd => cmd.id === id)) throw new Error("Validation command is unavailable");
+    if (!fs.existsSync(statePath)) throw new Error("Validation state is missing");
+    const settled = run => !["planned", "running"].includes(run.status) || !UNSETTLED.includes(run.results.find(result => result.id === id)?.status);
+    let current = read();
+    if (!settled(current)) {
+      fs.writeFileSync(path.join(directory, "cancel-command-" + id), "", { mode: 0o600, flag: "a" });
+      const deadline = Date.now() + 5000;
+      while (!settled(current) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        current = read();
+      }
+    }
+    process.stdout.write(JSON.stringify(current));
+    return;
+  }
   if (input.action === "cancel") {
     // Persistent tombstone also prevents a delayed launcher from starting work.
     fs.writeFileSync(path.join(directory, "cancel"), "", { mode: 0o600, flag: "a" });

@@ -61,6 +61,62 @@ describe("environment process usage", () => {
     expect(read).toHaveBeenCalledWith([environment({ id: "env-1", name: "alpha" })]);
   });
 
+  test("joins concurrent reads from several clients but never caches a completed one", async () => {
+    const commands = new Map<string, CommandHandler>();
+    const loadEnvironments = mock(async () => [environment({ id: "env-1", name: "alpha" })]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reads = 0;
+    const read = mock(async () => {
+      reads += 1;
+      const sequence = reads;
+      if (sequence === 1) await gate;
+      return {
+        environments: [],
+        sampledAt: `2026-09-13T00:00:0${sequence}.000Z`,
+        truncated: false,
+      };
+    });
+    registerSystemCommands((name, handler) => commands.set(name, handler), undefined, read);
+    const context = { storage: { loadEnvironments } } as unknown as CommandContext;
+    const handler = commands.get("get_environment_process_usage")!;
+
+    const first = handler({}, context);
+    const second = handler({}, context);
+    const third = handler({}, context);
+    release();
+    const answers = await Promise.all([first, second, third]);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(new Set(answers.map((answer) => JSON.stringify(answer))).size).toBe(1);
+
+    // A later, non-overlapping request enumerates afresh.
+    const later = (await handler({}, context)) as { sampledAt: string };
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(later.sampledAt).toBe("2026-09-13T00:00:02.000Z");
+  });
+
+  test("a failed joined read is shared once and does not poison the next request", async () => {
+    const commands = new Map<string, CommandHandler>();
+    let calls = 0;
+    const read = mock(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("ps unavailable");
+      return { environments: [], sampledAt: "2026-09-13T00:00:00.000Z", truncated: false };
+    });
+    registerSystemCommands((name, handler) => commands.set(name, handler), undefined, read);
+    const context = {
+      storage: { loadEnvironments: async () => [] },
+    } as unknown as CommandContext;
+    const handler = commands.get("get_environment_process_usage")!;
+    const results = await Promise.allSettled([handler({}, context), handler({}, context)]);
+    expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(read).toHaveBeenCalledTimes(1);
+    await expect(handler({}, context)).resolves.toMatchObject({ environments: [] });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   test("rejects when stored environments cannot be loaded", async () => {
     const commands = new Map<string, CommandHandler>();
     registerSystemCommands((name, handler) => commands.set(name, handler));

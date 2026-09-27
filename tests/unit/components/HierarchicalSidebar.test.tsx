@@ -2475,6 +2475,83 @@ describe("HierarchicalSidebar", () => {
       );
     });
 
+    test("sorts a folder's projects alphabetically from its context menu", async () => {
+      projectsValue = [
+        { ...project, id: "project-zulu", name: "Zulu", folder: "Work", order: 0 },
+        { ...secondProject, id: "project-alpha", name: "alpha", folder: "Work", order: 1 },
+        { ...project, id: "project-outside", name: "Outside", order: 2 },
+      ];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(
+          ["project-alpha", "project-zulu", "project-outside"],
+          {},
+        ),
+      );
+    });
+
+    test("does not persist a folder that is already alphabetized", async () => {
+      projectsValue = [
+        { ...project, id: "project-alpha", name: "Alpha", folder: "Work", order: 0 },
+        { ...secondProject, id: "project-zulu", name: "Zulu", folder: "Work", order: 1 },
+      ];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
+
+      expect(arrangeProjectsMock).not.toHaveBeenCalled();
+    });
+
+    test("sorts a collapsed folder without expanding it", async () => {
+      projectsValue = [
+        { ...project, id: "project-zulu", name: "Zulu", folder: "Work", order: 0 },
+        { ...secondProject, id: "project-alpha", name: "Alpha", folder: "Work", order: 1 },
+      ];
+      useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+      render(<HierarchicalSidebar />);
+
+      expect(screen.queryByRole("button", { name: /^Zulu/i }) === null).toBe(true);
+      fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-alpha", "project-zulu"], {}),
+      );
+      expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+      expect(screen.getByTitle("Expand folder Work")).toBeTruthy();
+    });
+
+    test("reports folder sort failures without leaking a rejected event promise", async () => {
+      projectsValue = [
+        { ...project, id: "project-zulu", name: "Zulu", folder: "Work", order: 0 },
+        { ...secondProject, id: "project-alpha", name: "Alpha", folder: "Work", order: 1 },
+      ];
+      arrangeProjectsMock.mockRejectedValueOnce(new Error("sort failed"));
+      const originalConsoleError = console.error;
+      const consoleErrorMock = mock(() => undefined);
+      console.error = consoleErrorMock as typeof console.error;
+
+      try {
+        render(<HierarchicalSidebar />);
+        fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
+
+        await waitFor(() =>
+          expect(consoleErrorMock).toHaveBeenCalledWith(
+            "Failed to sort project folder:",
+            expect.any(Error),
+          ),
+        );
+      } finally {
+        console.error = originalConsoleError;
+      }
+    });
+
     test("renaming a folder rewrites every member", async () => {
       projectsValue = [
         { ...project, folder: "Work" },

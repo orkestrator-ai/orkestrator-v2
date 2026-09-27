@@ -391,7 +391,11 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
   // observed call names below can still reveal those server names, but seeing
   // one call must not pretend that one tool is the server's complete inventory.
   const reportedInventory = new Set<string>();
-  for (const toolName of state.runTools ?? []) {
+  // A run inventory advertised before the last configuration reattach says
+  // nothing about the servers the current agent loaded.
+  const liveRunTools =
+    state.runTools !== undefined && state.runTools !== state.retiredRunTools ? state.runTools : [];
+  for (const toolName of liveRunTools) {
     const parsed = parseMcpToolName(toolName, configuredByLength);
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
@@ -404,6 +408,18 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
     if (tools && tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
+  }
+  // History only: the server stays listed (it was real, and may still be) but
+  // contributes no tools, so without fresh evidence it reads as `unknown`.
+  const retired = [
+    ...(state.retiredMcpTools ?? []),
+    ...(state.retiredRunTools !== undefined && state.retiredRunTools === state.runTools
+      ? state.retiredRunTools
+      : []),
+  ];
+  for (const toolName of retired) {
+    const parsed = parseMcpToolName(toolName, configuredByLength);
+    if (parsed) ensureServer(inventory, parsed.server);
   }
 
   return [...inventory].map(([name, toolSet]) => {
@@ -436,6 +452,25 @@ export function recordObservedMcpTool(state: SessionState, toolName: string | un
   if (toolName === undefined || !toolName.startsWith("mcp__")) return;
   if (state.observedMcpTools.size >= MAX_OBSERVED_MCP_TOOLS) return;
   state.observedMcpTools.add(toolName.slice(0, MAX_MCP_QUALIFIED_NAME_LENGTH));
+}
+
+/**
+ * Retire this configuration generation's MCP evidence.
+ *
+ * Called when a saved MCP configuration change detaches the agent. The server
+ * that answered a call before the edit may be the one the edit removed, so the
+ * names move to history: still listed, never again proof of a connection. The
+ * next call or run inventory under the new configuration is fresh evidence.
+ */
+export function retireMcpObservations(state: SessionState): void {
+  const retired = state.retiredMcpTools ?? new Set<string>();
+  for (const toolName of state.observedMcpTools) {
+    if (retired.size >= MAX_OBSERVED_MCP_TOOLS) break;
+    retired.add(toolName);
+  }
+  state.retiredMcpTools = retired;
+  state.observedMcpTools.clear();
+  if (state.runTools !== undefined) state.retiredRunTools = state.runTools;
 }
 
 /**

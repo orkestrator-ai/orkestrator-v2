@@ -13,15 +13,26 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  safeParseStructuredReviewFindings,
   safeParseStructuredReviewReport,
+  type StructuredReviewFindings,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
-import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-summary";
+import {
+  structuredReviewFindingsSummary,
+  structuredReviewVerdictSummary,
+} from "@/lib/review/structured-review-summary";
 
 export type JsonContainer = Record<string, unknown> | unknown[];
 
 export type JsonPayload = (
   | { kind: "structured-review"; report: StructuredReviewReport }
+  /**
+   * Only a report's issues and coverage gaps: what the build pipeline's
+   * address prompt frames for the fix turn. Rendered with the report's own
+   * finding sections rather than the generic tree.
+   */
+  | { kind: "review-findings"; findings: StructuredReviewFindings }
   | { kind: "verification"; verdict: VerificationVerdict }
   | { kind: "json"; value: JsonContainer }
 ) & {
@@ -119,12 +130,16 @@ export function parseJsonPayload(content: string): JsonPayload | null {
       source: detected.source,
     };
   }
+  const findings = safeParseStructuredReviewFindings(value);
+  if (findings.success) {
+    return { kind: "review-findings", findings: findings.data, source: detected.source };
+  }
   if (isVerificationVerdict(value)) {
     return { kind: "verification", verdict: value, source: detected.source };
   }
   // A fenced block of arbitrary JSON was written as code and stays code.
   // Markdown renders it verbatim, whereas the labelled tree humanizes keys and
-  // so cannot show the document the agent actually wrote. Only the two
+  // so cannot show the document the agent actually wrote. Only the
   // recognized contracts — which have renderers that say more than the source
   // does — are worth folding out of a code block.
   if (detected.fenced) return null;
@@ -186,6 +201,8 @@ export function jsonPayloadTitle(payload: JsonPayload): string {
   switch (payload.kind) {
     case "structured-review":
       return "Structured review report";
+    case "review-findings":
+      return "Review findings";
     case "verification":
       // The outcome is the title: a verdict the reader has to open to learn is
       // no better than the raw JSON it replaced.
@@ -200,6 +217,8 @@ export function jsonPayloadSummary(payload: JsonPayload): string {
   switch (payload.kind) {
     case "structured-review":
       return structuredReviewVerdictSummary(payload.report);
+    case "review-findings":
+      return structuredReviewFindingsSummary(payload.findings);
     case "verification":
       return payload.verdict.rationale.trim().replace(/\s+/g, " ");
     default:

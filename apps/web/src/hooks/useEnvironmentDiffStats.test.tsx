@@ -143,3 +143,89 @@ describe("useEnvironmentDiffStats", () => {
     expect(unlisteners[1]).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("useEnvironmentDiffStats revision-aware recovery", () => {
+  const generation = "diff-generation-1";
+  const stats = (additions: number) => ({
+    additions,
+    deletions: 0,
+    filesChanged: 1,
+    truncated: false,
+  });
+  const change = (environmentId: string, additions: number, revision?: number) => ({
+    environmentId,
+    comparisonRef: "main",
+    computedAt: "2026-09-24T09:00:00.000Z",
+    stats: stats(additions),
+    ...(revision === undefined ? {} : { generation, revision }),
+  });
+  const emitChange = (payload: unknown) =>
+    act(() => callbacks.get(DIFF_STATS_CHANGED_EVENT)?.({ payload }));
+
+  test("an older buffered change never overwrites the newer snapshot", async () => {
+    const snapshot = deferred<unknown>();
+    snapshotSpy.mockImplementationOnce(() => snapshot.promise);
+    renderHook(() => useEnvironmentDiffStats());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Emitted before the snapshot was captured (revision 4 <= 5).
+    emitChange(change("env-1", 4, 4));
+    await act(async () => {
+      snapshot.resolve({ entries: [change("env-1", 5)], generation, revision: 5 });
+      await Promise.resolve();
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(5);
+    expect(useEnvironmentDiffStore.getState().syncStatus).toBe("current");
+  });
+
+  test("an untracked environment's removal does not resurrect from a late change", async () => {
+    snapshotSpy.mockResolvedValue({ entries: [change("env-1", 1)], generation, revision: 1 });
+    renderHook(() => useEnvironmentDiffStats());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true);
+
+    emitChange({
+      environmentId: "env-1",
+      comparisonRef: "main",
+      computedAt: "2026-09-24T09:01:00.000Z",
+      removed: true,
+      generation,
+      revision: 2,
+    });
+    emitChange(change("env-1", 9, 2)); // duplicate revision, different body
+    emitChange(change("env-1", 9, 1)); // older than the removal
+
+    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(snapshotSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a revision gap triggers one conditional read from the contiguous position", async () => {
+    snapshotSpy.mockResolvedValueOnce({ entries: [], generation, revision: 3 });
+    renderHook(() => useEnvironmentDiffStats());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    snapshotSpy.mockResolvedValueOnce({
+      status: "snapshot",
+      generation,
+      revision: 6,
+      snapshot: { entries: [change("env-1", 5), change("env-2", 6)] },
+    });
+    emitChange(change("env-2", 6, 6)); // revisions 4 and 5 were missed
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(snapshotSpy).toHaveBeenCalledTimes(2);
+    expect(snapshotSpy.mock.calls[1]?.[0]).toEqual({ generation, revision: 3 });
+    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(5);
+    expect(useEnvironmentDiffStore.getState().stats.get("env-2")?.additions).toBe(6);
+  });
+});

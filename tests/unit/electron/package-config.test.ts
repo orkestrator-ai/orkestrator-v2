@@ -49,8 +49,8 @@ describe("Electron packaging configuration", () => {
       compilerOptions: { outDir: string; rootDir: string };
       include: string[];
     }>("apps/desktop/tsconfig.electron.json");
-    const desktopBuildScript = await fs.readFile(
-      path.join(process.cwd(), "apps/desktop/scripts/build.ts"),
+    const desktopBundleScript = await fs.readFile(
+      path.join(process.cwd(), "apps/desktop/scripts/electron-bundle.ts"),
       "utf8",
     );
     const bootstrapPreload = await fs.readFile(
@@ -126,9 +126,7 @@ describe("Electron packaging configuration", () => {
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist");
     expect(electronTsconfig.compilerOptions.rootDir).toBe(".");
     expect(electronTsconfig.include).toEqual(["electron/**/*.ts"]);
-    expect(desktopBuildScript).toContain(
-      'path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts")',
-    );
+    expect(desktopBundleScript).toContain('"electron/toolchain-bootstrap-preload.ts"');
     expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");
@@ -144,10 +142,12 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("initializeBrowserPreviews");
     expect(desktopMain).toContain("browserPreviewManager: browserPreviewRuntime.manager");
     expect(desktopMain).toContain("getBrowserPreviews: (event)");
-    expect(desktopMain).toContain(
-      "windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll()",
-    );
-    expect(desktopMain).toContain("browserPreviewPartitionForWindow(context.slot, connectionId)");
+    // Closing a window destroys its previews and the preview transport it owns.
+    expect(desktopMain).toContain("closing?.browserPreviewManager.destroyAll()");
+    expect(desktopMain).toContain("closing?.previewTransport.disposeAll()");
+    // A connection switch builds previews in the new connection's partition.
+    expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, connectionId)");
+    expect(desktopMain).toContain("const nextPreviewRuntime = createWindowBrowserPreviews(");
     expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
       desktopMain.indexOf("windowRequestGate.markReady()"),
     );
@@ -155,6 +155,14 @@ describe("Electron packaging configuration", () => {
       desktopMain.indexOf("await createWindow();"),
     );
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
+    expect(desktopMain.indexOf("registerBrowserPreviewWindowActivation({")).toBeGreaterThan(
+      desktopMain.indexOf("if (isPrimaryInstance)"),
+    );
+    expect(desktopMain.indexOf("registerBrowserPreviewWindowActivation({")).toBeLessThan(
+      desktopMain.indexOf(".then(startApplication)"),
+    );
+    expect(desktopMain).toContain("quitReopen.deferReopenWhileQuitting() || !startupComplete");
+    expect(desktopMain).toContain("relaunch: () => quitReopen.scheduleRelaunch()");
     expect(desktopMain).toContain("createSerializedMacOsPermissionProbe");
     expect(desktopMain).toContain("shouldProbeMacOsPermissionsBeforeBackend");
     expect(desktopMain).toContain("createMacOsPermissionSplashWindow");

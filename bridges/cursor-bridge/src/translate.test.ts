@@ -1006,6 +1006,13 @@ describe("update drift", () => {
     const state = newSessionState();
     applyInteractionUpdate(state, { type: "step-started" });
     applyInteractionUpdate(state, { type: "step-completed" });
+    applyInteractionUpdate(state, { type: "tool-requests-listed", callCount: 2 });
+    applyInteractionUpdate(state, {
+      type: "tool-call-delta",
+      callId: "launch",
+      modelCallId: "m1",
+      taskUpdate: { type: "tool-requests-listed", callCount: 1 },
+    });
     applyInteractionUpdate(state, { type: "invented-by-the-sdk" });
 
     expect(state.health.drift()).toEqual({

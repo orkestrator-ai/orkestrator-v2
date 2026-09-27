@@ -1,3 +1,4 @@
+import { linkBrowserTarget, serviceLinkTarget } from "@/lib/preview-service-entry";
 import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
@@ -31,6 +32,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
+import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -1206,7 +1208,13 @@ export function TerminalContainer({
           .findPaneWithTab(request.sourceTabId, environmentId);
         if (!pane) return;
 
-        if (createBrowserTab(request.url, pane.id)) {
+        // Loopback links are interpreted in this environment (a container's
+        // localhost:3000 is its own port 3000), not as a backend host port.
+        const target = linkBrowserTarget(
+          useEnvironmentStore.getState().getEnvironmentById(environmentId),
+          request.url,
+        );
+        if (createBrowserTab(target, pane.id)) {
           usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
         }
       }),
@@ -1242,6 +1250,19 @@ export function TerminalContainer({
         }
       }
 
+      if (type === "design-canvas")
+        return openDesignCanvasTab({
+          environmentId,
+          canvasId: options?.canvasId,
+          placement: options?.designPlacement,
+          requestedTabId: options?.tabId,
+          allTabs,
+          activePaneId,
+          maxTabs: MAX_TABS,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+
       // Selected durable workflows use caller-owned ids as idempotent focus
       // intents. Other callers retain collision reporting so they can roll back
       // any state they created specifically for a new tab.
@@ -1265,20 +1286,6 @@ export function TerminalContainer({
         rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);
         return false;
-      }
-
-      if (type === "design-canvas") {
-        if (
-          !options?.canvasId ||
-          usePaneLayoutStore.getState().hydration.get(environmentId) !== "done"
-        )
-          return false;
-        const newTab: TabInfo = {
-          id: createUniqueTabId("design"),
-          type: "design-canvas",
-          designCanvasData: { canvasId: options.canvasId },
-        };
-        return usePaneLayoutStore.getState().addTabInSplit(activePaneId, newTab, environmentId);
       }
 
       if (type === "browser") {
@@ -1564,11 +1571,12 @@ export function TerminalContainer({
 
     return window.orkestrator.listen<BrowserPreviewOpenLinkEvent>(
       "browser-preview-open-link",
-      ({ tabId, url }) => {
+      ({ tabId, url, service }) => {
         const sourcePane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);
         const sourceTab = sourcePane?.tabs.find((tab) => tab.id === tabId);
         if (!sourcePane || sourceTab?.type !== "browser") return;
-        if (createBrowserTab(url, sourcePane.id)) {
+        // Same-service links from a service preview keep the service identity.
+        if (createBrowserTab(service ? serviceLinkTarget(service) : url, sourcePane.id)) {
           usePaneLayoutStore.getState().setActivePane(sourcePane.id, environmentId);
         }
       },

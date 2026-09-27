@@ -584,7 +584,7 @@ describe("VirtualizedMessageList", () => {
     expect(lastVirtuosoProps.computeItemKey).toBe(computeItemKey);
   });
 
-  test("sets increaseViewportBy for overscan", () => {
+  test("sets the transcript estimate and overscan", () => {
     render(
       <VirtualizedMessageList
         messages={[]}
@@ -595,6 +595,7 @@ describe("VirtualizedMessageList", () => {
       />,
     );
 
+    expect(lastVirtuosoProps.defaultItemHeight).toBe(320);
     expect(lastVirtuosoProps.increaseViewportBy).toEqual({
       top: 400,
       bottom: 200,

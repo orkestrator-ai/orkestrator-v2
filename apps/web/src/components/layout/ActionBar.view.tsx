@@ -239,6 +239,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setRepoSettingsProjectId,
     globalSettingsOpen,
     globalSettingsDefaultSection,
+    globalSettingsSectionRequest,
     setGlobalSettingsOpen,
     setEnvSettingsEnvironmentId,
     dockerStatsOpen,
@@ -1588,6 +1589,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             open={globalSettingsOpen}
             onOpenChange={setGlobalSettingsOpen}
             defaultSection={globalSettingsDefaultSection}
+            sectionRequest={globalSettingsSectionRequest}
           />
         </LazyLoadBoundary>
       )}

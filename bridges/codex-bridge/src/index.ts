@@ -23,6 +23,8 @@ import {
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
+import { registerMcpReloadRoute } from "./mcp-reload-route.js";
+import { registerSessionCloseRoute } from "./session-close-route.js";
 import {
   applyCodexCollabStateToSubagentParts,
   CODEX_TIMELINE_ITEM_PREFIX,
@@ -40,29 +42,16 @@ import {
   shutdownSessionTitleGeneration,
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
-import { AppServerRuntime } from "./app-server-runtime.js";
+import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
-  BUILTIN_SLASH_COMMANDS,
-  buildPromptInput,
-  expandPromptTemplate,
-  getAvailableSlashCommandDefinitions,
-  isCodexCliNativeSlashCommand,
-  parseSlashCommandPrompt,
-  resolveConversationMode,
-  runInlinePromptCommand,
-  serializeSlashCommand,
-  wrapPromptForConversationMode,
-  type BridgeSlashCommand,
-  type BuiltinSlashCommand,
-  type ConversationMode,
-  type PromptSlashCommand,
-  type SlashCommandDefinition,
-} from "./prompts/slash-commands.js";
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+} from "@orkestrator/protocol/agent-command-catalogue";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -929,7 +918,6 @@ export const __testing = {
   readCodexCliModelCache,
   readTextFileIfPresentForTesting: readTextFileIfPresent,
   refreshRuntimeEnvironment,
-  runInlinePromptCommand,
   runtimeForTesting: () => appServerRuntime,
   setBridgeAuthForTesting: (token?: string) => {
     if (token === undefined) {
@@ -1126,6 +1114,10 @@ app.get("/global/health", (c) => {
         codexVersion: health.codexVersion,
         restartCount: health.restartCount,
         circuitOpen: health.circuitOpen,
+        // How the previous child died, so an unexplained restart can be told
+        // apart after the fact (SIGKILL from outside vs. Codex exiting itself).
+        lastExitCode: health.lastExitCode ?? null,
+        lastExitSignal: health.lastExitSignal ?? null,
       },
       activeThreads: health.activeThreads,
       activeTurns: health.activeTurns,
@@ -1208,43 +1200,29 @@ app.get("/global/usage", async (c) => {
   return c.json({ account: account ?? null });
 });
 
+/**
+ * Legacy global list for clients that predate `/session/:id/commands`.
+ * Templates and bridge built-ins only: reading it never starts Codex. Rows
+ * carry the version-1 descriptor fields, which older clients ignore.
+ */
 app.get("/global/slash-commands", async (c) => {
   const cwd = getWorkingDirectory();
-  const commands = await getAvailableSlashCommandDefinitions(cwd);
-  return c.json({ commands: commands.map(serializeSlashCommand), cwd });
+  return c.json({ commands: await appServerRuntime.listGlobalCommandRows(), cwd });
 });
 
+/**
+ * The enhanced (version 1) catalogue for one session. Metadata only: it does
+ * not touch liveness, hydrate a transcript or re-attach an idle thread. An
+ * unknown session is answered in band as `missing`, never 404 — a 404 here
+ * means "this bridge predates the route".
+ */
 app.get("/session/:id/commands", async (c) => {
-  const health = (await appServerRuntime.getRuntimeHealth(c.req.param("id"))) as {
-    skills?: { data?: unknown[] };
-  } | null;
-  if (!health) return c.json({ error: "Session not found" }, 404);
-  const commands: Array<{
-    name: string;
-    description?: string;
-    argumentHint?: string;
-    source: "builtin" | "project" | "user" | "plugin" | "skill" | "template";
-    scope?: "global" | "session";
-  }> = (await getAvailableSlashCommandDefinitions(getWorkingDirectory())).map(
-    serializeSlashCommand,
-  );
-  for (const group of health.skills?.data ?? []) {
-    if (!group || typeof group !== "object") continue;
-    const skills = (group as { skills?: unknown }).skills;
-    if (!Array.isArray(skills)) continue;
-    for (const candidate of skills) {
-      if (!candidate || typeof candidate !== "object") continue;
-      const skill = candidate as { name?: unknown; description?: unknown; scope?: unknown };
-      if (typeof skill.name !== "string" || !skill.name.trim()) continue;
-      commands.push({
-        name: `/skill:${skill.name.trim()}`,
-        ...(typeof skill.description === "string" ? { description: skill.description } : {}),
-        source: "skill",
-        scope: skill.scope === "project" ? "session" : "global",
-      });
-    }
-  }
-  return c.json({ commands: commands.slice(0, 512) });
+  return c.json(await appServerRuntime.getCommandCatalogue(c.req.param("id")));
+});
+
+/** Explicit refresh: rescans skills from disk (`reloaded`) and rereads templates. */
+app.post("/session/:id/commands/refresh", async (c) => {
+  return c.json(await appServerRuntime.refreshCommandCatalogue(c.req.param("id")));
 });
 
 app.get("/session/list", async (c) => {
@@ -1460,6 +1438,10 @@ app.post("/session/:id/prompt", async (c) => {
   if (workflowResultTool !== undefined && !isScopedAgentMcp(agentMcp)) {
     return c.json({ error: "workflowResultTool requires agentMcp" }, 400);
   }
+  const commandFields = readBridgePromptCommandFields(
+    body && typeof body === "object" && !Array.isArray(body) ? body : {},
+  );
+  if (!commandFields.ok) return c.json({ error: commandFields.error }, 400);
 
   const outcome = await appServerRuntime.prompt(sessionId, {
     prompt,
@@ -1469,8 +1451,15 @@ app.post("/session/:id/prompt", async (c) => {
     ...(typeof readOnly === "boolean" ? { readOnly } : {}),
     ...(isScopedAgentMcp(agentMcp) ? { agentMcp } : {}),
     ...(typeof workflowResultTool === "string" ? { workflowResultTool } : {}),
+    ...(commandFields.allowProviderCommands ? {} : { allowProviderCommands: false }),
+    ...(commandFields.command ? { command: commandFields.command } : {}),
   });
-  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  if (!outcome.ok) {
+    // Nothing was journaled or sent: the backend treats this as a rejection
+    // and keeps the draft, never as an ambiguous dispatch.
+    if (outcome.status === 422) return c.json(commandUnavailableResponse(outcome.error), 422);
+    return c.json({ error: outcome.error }, outcome.status);
+  }
   return c.json(outcome.result, 202);
 });
 
@@ -1602,6 +1591,7 @@ app.post("/session/:id/compact", async (c) => {
   const outcome = await appServerRuntime.compactSession(c.req.param("id"));
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   if (outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
   if (outcome === "unavailable") return c.json({ error: "Compaction could not be started" }, 503);
   // 202: `thread/compact/start` returns before the rewrite has happened. The
   // session stays busy until the bridge sees `thread/compacted`.
@@ -1636,6 +1626,8 @@ app.post("/session/:id/steer", async (c) => {
     requestId,
   );
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  // No `outcome` field: the backend reads this as a definite refusal, not "idle".
+  if (outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
   if (outcome === "idle") {
     return c.json({ error: "There is no active turn", outcome: "idle" }, 409);
   }
@@ -1728,6 +1720,7 @@ app.post("/session/:id/review", async (c) => {
   const result = await appServerRuntime.startNativeReview(c.req.param("id"), target);
   if (result.outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   if (result.outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (result.outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
   if (result.outcome === "unavailable") return c.json({ error: "Native review failed" }, 503);
   return c.json({ status: "processing", turnId: result.turnId }, 202);
 });
@@ -1790,6 +1783,9 @@ app.get("/session/:id/mcp", async (c) => {
   });
   return c.json({ servers });
 });
+
+registerMcpReloadRoute(app, appServerRuntime);
+registerSessionCloseRoute(app, appServerRuntime);
 
 app.post("/session/:id/mcp/:name/:action", async (c) => {
   const action = c.req.param("action");

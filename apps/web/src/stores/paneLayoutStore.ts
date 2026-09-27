@@ -1,7 +1,19 @@
 import { createSessionKey } from "@/lib/utils";
 import { create } from "zustand";
-import type { PaneNode, PaneLeaf, PaneSplit, TabInfo, EdgeDirection } from "@/types/paneLayout";
-import { getNativeAgentData, isPaneLeaf, MAX_SPLIT_DEPTH } from "@/types/paneLayout";
+import type {
+  BrowserAnnotationPanelState,
+  PaneNode,
+  PaneLeaf,
+  PaneSplit,
+  TabInfo,
+  EdgeDirection,
+} from "@/types/paneLayout";
+import {
+  getNativeAgentData,
+  isPaneLeaf,
+  MAX_SPLIT_DEPTH,
+  sanitizeBrowserAnnotationPanelState,
+} from "@/types/paneLayout";
 import {
   useTerminalSessionStore,
   // Distinct from the native `createSessionKey`: terminal keys also carry the
@@ -19,6 +31,7 @@ import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 import { forgetAgentHandoff } from "@/lib/agent-handoff";
+import { reportNativeTabTeardownFailure } from "@/lib/tab-teardown-notice";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 /**
@@ -257,6 +270,12 @@ interface PaneLayoutState {
     history?: string[],
     historyIndex?: number,
   ) => void;
+  /** Persist only web annotation panel view preferences for a browser tab. */
+  updateTabBrowserAnnotationPanel: (
+    tabId: string,
+    patch: Partial<BrowserAnnotationPanelState>,
+    environmentId?: string,
+  ) => void;
 
   // Pane management
   splitPane: (
@@ -360,7 +379,7 @@ function cleanupClaudeNativeTab(envId: string, tabId: string) {
       kind: "claude-native",
       sessionId: session?.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] Claude teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "Claude", err));
 }
 
 function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
@@ -377,7 +396,7 @@ function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
       kind: "opencode-native",
       sessionId: session?.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] OpenCode teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "OpenCode", err));
 }
 
 function cleanupCodexNativeTab(envId: string, tabId: string) {
@@ -394,7 +413,7 @@ function cleanupCodexNativeTab(envId: string, tabId: string) {
       kind: "codex-native",
       sessionId: session?.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] Codex teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "Codex", err));
 }
 
 function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
@@ -407,7 +426,7 @@ function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
       kind: `${data.platform}-native`,
       sessionId: data.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] shared native teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "shared native", err));
 }
 
 function cleanupClaudeTmuxTab(envId: string, tabId: string) {
@@ -1345,6 +1364,32 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     environments.set(envId, { ...envState, root });
     set({ environments });
     return platform;
+  },
+
+  updateTabBrowserAnnotationPanel: (tabId, patch, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
+    const previous = existingTab.browserData.annotationPanel ?? { open: false };
+    const next = sanitizeBrowserAnnotationPanelState({ ...previous, ...patch });
+    if (!next || JSON.stringify(next) === JSON.stringify(existingTab.browserData.annotationPanel))
+      return;
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId && tab.type === "browser" && tab.browserData
+          ? { ...tab, browserData: { ...tab.browserData, annotationPanel: next } }
+          : tab,
+      ),
+    }));
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
   },
 
   updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex) => {

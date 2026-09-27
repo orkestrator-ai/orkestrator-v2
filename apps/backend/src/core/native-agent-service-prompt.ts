@@ -2,8 +2,10 @@ import * as shared from "./native-agent-service-shared.js";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
+  stripCoordinatorContext,
 } from "@orkestrator/protocol/coordinator";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
+import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import {
   INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
@@ -25,6 +27,9 @@ import {
   readProviderStatus,
   AmbiguousPromptDispatchError,
   PendingNativeAgentDispatchError,
+  PARKED_DISPATCH_CONFLICT_MESSAGE,
+  PromptRejectedError,
+  nativeCapabilities,
 } from "./native-agent-service-shared.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
@@ -123,6 +128,25 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServiceProjection } from "./native-agent-service-projection.ts";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
+import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
+import {
+  nativeAgentCapabilities,
+  type NativeAgentCommandIntent,
+} from "@orkestrator/protocol/native-agent";
+import { commandCatalogueKey } from "./native-agent-command-catalogue.js";
+import {
+  commandDispatchNeedsCatalogue,
+  planCommandDispatch,
+  type CommandDispatchPlan,
+} from "./native-agent-command-dispatch.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import {
+  MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
+  nativeAgentObservationGroupKey,
+  observationSatisfies,
+} from "./native-agent-observation.js";
 
 export abstract class NativeAgentServicePrompt extends NativeAgentServiceProjection {
   sessionActivitySnapshot(
@@ -178,6 +202,223 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       presence: this.sessionActivitySnapshot(environmentId, agent, logicalSessionKey),
       ...(projection?.title ? { title: projection.title } : {}),
     };
+  }
+
+  /**
+   * The last projection this process built for one session, if any. Purely
+   * in-memory: never reads a provider or hydrates a transcript, so background
+   * observers may consult it freely. It can be stale or absent.
+   */
+  cachedProjectionSnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): NativeAgentSessionProjection | null {
+    const sessionKey = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);
+    return (
+      this.projectionCache.get(`${sessionKey}\0sync-v1`)?.projection ??
+      this.projectionCache.get(sessionKey)?.projection ??
+      null
+    );
+  }
+
+  /** Bounded retry bookkeeping for on-demand turn-outcome reads. */
+  protected readonly turnOutcomeAttempts = new Map<string, { attempts: number; retryAt: number }>();
+  /** Short-lived cache of on-demand pending-interaction reads, per session. */
+  protected readonly pendingInteractionReads = new Map<
+    string,
+    { at: number; requests: AgentInteractionRequest[] }
+  >();
+
+  /**
+   * How the turn started by `requestId` ended, without reading the transcript.
+   *
+   * A durable record (written by the queue drain's own status read, or by an
+   * earlier call) answers immediately. Otherwise, only while this request is
+   * still the session's latest dispatch and the turn looks finished, one
+   * provider status read settles it: a provider keeps a terminal turn error
+   * until the next turn, so `error` then is this turn's error. `pending` means
+   * "ask again later"; `unknown` means the outcome cannot be established.
+   */
+  async sessionTurnOutcome(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ outcome: "completed" | "failed" | "pending" | "unknown"; error?: string }> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session) return { outcome: "unknown" };
+    const recorded = session.turnOutcomes?.find((entry) => entry.requestId === input.requestId);
+    if (recorded) {
+      return { outcome: recorded.outcome, ...(recorded.error ? { error: recorded.error } : {}) };
+    }
+    const ids = session.dispatchedRequestIds ?? [];
+    if (ids[ids.length - 1] !== input.requestId) return { outcome: "unknown" };
+    const activity = this.sessionTurnActivitySnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (activity === "working" || activity === "waiting") return { outcome: "pending" };
+    const attemptKey = `${key}\0${input.requestId}`;
+    const attempt = this.turnOutcomeAttempts.get(attemptKey);
+    if (attempt && attempt.retryAt > this.now()) return { outcome: "pending" };
+    const retry = (): { outcome: "pending" | "unknown" } => {
+      const attempts = (attempt?.attempts ?? 0) + 1;
+      if (attempts >= 3) {
+        this.turnOutcomeAttempts.delete(attemptKey);
+        return { outcome: "unknown" };
+      }
+      if (!attempt && this.turnOutcomeAttempts.size >= 256) {
+        const oldest = this.turnOutcomeAttempts.keys().next().value;
+        if (oldest !== undefined) this.turnOutcomeAttempts.delete(oldest);
+      }
+      this.turnOutcomeAttempts.set(attemptKey, {
+        attempts,
+        retryAt: this.now() + 5_000 * attempts,
+      });
+      return { outcome: "pending" };
+    };
+    let provider: NativeAgentRuntimeProvider | undefined;
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      provider = await this.observeProvider(input);
+      // No bridge is running: the turn is over, and its error state is gone.
+      if (!provider) return { outcome: "unknown" };
+      observation = await readProviderStatus(provider, session.providerSessionId);
+    } catch {
+      return retry();
+    }
+    if (observation.status === "running" || observation.status === "blocked") return retry();
+    if (observation.status !== "idle" && observation.status !== "error") {
+      this.turnOutcomeAttempts.delete(attemptKey);
+      return { outcome: "unknown" };
+    }
+    let terminalError: string | null = null;
+    if (observation.status === "idle" && provider.turnTerminalError) {
+      try {
+        terminalError = await provider.turnTerminalError(
+          session.providerSessionId,
+          input.requestId,
+        );
+      } catch {
+        return retry();
+      }
+    }
+    this.turnOutcomeAttempts.delete(attemptKey);
+    const outcome =
+      observation.status === "error" || terminalError !== null
+        ? ("failed" as const)
+        : ("completed" as const);
+    const error =
+      outcome === "failed" ? (terminalError ?? observation.error)?.slice(0, 500) : undefined;
+    try {
+      await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
+        requestId: input.requestId,
+        outcome,
+        ...(error ? { error } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      // The answer is still correct for this call; a later call re-reads.
+    }
+    return { outcome, ...(error ? { error } : {}) };
+  }
+
+  /**
+   * Record the latest dispatched turn's outcome from a status read the caller
+   * already made (the queue drain reads status before sending the next prompt).
+   * An `idle` read counts only when the turn is not visibly still running.
+   */
+  protected async recordObservedTurnOutcome(
+    session: PersistedNativeAgentSession,
+    status: string,
+    detail: string | undefined,
+    provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+  ): Promise<void> {
+    const requestId = session.dispatchedRequestIds?.at(-1);
+    if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
+    if (status !== "idle" && status !== "error") return;
+    let failure = status === "error" ? detail : undefined;
+    if (status === "idle") {
+      const activity = this.sessionTurnActivitySnapshot(
+        session.environmentId,
+        session.agent,
+        session.logicalSessionKey,
+      );
+      if (activity === "working" || activity === "waiting") return;
+      if (provider?.turnTerminalError) {
+        try {
+          failure =
+            (await provider.turnTerminalError(session.providerSessionId, requestId)) ?? undefined;
+        } catch {
+          // Unreadable: leave the outcome for an observer rather than
+          // recording a success nobody proved.
+          return;
+        }
+      }
+    }
+    try {
+      await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
+        requestId,
+        outcome: status === "error" || failure !== undefined ? "failed" : "completed",
+        ...(failure ? { error: failure.slice(0, 500) } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      // Best-effort bookkeeping; it must never fault the caller's drain.
+    }
+  }
+
+  /**
+   * Pending interactions of one session, for linking to the request whose turn
+   * is waiting. Reads the provider's pending-interaction list at most once per
+   * ten seconds per session (callers ask only while a turn is `waiting`),
+   * falling back to the in-memory projection; `null` when neither is known.
+   */
+  protected forgetPendingInteractions(key: string): void {
+    this.pendingInteractionReads.delete(key);
+  }
+
+  async sessionPendingInteractions(
+    input: NativeAgentProjectionInput,
+  ): Promise<AgentInteractionRequest[] | null> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const live = (requests: readonly AgentInteractionRequest[]) =>
+      requests.filter((request) => request.state === "pending" || request.state === "answering");
+    const cached = this.pendingInteractionReads.get(key);
+    if (cached && cached.at > this.now() - 10_000) return live(cached.requests);
+    const fallback = () => {
+      const projection = this.cachedProjectionSnapshot(
+        input.environmentId,
+        input.agent,
+        input.logicalSessionKey,
+      );
+      return projection?.interactions ? live(projection.interactions) : null;
+    };
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      if (!session) return null;
+      const provider = await this.observeProvider(input);
+      if (!provider?.interactions) return fallback();
+      const snapshot = await provider.interactions.listPendingInteractions(
+        session.providerSessionId,
+      );
+      if (!cached && this.pendingInteractionReads.size >= 128) {
+        const oldest = this.pendingInteractionReads.keys().next().value;
+        if (oldest !== undefined) this.pendingInteractionReads.delete(oldest);
+      }
+      this.pendingInteractionReads.set(key, { at: this.now(), requests: snapshot.requests });
+      return live(snapshot.requests);
+    } catch {
+      return fallback();
+    }
   }
 
   /** Read-only delivery gate used before agent mail claims a durable message. */
@@ -261,11 +502,26 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
           // The service-level idle observation happens before the message is
           // claimed. Recheck under the same durable per-session fence as a
           // normal prompt so whichever dispatch entered first has priority.
-          const activity = this.sessionActivitySnapshot(
+          //
+          // A retained idle is trusted only while it is as fresh as the mail
+          // presence lease and was read after the session's latest dispatch.
+          // Anything older — a group the observer has backed off, a sweep that
+          // has not run — is `unknown` here and costs one authoritative read:
+          // slower observation must never read as permission to inject.
+          const observation = this.observations.view(session.key, session.providerSessionId);
+          const observed = this.sessionActivitySnapshot(
             input.environmentId,
             input.agent,
             input.logicalSessionKey,
           );
+          const activity =
+            observed === "idle" &&
+            !observationSatisfies(observation, {
+              maxAgeMs: MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
+              requirePostDispatch: true,
+            })
+              ? "unknown"
+              : observed;
           if (
             activity !== "idle" &&
             (activity !== "unknown" ||
@@ -333,6 +589,24 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         phase: input.phase,
       });
       /*
+       * Decide what this submission executes before anything is journaled or
+       * attached. A command that no longer exists, changed, or cannot accept
+       * this input is refused here with the draft intact; it is never sent as
+       * ordinary text instead.
+       */
+      const commandPlan = await this.planDispatchCommand(input, session, provider);
+      if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      if (commandPlan.kind === "session-action") {
+        const result = await this.storage.dispatchNativeAgentPromptOnce(
+          session.key,
+          input.requestId,
+          async (durable) => {
+            await this.performCommandSessionAction(input, durable, provider, commandPlan.action);
+          },
+        );
+        return result.session;
+      }
+      /*
        * Attach the provider before the at-most-once window opens.
        *
        * A cold agent process is the single most expensive thing the dispatch
@@ -360,13 +634,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         durable: PersistedNativeAgentSession,
       ): Promise<{ url: string; token: string } | undefined> => {
         if (
-          !(
-            durable.agent === "claude" ||
-            durable.agent === "codex" ||
-            durable.agent === "pi" ||
-            durable.agent === "cursor" ||
-            durable.agent === "grok"
-          ) ||
+          nativeAgentCapabilities(durable.agent).agentTools !== true ||
           durable.owner?.kind !== "environment" ||
           !this.options.resolveAgentToolConnection
         ) {
@@ -443,38 +711,56 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             const agentMcp = dispatchAgentMcpResolved
               ? dispatchAgentMcp
               : await resolveAgentMcp(durable);
-            await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
-              requestId: input.requestId,
-              // Only a person typing into the composer can mean "run this
-              // command"; workflow-authored prompts are literal text.
-              allowProviderCommands:
-                input.allowProviderCommands ?? durable.origin === "interactive-native",
-              images: input.images,
-              attachments: input.attachments,
-              schema: input.schema,
-              mode: input.mode,
-              fastMode: input.fastMode,
-              subAgent: input.subAgent,
-              executionAgent: preparation.executionAgent ?? input.executionAgent,
-              includeLocalSettings: input.includeLocalSettings,
-              promptSuggestions: input.promptSuggestions,
-              model: preparation.model ?? input.model,
-              effort: preparation.effort ?? input.reasoningEffort,
-              parameterValues: durable.controls?.parameterValues,
-              persistDefaults: durable.controls?.persistDefaults,
-              agentMcp,
-            });
-            // Provider acceptance is the authoritative working edge. Record it
-            // before the durable dispatch bookkeeping completes so a newer
-            // idle activity snapshot cannot be overwritten by a late return
-            // from storage.
-            this.observedSessionActivity.set(durable.key, {
-              providerSessionId: durable.providerSessionId,
-              state: "working",
-            });
+            /*
+             * Fence every observation read that started before this point, or
+             * runs while the send is in flight: its idle is the provider's
+             * answer from before this turn and must never be applied after the
+             * `working` recorded below (it would end a turn that just began).
+             */
+            const groupKey = nativeAgentObservationGroupKey(durable.environmentId, durable.agent);
+            const releaseDispatchFence = this.observations.beginDispatch(durable.key, groupKey);
+            try {
+              await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
+                requestId: input.requestId,
+                // Only a person typing into the composer can mean "run this
+                // command"; workflow-authored prompts are literal text. The plan
+                // above already applied that default and resolved any command.
+                allowProviderCommands: commandPlan.allowProviderCommands,
+                ...(commandPlan.command ? { command: commandPlan.command } : {}),
+                images: input.images,
+                attachments: input.attachments,
+                schema: input.schema,
+                mode: input.mode,
+                fastMode: input.fastMode,
+                subAgent: input.subAgent,
+                executionAgent: preparation.executionAgent ?? input.executionAgent,
+                includeLocalSettings: input.includeLocalSettings,
+                promptSuggestions: input.promptSuggestions,
+                model: preparation.model ?? input.model,
+                effort: preparation.effort ?? input.reasoningEffort,
+                parameterValues: durable.controls?.parameterValues,
+                persistDefaults: durable.controls?.persistDefaults,
+                agentMcp,
+              });
+              // Provider acceptance is the authoritative working edge. Record it
+              // before the durable dispatch bookkeeping completes so a newer
+              // idle activity snapshot cannot be overwritten by a late return
+              // from storage.
+              this.observedSessionActivity.set(durable.key, {
+                providerSessionId: durable.providerSessionId,
+                state: "working",
+              });
+              this.observations.recordDispatchAccepted({
+                sessionKey: durable.key,
+                groupKey,
+                providerSessionId: durable.providerSessionId,
+              });
+            } finally {
+              releaseDispatchFence();
+            }
           },
           persistAmbiguousDispatch && session.origin === "interactive-native"
-            ? this.persistedPendingDispatch(input)
+            ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })
             : undefined,
         );
         if (
@@ -517,7 +803,11 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       } finally {
         const remaining = (this.providerDispatchCounts.get(provider) ?? 1) - 1;
         if (remaining > 0) this.providerDispatchCounts.set(provider, remaining);
-        else this.providerDispatchCounts.delete(provider);
+        else {
+          this.providerDispatchCounts.delete(provider);
+          // A provider retired while this send was in flight may go now.
+          this.scheduleProviderRetirement(provider);
+        }
       }
     } finally {
       releaseCoordinatorTurn?.();
@@ -571,8 +861,118 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       promptSuggestions: input.promptSuggestions,
       model: input.model,
       reasoningEffort: input.reasoningEffort,
+      ...(input.command ? { command: input.command } : {}),
       createdAt: new Date(this.now()).toISOString(),
     };
+  }
+
+  /**
+   * Resolve command intent against this session's authoritative catalogue.
+   *
+   * Absent intent keeps the historical default: an interactive composer's
+   * text may invoke a command, anything a workflow, mail or schema authored is
+   * literal. A selection that is not found gets one forced catalogue re-read,
+   * because a list refreshed since the user picked it may simply be newer.
+   */
+  protected async planDispatchCommand(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<CommandDispatchPlan> {
+    const intent: NativeAgentCommandIntent =
+      input.allowProviderCommands === false
+        ? { kind: "literal" }
+        : (input.command ??
+          (input.allowProviderCommands === true || session.origin === "interactive-native"
+            ? { kind: "typed" }
+            : { kind: "literal" }));
+    const planInput = {
+      platform: input.agent,
+      agentLabel: AGENT_PLATFORM_LABELS[input.agent] ?? input.agent,
+      prompt:
+        input.owner?.kind === "coordinator" ? stripCoordinatorContext(input.prompt) : input.prompt,
+      intent,
+      structuredOutput: input.schema !== undefined,
+      attachments: [
+        ...(input.attachments ?? []).map((attachment) => ({ type: attachment.type })),
+        ...(input.images ?? []).map(() => ({ type: "image" as const })),
+      ],
+    };
+    const capabilities = nativeCapabilities(input.agent);
+    if (!commandDispatchNeedsCatalogue(input.agent, planInput.prompt, intent)) {
+      return planCommandDispatch({
+        ...planInput,
+        commands: [],
+        catalogue: { status: "ready", revision: 0, enhanced: false },
+      });
+    }
+    const supported =
+      capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
+    const key = commandCatalogueKey(input.environmentId, input.agent, session.providerSessionId);
+    const read = async (force: boolean) =>
+      supported
+        ? this.commandCatalogues.readForDispatch(
+            key,
+            input.environmentId,
+            provider,
+            session.providerSessionId,
+            force,
+          )
+        : { commands: [], state: unsupportedCommandCatalogueState() };
+    let snapshot = await read(false);
+    const busy = (await readProviderStatus(provider, session.providerSessionId)).status !== "idle";
+    let plan = planCommandDispatch({
+      ...planInput,
+      busy,
+      commands: withSessionActionSlashCommands(snapshot.commands, capabilities),
+      catalogue: snapshot.state,
+    });
+    if (plan.kind === "rejected" && plan.staleSelection && supported) {
+      snapshot = await read(true);
+      plan = planCommandDispatch({
+        ...planInput,
+        busy,
+        commands: withSessionActionSlashCommands(snapshot.commands, capabilities),
+        catalogue: snapshot.state,
+      });
+    }
+    return plan;
+  }
+
+  /** Run a command that resolved to an Orkestrator session action. */
+  protected async performCommandSessionAction(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+    action: "compact",
+  ): Promise<void> {
+    const label = AGENT_PLATFORM_LABELS[input.agent] ?? input.agent;
+    if (!nativeCapabilities(input.agent).actions?.compact || !provider.performSessionAction) {
+      throw new PromptRejectedError(`${label} does not support /compact here.`);
+    }
+    if (session.pendingDispatch || session.pendingSteer) {
+      throw new PromptRejectedError(PARKED_DISPATCH_CONFLICT_MESSAGE);
+    }
+    // Compacting mid-turn would rewrite the context a running turn is using.
+    // The provider's own compact guard is the atomic fence; this check only
+    // gives the common case a clear message before asking it.
+    const { status } = await readProviderStatus(provider, session.providerSessionId);
+    if (status === "running" || status === "blocked") {
+      throw new PromptRejectedError(
+        `/compact runs when ${label} is idle. Try again after this turn.`,
+      );
+    }
+    const outcome = await provider.performSessionAction(session.providerSessionId, {
+      kind: action,
+    });
+    this.invalidateProjection(session.key);
+    if (outcome.outcome !== "applied") {
+      throw new PromptRejectedError(
+        outcome.outcome === "idle"
+          ? `${label} had nothing to compact.`
+          : `${label} did not confirm the compaction. Check the transcript before retrying.`,
+      );
+    }
   }
 
   async claimOpenCodeManualPrompt(input: {
@@ -665,21 +1065,40 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * interactive prompt should not wait for that timer. The worker owns all
    * provider I/O and its per-queue task map coalesces concurrent notifications.
    */
+  /** Step 08 diagnostics for the keyed launch/queue driver (`null` on rollback). */
+  schedulingStatus() {
+    return this.queueScheduling?.status() ?? null;
+  }
+
+  wakeEnvironment(environmentId: string): void {
+    this.queueScheduling?.wakeEnvironment(environmentId);
+  }
+
+  async reconcileScheduling() {
+    return this.queueScheduling ? this.queueScheduling.reconcileNow() : null;
+  }
+
   notifyPromptQueueChanged(queueKey: string): void {
     if (this.stopped || !nonBlank(queueKey)) return;
+    // Index the key so a busy session's queue keeps its 2 s due check.
+    this.queueScheduling?.wakeQueue(queueKey, "enqueue");
     void this.drainPromptQueue(queueKey);
   }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    this.unsubscribeObservationWakeups?.();
+    this.unsubscribeObservationWakeups = null;
     if (this.launchTimer) clearInterval(this.launchTimer);
     this.launchTimer = null;
+    this.queueScheduling?.stop();
+    this.queueScheduling = null;
     if (this.interactionTimer) clearInterval(this.interactionTimer);
     this.interactionTimer = null;
     await Promise.allSettled([
       ...this.projectionRefreshes.values(),
       ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
-      ...[...this.slashCommandRefreshes.values()].map((entry) => entry.operation),
+      this.commandCatalogues.settle(),
     ]);
     await this.settleAndClearProgressiveReads();
     await Promise.allSettled(this.scanTasks);
@@ -695,6 +1114,21 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       ]);
     }
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
+    // Obsolete providers still in their retirement grace hold event streams
+    // of their own; nothing can be in flight on them once the drains above
+    // have settled.
+    const retiring = Array.from(this.retiringProviders.keys()).filter(
+      (provider) => !this.isProviderCached(provider) && !this.disposedProviders.has(provider),
+    );
+    for (const timer of this.retiringProviders.values()) if (timer) clearTimeout(timer);
+    this.retiringProviders.clear();
+    await Promise.allSettled(
+      retiring.map((provider) => {
+        this.disposedProviders.add(provider);
+        return provider.dispose?.();
+      }),
+    );
+    this.observations.clear();
     this.openCodeRecoveryCandidates.clear();
     this.openCodeManualPromptClaims.clear();
     this.openCodeRecoveryDispatches.clear();
@@ -702,10 +1136,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.providers.clear();
     this.providerConnections.clear();
     this.modelCatalogCache.clear();
-    this.slashCommandCache.clear();
+    this.commandCatalogues.clear();
     this.authStatusCache.clear();
     this.modelCatalogRefreshes.clear();
-    this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
     this.projectionSync.clear();
     this.projectionSyncBytes = 0;
@@ -827,8 +1260,16 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   reconcileAgentInteractions(): Promise<void> {
     if (this.stopped || this.options.interactionMonitorMode !== "observe-only")
       return Promise.resolve();
-    if (this.interactionScan) return this.interactionScan;
-    const scan = this.trackScan(this.reconcileAgentInteractionsOnce()).finally(() => {
+    recurringWorkMetrics.requested("native-interaction-observe");
+    if (this.interactionScan) {
+      recurringWorkMetrics.coalesced("native-interaction-observe");
+      return this.interactionScan;
+    }
+    const scan = this.trackScan(
+      recurringWorkMetrics.observe("native-interaction-observe", () =>
+        this.reconcileAgentInteractionsOnce(),
+      ),
+    ).finally(() => {
       if (this.interactionScan === scan) this.interactionScan = null;
     });
     this.interactionScan = scan;

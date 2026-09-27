@@ -1547,3 +1547,118 @@ describe("BuildPipelineService provider lifecycle", () => {
     });
   });
 });
+
+describe("BuildPipelineService provider cache", () => {
+  test("concurrent resolutions of one harness share a single provider", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-provider-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const created: Array<{ dispose: () => Promise<void>; disposed: number }> = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const service = new BuildPipelineService(
+      storage,
+      async () => {
+        throw new Error("No commands expected");
+      },
+      {
+        autoAdvance: false,
+        provider: async () => {
+          // Held open so every concurrent caller arrives before the first
+          // creation can populate the cache.
+          await gate;
+          const instance = {
+            disposed: 0,
+            dispose: async () => {
+              instance.disposed += 1;
+            },
+          };
+          created.push(instance);
+          return instance as unknown as BuildPipelineProvider;
+        },
+      },
+    );
+    const pipeline = {
+      id: "pipeline-1",
+      environmentId: "env-1",
+      agentType: "claude",
+      sessions: [],
+    } as unknown as BuildPipeline;
+    const resolve = (
+      service as unknown as {
+        provider(pipeline: BuildPipeline, agent: string): Promise<BuildPipelineProvider>;
+      }
+    ).provider.bind(service);
+    try {
+      const pending = [
+        resolve(pipeline, "opencode"),
+        resolve(pipeline, "opencode"),
+        resolve(pipeline, "opencode"),
+        resolve(pipeline, "codex"),
+      ];
+      release();
+      const providers = await Promise.all(pending);
+
+      // One instance per environment harness, never an uncached duplicate.
+      expect(created).toHaveLength(2);
+      expect(providers[1]).toBe(providers[0]!);
+      expect(providers[2]).toBe(providers[0]!);
+      expect(providers[3]).not.toBe(providers[0]!);
+      expect(await resolve(pipeline, "opencode")).toBe(providers[0]!);
+      expect(created).toHaveLength(2);
+
+      await service.shutdown();
+      expect(created.map((instance) => instance.disposed)).toEqual([1, 1]);
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed creation is not cached and the next resolution retries", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-provider-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    let attempts = 0;
+    const service = new BuildPipelineService(
+      storage,
+      async () => {
+        throw new Error("No commands expected");
+      },
+      {
+        autoAdvance: false,
+        provider: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("bridge unavailable");
+          return {} as BuildPipelineProvider;
+        },
+      },
+    );
+    const pipeline = {
+      id: "pipeline-1",
+      environmentId: "env-1",
+      agentType: "claude",
+      sessions: [],
+    } as unknown as BuildPipeline;
+    const resolve = (
+      service as unknown as {
+        provider(pipeline: BuildPipeline, agent: string): Promise<BuildPipelineProvider>;
+      }
+    ).provider.bind(service);
+    try {
+      const first = await Promise.allSettled([
+        resolve(pipeline, "claude"),
+        resolve(pipeline, "claude"),
+      ]);
+      expect(first.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      expect(attempts).toBe(1);
+      await resolve(pipeline, "claude");
+      expect(attempts).toBe(2);
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});

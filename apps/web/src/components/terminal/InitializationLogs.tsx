@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { getContainerLogs } from "@/lib/backend";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,54 +45,65 @@ export function InitializationLogs({
   // Docker is the durable log buffer. Refresh from its authoritative tail so
   // remounts recover everything still in the bounded snapshot without relying
   // on a renderer-owned follower process or a gap-prone live event stream.
+  // The read runs through the read coordinator: equivalent views share one
+  // read (and the backend shares one `docker logs` across clients), it pauses
+  // while the document is hidden and reconciles once on return. An identical
+  // tail writes no state, so it neither re-renders nor re-scrolls.
+  const lastSnapshotRef = useRef<string | null>(null);
+  const failureLoggedRef = useRef(false);
   useEffect(() => {
-    let disposed = false;
-    let refreshInFlight = false;
-    let consecutiveFailures = 0;
-    const refresh = async (initial: boolean) => {
-      if (refreshInFlight) return;
-      refreshInFlight = true;
-      try {
-        const snapshot = await getContainerLogs(containerId, String(MAX_LOG_LINES));
-        if (disposed) return;
-        const snapshotLines = snapshot
-          ? snapshot.split("\n").filter((line) => line.length > 0)
-          : [];
-        consecutiveFailures = 0;
-        setLogs(snapshotLines.slice(-MAX_LOG_LINES));
+    lastSnapshotRef.current = null;
+    failureLoggedRef.current = false;
+    setLogs([]);
+    setError(null);
+    setIsStale(false);
+    setIsLoading(true);
+  }, [containerId]);
+  useCoordinatedRead<string>({
+    key: { resource: "container-init-logs", target: containerId, options: `tail=${MAX_LOG_LINES}` },
+    demand: { intervalMs: pollIntervalMs, priority: "standard" },
+    read: () => getContainerLogs(containerId, String(MAX_LOG_LINES)),
+    onState: (state) => {
+      if (state.status === "current") {
+        const snapshot = state.value ?? "";
+        failureLoggedRef.current = false;
         setError(null);
         setIsStale(false);
         setIsLoading(false);
-      } catch (err) {
-        if (disposed) return;
-        const errorMessage = err instanceof Error ? err.message : "Unknown error";
-        if (initial) {
-          console.error("[InitializationLogs] Error loading logs:", errorMessage);
-          setError(`Failed to load container logs: ${errorMessage}`);
-          setIsLoading(false);
-          return;
-        }
-        // A later failure keeps the last good tail — it is still the best view
-        // of the container — but says so rather than presenting stale output
-        // under a spinner that implies it is live.
-        consecutiveFailures += 1;
-        if (consecutiveFailures === STALE_LOG_FAILURE_THRESHOLD) {
-          console.warn("[InitializationLogs] Container logs stopped refreshing:", errorMessage);
-        }
-        if (consecutiveFailures >= STALE_LOG_FAILURE_THRESHOLD) setIsStale(true);
-      } finally {
-        refreshInFlight = false;
+        if (snapshot === lastSnapshotRef.current) return;
+        lastSnapshotRef.current = snapshot;
+        const snapshotLines = snapshot
+          ? snapshot.split("\n").filter((line) => line.length > 0)
+          : [];
+        setLogs(snapshotLines.slice(-MAX_LOG_LINES));
+        return;
       }
-    };
-
-    void refresh(true);
-    const interval = setInterval(() => void refresh(false), pollIntervalMs);
-
-    return () => {
-      disposed = true;
-      clearInterval(interval);
-    };
-  }, [containerId, pollIntervalMs]);
+      if (state.status !== "error") return;
+      const errorMessage = state.error instanceof Error ? state.error.message : "Unknown error";
+      if (!state.hasValue) {
+        if (!failureLoggedRef.current) {
+          failureLoggedRef.current = true;
+          console.error("[InitializationLogs] Error loading logs:", errorMessage);
+        }
+        setError(`Failed to load container logs: ${errorMessage}`);
+        setIsLoading(false);
+        return;
+      }
+      if (lastSnapshotRef.current === null) {
+        const snapshot = state.value ?? "";
+        lastSnapshotRef.current = snapshot;
+        setLogs(snapshot ? snapshot.split("\n").filter(Boolean).slice(-MAX_LOG_LINES) : []);
+        setIsLoading(false);
+      }
+      // A later failure keeps the last good tail — it is still the best view
+      // of the container — but says so rather than presenting stale output
+      // under a spinner that implies it is live.
+      if (state.failures === STALE_LOG_FAILURE_THRESHOLD) {
+        console.warn("[InitializationLogs] Container logs stopped refreshing:", errorMessage);
+      }
+      if (state.failures >= STALE_LOG_FAILURE_THRESHOLD) setIsStale(true);
+    },
+  });
 
   return (
     <div className={cn("flex flex-col h-full bg-background", className)}>

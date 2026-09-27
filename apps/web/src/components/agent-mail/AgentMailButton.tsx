@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Inbox, Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
+  MessageMarkdown,
+} from "@/components/chat/MessageMarkdown";
+import { mailMarkdownComponents } from "./mail-markdown-components";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,12 +28,28 @@ import { AGENT_MAIL_DEFAULT_LIST_LIMIT } from "@orkestrator/protocol/agent-mail"
 
 const OPEN_EVENT = "orkestrator:open-agent-mail";
 
+function AgentMailBody({ body }: { body: string }): ReactNode {
+  if (body.length > MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS) {
+    return <p className="whitespace-pre-wrap break-words text-xs">{body}</p>;
+  }
+  return (
+    <MessageMarkdown
+      content={body}
+      components={mailMarkdownComponents}
+      className="break-words text-xs prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2 [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+    />
+  );
+}
+
 export function openAgentMailForTab(
   environmentId: string,
   tabId: string,
   mode: "inbox" | "compose" | "settings" = "inbox",
+  restoreFocusTo?: HTMLElement | null,
 ): void {
-  window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { environmentId, tabId, mode } }));
+  window.dispatchEvent(
+    new CustomEvent(OPEN_EVENT, { detail: { environmentId, tabId, mode, restoreFocusTo } }),
+  );
 }
 
 function senderLabel(message: Pick<AgentMailMessage, "from">): string {
@@ -123,6 +144,7 @@ export function AgentMailButton() {
   const sendAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const destinationRef = useRef("");
   const focusRef = useRef<MailboxAddress | null>(null);
+  const restoreFocusToRef = useRef<HTMLElement | null>(null);
   const hydrateGeneration = useRef(0);
 
   const hydrate = useCallback(
@@ -225,9 +247,10 @@ export function AgentMailButton() {
   useEffect(() => {
     const listener = (raw: Event) => {
       const detail = (raw as CustomEvent).detail as
-        | { environmentId?: string; tabId?: string; mode?: string }
+        | { environmentId?: string; tabId?: string; mode?: string; restoreFocusTo?: HTMLElement }
         | undefined;
       if (!detail?.environmentId || !detail.tabId) return;
+      restoreFocusToRef.current = detail.restoreFocusTo ?? null;
       const nextFocus = { environmentId: detail.environmentId, tabId: detail.tabId };
       const nextDestination = mailboxIdOf(nextFocus);
       focusRef.current = nextFocus;
@@ -438,7 +461,9 @@ export function AgentMailButton() {
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
+        if (!next) restoreFocusToRef.current = null;
         if (next) {
+          restoreFocusToRef.current = null;
           focusRef.current = null;
           setFocus(null);
           setFocusUnavailable(false);
@@ -466,6 +491,14 @@ export function AgentMailButton() {
         align="end"
         className="w-[min(94vw,470px)] border-zinc-700/80 bg-zinc-950 p-0 shadow-2xl"
         onCloseAutoFocus={(event) => event.preventDefault()}
+        // A closing context menu or popover may restore focus to its trigger
+        // after opening this dropdown. Ignore only that one focus handoff.
+        onFocusOutside={(event) => {
+          const restoreFocusTo = restoreFocusToRef.current;
+          restoreFocusToRef.current = null;
+          if (restoreFocusTo && event.detail.originalEvent.target === restoreFocusTo)
+            event.preventDefault();
+        }}
       >
         <div className="border-b border-zinc-800 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -717,9 +750,7 @@ export function AgentMailButton() {
                     </button>
                     {active && expanded && (
                       <div className="mt-2 rounded-md border border-zinc-800 bg-black/30 p-3">
-                        <p className="whitespace-pre-wrap text-xs leading-relaxed">
-                          {expanded.body}
-                        </p>
+                        <AgentMailBody body={expanded.body} />
                         <div className="mt-3 grid gap-1 text-[11px] text-muted-foreground">
                           <p>
                             Seen by you:{" "}

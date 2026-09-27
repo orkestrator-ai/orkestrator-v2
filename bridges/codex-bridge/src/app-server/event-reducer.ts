@@ -104,7 +104,6 @@ const IGNORED_METHODS = new Set([
   "remoteControl/status/changed",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
-  "skills/changed",
   "fs/changed",
   "externalAgentConfig/import/progress",
   "externalAgentConfig/import/completed",
@@ -207,6 +206,12 @@ export function reduceNotification(
   const turnId = isRecord(params) ? str(params.turnId) : undefined;
 
   switch (notification.method) {
+    // Connection-scoped invalidation with an empty payload. Emitting a mark and
+    // nothing else keeps this O(1) on the notification path; the command
+    // catalogue coalesces a burst into at most one off-loop `skills/list`.
+    case "skills/changed":
+      return { events: [{ kind: "skills.changed", ...base }] };
+
     case "thread/settings/updated": {
       const settings =
         isRecord(params) && isRecord(params.threadSettings) ? params.threadSettings : undefined;

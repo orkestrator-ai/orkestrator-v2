@@ -4,6 +4,7 @@ import {
   cleanupFailedDesktopWindow,
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
+  releaseBoundWindowIfQuitting,
   rendererPartitionForWindow,
 } from "../../../apps/desktop/electron/desktop-window-lifecycle";
 
@@ -23,6 +24,31 @@ describe("desktop window lifecycle", () => {
     expect(slots.allocate()).toBe(2);
     expect(() => slots.allocate()).toThrow("up to 2 open windows");
     slots.release(1);
+    expect(slots.allocate()).toBe(1);
+  });
+
+  test("releases the connection scope and slot when quit wins a pending bind", async () => {
+    const slots = new DesktopWindowSlotAllocator(1);
+    const slot = slots.allocate();
+    const releaseScope = mock(() => undefined);
+    let finishBind!: () => void;
+    const bind = new Promise<void>((resolve) => {
+      finishBind = resolve;
+    });
+    let quitting = false;
+    const create = async () => {
+      await bind;
+      return releaseBoundWindowIfQuitting({
+        isQuitting: () => quitting,
+        releaseScope,
+        releaseSlot: () => slots.release(slot),
+      });
+    };
+    const pending = create();
+    quitting = true;
+    finishBind();
+    expect(await pending).toBe(true);
+    expect(releaseScope).toHaveBeenCalledTimes(1);
     expect(slots.allocate()).toBe(1);
   });
 

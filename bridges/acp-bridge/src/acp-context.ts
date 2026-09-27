@@ -26,6 +26,15 @@ import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-methods.js";
 import { loadAcpProviderConfig, providerArgv } from "./acp-provider-config.js";
+import {
+  GrokMcpConfigWatcher,
+  grokMcpConfigFiles,
+  grokMcpConfigFingerprint,
+  grokMcpConfigStatus,
+  vendorMcpInventory,
+  type GrokMcpConfigFingerprint,
+  type GrokMcpConfigStatus,
+} from "./acp-mcp-inventory.js";
 
 export type Provider = AgentPlatform;
 export type JsonObject = Record<string, unknown>;
@@ -295,6 +304,8 @@ export interface SessionState {
   /** Coalesces best-effort Cursor metadata replays within one live session. */
   cursorToolReplayTimer?: ReturnType<typeof setTimeout>;
   cursorToolReplayRunning?: boolean;
+  /** Replay children that close must terminate before acknowledging removal. */
+  cursorToolReplayChildren?: Set<AcpProcess>;
   /**
    * The pass this session still owes. `live` runs mid-turn and may only touch
    * settled calls; `final` runs once the turn is over and supersedes a pending
@@ -342,6 +353,28 @@ export interface SessionState {
    */
   attaching?: Promise<AcpProcess>;
   /**
+   * Set by `POST /session/:id/close` (see `acp-session-close.ts`) for as long
+   * as that close owns the session. The entry stays in `sessions` throughout,
+   * so a lookup during the window finds a closing session rather than a
+   * missing one, and every admission path (prompt, attach, config, resume,
+   * create-by-key, new child, parked agent request) is refused.
+   *
+   * - `fenced`: admission refused; still written to the state file.
+   * - `committing`: the child exited and the state-file write that omits this
+   *   session is in flight. Only once that write lands does the entry leave
+   *   the registry.
+   *
+   * A close that ends `pending` leaves the session `fenced` (fail closed): the
+   * backend keeps its close intent and retries. Never persisted.
+   */
+  closing?: "fenced" | "committing";
+  /**
+   * Settles after the dispatched turn's completion handler ran (the
+   * `session/prompt` response, e.g. `stopReason: "cancelled"`, or its
+   * failure). Close waits on it after `session/cancel`. Never persisted.
+   */
+  turnSettlement?: Promise<void>;
+  /**
    * Token accounting for the most recently completed turn, or undefined while
    * the agent has never reported any. Persisted so the agent info panel still
    * has something authoritative to show after a bridge restart.
@@ -367,8 +400,21 @@ export interface SessionState {
   turnStartedAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
-  /** Bounded ACP command catalogue; persisted so detach/re-attach does not empty the picker. */
+  /**
+   * Bounded ACP command inventory (see `acp-commands.ts`); persisted so a
+   * restart does not empty the picker. Undefined until anything is known.
+   */
   availableCommands?: NativeAgentSlashCommand[];
+  /**
+   * True once the agent pushed an inventory to *this* bridge process. Rows
+   * restored from disk leave it unset: they are shown as stale and never
+   * authorize executing a command. Never persisted.
+   */
+  commandsLive?: boolean;
+  /** Advances with every pushed inventory; persisted so it stays monotonic. */
+  commandsRevision?: number;
+  /** The last pushed inventory dropped advertised rows. */
+  commandsTruncated?: boolean;
   /** Whether session/load is replaying transcript updates into this state. */
   historyReplay: false | "hydrate" | "ignore";
   /**
@@ -454,6 +500,8 @@ export interface PersistedSession {
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
   availableCommands?: NativeAgentSlashCommand[];
+  commandsRevision?: number;
+  commandsTruncated?: boolean;
   subagentLimitExceeded?: boolean;
   settledCursorAgentIds?: string[];
 }
@@ -537,6 +585,11 @@ export let catalogProbe: Promise<NativeAgentComposerState> | null = null;
 export const agentRuntime: {
   version?: string;
   mcp?: NativeAgentMcpServer[];
+  /**
+   * The native Grok MCP configuration the child that last reported `mcp`
+   * loaded at spawn. Process-level, like `mcp` itself.
+   */
+  mcpLoaded?: GrokMcpConfigFingerprint & { observedAt: string };
   authMethods?: Array<{ id: string; name: string }>;
   authenticated?: boolean;
   promptCapabilities?: InitializeResponse["agentCapabilities"] extends infer _Capabilities
@@ -703,6 +756,15 @@ export const MAX_RESUMABLE_SESSIONS = 512;
 export const MAX_SESSION_LIST_PAGES = 64;
 export const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 export const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
+/** How long `POST /session/:id/close` waits for an in-flight attach. */
+export const CLOSE_ATTACH_WAIT_MS = parseDuration(process.env.ACP_CLOSE_ATTACH_WAIT_MS, 5_000);
+/**
+ * How long `POST /session/:id/close` waits, after `session/cancel`, for the
+ * running `session/prompt` to answer before terminating the child.
+ */
+export const CLOSE_CANCEL_WAIT_MS = parseDuration(process.env.ACP_CLOSE_CANCEL_WAIT_MS, 2_000);
+/** Fixed, content-free refusal for work aimed at a session that is closing. */
+export const SESSION_CLOSING_ERROR = "Session is closing";
 /**
  * How long a Cursor parent generation may wait for live background children
  * before continuing without them. Grok never reads this: it settles through
@@ -763,8 +825,17 @@ export const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
 );
 export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 
+/** `AcpProcess.onUpdate` before a session handler is attached. */
+const unattachedUpdate = (): void => undefined;
+
 export class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
+  /**
+   * The native Grok MCP files as this child found them at spawn. Grok reads
+   * its MCP configuration once at startup, so this is what the child's
+   * `servers_updated` listing reflects. Never rejects.
+   */
+  readonly mcpConfigAtSpawn: Promise<GrokMcpConfigFingerprint | undefined>;
   readonly clientMethods = new AcpClientMethods(workingDirectory);
   #diagnostics?: BridgeRunDiagnostics;
   #nextId = 1;
@@ -780,7 +851,15 @@ export class AcpProcess {
   #closed = false;
   #terminationOutcome?: "resolved" | "rejected";
   #stdoutBuffer = Buffer.alloc(0);
-  onUpdate: (params: JsonObject) => void = () => undefined;
+  onUpdate: (params: JsonObject) => void = unattachedUpdate;
+  /**
+   * The latest `available_commands_update` that arrived before a session
+   * handler was attached. Agents announce commands right after `session/new`
+   * answers, often in the same stdout chunk, so the notification is read
+   * before the caller has even seen the new session id. The inventory is a
+   * full replacement, so the latest one is all that needs keeping.
+   */
+  earlyCommandsUpdate: JsonObject | null = null;
   onVendor: (method: string, params: JsonObject) => void = () => undefined;
   onPermission: (id: number, params: JsonObject) => void = (id) => {
     this.respond(id, { outcome: { outcome: "cancelled" } });
@@ -800,6 +879,11 @@ export class AcpProcess {
       ...spawnOptions,
       approvals: spawnOptions.policy?.approvals,
     });
+    // Read before the child starts, so an edit racing the spawn is reported
+    // as a change rather than missed.
+    this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
+      () => undefined,
+    );
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
       env: { ...process.env, ...providerConfig.env },
@@ -842,7 +926,7 @@ export class AcpProcess {
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
-        session: { configOptions: { boolean: {} } },
+        session: { configOptions: { boolean: {} }, notices: {} },
         _meta: { parameterizedModelPicker: true },
       },
       clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
@@ -1091,6 +1175,13 @@ export class AcpProcess {
     if (message.method === "session/update" && isObject(message.params)) {
       this.#diagnostics?.activity("notification");
       this.#diagnostics?.count("notificationsReceived");
+      if (
+        this.onUpdate === unattachedUpdate &&
+        isObject(message.params.update) &&
+        message.params.update.sessionUpdate === "available_commands_update"
+      ) {
+        this.earlyCommandsUpdate = message.params;
+      }
       this.onUpdate(message.params);
       return;
     }
@@ -1101,7 +1192,7 @@ export class AcpProcess {
       // this child is attached to a session at all.
       this.#diagnostics?.activity("notification");
       this.#diagnostics?.count("notificationsReceived");
-      rememberVendorRuntime(message.method, params);
+      rememberVendorRuntime(message.method, params, this.mcpConfigAtSpawn);
       // Every vendor *notification* is then offered to the session handler,
       // which ignores the ones it does not model. Notifications expect no reply,
       // so forwarding one this bridge cannot act on costs nothing — unlike a
@@ -1292,27 +1383,48 @@ function isAcpClientMethod(method: string): boolean {
   return method.startsWith("fs/") || method.startsWith("terminal/");
 }
 
-function rememberVendorRuntime(method: string, params: JsonObject): void {
-  if (!method.endsWith("/mcp/servers_updated") || !Array.isArray(params.mcpServers)) return;
-  const mcp = params.mcpServers.slice(0, 64).flatMap((candidate, index) => {
-    if (!isObject(candidate)) return [];
-    const name =
-      typeof candidate.name === "string" && candidate.name.trim()
-        ? candidate.name.trim().slice(0, 128)
-        : `server-${index + 1}`;
-    return [
-      {
-        id: name,
-        name,
-        status: "connected" as const,
-        scope: name === "orkestrator" ? ("orkestrator" as const) : undefined,
-        actions: [],
-      },
-    ];
+/** Orders `mcpLoaded` writes: only the latest listing's child may set it. */
+let mcpReportGeneration = 0;
+
+function rememberVendorRuntime(
+  method: string,
+  params: JsonObject,
+  loadedConfig?: Promise<GrokMcpConfigFingerprint | undefined>,
+): void {
+  if (!method.endsWith("/mcp/servers_updated")) return;
+  const mcp = vendorMcpInventory(params);
+  if (!mcp) return;
+  // Which configuration this listing reflects. Settled off the stdout loop:
+  // the fingerprint read was started at spawn and is normally long done.
+  const generation = ++mcpReportGeneration;
+  const observedAt = new Date().toISOString();
+  void loadedConfig?.then((loaded) => {
+    if (generation !== mcpReportGeneration) return;
+    if (loaded) agentRuntime.mcpLoaded = { ...loaded, observedAt };
+    else delete agentRuntime.mcpLoaded;
   });
   if (JSON.stringify(agentRuntime.mcp) === JSON.stringify(mcp)) return;
   agentRuntime.mcp = mcp;
   for (const state of sessions.values()) state.revision += 1;
+}
+
+function currentGrokMcpConfigFiles(): { user: string; project: string } {
+  return grokMcpConfigFiles({
+    env: { ...process.env, ...providerConfig.env },
+    cwd: workingDirectory,
+  });
+}
+
+const grokMcpConfigWatcher = new GrokMcpConfigWatcher(currentGrokMcpConfigFiles);
+
+/**
+ * Process-level MCP status for `/mcp` and `/runtime-health`: which saved
+ * configuration the reporting child loaded, what is saved now, and whether
+ * they differ. Content-free; never a path.
+ */
+export async function publicMcpConfigStatus(): Promise<GrokMcpConfigStatus> {
+  const current = await grokMcpConfigWatcher.current().catch(() => undefined);
+  return grokMcpConfigStatus(agentRuntime.mcpLoaded, current);
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

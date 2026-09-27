@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { newSessionState } from "./agent-session.js";
-import { drainPersistence, loadPersistedState } from "./persistence.js";
+import { drainPersistence, loadPersistedState, reopenPersistenceForTests } from "./persistence.js";
 import { clientSessionKeys, sessionIsWorking, sessions, type BridgeToolPart } from "./state.js";
 import { ABANDONED_COMPACTION_NOTE } from "./translate.js";
 
@@ -28,6 +28,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // `persist()` drains, which closes admission for the rest of the process.
+  reopenPersistenceForTests();
   sessions.clear();
   clientSessionKeys.clear();
   // Restored rather than merely deleted: leaving it set would have any other
@@ -93,6 +95,28 @@ describe("round trip", () => {
     // Nothing about the dead process survives.
     expect(restored.agent).toBeNull();
     expect(restored.dispatching).toBe(false);
+  });
+
+  test("keeps a pending configuration resume, and writes nothing when there is none", async () => {
+    const pending = newSessionState();
+    pending.agentId = "agent-1";
+    pending.configResumePending = true;
+    const settled = newSessionState();
+    settled.agentId = "agent-2";
+    sessions.set(pending.id, pending);
+    sessions.set(settled.id, settled);
+
+    const payload = (await persist()) as { sessions: Array<Record<string, unknown>> };
+    expect(payload.sessions.find((entry) => entry.id === settled.id)).not.toHaveProperty(
+      "configResumePending",
+    );
+    sessions.clear();
+    await loadPersistedState();
+
+    // A restart between the detach and a successful resume must still refuse
+    // to replace the conversation with a new agent.
+    expect(sessions.get(pending.id)?.configResumePending).toBe(true);
+    expect(sessions.get(settled.id)?.configResumePending).toBeUndefined();
   });
 
   test("drops token counts a state file cannot justify", async () => {

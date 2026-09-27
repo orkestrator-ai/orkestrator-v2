@@ -54,11 +54,15 @@ afterAll(() => {
 });
 
 const { readPrefetchedCommandResponse } = await import("./prefetched-command-responses");
+const { createReadCoordinator, getReadCoordinator, resetReadCoordinatorForTests } =
+  await import("./read-coordinator");
 const {
   dispatchResourceChange,
   onResourceChanged,
   onResourceResync,
+  onViewSafetyCheck,
   requestResourceResync,
+  requestViewSafetyChecks,
   resetResourceSync,
   startResourceSync,
 } = await import("./resource-sync");
@@ -454,6 +458,25 @@ describe("startResourceSync", () => {
     expect(resync).toHaveBeenCalledTimes(1);
   });
 
+  test("forwards confirmed reconnects, not the boot announcement, to the read coordinator", async () => {
+    const coordinator = createReadCoordinator({ document: null, window: null });
+    const notifyReconnected = mock(() => undefined);
+    resetReadCoordinatorForTests(() => ({ ...coordinator, notifyReconnected }));
+    try {
+      getReadCoordinator();
+      startResourceSync();
+      await tick(10);
+      const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
+      // Inside the attach-time window: covered by the boot resync.
+      connected?.handler({ payload: undefined });
+      expect(notifyReconnected).not.toHaveBeenCalled();
+      connected?.handler({ payload: undefined });
+      expect(notifyReconnected).toHaveBeenCalledTimes(1);
+    } finally {
+      resetReadCoordinatorForTests();
+    }
+  });
+
   test("requests a resync when a global revision gap is observed", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
@@ -633,6 +656,58 @@ describe("startResourceSync", () => {
     expect(resync).toHaveBeenCalledTimes(1);
     stop();
     expect(clearIntervalMock).toHaveBeenCalledWith(42);
+  });
+});
+
+describe("ephemeral view safety checks", () => {
+  test("ride the existing manifest interval instead of a per-view timer", async () => {
+    let intervalCallback: (() => void) | undefined;
+    let intervals = 0;
+    globalThis.setInterval = ((callback: TimerHandler) => {
+      intervals += 1;
+      intervalCallback = callback as () => void;
+      return 7 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+    const checks: string[] = [];
+    const unsubscribe = onViewSafetyCheck((reason) => checks.push(`pr:${reason}`));
+    onViewSafetyCheck((reason) => checks.push(`diff:${reason}`));
+
+    startResourceSync();
+    await tick(10);
+    // Attachment and connection are covered by each view's own reconnect path.
+    expect(checks).toEqual([]);
+    intervalCallback?.();
+    expect(checks).toEqual(["pr:interval", "diff:interval"]);
+    expect(intervals).toBe(1);
+
+    unsubscribe();
+    intervalCallback?.();
+    expect(checks).toEqual(["pr:interval", "diff:interval", "diff:interval"]);
+  });
+
+  test("run when the resource stream shows a gap, and a throwing view is isolated", async () => {
+    const checks: string[] = [];
+    onViewSafetyCheck(() => {
+      throw new Error("broken view");
+    });
+    onViewSafetyCheck((reason) => checks.push(reason));
+    startResourceSync();
+    await tick(10);
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 1 }) });
+    resource?.handler({ payload: change({ revision: 2 }) });
+    expect(checks).toEqual([]);
+    resource?.handler({ payload: change({ revision: 5 }) });
+    expect(checks).toEqual(["resource-gap"]);
+  });
+
+  test("resetResourceSync drops registered view checks", () => {
+    const checks: string[] = [];
+    onViewSafetyCheck((reason) => checks.push(reason));
+    resetResourceSync();
+    requestViewSafetyChecks("interval");
+    expect(checks).toEqual([]);
   });
 });
 

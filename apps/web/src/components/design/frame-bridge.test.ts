@@ -20,3 +20,29 @@ describe("DesignFrameBridge", () => {
     bridge.close();
   });
 });
+
+describe("DesignFrameBridge lifecycle", () => {
+  test("asks after close reject immediately and generations are distinct", async () => {
+    const target = { postMessage() {} } as unknown as Window;
+    const first = new DesignFrameBridge(target, 1000);
+    const second = new DesignFrameBridge(target, 1000);
+    expect(second.generation).toBeGreaterThan(first.generation);
+    first.close();
+    await expect(first.ask({ op: "serialize" })).rejects.toThrow("Frame closed");
+    second.close();
+  });
+
+  test("an escape message from the frame routes to the owner, not to a pending ask", () => {
+    let escaped = 0;
+    const target = { postMessage() {} } as unknown as Window;
+    const bridge = new DesignFrameBridge(target, 1000, () => escaped++);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: target as unknown as MessageEventSource,
+        data: { channel: "orkestrator-design-escape" },
+      }),
+    );
+    expect(escaped).toBe(1);
+    bridge.close();
+  });
+});

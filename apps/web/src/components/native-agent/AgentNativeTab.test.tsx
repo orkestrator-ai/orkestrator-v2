@@ -49,6 +49,8 @@ import {
 } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { CLAUDE_AUTH_LOGIN_COMMAND, CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
@@ -1161,6 +1163,43 @@ describe("AgentNativeTab", () => {
     } finally {
       window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
     }
+  });
+
+  test("an assigned Grok composer restores its image after a cold remount", async () => {
+    const tabId = "tab-grok-draft-remount";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const draftKey = composeDraftKey("grok", "env-1", sessionKey);
+    const image = {
+      id: "grok-image-1",
+      type: "image",
+      name: "layout.png",
+      path: "/tmp/layout.png",
+      previewUrl: "data:image/png;base64,abc",
+    };
+    composeDraftRecords.set(draftKey, {
+      draftKey,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: { text: "Review the layout", mentions: [], attachments: [image] },
+      updatedAt: "2026-09-15T00:00:00.000Z",
+      revision: 1,
+    });
+
+    const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+    await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
+    const savedRevision = composeDraftRecords.get(draftKey)!.revision;
+    first.unmount();
+    useNativeComposeStore.setState({ drafts: new Map() });
+
+    const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+    expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
+    await waitFor(() =>
+      expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(savedRevision),
+    );
+    expect(composeDraftRecords.get(draftKey)?.value).toMatchObject({ attachments: [image] });
+    remounted.unmount();
   });
 
   test("unlocks a preserved draft when authoritative readiness recovers", async () => {
@@ -5461,39 +5500,45 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
-    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    // Background polls are scheduled by the read coordinator; a fake clock
+    // drives the registered production poll deterministically.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
+      await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
 
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
+      await act(async () => {
+        dispatchResourceChange({
+          resource: "native-agent-session",
+          id: "env-1",
+          revision: 1,
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 120);
+        });
       });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
-    });
 
-    await act(async () => {
-      failEnsure!();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
+      await act(async () => {
+        failEnsure!();
+        await Promise.resolve();
       });
-    });
 
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
-    // The actionable reason, not "Unable to connect".
-    expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+      // The actionable reason, not "Unable to connect".
+      expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
-    // And it survives the poll loop, which reads the same absent session again.
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_700);
-      });
-    });
-    expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
+      // Drive the registered production poll once. Advancing the coordinator's
+      // clock is stronger and faster than sleeping beyond its nominal interval.
+      const readsBeforePoll = getNativeAgentProjectionMock.mock.calls.length;
+      await act(() => clock.advance(1_500));
+      await waitFor(() =>
+        expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll),
+      );
+      expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
+    } finally {
+      resetReadCoordinatorForTests();
+    }
   }, 10_000);
 
   test("releases a creation failure once a read finds the session", async () => {
@@ -6329,45 +6374,39 @@ describe("AgentNativeTab", () => {
 
   test("polls an active tab faster while a turn runs and stops entirely when inactive", async () => {
     /*
-     * The backend no longer refreshes projections on a timer, so this interval
-     * is the only thing that advances a visible transcript. Assert the cadence
-     * it registers rather than waiting on wall-clock ticks.
+     * The backend no longer refreshes projections on a timer, so this poll is
+     * the only thing that advances a visible transcript. Assert the cadence
+     * the read coordinator schedules rather than waiting on wall-clock ticks.
      */
-    const registered: number[] = [];
-    const realSetInterval = window.setInterval.bind(window);
-    const intervalSpy = spyOn(window, "setInterval").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...rest: unknown[]
-    ) => {
-      registered.push(timeout ?? 0);
-      return realSetInterval(handler, timeout, ...rest);
-    }) as typeof window.setInterval);
+    const { clock, coordinator } = installFakeReadCoordinator();
+    const sessionCadence = () =>
+      coordinator
+        .getDiagnostics()
+        .entries.filter((entry) => entry.id.includes("native-agent-session") && entry.subscribers)
+        .map((entry) => entry.cadenceMs);
     try {
       const view = render(<NativeSessionHarness />);
       await waitFor(() =>
         expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
       );
-      expect(registered).toContain(1_500);
-      expect(registered).not.toContain(500);
+      expect(sessionCadence()).toEqual([1_500]);
 
-      registered.length = 0;
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         ...(await defaultProjection(input as never)),
         turn: { phase: "running" as const },
       }));
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-      await waitFor(() => expect(registered).toContain(500));
+      await waitFor(() => expect(sessionCadence()).toEqual([500]));
 
       // Unmounting is the inactive path: no timer may outlive the tree.
-      registered.length = 0;
       const before = getNativeAgentProjectionMock.mock.calls.length;
       view.unmount();
-      await new Promise((resolve) => setTimeout(resolve, 700));
-      expect(registered).toEqual([]);
+      expect(sessionCadence()).toEqual([]);
+      expect(clock.pending).toBe(0);
+      await act(() => clock.advance(5_000));
       expect(getNativeAgentProjectionMock.mock.calls.length).toBe(before);
     } finally {
-      intervalSpy.mockRestore();
+      resetReadCoordinatorForTests();
     }
   });
 
@@ -6558,6 +6597,42 @@ describe("AgentNativeTab", () => {
         .getState()
         .turnStopMarkers.get(createSessionKey("env-1", "tab-review-running"))?.sessionId,
     ).toBe("claude-session");
+  });
+
+  test("stops from the transcript in its pane but ignores sidebar Escape", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      turn: { phase: "running" as const },
+      messages: [
+        {
+          id: "assistant-running",
+          role: "assistant" as const,
+          content: "Running transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      ],
+    }));
+    render(
+      <>
+        <div data-pane-leaf="">
+          <AgentNativeTab
+            tabId="tab-escape-scope"
+            data={identity("claude")}
+            isActive
+            ownsGlobalShortcuts
+          />
+        </div>
+        <input aria-label="Sidebar search" />
+      </>,
+    );
+
+    await screen.findByTitle("Stop current query");
+    fireEvent.keyDown(screen.getByLabelText("Sidebar search"), { key: "Escape" });
+    expect(stopNativeAgentSessionMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByTestId("virtuoso-scroller"), { key: "Escape" });
+    await waitFor(() => expect(stopNativeAgentSessionMock).toHaveBeenCalledTimes(1));
   });
 
   describe("capability-driven parity", () => {
@@ -6826,6 +6901,7 @@ describe("AgentNativeTab", () => {
       overrides: {
         connection?: NativeAgentSessionProjection["connection"];
         phase?: NativeAgentSessionProjection["turn"]["phase"];
+        turnActivity?: NativeAgentSessionProjection["turn"]["activity"];
         actions?: NativeAgentSessionProjection["capabilities"]["actions"];
         messageWindow?: NativeAgentSessionProjection["messageWindow"];
         queue?: NativeAgentSessionProjection["queue"];
@@ -6847,7 +6923,10 @@ describe("AgentNativeTab", () => {
         environmentId: input.environmentId,
         sessionId: overrides.sessionId ?? `${input.agent}-session`,
         connection: overrides.connection ?? ("connected" as const),
-        turn: { phase: overrides.phase ?? "idle" },
+        turn: {
+          phase: overrides.phase ?? "idle",
+          ...(overrides.turnActivity ? { activity: overrides.turnActivity } : {}),
+        },
         messages: overrides.messages ?? [
           {
             id: "assistant-1",
@@ -7885,6 +7964,36 @@ describe("AgentNativeTab", () => {
       view.unmount();
       await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledTimes(1));
       expect(mockToastDismiss).toHaveBeenCalledWith(toastId);
+    });
+
+    test("refines the running indicator with the provider's reported activity", async () => {
+      seedProjection({ phase: "running", turnActivity: { thinkingTokens: 1_200 } });
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-turn-activity"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      expect(
+        (await screen.findByText(/is thinking\.\.\./)).closest('[role="status"]')?.textContent,
+      ).toContain("~1.2k tokens");
+
+      // Compaction outranks thinking: it is the reason nothing is moving.
+      seedProjection({
+        phase: "running",
+        turnActivity: { compacting: true, thinkingTokens: 1_200 },
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-turn-activity"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      expect(await screen.findByText("Compacting conversation…")).toBeTruthy();
     });
 
     test("dismisses the reconnect toast as soon as the session recovers", async () => {

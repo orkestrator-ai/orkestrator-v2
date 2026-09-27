@@ -258,3 +258,37 @@ describe("diff stats payload guards", () => {
     expect(DIFF_STATS_CHANGED_EVENT).toBe("environment-diff-stats-changed");
   });
 });
+
+describe("optional revision metadata", () => {
+  const removal = {
+    environmentId: "env-1",
+    comparisonRef: "main",
+    computedAt: "2026-07-27T12:00:00.000Z",
+    removed: true,
+  };
+
+  test("accepts stamped and legacy changes and removals", () => {
+    expect(isEnvironmentDiffStatsEvent({ ...validChange(), generation: "g", revision: 1 })).toBe(
+      true,
+    );
+    expect(isEnvironmentDiffStatsEvent({ ...removal, generation: "g", revision: 2 })).toBe(true);
+    expect(isEnvironmentDiffStatsEvent(validChange())).toBe(true);
+  });
+
+  test("rejects a partial or malformed stamp instead of treating it as legacy", () => {
+    expect(isEnvironmentDiffStatsChange({ ...validChange(), revision: 1 })).toBe(false);
+    expect(isEnvironmentDiffStatsChange({ ...validChange(), generation: "g", revision: 0 })).toBe(
+      false,
+    );
+    expect(isEnvironmentDiffStatsRemoval({ ...removal, generation: "g" })).toBe(false);
+  });
+
+  test("validates the snapshot-level stamp", () => {
+    expect(
+      isEnvironmentDiffStatsSnapshot({ entries: [validChange()], generation: "g", revision: 0 }),
+    ).toBe(true);
+    expect(isEnvironmentDiffStatsSnapshot({ entries: [], generation: "g", revision: -1 })).toBe(
+      false,
+    );
+  });
+});

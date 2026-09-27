@@ -67,6 +67,18 @@ export { readSessionPreferences, updateSessionPreferences };
 
 export const sessionManagerTestHome = mkdtempSync(join(tmpdir(), "claude-session-manager-home-"));
 
+// Simulated turns must never consult the developer's gh login or capture a
+// live GitHub token in SDK options. Restore the exact host values at teardown.
+const githubEnvKeys = [
+  "ORKESTRATOR_GITHUB_CREDENTIAL_FILE",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
+] as const;
+const originalGithubEnv = Object.fromEntries(githubEnvKeys.map((key) => [key, process.env[key]]));
+for (const key of githubEnvKeys) delete process.env[key];
+process.env.GH_TOKEN = "test-gh-token";
+
 setClaudeHomeForTesting(sessionManagerTestHome);
 
 // Only `captureEvents` below needs a type from here. The suites that assert on
@@ -111,6 +123,8 @@ export const {
   IDLE_TRANSCRIPT_EVICTION_MS,
   MAX_TERMINAL_BACKGROUND_TASKS,
   STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
+  CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
+  withControlRequestTimeout,
   deleteSessionDurably,
   renameSessionDurably,
   forkPersistedSession,
@@ -242,6 +256,11 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  for (const key of githubEnvKeys) {
+    const original = originalGithubEnv[key];
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
   // Restore the real mcp-config / plugin-config modules so other test files
   // in the same `bun test` run get the real implementations.
   mock.module("./mcp-config.js", () => mcpConfigSnapshot);

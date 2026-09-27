@@ -62,17 +62,6 @@ import {
 } from "./messages/types.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
 import {
-  buildPromptInput,
-  expandPromptTemplate,
-  getAvailableSlashCommandDefinitions,
-  isCodexCliNativeSlashCommand,
-  parseCodexSteerCommand,
-  parseSlashCommandPrompt,
-  wrapPromptForConversationMode,
-  type ConversationMode,
-  type PromptSlashCommand,
-} from "./prompts/slash-commands.js";
-import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
@@ -112,6 +101,25 @@ export function toEngineInput(
   // A prompt-less turn is not valid; attachments alone still need a text slot.
   if (input.length === 0) input.push({ type: "text", text });
   return input;
+}
+
+/**
+ * Adds the structured skill binding to a turn's input.
+ *
+ * The result is exactly one text item (the `$name` marker plus arguments),
+ * then the skill item, then any images — app-server attaches the skill's
+ * instructions from the item and reads the arguments from the text.
+ */
+export function withSkillInput(
+  input: EngineUserInput[],
+  skill: { name: string; path: string } | undefined,
+): EngineUserInput[] {
+  if (!skill) return input;
+  const textIndex = input.findIndex((item) => item.type === "text");
+  const skillItem: EngineUserInput = { type: "skill", name: skill.name, path: skill.path };
+  return textIndex === -1
+    ? [skillItem, ...input]
+    : [...input.slice(0, textIndex + 1), skillItem, ...input.slice(textIndex + 1)];
 }
 
 /** app-server model → the shape the frontend model picker already consumes. */

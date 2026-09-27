@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
   STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
   captureEvents,
   createSession,
@@ -25,6 +26,7 @@ import {
   sendPrompt,
   track,
   waitFor,
+  withControlRequestTimeout,
 } from "./session-manager-test-harness.js";
 
 // ---------------------------------------------------------------------------
@@ -75,10 +77,23 @@ describe("getAvailableModels", () => {
     expect(catalog.models.map((model) => model.id)).toEqual([
       "default",
       "opus[1m]",
-      "claude-fable-5[1m]",
+      "claude-fable-5-1[1m]",
       "sonnet",
       "haiku",
     ]);
+    // Claude Code 2.1.280 made Opus 5.5 (1M context) the default Opus.
+    expect(Object.fromEntries(catalog.models.map((m) => [m.id, m.resolvedModel]))).toEqual({
+      default: "claude-opus-5-5[1m]",
+      "opus[1m]": "claude-opus-5-5[1m]",
+      "claude-fable-5-1[1m]": "claude-fable-5-1",
+      sonnet: "claude-sonnet-5",
+      haiku: "claude-haiku-4-5-20251001",
+    });
+    for (const id of ["default", "opus[1m]"]) {
+      expect(catalog.models.find((m) => m.id === id)?.description).toBe(
+        "Opus 5.5 with 1M context · Best for everyday, complex tasks",
+      );
+    }
   });
 
   test("fallback marks the Opus aliases as fast-mode capable and Haiku without effort", async () => {
@@ -98,7 +113,7 @@ describe("getAvailableModels", () => {
     ]);
 
     // Reasoning-capable models expose the full effort ladder incl. xhigh/max.
-    for (const id of ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet"]) {
+    for (const id of ["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet"]) {
       const model = byId.get(id);
       expect(model?.supportsEffort).toBe(true);
       expect(model?.supportedEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -1312,36 +1327,193 @@ describe("claude usage snapshot", () => {
     });
   });
 
-  test("accumulates counters across turns while context stays a level", async () => {
-    const session = createSession("accumulating");
-    track(session.id);
-    const turn = {
+  // Each result's `modelUsage` and `total_cost_usd` are running totals. Claude
+  // Code before 2.1.277 restarted them for every resumed `query()`, so two
+  // identical results mean two identical turns; from 2.1.277 a resumed query
+  // continues its transcript's totals, so the second turn's result carries the
+  // first turn as well. Both must settle on the same session numbers.
+  function cumulativeTurn(multiple: number) {
+    return {
       type: "result",
       subtype: "success",
       modelUsage: {
         "claude-opus-5": {
-          inputTokens: 10,
-          outputTokens: 20,
-          cacheReadInputTokens: 70,
+          inputTokens: 10 * multiple,
+          outputTokens: 20 * multiple,
+          cacheReadInputTokens: 70 * multiple,
           contextWindow: 1000,
         },
       },
-      total_cost_usd: 0.5,
+      total_cost_usd: 0.5 * multiple,
       duration_ms: 100,
       duration_api_ms: 80,
       num_turns: 3,
       ttft_ms: 25,
       permission_denials: [{ tool_name: "Bash", tool_use_id: "tool-denied" }],
     };
+  }
 
-    for (let index = 0; index < 2; index += 1) {
-      const promptPromise = sendPrompt(session.id, `turn ${index}`);
+  async function runTurns(sessionId: string, turns: Array<{ cli: string; results: object[] }>) {
+    for (const [index, { cli, results }] of turns.entries()) {
+      const promptPromise = sendPrompt(sessionId, `turn ${index}`);
       const call = await nextQueryCall();
-      call.push(turn);
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-usage",
+        claude_code_version: cli,
+      });
+      for (const result of results) call.push(result);
       call.finish();
       await promptPromise;
     }
+  }
 
+  for (const { cli, multiples } of [
+    { cli: "2.1.276", multiples: [1, 1] },
+    { cli: "2.1.280", multiples: [1, 2] },
+  ]) {
+    test(`accumulates counters across turns while context stays a level (CLI ${cli})`, async () => {
+      const session = createSession(`accumulating-${cli}`);
+      track(session.id);
+      await runTurns(
+        session.id,
+        multiples.map((multiple) => ({ cli, results: [cumulativeTurn(multiple)] })),
+      );
+      expectTwoAccumulatedTurns(session.id);
+    });
+  }
+
+  test("a restarted provider count is read as the turn's own usage", async () => {
+    const session = createSession("accumulating-reset");
+    track(session.id);
+    // The second query resumed a transcript that saved no totals (or followed a
+    // `/clear`): its count went down, so it is this turn alone.
+    await runTurns(session.id, [
+      { cli: "2.1.280", results: [cumulativeTurn(3)] },
+      { cli: "2.1.280", results: [cumulativeTurn(1)] },
+    ]);
+    expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 40, costUsd: 2 });
+  });
+
+  test("a zeroed result neither counts nor resets the baseline", async () => {
+    const session = createSession("accumulating-zeroed");
+    track(session.id);
+    await runTurns(session.id, [
+      { cli: "2.1.280", results: [cumulativeTurn(1)] },
+      { cli: "2.1.280", results: [cumulativeTurn(0)] },
+      { cli: "2.1.280", results: [cumulativeTurn(2)] },
+    ]);
+    expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 20, costUsd: 1 });
+  });
+
+  test("does not count a pre-attach transcript as the first observed turn", async () => {
+    const session = createSession("attached cumulative usage");
+    track(session.id);
+    session.sdkSessionId = "11111111-2222-4333-8444-555555555555";
+    session.messages.push({
+      id: "persisted-user",
+      role: "user",
+      content: "Earlier work",
+      parts: [{ type: "text", content: "Earlier work" }],
+      createdAt: new Date(0).toISOString(),
+    });
+
+    const prompt = sendPrompt(session.id, "new work");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "init",
+      session_id: session.sdkSessionId,
+      claude_code_version: "2.1.280",
+    });
+    call.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 10, cache_read_input_tokens: 70 } },
+      },
+    });
+    call.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 20 } },
+    });
+    call.push({ type: "stream_event", event: { type: "message_stop" } });
+    call.push(cumulativeTurn(3));
+    call.finish();
+    await prompt;
+
+    expect(session.usage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 70,
+      lastTurnTokens: 100,
+      sessionTokens: 100,
+      costUsd: 0,
+    });
+    expect(session.usage?.turns?.at(-1)).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 70,
+      costUsd: 0,
+    });
+  });
+
+  test("does not count interrupted streamed tokens again on the next resumed result", async () => {
+    const session = createSession("interrupted cumulative usage");
+    track(session.id);
+    await runTurns(session.id, [{ cli: "2.1.280", results: [cumulativeTurn(1)] }]);
+
+    const interrupted = sendPrompt(session.id, "interrupted turn");
+    const interruptedCall = await nextQueryCall();
+    interruptedCall.push({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-usage",
+      claude_code_version: "2.1.280",
+    });
+    interruptedCall.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 10, cache_read_input_tokens: 70 } },
+      },
+    });
+    interruptedCall.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 20 } },
+    });
+    interruptedCall.push({ type: "stream_event", event: { type: "message_stop" } });
+    await waitFor(() => session.inProgressUsage?.sessionTokens === 200);
+    interruptedCall.fail(new Error("provider disconnected"));
+    await expect(interrupted).rejects.toThrow("provider disconnected");
+    expect(session.usage).toMatchObject({ sessionTokens: 200, costUsd: 0.5 });
+
+    await runTurns(session.id, [{ cli: "2.1.280", results: [cumulativeTurn(3)] }]);
+
+    expect(session.usage).toMatchObject({
+      inputTokens: 30,
+      outputTokens: 60,
+      cacheReadTokens: 210,
+      sessionTokens: 300,
+      lastTurnTokens: 100,
+      costUsd: 1.5,
+    });
+  });
+
+  test("a second result in one query adds only what it ran since the first", async () => {
+    const session = createSession("accumulating-continuation");
+    track(session.id);
+    // A background-task continuation delivers a second result on the same
+    // `query()`, whichever CLI is running; it has always been cumulative.
+    await runTurns(session.id, [
+      { cli: "2.1.276", results: [cumulativeTurn(1), cumulativeTurn(2)] },
+    ]);
+    expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 20, costUsd: 1 });
+  });
+
+  function expectTwoAccumulatedTurns(sessionId: string) {
+    const session = { id: sessionId };
     expect(getSession(session.id)?.usage).toMatchObject({
       // A level, not a running total: this is the size of the context now.
       usedTokens: 100,
@@ -1373,7 +1545,7 @@ describe("claude usage snapshot", () => {
       { toolName: "Bash", toolUseId: "tool-denied" },
       { toolName: "Bash", toolUseId: "tool-denied" },
     ]);
-  });
+  }
 
   test("publishes nothing when a turn reports no tokens", async () => {
     const { session } = await runPromptWithMessages([{ type: "result", subtype: "success" }]);
@@ -1521,5 +1693,105 @@ describe("claude usage snapshot", () => {
     ]);
 
     expect(session.usage).toMatchObject({ usedTokens: 120205, estimated: true });
+  });
+
+  test("settles the turn when the context request never answers", async () => {
+    // Observed live: the CLI left get_context_usage unanswered after a result,
+    // the awaited request parked the SDK message loop, and the session stayed
+    // `running` while every later frame went unconsumed.
+    queryControlOverrides.getContextUsage = mock(() => new Promise<unknown>(() => {}));
+
+    const startedAt = performance.now();
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": { inputTokens: 5, outputTokens: 200, contextWindow: 200000 },
+        },
+      },
+    ]);
+
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(
+      CONTEXT_USAGE_REQUEST_TIMEOUT_MS - 50,
+    );
+    expect(session.status).toBe("idle");
+    expect(session.usage).toMatchObject({ usedTokens: 205, estimated: true });
+  });
+
+  test("discards a context report that arrives after the deadline", async () => {
+    let answerLate: ((value: unknown) => void) | undefined;
+    queryControlOverrides.getContextUsage = mock(
+      () =>
+        new Promise<unknown>((resolve) => {
+          answerLate = resolve;
+        }),
+    );
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": { inputTokens: 5, outputTokens: 200, contextWindow: 200000 },
+        },
+      },
+    ]);
+    const settledUsage = session.usage;
+    expect(settledUsage).toMatchObject({ usedTokens: 205, estimated: true });
+
+    answerLate?.({ totalTokens: 51_200, maxTokens: 200_000, percentage: 25.6 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(session.status).toBe("idle");
+    expect(session.usage).toBe(settledUsage);
+  });
+});
+
+describe("withControlRequestTimeout", () => {
+  class TestTimeoutError extends Error {}
+
+  test("returns the answer when the request settles before the deadline", async () => {
+    await expect(
+      withControlRequestTimeout(Promise.resolve("answer"), 1_000, () => new TestTimeoutError()),
+    ).resolves.toBe("answer");
+  });
+
+  test("propagates a request failure that beats the deadline", async () => {
+    await expect(
+      withControlRequestTimeout(
+        Promise.reject(new Error("control channel closed")),
+        1_000,
+        () => new TestTimeoutError(),
+      ),
+    ).rejects.toThrow("control channel closed");
+  });
+
+  test("rejects with the caller's error when the request never answers", async () => {
+    await expect(
+      withControlRequestTimeout(new Promise(() => {}), 5, () => new TestTimeoutError()),
+    ).rejects.toBeInstanceOf(TestTimeoutError);
+  });
+
+  test("ignores a late rejection without surfacing an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let failLate: ((error: Error) => void) | undefined;
+      const request = new Promise<never>((_, reject) => {
+        failLate = reject;
+      });
+
+      await expect(
+        withControlRequestTimeout(request, 5, () => new TestTimeoutError()),
+      ).rejects.toBeInstanceOf(TestTimeoutError);
+
+      failLate?.(new Error("query closed"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

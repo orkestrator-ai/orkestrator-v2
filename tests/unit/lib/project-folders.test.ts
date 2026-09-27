@@ -12,6 +12,7 @@ import {
   resolveProjectArrangement,
   resolveRemoveProjectFromFolder,
   resolveRenameProjectFolder,
+  resolveSortProjectFolder,
   resolveUngroupProjectFolder,
 } from "@/lib/project-folders";
 
@@ -253,6 +254,47 @@ describe("folder maintenance arrangements", () => {
     expect(resolveRenameProjectFolder(projects, "Work", "  ")).toBeNull();
     expect(resolveRenameProjectFolder(projects, "Work", "Work")).toBeNull();
     expect(resolveRenameProjectFolder(projects, "Absent", "Personal")).toBeNull();
+  });
+
+  test("sorting alphabetizes only the selected folder's projects", () => {
+    const unsortedProjects = [
+      makeProject("outside-before", 0),
+      { ...makeProject("zulu", 1, "Work"), name: "Zulu" },
+      { ...makeProject("alpha", 2, "Work"), name: "alpha" },
+      { ...makeProject("project-10", 3, "Work"), name: "Project 10" },
+      { ...makeProject("project-2", 4, "Work"), name: "project 2" },
+      makeProject("outside-after", 5),
+    ];
+
+    expect(resolveSortProjectFolder(unsortedProjects, "work")).toEqual({
+      projectIds: ["outside-before", "alpha", "project-2", "project-10", "zulu", "outside-after"],
+      folders: {},
+    });
+  });
+
+  test("sorting an alphabetized or absent folder does nothing", () => {
+    expect(resolveSortProjectFolder(projects, "Work")).toBeNull();
+    expect(resolveSortProjectFolder(projects, "Absent")).toBeNull();
+  });
+
+  test("sorts non-contiguous folder members against the rendered tree order", () => {
+    const outside = makeProject("outside", 1);
+    const unsortedProjects = [
+      { ...makeProject("zulu", 0, "Work"), name: "Zulu" },
+      outside,
+      { ...makeProject("alpha", 2, "Work"), name: "Alpha" },
+    ];
+    expect(resolveSortProjectFolder(unsortedProjects, "Work")).toEqual({
+      projectIds: ["alpha", "zulu", "outside"],
+      folders: {},
+    });
+
+    const alreadySortedProjects = [
+      { ...makeProject("alpha", 0, "Work"), name: "Alpha" },
+      outside,
+      { ...makeProject("zulu", 2, "Work"), name: "Zulu" },
+    ];
+    expect(resolveSortProjectFolder(alreadySortedProjects, "Work")).toBeNull();
   });
 
   test("ungrouping returns every member to the root", () => {

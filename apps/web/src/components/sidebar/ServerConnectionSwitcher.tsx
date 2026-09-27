@@ -30,6 +30,8 @@ type DisplayReadiness = Readiness | "needs-token" | "unchecked";
 
 const ACTIVE_PROBE_INTERVAL_MS = 30_000;
 const INACTIVE_PROBE_CACHE_MS = 10_000;
+/** An in-flight probe younger than this is joined rather than superseded. */
+export const PROBE_SUPERSEDE_AFTER_MS = 5_000;
 
 function getConnectionsApi(): ConnectionsApi | null {
   return window.orkestrator?.connections ?? null;
@@ -86,7 +88,14 @@ export function ServerConnectionSwitcher() {
     (connection: ConnectionSummary, options: { supersede?: boolean } = {}) => {
       const api = getConnectionsApi();
       if (!api || connection.requiresToken) return;
-      if (inFlightProbes.current.has(connection.id) && !options.supersede) return;
+      if (inFlightProbes.current.has(connection.id)) {
+        // A probe that is still young answers for everyone who asked since it
+        // started (focus + interval + menu bursts). Only a stalled one is
+        // superseded; its late result is fenced out by the generation below.
+        if (!options.supersede) return;
+        const startedAt = lastProbeAt.current[connection.id] ?? 0;
+        if (Date.now() - startedAt < PROBE_SUPERSEDE_AFTER_MS) return;
+      }
       if (
         !options.supersede &&
         Date.now() - (lastProbeAt.current[connection.id] ?? 0) < INACTIVE_PROBE_CACHE_MS
@@ -158,10 +167,17 @@ export function ServerConnectionSwitcher() {
 
   useEffect(() => {
     if (!active || active.requiresToken) return;
+    // The authenticated readiness probe stays: an open event stream proves
+    // neither the command surface nor the credential. It pauses while the
+    // document is hidden; focus on return probes (joining a young probe).
     const refresh = () => probeConnection(active, { supersede: true });
+    const tick = () => {
+      if (document.visibilityState === "hidden") return;
+      refresh();
+    };
     refresh();
     window.addEventListener("focus", refresh);
-    const interval = window.setInterval(refresh, ACTIVE_PROBE_INTERVAL_MS);
+    const interval = window.setInterval(tick, ACTIVE_PROBE_INTERVAL_MS);
     return () => {
       window.removeEventListener("focus", refresh);
       window.clearInterval(interval);

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   composeDraftKey,
@@ -15,6 +15,19 @@ import {
   normalizeTranscriptAnnotationComment,
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
+import type { WebAnnotationMigratedReference } from "@orkestrator/protocol/web-annotations";
+import { getComposeDraft } from "@/lib/backend";
+import { describeWebAnnotationError, webAnnotationErrorDetail } from "@/lib/web-annotations/client";
+import {
+  applyMigratedReferences,
+  hasUnmigratedBrowserNotes,
+  reconcileComposeDraftValue,
+  savedMigrationReferences,
+} from "@/lib/web-annotations/compose-migration";
+import {
+  restorableDraftAttachments,
+  type NativeDraftNamespace,
+} from "@/lib/native-draft-attachments";
 
 interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
@@ -48,16 +61,6 @@ interface PersistedNativeComposeDraft {
   metadata?: unknown;
 }
 
-type NativeDraftNamespace =
-  | "claude"
-  | "claude-tmux"
-  | "codex"
-  | "opencode"
-  | "cursor"
-  | "grok"
-  | "pi"
-  | "agent-native";
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -69,46 +72,6 @@ function isPersistedFileMention(value: unknown): boolean {
     typeof value.filename === "string" &&
     typeof value.relativePath === "string"
   );
-}
-
-function isPersistedAttachment(namespace: NativeDraftNamespace, value: unknown): boolean {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.path !== "string" ||
-    (value.previewUrl !== undefined && typeof value.previewUrl !== "string") ||
-    (value.annotationId !== undefined && typeof value.annotationId !== "string")
-  ) {
-    return false;
-  }
-  if (namespace === "cursor" || namespace === "grok") return false;
-  if (namespace === "codex") return value.type === "image";
-  return value.type === "file" || value.type === "image";
-}
-
-/**
- * Resolve which provider's attachment rules a stored draft must satisfy.
- *
- * The shared `agent-native` record belongs to a tab that has not been assigned
- * yet, so its own namespace says nothing about what the selected agent accepts.
- * The persisted platform does, and restoring an attachment the agent refuses
- * would fail the next send rather than being dropped by the bridge.
- */
-function effectiveAttachmentNamespace(
-  namespace: NativeDraftNamespace,
-  metadata: unknown,
-): NativeDraftNamespace {
-  if (namespace !== "agent-native") return namespace;
-  const platform = isRecord(metadata) ? metadata.platform : undefined;
-  return platform === "claude" ||
-    platform === "codex" ||
-    platform === "opencode" ||
-    platform === "cursor" ||
-    platform === "grok" ||
-    platform === "pi"
-    ? platform
-    : namespace;
 }
 
 function readDraft<TMention, TAttachment>(
@@ -138,11 +101,20 @@ function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
   );
 }
 
+/** Quiet period after the last draft change before it is written to the backend. */
+export const NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS = 400;
+
 /**
  * Mirrors one native chat composer to backend draft storage.
  *
  * Hydration never overwrites input typed while the snapshot request was in
  * flight. Writes are debounced and serialized by the shared persistence helper.
+ *
+ * Returns a counter that advances each time a persisted draft is applied to
+ * the store. Restoration only enforces what the draft's *own* namespace knows;
+ * a composer whose effective platform is resolved elsewhere (the unassigned
+ * composer's default provider) keys its capability reconciliation on this so
+ * a restored draft is reconciled exactly once, without polling the store.
  */
 export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   namespace: NativeDraftNamespace,
@@ -150,10 +122,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   sessionKey: string,
   store: NativeComposeDraftStore<TMention, TAttachment>,
   fallbackNamespace?: NativeDraftNamespace,
-): void {
+): number {
+  const [restoreGeneration, setRestoreGeneration] = useState(0);
   useEffect(() => {
     let disposed = false;
     let hydrated = false;
+    let restored = false;
     let readSucceeded = false;
     let locallyChanged = false;
     let applyingHydration = false;
@@ -165,9 +139,36 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
 
     const reportPersistenceError = (error: unknown): void => {
       if (!(error instanceof DraftRevisionConflictError)) {
+        const typed = webAnnotationErrorDetail(error).detail;
+        if (typed?.code === "upgrade-required" || typed?.code === "conflict") {
+          // An older copy of a migrated browser note: reconcile, then retry
+          // once. The user's text is never dropped.
+          void reconcile()
+            .then(() => persist(store.getState()))
+            .catch((retryError) => {
+              toast.error("Draft not saved", {
+                id: `compose-draft-migration:${key}`,
+                description: describeWebAnnotationError(retryError),
+              });
+            });
+          return;
+        }
         console.warn(`[${namespace}] Failed to persist compose draft:`, error);
         return;
       }
+      const draftAnnotations = readDraft(store.getState(), sessionKey).annotations;
+      if (!hasUnmigratedBrowserNotes(draftAnnotations as TranscriptAnnotation[] | undefined)) {
+        showConflictToast();
+        return;
+      }
+      void resolveMigrationConflict()
+        .catch(() => false)
+        .then((resolved) => {
+          if (!resolved) showConflictToast();
+        });
+    };
+
+    const showConflictToast = (): void => {
       const discarding = isEmptyDraft(readDraft(store.getState(), sessionKey));
       toast.error("Draft changed in another window", {
         id: `compose-draft-conflict:${key}`,
@@ -187,11 +188,88 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       });
     };
 
+    /** Replace legacy browser notes the backend now holds in threads (in memory only). */
+    const applyReferences = (references: WebAnnotationMigratedReference[]): void => {
+      if (references.length === 0 || disposed) return;
+      const state = store.getState();
+      if (!state.setAnnotations) return;
+      const attachments = (state.attachments.get(sessionKey) ?? []) as Array<
+        TAttachment & { annotationId?: string }
+      >;
+      const next = applyMigratedReferences(
+        state.annotations?.get(sessionKey) ?? [],
+        attachments,
+        references,
+      );
+      if (!next) return;
+      state.setAnnotations(sessionKey, next.annotations);
+      if (next.attachments.length !== attachments.length) {
+        state.clearAttachments(sessionKey);
+        for (const attachment of next.attachments) state.addAttachment(sessionKey, attachment);
+      }
+    };
+
+    /**
+     * A dirty in-memory draft holding legacy browser notes goes through the
+     * backend's idempotent import, keeping the user's text; the next save
+     * then persists lightweight references instead of fanning notes out.
+     */
+    let reconciling: Promise<void> | null = null;
+    const reconcile = (): Promise<void> => {
+      if (reconciling) return reconciling;
+      const draft = readDraft(store.getState(), sessionKey);
+      if (!hasUnmigratedBrowserNotes(draft.annotations as TranscriptAnnotation[] | undefined)) {
+        return Promise.resolve();
+      }
+      reconciling = reconcileComposeDraftValue(environmentId, { ...draft })
+        .then((result) => {
+          if (result) applyReferences(result.references);
+        })
+        .finally(() => {
+          reconciling = null;
+        });
+      return reconciling;
+    };
+
     const persist = (state: NativeComposeDraftState<TMention, TAttachment>): Promise<void> => {
       const draft = readDraft(state, sessionKey);
       return isEmptyDraft(draft)
         ? discardComposeDraft(key)
-        : persistComposeDraft(key, "environment", environmentId, draft);
+        : persistComposeDraft(key, "environment", environmentId, draft).then((saved) => {
+            applyReferences(savedMigrationReferences(saved));
+          });
+    };
+
+    /**
+     * A conflict caused only by server-side migration (the persisted draft
+     * lost its legacy notes, nothing else changed) is saved through the
+     * normal conflict path after reconciling; anything else asks the user.
+     */
+    const resolveMigrationConflict = async (): Promise<boolean> => {
+      if (
+        !hasUnmigratedBrowserNotes(
+          readDraft(store.getState(), sessionKey).annotations as TranscriptAnnotation[] | undefined,
+        )
+      ) {
+        return false;
+      }
+      await reconcile();
+      const current = readDraft(store.getState(), sessionKey);
+      const server = await loadServerValue();
+      if (!server || server.text !== current.text) return false;
+      if (hasUnmigratedBrowserNotes(server.annotations as TranscriptAnnotation[] | undefined)) {
+        return false;
+      }
+      await resolveComposeDraftSaveConflict(key, "environment", environmentId, current);
+      return true;
+    };
+    const loadServerValue = async (): Promise<PersistedNativeComposeDraft | null> => {
+      try {
+        const persisted = await getComposeDraft<PersistedNativeComposeDraft>(key);
+        return persisted?.value ?? null;
+      } catch {
+        return null;
+      }
     };
 
     const schedule = (state: NativeComposeDraftState<TMention, TAttachment>) => {
@@ -202,7 +280,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         void persist(state).catch((error) => {
           reportPersistenceError(error);
         });
-      }, 400);
+      }, NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS);
     };
 
     const unsubscribe = store.subscribe((state, previous) => {
@@ -251,9 +329,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           return;
         }
         const mentions = value.mentions.filter(isPersistedFileMention);
-        const attachmentNamespace = effectiveAttachmentNamespace(namespace, value.metadata);
-        const attachments = value.attachments.filter((attachment) =>
-          isPersistedAttachment(attachmentNamespace, attachment),
+        // Structure first, then the shared capability table for the resolved
+        // platform. Model vision support is left to the composer's send path.
+        const attachments = restorableDraftAttachments(
+          namespace,
+          value.metadata,
+          value.attachments,
         );
         const annotations = Array.isArray(value.annotations)
           ? value.annotations
@@ -276,6 +357,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           if (value.metadata !== undefined) {
             state.setDraftMetadata?.(sessionKey, value.metadata);
           }
+          restored = true;
         } finally {
           applyingHydration = false;
         }
@@ -287,7 +369,14 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         if (readSucceeded || locallyChanged) {
           hydrated = true;
           if (!disposed) schedule(store.getState());
+          // Persistence resumed with a draft that may still hold legacy
+          // browser notes typed before migration: reconcile them in memory.
+          if (!disposed) void reconcile().catch(() => undefined);
         }
+        // Announced after the save above is scheduled, so a reconciliation the
+        // host runs in response re-arms that same debounce instead of adding
+        // a second write.
+        if (restored && !disposed) setRestoreGeneration((generation) => generation + 1);
       });
 
     return () => {
@@ -304,4 +393,5 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       }
     };
   }, [environmentId, fallbackNamespace, namespace, sessionKey, store]);
+  return restoreGeneration;
 }

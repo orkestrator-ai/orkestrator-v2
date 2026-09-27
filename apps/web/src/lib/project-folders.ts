@@ -356,6 +356,28 @@ export function resolveRenameProjectFolder(
   return { projectIds: ordered.map((project) => project.id), folders };
 }
 
+/** Arrangement that sorts one folder's projects alphabetically by display name. */
+export function resolveSortProjectFolder(
+  projects: readonly Project[],
+  folderName: string,
+): ProjectArrangement | null {
+  const key = projectFolderKey(folderName);
+  const entries = buildProjectTree(projects);
+  const folder = entries.find(
+    (entry): entry is ProjectFolderEntry => entry.kind === "folder" && entry.key === key,
+  );
+  if (!folder) return null;
+
+  const ordered = flattenProjectTree(entries);
+  const sortedProjects = [...folder.projects].sort((left, right) =>
+    left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }),
+  );
+  const nextEntries = entries.map((entry) =>
+    entry === folder ? { ...entry, projects: sortedProjects } : entry,
+  );
+  return arrangementOrNull(ordered, flattenProjectTree(nextEntries), {});
+}
+
 /** Arrangement that dissolves a folder, returning every member to the root. */
 export function resolveUngroupProjectFolder(
   projects: readonly Project[],

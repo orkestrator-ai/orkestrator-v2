@@ -14,6 +14,7 @@ import {
 import { handlePromptTools } from "./fake-agent-prompt-tools.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "../structured-prompt-marker.js";
 import { beginClientMethodExercise } from "./fake-agent-final.js";
+import { announceCommands } from "./fake-agent-session.js";
 
 function retriableProviderErrorMessage(): string {
   const name = process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError";
@@ -34,6 +35,28 @@ export function handlePromptStart(message: JsonObject): boolean {
         process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
+    }
+    if (prompt === "COMMANDS_UPDATE") {
+      announceCommands("fake-session");
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
+    // A stand-in for an agent interpreting its own command grammar: it answers
+    // with the command token it ran and ends the turn.
+    if (prompt.startsWith("/")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `ran:${prompt.split(/\s/)[0]}` },
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
     }
     if (prompt === "ACP_CLIENT_METHODS" && process.env.FAKE_ACP_CLIENT_FILE) {
       beginClientMethodExercise(message.id, process.env.FAKE_ACP_CLIENT_FILE);

@@ -728,6 +728,22 @@ describe("remote gateway", () => {
     expect(oversized.status).toBe(413);
     expect(oversized.json()).toEqual({ error: "Request body is too large" });
     expect(backend.invoke).toHaveBeenCalledTimes(1);
+
+    // MCP mutations have a far smaller contract; they are refused before the
+    // command runs, with a code the settings UI can decode.
+    const mcpOversized = await requestUrl(`${info!.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        command: "mutate_mcp_definition",
+        args: { mutation: { padding: "x".repeat(300 * 1024) } },
+      }),
+    });
+    expect(mcpOversized.status).toBe(413);
+    expect((mcpOversized.json() as { error: string }).error).toContain(
+      "McpManagementError:invalid-request:",
+    );
+    expect(backend.invoke).toHaveBeenCalledTimes(1);
   });
 
   test("surfaces persistence failures without reporting a successful rotation", async () => {

@@ -3,7 +3,7 @@ import { runCommand } from "./shell.js";
 
 export type ProcessTreeSignal = "SIGTERM" | "SIGKILL";
 
-type ProcessTreeChild = Pick<
+export type ProcessTreeChild = Pick<
   ChildProcessWithoutNullStreams,
   "pid" | "exitCode" | "signalCode" | "kill"
 >;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type {
@@ -6,6 +6,7 @@ import type {
   AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
+  NativeAgentCommandIntent,
   NativeAgentControlUpdate,
   NativeAgentDispatchOutcome,
   NativeAgentMessageWindow,
@@ -44,6 +45,7 @@ import {
   discardNativeAgentDispatch,
   movePromptQueueMessage,
   performNativeAgentSessionAction,
+  refreshNativeAgentCommands,
   refreshNativeAgentModels,
   removePromptQueueMessage,
   resolveNativeAgentInteraction,
@@ -54,9 +56,16 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
+import {
+  nativeObservationInvalidationMatches,
+  subscribeNativeObservationInvalidations,
+} from "@/lib/native-observation-events";
+import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   evictNativeAgentHistoryCaches,
   useNativeAgentProjectionStore,
@@ -68,8 +77,7 @@ import {
 const DEFAULT_MESSAGE_WINDOW = 512;
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
-const ACTIVE_PROJECTION_REFRESH_MS = 500;
-export const IDLE_PROJECTION_REFRESH_MS = 1_500;
+export { IDLE_PROJECTION_REFRESH_MS } from "@/lib/native-session-read-policy";
 const CLIENT_HISTORY_MAX_MESSAGES = 4_096;
 const CLIENT_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
@@ -79,6 +87,8 @@ const HISTORY_PAGE_MAX_MESSAGES = 200;
 let syncCapability: {
   supported: boolean;
   progressive: boolean;
+  /** The backend announces stamped, session-scoped activity invalidations. */
+  observationEvents?: boolean;
   checkedAt: number;
   generation: number;
 } | null = null;
@@ -96,22 +106,162 @@ function messagePartCount(message: unknown): number {
 }
 
 /**
+ * A provider identity for one part that survives its content changing: a
+ * tool row keeps its `toolUseId` as it settles, and a streamed text or
+ * thinking part keeps its source id and arrival time as it grows.
+ */
+function durablePartIdentity(part: unknown): string | undefined {
+  if (!part || typeof part !== "object") return undefined;
+  const { type, toolUseId, sourcePartId, createdAt, toolName, toolTitle, content } = part as {
+    type?: unknown;
+    toolUseId?: unknown;
+    sourcePartId?: unknown;
+    createdAt?: unknown;
+    toolName?: unknown;
+    toolTitle?: unknown;
+    content?: unknown;
+  };
+  if (typeof toolUseId === "string" && toolUseId) {
+    // One Codex file-change item gives every changed file the same tool id.
+    if (toolName === "apply_patch" && typeof content === "string") {
+      return `${String(type)}\0tool\0${toolUseId}\0${String(toolTitle)}\0${content}`;
+    }
+    return `${String(type)}\0tool\0${toolUseId}`;
+  }
+  const source = typeof sourcePartId === "string" && sourcePartId ? sourcePartId : undefined;
+  const arrived = typeof createdAt === "string" && createdAt ? createdAt : undefined;
+  if (!source && !arrived) return undefined;
+  return `${String(type)}\0${source ?? ""}\0${arrived ?? ""}`;
+}
+
+/**
+ * Where `incoming` (a contiguous run of one message's parts) starts inside the
+ * `local` copy of that message, or -1 when the two cannot be proven to overlap.
+ *
+ * Parts with a durable identity match on it. Parts without one must be equal,
+ * except the last local part, which may still have been streaming when this
+ * client read it; that loose match never counts on its own.
+ */
+function locateIncomingParts(
+  local: readonly unknown[],
+  incoming: readonly unknown[],
+  hint: number | undefined,
+): number {
+  if (local.length === 0 || incoming.length === 0) return -1;
+  const serialized: Array<string | undefined> = [];
+  const serialize = (index: number) => (serialized[index] ??= JSON.stringify(local[index]));
+  const incomingSerialized: Array<string | undefined> = [];
+  const serializeIncoming = (index: number) =>
+    (incomingSerialized[index] ??= JSON.stringify(incoming[index]));
+  const contentWithoutIdentity = (part: unknown) => {
+    if (!part || typeof part !== "object") return JSON.stringify(part);
+    const {
+      sourcePartId: _sourcePartId,
+      createdAt: _createdAt,
+      ...content
+    } = part as Record<string, unknown>;
+    return JSON.stringify(content);
+  };
+  const match = (localIndex: number, incomingIndex: number): "strict" | "loose" | false => {
+    const held = durablePartIdentity(local[localIndex]);
+    const next = durablePartIdentity(incoming[incomingIndex]);
+    if (held !== undefined || next !== undefined) {
+      if (held === next) return "strict";
+      // A bridge may reissue source ids for otherwise identical parts.
+      return contentWithoutIdentity(local[localIndex]) ===
+        contentWithoutIdentity(incoming[incomingIndex])
+        ? "strict"
+        : false;
+    }
+    if (serialize(localIndex) === serializeIncoming(incomingIndex)) return "strict";
+    const heldPart = local[localIndex] as { type?: unknown; content?: unknown } | null;
+    const nextPart = incoming[incomingIndex] as { type?: unknown; content?: unknown } | null;
+    const growsHeldText =
+      heldPart?.type === "text" &&
+      nextPart?.type === "text" &&
+      typeof heldPart.content === "string" &&
+      typeof nextPart.content === "string" &&
+      nextPart.content.startsWith(heldPart.content);
+    return localIndex === local.length - 1 && growsHeldText ? "loose" : false;
+  };
+  const overlapAt = (offset: number) => {
+    const overlap = Math.min(local.length - offset, incoming.length);
+    let strict = 0;
+    for (let index = 0; index < overlap; index += 1) {
+      const result = match(offset + index, index);
+      if (!result) return 0;
+      if (result === "strict") strict += 1;
+    }
+    return strict > 0 ? overlap : 0;
+  };
+  let bestOffset = -1;
+  let bestOverlap = 0;
+  for (let offset = 0; offset < local.length; offset += 1) {
+    const overlap = overlapAt(offset);
+    if (
+      overlap > bestOverlap ||
+      (overlap > 0 &&
+        overlap === bestOverlap &&
+        offset + overlap === local.length &&
+        bestOffset + bestOverlap !== local.length) ||
+      (overlap > 0 &&
+        overlap === bestOverlap &&
+        (offset + overlap === local.length) === (bestOffset + bestOverlap === local.length) &&
+        (offset === hint || (bestOffset !== hint && offset > bestOffset)))
+    ) {
+      bestOffset = offset;
+      bestOverlap = overlap;
+    }
+  }
+  return bestOffset;
+}
+
+/**
  * The live tail may omit leading parts of its first message to fit the byte
- * window. If this client already holds a more complete copy of that same row,
- * keep the local parts so the cut cannot open a hole in the middle of a turn
- * the tab has already rendered.
+ * window. If this client already holds a copy of that same row, lay the
+ * incoming parts over it at the offset where they overlap: the local copy
+ * supplies the leading parts the window cut, so the cut cannot open a hole in
+ * the middle of a turn the tab has already rendered, and the incoming parts
+ * stay authoritative for everything they cover, including parts appended
+ * since the tab last read the row.
+ *
+ * Choosing whole copies by part count alone froze the row: a trimmed head that
+ * gained a final part still had fewer parts than the fuller copy on screen, so
+ * the new part was never shown and later polls reported the view unchanged.
+ * When a nonempty incoming copy cannot be proven to overlap, it wins.
  */
 function preferCompleteLiveHead<TMessage>(
   held: readonly TMessage[] | undefined,
   incoming: readonly TMessage[],
-): TMessage[] {
-  if (!held?.length || incoming.length === 0) return [...incoming];
+  omittedParts?: number,
+): { messages: TMessage[]; restoredPrefix: boolean } {
+  const incomingOnly = () => ({ messages: [...incoming], restoredPrefix: false });
+  if (!held?.length || incoming.length === 0) return incomingOnly();
   const head = incoming[0]!;
   const headId = (head as { id?: unknown })?.id;
-  if (typeof headId !== "string") return [...incoming];
+  if (typeof headId !== "string") return incomingOnly();
   const local = held.find((message) => (message as { id?: unknown })?.id === headId);
-  if (!local || messagePartCount(local) <= messagePartCount(head)) return [...incoming];
-  return [local, ...incoming.slice(1)];
+  const localParts = (local as { parts?: unknown } | undefined)?.parts;
+  const headParts = (head as { parts?: unknown }).parts;
+  if (!Array.isArray(localParts) || !Array.isArray(headParts)) return incomingOnly();
+  const offset =
+    headParts.length === 0 && (omittedParts ?? 0) > 0
+      ? localParts.length
+      : omittedParts === localParts.length
+        ? localParts.length
+        : locateIncomingParts(localParts, headParts, omittedParts);
+  if (offset < 0 || (offset === 0 && headParts.length >= localParts.length)) {
+    return incomingOnly();
+  }
+  const parts = [
+    ...localParts.slice(0, offset),
+    ...headParts,
+    ...localParts.slice(offset + headParts.length),
+  ];
+  return {
+    messages: [{ ...head, parts } as TMessage, ...incoming.slice(1)],
+    restoredPrefix: omittedParts === undefined ? offset > 0 : offset >= omittedParts,
+  };
 }
 
 /**
@@ -255,8 +405,17 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
       const capabilities = await getNativeAgentSyncCapabilities();
       const supported = capabilities.projectionSyncVersions?.includes(1) === true;
       const progressive = capabilities.progressiveViewVersions?.includes(1) === true;
+      const observationEvents =
+        capabilities.observationEventVersions?.includes(NATIVE_AGENT_OBSERVATION_EVENT_VERSION) ===
+        true;
       if (generation === syncCapabilityGeneration) {
-        syncCapability = { supported, progressive, checkedAt: Date.now(), generation };
+        syncCapability = {
+          supported,
+          progressive,
+          observationEvents,
+          checkedAt: Date.now(),
+          generation,
+        };
       }
       return supported;
     } catch (error) {
@@ -284,11 +443,46 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
   }
 }
 
+/**
+ * Whether the connected backend announces stamped, session-scoped activity
+ * invalidations (step 07). Synchronous and conservative: false until the
+ * capability read for the current backend generation has answered.
+ */
+export function nativeObservationEventsSupported(): boolean {
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.observationEvents,
+  );
+}
+
 async function nativeAgentProgressiveSupported(): Promise<boolean> {
   await nativeAgentSyncSupported();
   return Boolean(
     syncCapability?.generation === syncCapabilityGeneration && syncCapability.progressive,
   );
+}
+
+/**
+ * Command rows and their catalogue state for a rebuilt projection.
+ *
+ * Discovery is read in parallel with transcript and state, so its snapshot can
+ * land before any projection exists to carry it; a later read then answers
+ * `unchanged`. Falling back to the held discovery view (for the same identity
+ * only) keeps that first snapshot instead of losing the menu until it changes.
+ */
+function retainedCommandFields(
+  current: Pick<NativeAgentSessionProjection, "slashCommands" | "slashCommandCatalogue"> | null,
+  discovery: NativeAgentDiscoveryView | undefined,
+  identity: NativeAgentViewIdentity,
+): Pick<NativeAgentSessionProjection, "slashCommands" | "slashCommandCatalogue"> {
+  const section = sameProgressiveIdentity(discovery?.identity, identity)
+    ? discovery?.sections.commands
+    : undefined;
+  const commands = current?.slashCommands ?? section?.value;
+  const catalogue = current?.slashCommandCatalogue ?? section?.catalogue;
+  return {
+    ...(commands ? { slashCommands: commands } : {}),
+    ...(catalogue ? { slashCommandCatalogue: catalogue } : {}),
+  };
 }
 
 function sameProgressiveIdentity(
@@ -432,6 +626,19 @@ export interface NativeAgentSendOptions {
     dataUrl?: string;
     filename?: string;
   }>;
+  /** Command intent; absent keeps the legacy (typed) interpretation. */
+  command?: NativeAgentCommandIntent;
+}
+
+/**
+ * Prompt text as it should travel.
+ *
+ * An ordinary prompt is trimmed as it always was. A command keeps its bytes —
+ * trailing spaces, tabs and newlines in its arguments included — with only
+ * leading whitespace removed, which is also all the backend trims.
+ */
+export function nativeSubmissionText(prompt: string, command?: NativeAgentCommandIntent): string {
+  return command && command.kind !== "literal" ? prompt.replace(/^\s+/, "") : prompt.trim();
 }
 
 /**
@@ -727,6 +934,8 @@ export function useNativeAgentSession<TMessage = unknown>({
         reconcileAfterInFlight?: boolean;
       }) => Promise<NativeAgentSessionProjection<TMessage> | null>
     >(null);
+  /** Background-read invalidation, owned by the read coordinator below. */
+  const coordinatedInvalidateRef = useRef<() => void>(() => {});
   const pendingDispatchRef = useRef<{
     prompt: string;
     requestId: string;
@@ -900,24 +1109,52 @@ export function useNativeAgentSession<TMessage = unknown>({
           .map((message) => messageId(message))
           .filter((id): id is string => typeof id === "string"),
       );
+      const displayed = projectionRef.current;
+      // A progressive transcript has no sync paging epoch yet. The first
+      // joined snapshot establishes one, but its bounded tail must not erase
+      // the older messages this tab already rendered in the same session.
+      if (
+        historyEpochChanged &&
+        historyEpochRef.current === undefined &&
+        !evicted &&
+        !params.retained &&
+        displayed !== null &&
+        displayed.sessionId === live.sessionId &&
+        displayed.generation === live.generation
+      ) {
+        const firstLiveId = messageId(live.messages[0] as TMessage);
+        const firstLiveIndex = displayed.messages.findIndex(
+          (message) => messageId(message) === firstLiveId,
+        );
+        if (firstLiveIndex > 0) {
+          retainedMessages = displayed.messages.slice(0, firstLiveIndex);
+        }
+      }
       if (mergeAgedOut && previousLive) {
         const retainedIds = new Set(retainedMessages.map((message) => messageId(message)));
-        const agedOut = previousLive.messages.filter((message) => {
-          const id = messageId(message);
-          return typeof id === "string" && !liveIds.has(id) && !retainedIds.has(id);
-        });
+        const agedOut = previousLive.messages
+          .filter((message) => {
+            const id = messageId(message);
+            return typeof id === "string" && !liveIds.has(id) && !retainedIds.has(id);
+          })
+          .map(
+            (message) =>
+              displayed?.messages.find(
+                (candidate) => messageId(candidate) === messageId(message),
+              ) ?? message,
+          );
         if (agedOut.length > 0) retainedMessages = [...retainedMessages, ...agedOut];
       }
       retainedMessages = retainedMessages.filter(
         (message) => !liveIds.has(messageId(message) as string),
       );
 
-      const displayLive = preferCompleteLiveHead(
-        previousLive?.messages ?? projectionRef.current?.messages,
+      const headMerge = preferCompleteLiveHead(
+        projectionRef.current?.messages ?? previousLive?.messages,
         live.messages,
+        live.messageWindow?.omittedParts,
       );
-      const keptLocalHead =
-        displayLive.length > 0 && live.messages.length > 0 && displayLive[0] !== live.messages[0];
+      const displayLive = headMerge.messages;
       const omittedParts = live.messageWindow?.omittedParts ?? 0;
       /*
        * A part-trimmed live head sits at the start of the overlapping row. If
@@ -926,7 +1163,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        * tail instead; an explicit page (`params.retained`) still wins because
        * the user asked to see that range.
        */
-      if (omittedParts > 0 && !keptLocalHead && !params.retained) {
+      if (omittedParts > 0 && !headMerge.restoredPrefix && !params.retained) {
         retainedMessages = [];
         retainedCursor = boundaryCursor;
       }
@@ -1161,13 +1398,16 @@ export function useNativeAgentSession<TMessage = unknown>({
               (message) => (message as { id?: unknown })?.id === firstLiveId.id,
             )
           : -1;
-      const displayLive = preferCompleteLiveHead(current?.messages, value.messages);
-      const keptLocalHead =
-        displayLive.length > 0 && value.messages.length > 0 && displayLive[0] !== value.messages[0];
+      const headMerge = preferCompleteLiveHead(
+        current?.messages,
+        value.messages,
+        value.messageWindow?.omittedParts,
+      );
+      const displayLive = headMerge.messages;
       const omittedParts = value.messageWindow?.omittedParts ?? 0;
       const partTruncatedHead =
         omittedParts > 0 ||
-        keptLocalHead ||
+        headMerge.restoredPrefix ||
         (firstLiveIndex >= 0 &&
           current !== null &&
           messagePartCount(current.messages[firstLiveIndex]) > messagePartCount(value.messages[0]));
@@ -1181,7 +1421,8 @@ export function useNativeAgentSession<TMessage = unknown>({
        * timeline if we keep the prefix. Keep the prefix only when this client
        * already holds the fuller row; otherwise collapse to the contiguous tail.
        */
-      const collapsedForPartTruncation = partTruncatedHead && !keptLocalHead && firstLiveIndex > 0;
+      const collapsedForPartTruncation =
+        partTruncatedHead && !headMerge.restoredPrefix && firstLiveIndex > 0;
       let retained =
         current &&
         !identityChanged &&
@@ -1362,7 +1603,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? { completionBlockedByBackgroundTasks: current.completionBlockedByBackgroundTasks }
           : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
-        ...(current?.slashCommands ? { slashCommands: current.slashCommands } : {}),
+        ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         revision: (current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
@@ -1483,7 +1724,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? {}
           : { completionBlockedByBackgroundTasks: value.completionBlockedByBackgroundTasks }),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
-        ...(current?.slashCommands ? { slashCommands: current.slashCommands } : {}),
+        ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         revision: (current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
@@ -1529,6 +1770,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (current) {
         const models = value.sections.models?.value;
         const commands = value.sections.commands?.value;
+        const commandCatalogue = value.sections.commands?.catalogue;
         const mcp = value.sections.mcp?.value;
         const auth = value.sections.auth?.value;
         const runtime = value.sections.runtime?.value;
@@ -1547,10 +1789,14 @@ export function useNativeAgentSession<TMessage = unknown>({
               }
             : {}),
           ...(commands ? { slashCommands: commands } : {}),
+          ...(commandCatalogue ? { slashCommandCatalogue: commandCatalogue } : {}),
           ...(runtime || mcp
             ? {
                 runtime: {
                   ...current.runtime,
+                  // A runtime section is the only source of steer occupancy,
+                  // so its absence there retires a retained saturated value.
+                  ...(runtime ? { steer: undefined } : {}),
                   ...runtime?.summary,
                   ...(runtime ? { notices: runtime.notices } : {}),
                   ...(mcp ? { mcp, mcpServers: mcp.length } : {}),
@@ -1645,12 +1891,9 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (refreshesInFlightRef.current > 0 || establishingSessionRef.current > 0) return;
     reconcileAfterInFlightRef.current = false;
     if (!backgroundRefreshEnabledRef.current) return;
-    queueMicrotask(() => {
-      void refreshRef.current?.({
-        manual: false,
-        reconcileAfterInFlight: true,
-      });
-    });
+    // Through the read coordinator, so the trailing read joins/defers like
+    // every other background read (e.g. waits for a hidden document).
+    queueMicrotask(() => coordinatedInvalidateRef.current());
   }, []);
 
   const refresh = useCallback(
@@ -2347,6 +2590,39 @@ export function useNativeAgentSession<TMessage = unknown>({
     void connect().then(() => undefined);
   }, [connect, enabled, isActive]);
 
+  /*
+   * Background reads — the 500/1,500 ms cadence, resource-change hints, resync
+   * and trailing reconciles — are scheduled by the shared read coordinator:
+   * one timer, joined reads with a single dirty flag, paused while the
+   * document is hidden, and reconciled first (critical) on return.
+   * Reads apply into this instance's fenced state (sequence/epoch, conditional
+   * tokens), so the key's view is this instance. Explicit and post-mutation
+   * reads stay direct `refresh()` calls, as do connect/adopt reads.
+   */
+  const readInstanceId = useId();
+  const { invalidate: coordinatedInvalidate } = useCoordinatedRead({
+    key: {
+      resource: "native-agent-session",
+      target: `${environmentId}\u0000${platform}\u0000${sessionKey}`,
+      view: readInstanceId,
+    },
+    enabled,
+    readOnSubscribe: false,
+    retainOnDispose: false,
+    demand: nativeSessionReadDemand(platform, runtimeProjection?.turn.phase, {
+      active: enabled && isActive,
+      observationEvents: nativeObservationEventsSupported(),
+    }),
+    read: async (context) => {
+      await (refreshRef.current?.(
+        context.reason === "interval"
+          ? { manual: false }
+          : { manual: false, reconcileAfterInFlight: true },
+      ) ?? Promise.resolve(null));
+    },
+  });
+  coordinatedInvalidateRef.current = coordinatedInvalidate;
+
   useEffect(() => {
     const unsubscribeChange = onResourceChanged("native-agent-session", (change) => {
       if (
@@ -2356,44 +2632,47 @@ export function useNativeAgentSession<TMessage = unknown>({
         (change.agent === undefined ||
           (change.agent === platform && change.logicalSessionKey === sessionKey))
       ) {
-        void refresh({ manual: false, reconcileAfterInFlight: true });
+        coordinatedInvalidate();
       }
     });
     const unsubscribeResync = onResourceResync(() => {
       invalidateNativeAgentSyncCapability();
-      if (enabled && isActive) {
-        void refresh({ manual: false, reconcileAfterInFlight: true });
+      if (enabled && isActive) coordinatedInvalidate();
+    });
+    /*
+     * The backend observer announces every activity transition, stamped: a
+     * turn starting or ending, a question or approval parking the turn. This
+     * is what lets a qualified idle view read less often — it is told when it
+     * must read. A missed announcement (stamp gap) or a new observer lifetime
+     * re-reads every view.
+     */
+    const unsubscribeObservation = subscribeNativeObservationInvalidations((invalidation) => {
+      if (
+        enabled &&
+        isActive &&
+        nativeObservationInvalidationMatches(invalidation, {
+          environmentId,
+          agent: platform,
+          logicalSessionKey: sessionKey,
+        })
+      ) {
+        coordinatedInvalidate();
       }
     });
     return () => {
       unsubscribeChange();
       unsubscribeResync();
+      unsubscribeObservation();
     };
-  }, [enabled, environmentId, isActive, platform, refresh, sessionKey]);
-
-  useEffect(() => {
-    if (!enabled || !isActive) return;
-    const active =
-      runtimeProjection?.turn.phase === "running" ||
-      runtimeProjection?.turn.phase === "blocked" ||
-      runtimeProjection?.turn.phase === "cancelling" ||
-      runtimeProjection?.turn.phase === "recovering";
-    const timer = window.setInterval(
-      () => {
-        void refresh({ manual: false });
-      },
-      active ? ACTIVE_PROJECTION_REFRESH_MS : IDLE_PROJECTION_REFRESH_MS,
-    );
-    return () => window.clearInterval(timer);
-  }, [enabled, isActive, refresh, runtimeProjection?.turn.phase]);
+  }, [coordinatedInvalidate, enabled, environmentId, isActive, platform, sessionKey]);
 
   const send = useCallback(
     async (
       prompt: string,
       options: NativeAgentSendOptions = {},
     ): Promise<NativeAgentDispatchOutcome> => {
-      const text = prompt.trim();
-      if (!text) return { outcome: "rejected", error: "Prompt must not be blank" };
+      const text = nativeSubmissionText(prompt, options.command);
+      if (!text.trim()) return { outcome: "rejected", error: "Prompt must not be blank" };
       const pending = pendingDispatchRef.current;
       const requestId =
         options.requestId ?? (pending?.prompt === text ? pending.requestId : crypto.randomUUID());
@@ -2422,6 +2701,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           includeLocalSettings: options.includeLocalSettings,
           promptSuggestions: options.promptSuggestions,
           attachments: options.attachments,
+          ...(options.command ? { command: options.command } : {}),
         });
         if (outcome.outcome !== "unknown") pendingDispatchRef.current = null;
         if (outcome.outcome === "accepted") {
@@ -2523,8 +2803,8 @@ export function useNativeAgentSession<TMessage = unknown>({
   const queueKey = useMemo(() => `${platform}\0${sessionKey}`, [platform, sessionKey]);
   const enqueue = useCallback(
     async (prompt: string, options: NativeAgentSendOptions = {}) => {
-      const text = prompt.trim();
-      if (!text) throw new Error("Prompt must not be blank");
+      const text = nativeSubmissionText(prompt, options.command);
+      if (!text.trim()) throw new Error("Prompt must not be blank");
       await enqueuePromptQueueMessage(queueKey, environmentId, {
         id: options.requestId ?? crypto.randomUUID(),
         text,
@@ -2541,6 +2821,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? {}
           : { promptSuggestions: options.promptSuggestions }),
         ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+        // Revalidated by the backend at dequeue, never rebound by name.
+        ...(options.command ? { command: options.command } : {}),
       });
       return refresh();
     },
@@ -2631,6 +2913,19 @@ export function useNativeAgentSession<TMessage = unknown>({
     const next = await refreshNativeAgentModels<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     return next;
+  }, [applyMutationProjection, beginProjectionMutation, identity]);
+  /**
+   * Ask the backend to re-read (or reload) this session's command list.
+   * The outcome says what actually happened; the projection carries the
+   * resulting catalogue state, so the menu renders from authority.
+   */
+  const refreshCommands = useCallback(async () => {
+    const operationEpoch = beginProjectionMutation();
+    const result = await refreshNativeAgentCommands<TMessage>(identity);
+    if (operationEpoch === projectionOperationEpochRef.current && result.projection) {
+      applyMutationProjection(result.projection);
+    }
+    return result;
   }, [applyMutationProjection, beginProjectionMutation, identity]);
   const loadToolDetails = useCallback(
     (detailRef: string): Promise<NativeAgentToolDetails> =>
@@ -2893,6 +3188,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     fork,
     performAction,
     refreshModels,
+    refreshCommands,
     loadToolDetails,
     loadEarlierMessages,
     initialLaunchOptionsRef,

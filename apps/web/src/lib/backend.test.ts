@@ -852,6 +852,19 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("sends a known revision only for conditional view snapshot reads", async () => {
+    const known = { generation: "gen-1", revision: 7 };
+    await backendWrappers.getPrMonitorState(known);
+    await backendWrappers.getEnvironmentDiffStats(known);
+    await backendWrappers.getEnvironmentDiffStats(undefined);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_pr_monitor_state", { knownGeneration: "gen-1", knownRevision: 7 }],
+      ["get_environment_diff_stats", { knownGeneration: "gen-1", knownRevision: 7 }],
+      ["get_environment_diff_stats"],
+    ]);
+  });
+
   test("forwards backend-owned prompt-queue mutations exactly", async () => {
     const message = { id: "message-1", text: "Ship it" };
 
@@ -1830,6 +1843,7 @@ describe("backend native agent and looped review wrappers", () => {
       [backendWrappers.addressMultiReview, "address_multi_review"],
       [backendWrappers.retryMultiReview, "retry_multi_review"],
       [backendWrappers.cancelMultiReview, "cancel_multi_review"],
+      [backendWrappers.stopMultiReviewValidation, "stop_multi_review_validation"],
     ] as const) {
       await expect(method("multi-1")).resolves.toBe(workflow);
       expect(invokeMock).toHaveBeenLastCalledWith(command, { workflowId: "multi-1" });
@@ -1856,6 +1870,36 @@ describe("backend native agent and looped review wrappers", () => {
       workflow,
     );
     expect(invokeMock).toHaveBeenLastCalledWith("restart_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
+    });
+
+    const restartModel = {
+      agent: "claude" as const,
+      model: "opus",
+      reasoningEffort: "high",
+    };
+    await expect(
+      backendWrappers.restartMultiReviewStep("multi-1", "consolidate", restartModel),
+    ).resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith("restart_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
+      model: restartModel,
+    });
+
+    await expect(backendWrappers.pauseMultiReviewStep("multi-1", "consolidate")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("pause_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
+    });
+
+    await expect(backendWrappers.resumeMultiReviewStep("multi-1", "consolidate")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("resume_multi_review_step", {
       workflowId: "multi-1",
       kind: "consolidate",
     });
@@ -2146,6 +2190,26 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("get_review_validation_output", {
       environmentId: "env-1",
       runId: "validation-1",
+      resultId: "typecheck",
+    });
+  });
+
+  test("stops one validation command by environment, run snapshot, and result identity", async () => {
+    const run = {
+      id: "validation-1",
+      status: "running" as const,
+      startedAt: "2026-09-27T10:00:00.000Z",
+      plan: { headRef: "a".repeat(40), commands: [], limitations: ["none"] },
+      results: [],
+    };
+    invokeMock.mockResolvedValueOnce(run);
+
+    await expect(
+      backendWrappers.stopReviewValidationCommand("env-1", run, "typecheck"),
+    ).resolves.toEqual(run);
+    expect(invokeMock).toHaveBeenLastCalledWith("stop_review_validation_command", {
+      environmentId: "env-1",
+      run,
       resultId: "typecheck",
     });
   });

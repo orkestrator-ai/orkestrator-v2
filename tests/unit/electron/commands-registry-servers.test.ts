@@ -980,7 +980,7 @@ exit 0
         expect(execLog).toContain(
           "export ORKESTRATOR_GITHUB_CREDENTIAL_FILE='/tmp/orkestrator-ai/github-token'",
         );
-        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
+        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
       });
     } finally {
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
@@ -1117,7 +1117,7 @@ exit 0
         expect(execLog).toContain("pkill -f '[o]pencode serve'");
         expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
         expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
-        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
+        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
       });
     } finally {
       await bridge.close();

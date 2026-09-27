@@ -234,6 +234,41 @@ describe("BuildLaunchDialog", () => {
     });
   });
 
+  test("upgrades a configured build step whose Claude model id was superseded", () => {
+    const upgradedCatalog: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        { id: "default", name: "Default", reasoningEfforts: [] },
+        {
+          id: "claude-fable-5-1[1m]",
+          name: "Fable 5.1",
+          reasoningEfforts: ["xhigh"],
+        },
+      ],
+    };
+    const { onConfirm } = renderDialog({
+      catalog: upgradedCatalog,
+      pipelineDefaults: {
+        steps: {
+          build: {
+            agent: "claude",
+            model: "claude-fable-5[1m]",
+            reasoningEffort: "xhigh",
+          },
+        },
+        reviewers: [],
+      },
+    });
+
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build).toEqual({
+      agent: "claude",
+      model: "claude-fable-5-1[1m]",
+      reasoningEffort: "xhigh",
+    });
+  });
+
   test("keeps configured OpenCode models after the catalogue hydrates", () => {
     const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
     const pipelineDefaults = {

@@ -8,6 +8,11 @@ import {
   parseRuntimeProfile,
   resolveRuntimeProfile,
 } from "./runtime-profile";
+import { APP_SLUG } from "./app-constants";
+import {
+  RUNTIME_APP_SLUG,
+  runtimeProfileStatusPath,
+} from "@orkestrator/protocol/runtime-profile-status";
 
 const roots = {
   developmentRoot: path.join(path.sep, "safe", "orkestrator-v2-dev"),
@@ -16,6 +21,20 @@ const roots = {
 };
 
 describe("runtime profiles", () => {
+  test("shares its data-root slug and status path with the published client", () => {
+    // The CLI resolves --profile through the protocol copy; a drifted slug or
+    // layout would send it to a different (or production) data root.
+    expect(RUNTIME_APP_SLUG).toBe(APP_SLUG);
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: "/repo/a",
+      requestedId: "QA 1",
+      roots,
+    });
+    expect(runtimeProfileStatusPath(roots.developmentRoot, "QA 1").statusPath).toBe(
+      path.join(profile.runtimeDir, "status.json"),
+    );
+  });
+
   test("normalizes caller names conservatively", () => {
     expect(normalizeRuntimeProfileId(" Agent 123 / QA ")).toBe("agent-123-qa");
     expect(() => normalizeRuntimeProfileId("...///")).toThrow();

@@ -287,6 +287,7 @@ describe("EnvironmentSettingsDialog", () => {
       "opencode",
       "network",
       "ports",
+      "previews",
       "extensions",
     ]);
   });
@@ -351,7 +352,11 @@ describe("EnvironmentSettingsDialog", () => {
 
     clickAgentTab("Pi");
     await waitFor(() => expect(screen.getByText("pi-project-extension")).toBeTruthy());
-    expect(screen.getByText("Pi does not include a built-in MCP client")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "~/.pi/agent/mcp.json (native Pi sessions; containers also read .pi/mcp.json)",
+      ),
+    ).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("pi-skill").length).toBeGreaterThan(0));
 
     const skillCalls = mockListEnvironmentAgentSkills.mock.calls.map((call) => call.slice(0, 2));

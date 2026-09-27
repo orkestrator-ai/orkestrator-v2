@@ -1416,6 +1416,63 @@ exit 1
     );
   });
 
+  test("container status reads follow the fetch policy, not the read cadence", async () => {
+    const { containerGitFetchPolicy } =
+      await import("../../../apps/backend/src/core/commands-runtime-state");
+    const { formatContainerFetchResponse } =
+      await import("../../../apps/backend/src/core/container-git-fetch");
+    const environment = createEnvironment({
+      id: "env-container-fetch-policy",
+      environmentType: "containerized",
+      containerId: "container-fetch-policy",
+      worktreePath: undefined,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const framedStatus = framedContainerGitStatus("M\0tracked.txt\0", "1\t0\ttracked.txt\0");
+    const fetchResponse = formatContainerFetchResponse({ repo: "/workspace" });
+
+    await withFakeDocker(
+      `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *"git fetch origin"*)
+      printf 'FETCH\\n' >> "$FAKE_DOCKER_EXEC_LOG"
+      printf '%s' '${fetchResponse}'
+      ;;
+    *)
+      printf 'STATUS\\n' >> "$FAKE_DOCKER_EXEC_LOG"
+      printf '%s' '${framedStatus}'
+      ;;
+  esac
+  exit 0
+fi
+exit 1
+`,
+      async (logs) => {
+        for (let read = 0; read < 5; read += 1) {
+          await expect(
+            commands.get("get_git_status")?.(
+              { containerId: "container-fetch-policy", targetBranch: "main", refresh: read > 0 },
+              context,
+            ),
+          ).resolves.toEqual([expect.objectContaining({ path: "tracked.txt", status: "M" })]);
+          await containerGitFetchPolicy.idle();
+        }
+        const execs = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
+        // Every read scanned local refs (manual refreshes force a scan); only
+        // the first found a fetch due, and the refresh clicks within 15 s of
+        // it joined that attempt instead of fetching again.
+        expect(execs.filter((line) => line === "STATUS")).toHaveLength(5);
+        expect(execs.filter((line) => line === "FETCH")).toHaveLength(1);
+        expect(containerGitFetchPolicy.freshness("container-fetch-policy", "main")).toMatchObject({
+          state: "current",
+        });
+      },
+    );
+  });
+
   test("injects workspace artifact git excludes before reading container git status", async () => {
     const environment = createEnvironment({
       id: "env-container",

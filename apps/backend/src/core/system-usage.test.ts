@@ -395,6 +395,62 @@ describe("system usage", () => {
     expect(gpuPercent).toHaveBeenCalledTimes(4);
   });
 
+  // Step 09 measurement: is a completed-snapshot TTL worth adding? Two clients
+  // whose five-second title bars interleave send a non-overlapping request
+  // every 2.5 s. Everything costly is already bounded by the GPU/RAM caches;
+  // what remains per request is two `os.cpus()` reads and one `statfs`, and
+  // the CPU window never needs the 200 ms fresh baseline. A TTL would save
+  // nothing measurable, and it would hand out stale CPU figures.
+  test("non-overlapping requests from two clients repeat no costly probe", async () => {
+    let clock = 0;
+    let cpuReads = 0;
+    const cpus = () => {
+      cpuReads += 1;
+      return [cpu(clock * 3, clock)];
+    };
+    const gpuPercent = mock(async () => 10);
+    const disks: string[] = [];
+    let freshBaselines = 0;
+    const read = createSystemUsageReader({
+      platform: "linux",
+      cpus,
+      totalMemory: () => 1_000,
+      freeMemory: () => 500,
+      diskPercent: async (path) => {
+        disks.push(path);
+        return path === "/data" ? 40 : 90;
+      },
+      gpuPercent,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        freshBaselines += 1;
+        clock += milliseconds;
+      },
+    });
+
+    await read("/data");
+    const startupBaselines = freshBaselines;
+    const sampledAt = new Set<string>();
+    for (let request = 0; request < 24; request += 1) {
+      clock += 2_500;
+      const snapshot = await read("/data");
+      sampledAt.add(snapshot.sampledAt);
+      expect(snapshot.diskPercent).toBe(40);
+    }
+    // 60 s of two clients: one GPU probe per 15 s cache window, no fresh CPU
+    // baselines after startup, one statfs per request, every sample new.
+    expect(gpuPercent.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(freshBaselines).toBe(startupBaselines);
+    expect(disks.length).toBe(25);
+    expect(sampledAt.size).toBe(24);
+    expect(cpuReads).toBeLessThanOrEqual(2 + 1 + 24);
+
+    // A disk reading is never reused for another filesystem target.
+    const [data, other] = await Promise.all([read("/data"), read("/other")]);
+    expect(data.diskPercent).toBe(40);
+    expect(other.diskPercent).toBe(90);
+  });
+
   test("shares an in-flight GPU probe across different disk reads", async () => {
     let clock = 0;
     const gpuProbe = deferred<number | null>();

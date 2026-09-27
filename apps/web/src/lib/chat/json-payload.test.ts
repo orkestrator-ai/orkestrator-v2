@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { structuredReviewFindings } from "@orkestrator/protocol/structured-review";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import {
   describeJsonValue,
@@ -131,6 +132,32 @@ describe("parseJsonPayload", () => {
     expect(normalizedIssue.alternativeFixes).toBeUndefined();
   });
 
+  test("recognizes a report reduced to its issues and coverage gaps", () => {
+    const findings = structuredReviewFindings(TEST_STRUCTURED_REVIEW_REPORT);
+    const payload = parseJsonPayload(JSON.stringify(findings, null, 2));
+    expect(payload?.kind).toBe("review-findings");
+    if (payload?.kind !== "review-findings") throw new Error("unreachable");
+    expect(payload.findings).toEqual(findings);
+  });
+
+  test("recognizes fenced findings, since they have a renderer of their own", () => {
+    const findings = JSON.stringify(structuredReviewFindings(TEST_STRUCTURED_REVIEW_REPORT));
+    expect(parseJsonPayload(`\`\`\`json\n${findings}\n\`\`\``)?.kind).toBe("review-findings");
+  });
+
+  test("does not mistake an invalid or wider findings document for findings", () => {
+    const findings = structuredReviewFindings(TEST_STRUCTURED_REVIEW_REPORT);
+    expect(
+      parseJsonPayload(
+        JSON.stringify({ ...findings, verdict: TEST_STRUCTURED_REVIEW_REPORT.verdict }),
+      )?.kind,
+    ).toBe("json");
+    expect(parseJsonPayload('{"issues":[{"title":"Partial"}],"testCoverageGaps":[]}')?.kind).toBe(
+      "json",
+    );
+    expect(parseJsonPayload(JSON.stringify({ issues: findings.issues }))?.kind).toBe("json");
+  });
+
   test("recognizes a verification verdict", () => {
     const payload = parseJsonPayload('{"complete":true,"rationale":"Working tree is clean."}');
     expect(payload).toEqual({
@@ -230,6 +257,14 @@ describe("jsonPayloadTitle and jsonPayloadSummary", () => {
     expect(jsonPayloadTitle(payload)).toBe("Structured review report");
     expect(jsonPayloadSummary(payload)).toContain("Ready: ");
     expect(jsonPayloadSummary(payload)).toContain(" risk");
+  });
+
+  test("summarize review findings by their counts", () => {
+    const payload = parseJsonPayload(
+      JSON.stringify(structuredReviewFindings(TEST_STRUCTURED_REVIEW_REPORT)),
+    )!;
+    expect(jsonPayloadTitle(payload)).toBe("Review findings");
+    expect(jsonPayloadSummary(payload)).toBe("1 issue · 1 coverage gap");
   });
 
   test("wraps a durable report as the structured-review transcript payload", () => {

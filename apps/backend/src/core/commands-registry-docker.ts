@@ -1,3 +1,4 @@
+import { createSharedContainerLogReader } from "./container-log-snapshots.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type {
   DockerAvailability,
@@ -206,16 +207,15 @@ export function registerDockerCommands(
   register("get_container_host_port", ({ containerId, containerPort }) =>
     getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")),
   );
-  register(
-    "get_container_logs",
-    async ({ containerId, tail }) =>
-      (
-        await runCommand(
-          "docker",
-          ["logs", "--tail", asOptionalString(tail) ?? "200", asString(containerId, "containerId")],
-          { timeoutMs: 30_000 },
-        )
-      ).stdout,
+  // Initialization views in every client poll this once a second; equivalent
+  // tails join and share a short-lived snapshot (container-log-snapshots.ts).
+  const readContainerLogs = createSharedContainerLogReader({
+    read: async (containerId, tail) =>
+      (await runCommand("docker", ["logs", "--tail", tail, containerId], { timeoutMs: 30_000 }))
+        .stdout,
+  });
+  register("get_container_logs", ({ containerId, tail }) =>
+    readContainerLogs(asString(containerId, "containerId"), asOptionalString(tail) ?? "200"),
   );
   register("stream_container_logs", ({ containerId }, { emit }) => {
     const id = asString(containerId, "containerId");

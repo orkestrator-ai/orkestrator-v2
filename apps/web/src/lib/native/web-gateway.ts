@@ -21,11 +21,19 @@ import {
   terminalWebSocketUrl,
   type TerminalSocketPayload,
 } from "@/lib/native/terminal-websocket-client";
+import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 /** How many recently closed terminal input queues stay rejected. */
 const TERMINAL_CLOSED_QUEUE_MEMORY = 256;
 const EVENT_RECONNECT_DELAY_MS = 2_000;
+/**
+ * Consecutive main-stream failures back off to at most this multiple of the
+ * first retry (16 s by default), and a stream must stay up this long before
+ * its loss counts as a first failure again.
+ */
+const EVENT_RECONNECT_MAX_DELAY_FACTOR = 8;
+const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
 const GATEWAY_CONNECTED_EVENT = "gateway.connected";
 const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
@@ -71,7 +79,12 @@ export interface BrowserGatewayOptions {
   token?: string;
   replaceExisting?: boolean;
   onTokenChanged?: (token: string) => void;
+  /** First main-stream reconnect delay; repeated failures back off from it. */
   eventReconnectDelayMs?: number;
+  /** Upper bound of the main-stream reconnect backoff. */
+  eventReconnectMaxDelayMs?: number;
+  /** Jitter source for the main-stream reconnect backoff; uniform in [0, 1). */
+  eventReconnectRandom?: () => number;
   reportBootMetrics?: boolean;
   /** Same-origin app install probes for the agent-test-only activity endpoint. */
   agentTestSessionActivity?: boolean;
@@ -123,6 +136,22 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let eventSource: EventSource | null = null;
   let streamAbortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // A backend restart drops every open tab's stream at once. Consecutive
+  // failures back off with jitter so those tabs do not retry in lock-step for
+  // the whole outage; the first retry is never slower than the configured
+  // delay, and only a stream that stayed up resets the ladder. Replay is
+  // unchanged: each attempt still resumes from `mainEventCursor`.
+  const eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
+  const mainStreamBackoff = new ReconnectBackoff(
+    {
+      initialDelayMs: eventReconnectDelayMs,
+      maxDelayMs:
+        options.eventReconnectMaxDelayMs ??
+        eventReconnectDelayMs * EVENT_RECONNECT_MAX_DELAY_FACTOR,
+      healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
+    },
+    options.eventReconnectRandom ? { random: options.eventReconnectRandom } : {},
+  );
   let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsDeferredTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsLoadObserved =
@@ -545,7 +574,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       ensureEventStream();
-    }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
+    }, mainStreamBackoff.nextDelayMs());
   };
 
   const connectFetchEventStream = () => {
@@ -564,6 +593,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         if (!response.ok || !response.body) {
           throw new Error(`Gateway event stream failed with HTTP ${response.status}`);
         }
+        mainStreamBackoff.connected();
         if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
           bootMetricsEventStreamConnectedMs = performance.now();
           maybeSendBootMetrics();
@@ -595,6 +625,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     });
     eventSource = source;
     source.onopen = () => {
+      if (eventSource === source) mainStreamBackoff.connected();
       if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
         bootMetricsEventStreamConnectedMs = performance.now();
         maybeSendBootMetrics();
@@ -629,6 +660,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     streamAbortController = null;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
+    // A later listener starts a fresh connection, not the tail of an old outage.
+    mainStreamBackoff.reset();
     // Nothing is listening any more, so there is no boot left to measure. A
     // surviving timer would hold this whole closure and still report for a
     // session that has already torn down.

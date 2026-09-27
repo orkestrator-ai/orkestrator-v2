@@ -1,3 +1,4 @@
+import { WEB_ANNOTATION_QUEUE_ITEM_FROZEN } from "@orkestrator/protocol/web-annotations";
 import * as shared from "./storage-shared.js";
 import {
   MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES,
@@ -142,6 +143,47 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
+/** Prefix of an idempotent enqueue whose id is already used by a different body. */
+export const PROMPT_QUEUE_MESSAGE_CONFLICT = "Prompt queue message conflict:";
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** SHA-256 of a key-order-independent JSON form of one queued message. */
+export function canonicalPromptQueueMessageFingerprint(message: unknown): string {
+  return createHash("sha256").update(canonicalJson(message)).digest("hex");
+}
+
+/**
+ * Prefix of the error for editing a frozen queue item. Backend-authored items
+ * (a typed `origin`, e.g. a web annotation request) are immutable snapshots:
+ * they can be reordered or removed, never edited or turned into a draft.
+ */
+export const PROMPT_QUEUE_MESSAGE_FROZEN = WEB_ANNOTATION_QUEUE_ITEM_FROZEN;
+
+export function isFrozenPromptQueueMessage(message: unknown): boolean {
+  return isRecord(message) && isRecord(message.origin) && isNonBlankString(message.origin.kind);
+}
+
+function assertPromptQueueBodyUnchanged(current: unknown, next: unknown): void {
+  if (!isFrozenPromptQueueMessage(current)) return;
+  if (
+    canonicalPromptQueueMessageFingerprint(current) !== canonicalPromptQueueMessageFingerprint(next)
+  ) {
+    const id = isRecord(current) ? String(current.id) : "message";
+    throw new Error(`${PROMPT_QUEUE_MESSAGE_FROZEN} ${id} cannot be changed`);
+  }
+}
+
 export abstract class StoragePrompts extends StorageNative {
   async getPromptQueue(queueKey: string): Promise<PersistedPromptQueue | null> {
     if (!isNonBlankString(queueKey)) {
@@ -276,6 +318,122 @@ export abstract class StoragePrompts extends StorageNative {
   }
 
   /**
+   * Appends one backend-authored prompt exactly once per stable message id.
+   *
+   * Unlike {@link enqueuePromptQueueMessage}, presence is checked against every
+   * durable identity the native queue can hold — queued, renderer-claimed,
+   * reserved in flight, parked with a dispatch error — and against the native
+   * session's consumed receipts (`dispatchedRequestIds` and an ambiguous
+   * `pendingDispatch`). A lost response can therefore be retried with the same
+   * id without ever publishing a second copy of an already-sent prompt.
+   *
+   * The queue half is read under the prompt-queue mutation lock. The session
+   * half needs no lock: the drainer records the session receipt before it
+   * acknowledges the queue reservation, so an id that has left the queue is
+   * already visible in the session record.
+   *
+   * `fingerprint` defaults to {@link canonicalPromptQueueMessageFingerprint}
+   * of `message`; a present id with a different fingerprint is a conflict.
+   */
+  async enqueuePromptQueueMessageIfAbsent(
+    queueKey: string,
+    environmentId: string,
+    message: unknown,
+    fingerprint?: string,
+  ): Promise<{ status: "queued" | "present" | "consumed"; queue: PersistedPromptQueue | null }> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    assertPromptQueueKeyOwner(queueKey, environmentId);
+    this.validatePromptQueueMessage(message);
+    const messageId = message.id as string;
+    const expected = fingerprint ?? canonicalPromptQueueMessageFingerprint(message);
+    if (!isNonBlankString(expected)) {
+      throw new Error("Prompt queue message fingerprint must not be blank");
+    }
+
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      const held = [
+        ...(previous?.messages ?? []),
+        previous?.outstandingClaim?.message,
+        previous?.inFlight?.message,
+      ].find((candidate) => isRecord(candidate) && candidate.id === messageId);
+      if (held !== undefined) {
+        if (canonicalPromptQueueMessageFingerprint(held) !== expected) {
+          throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
+        }
+        return { status: "present" as const, queue: previous ?? null };
+      }
+      if (
+        previous?.dispatchError?.messageId === messageId ||
+        previous?.dispatchError?.requestId === messageId
+      ) {
+        // The rejected item is restored to `messages`, so this is reachable
+        // only for a corrupt record. Never publish beside a parked twin.
+        throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
+      }
+      if (previous?.inFlight?.requestId === messageId) {
+        throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
+      }
+
+      // A removed backend-authored item is permanently consumed: removal from
+      // the chat queue must never make its id publishable again.
+      if (previous?.removedOrigins?.some((entry) => entry.requestId === messageId)) {
+        return { status: "consumed" as const, queue: previous };
+      }
+      const session = await this.promptQueueNativeSession(queueKey, environmentId);
+      if (
+        session?.dispatchedRequestIds?.includes(messageId) ||
+        session?.pendingDispatch?.requestId === messageId
+      ) {
+        return { status: "consumed" as const, queue: previous ?? null };
+      }
+
+      const queue = await this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        [...(previous?.messages ?? []), message],
+        previous,
+      );
+      return { status: "queued" as const, queue };
+    });
+  }
+
+  /** The native session a `${agent}\0${logicalSessionKey}` queue drains into. */
+  protected async promptQueueNativeSession(
+    queueKey: string,
+    environmentId: string,
+  ): Promise<PersistedNativeAgentSession | null> {
+    const separator = queueKey.indexOf("\0");
+    if (separator <= 0) return null;
+    const agent = queueKey.slice(0, separator);
+    const logicalSessionKey = queueKey.slice(separator + 1);
+    if (!isNonBlankString(logicalSessionKey)) return null;
+    // Same derivation as `nativeAgentSessionStorageKey`; storage sits below the
+    // native agent service and cannot import it without a cycle.
+    const key = createHash("sha256")
+      .update(environmentId)
+      .update("\0")
+      .update(agent)
+      .update("\0")
+      .update(logicalSessionKey)
+      .digest("hex");
+    const session = await this.getNativeAgentSession(key);
+    if (!session || session.environmentId !== environmentId) return null;
+    return session;
+  }
+
+  /**
    * Inserts a previously claimed prompt back at the head when a renderer
    * discovers that its agent sender is no longer ready.
    */
@@ -305,6 +463,7 @@ export abstract class StoragePrompts extends StorageNative {
         isRecord(previous.outstandingClaim.message) &&
         previous.outstandingClaim.message.id === message.id
       ) {
+        assertPromptQueueBodyUnchanged(previous.outstandingClaim.message, message);
         return this.savePromptQueueMutation(
           queues,
           queueKey,
@@ -818,6 +977,11 @@ export abstract class StoragePrompts extends StorageNative {
           return { removed: null, queue: previousQueue, draft: null };
         }
         const authoritativeMessage = previousQueue.messages[messageIndex];
+        if (isFrozenPromptQueueMessage(authoritativeMessage)) {
+          throw new Error(
+            `${PROMPT_QUEUE_MESSAGE_FROZEN} ${messageId} is a frozen request snapshot; it cannot be edited or moved into a draft. Remove it to cancel the request.`,
+          );
+        }
         if (
           !isRecord(authoritativeMessage) ||
           typeof authoritativeMessage.text !== "string" ||

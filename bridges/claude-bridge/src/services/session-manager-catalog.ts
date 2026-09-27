@@ -5,14 +5,12 @@ import type {
   McpServerStatus,
   Query,
   SDKUserMessage,
-  SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAuthStatus,
   NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
-  NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -35,7 +33,6 @@ import type {
   SessionState,
 } from "../types/index.js";
 
-const CATALOG_LIMIT = 512;
 const AUTH_CACHE_TTL_MS = 30_000;
 let authCache: { expiresAt: number; value: NativeAgentAuthStatus } | undefined;
 
@@ -51,7 +48,7 @@ export function resetClaudeCatalogCachesForTesting(): void {
  * request the moment stdout ends. Read-only callers are better served by a
  * cached answer than by a request that cannot land.
  */
-function readableControl(session: SessionState | undefined): SessionState["queryControl"] {
+export function readableControl(session: SessionState | undefined): SessionState["queryControl"] {
   if (!session?.queryControl) return undefined;
   return session.queryControl === session.queryControlDraining ? undefined : session.queryControl;
 }
@@ -218,99 +215,6 @@ function createProbe(): Query {
       ...claudeExecutableOptions(),
     },
   });
-}
-
-function commandSource(command: SlashCommand): NativeAgentSlashCommand["source"] {
-  const metadata = command as SlashCommand & { source?: unknown; scope?: unknown };
-  const raw = typeof metadata.source === "string" ? metadata.source.toLowerCase() : "";
-  if (raw.includes("project") || raw.includes("local")) return "project";
-  if (raw.includes("user")) return "user";
-  if (raw.includes("plugin")) return "plugin";
-  if (raw.includes("skill")) return "skill";
-  return "builtin";
-}
-
-function normalizeCommands(
-  commands: readonly SlashCommand[],
-  skills: readonly string[] = [],
-): NativeAgentSlashCommand[] {
-  const result = new Map<string, NativeAgentSlashCommand>();
-  for (const command of commands.slice(0, CATALOG_LIMIT)) {
-    const name = command.name.startsWith("/") ? command.name : `/${command.name}`;
-    result.set(name, {
-      name,
-      source: commandSource(command),
-      ...(command.description ? { description: command.description.slice(0, 1_000) } : {}),
-      ...(command.argumentHint ? { argumentHint: command.argumentHint.slice(0, 512) } : {}),
-      ...(command.aliases?.length
-        ? {
-            aliases: command.aliases
-              .slice(0, 16)
-              .map((alias) => (alias.startsWith("/") ? alias : `/${alias}`)),
-          }
-        : {}),
-      scope: commandSource(command) === "project" ? "session" : "global",
-    });
-  }
-  for (const skill of skills.slice(0, CATALOG_LIMIT)) {
-    if (typeof skill !== "string" || !skill.trim()) continue;
-    const name = skill.startsWith("/") ? skill : `/skill:${skill}`;
-    result.set(name, { name, source: "skill", scope: "session" });
-  }
-  return [...result.values()].slice(0, CATALOG_LIMIT);
-}
-
-export async function readSessionCommands(
-  sessionId: string,
-  refresh = false,
-): Promise<NativeAgentSlashCommand[]> {
-  const session = sessions.get(sessionId);
-  const control = readableControl(session);
-  if (control?.supportedCommands) {
-    if (refresh) {
-      await Promise.allSettled([control.reloadSkills?.(), control.reloadPlugins?.()]);
-    }
-    try {
-      const commands = normalizeCommands(
-        await control.supportedCommands(),
-        session?.initData?.skills,
-      );
-      if (session) session.commandInventory = commands;
-      return commands;
-    } catch (error) {
-      // The turn query died mid-request. Fall through to the cache or a probe
-      // rather than failing a read the caller only wanted for display.
-      rethrowUnlessClosedTransport(error);
-    }
-  }
-  // Spawning a probe costs a whole Claude CLI process, so a previous answer is
-  // strictly better whenever one exists: this catalogue changes only when the
-  // user edits commands, plugins or skills, and `refresh` forces a real read.
-  if (!refresh && session?.commandInventory) return session.commandInventory;
-  let probe: Query | undefined;
-  try {
-    probe = createProbe();
-    const commands = normalizeCommands(await probe.supportedCommands(), session?.initData?.skills);
-    if (session) session.commandInventory = commands;
-    return commands;
-  } catch {
-    return session?.commandInventory ?? [];
-  } finally {
-    await Promise.resolve(probe?.close()).catch(() => undefined);
-  }
-}
-
-export async function refreshClaudeCatalogs(): Promise<void> {
-  const sessionIds = [...sessions.keys()].slice(0, 128);
-  let next = 0;
-  await Promise.allSettled(
-    Array.from({ length: Math.min(8, sessionIds.length) }, async () => {
-      while (next < sessionIds.length) {
-        const sessionId = sessionIds[next++];
-        if (sessionId) await readSessionCommands(sessionId, true);
-      }
-    }),
-  );
 }
 
 function mcpScope(scope: string | undefined, name: string): NativeAgentMcpServer["scope"] {

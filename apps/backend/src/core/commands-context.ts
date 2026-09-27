@@ -22,6 +22,11 @@ export type BackendEmit = (event: string, payload: unknown) => void;
 
 export type CommandContext = {
   design?: import("./design-service.js").DesignService;
+  previews?: import("./preview-runtime.js").PreviewRuntime;
+  mcpManagement?: import("./mcp-management/service.js").McpManagementService;
+  webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
+  /** Backend rollout switch for web annotations (enabled / read-only / disabled). */
+  webAnnotationRollout?: import("./web-annotation-rollout.js").WebAnnotationRollout;
   storage: StorageService;
   emit: BackendEmit;
   appRoot: string;
@@ -49,6 +54,8 @@ export type CommandContext = {
   multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
   workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
+  /** Environment deletion: drops the environment's workflow result slots. */
+  deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
   projectGit?: ProjectGitService;

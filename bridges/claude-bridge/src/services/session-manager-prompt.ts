@@ -9,7 +9,13 @@ import type {
   SDKAPIRetryMessage,
   SDKAuthStatusMessage,
   SDKAssistantMessage,
+  SDKHookResponseMessage,
+  SDKInformationalMessage,
+  SDKMemoryRecallMessage,
+  SDKPermissionDeniedMessage,
   SDKStartupFailureReason,
+  SDKStatusMessage,
+  SDKThinkingTokensMessage,
   SDKUsageReport,
   SDKSystemMessage,
   SDKToolProgressMessage,
@@ -38,6 +44,7 @@ import type {
   SdkMessageBase,
   SdkResultMessage,
   SdkSystemMessage,
+  SessionTurnActivity,
   TaskListSnapshot,
   MessagePatchEventData,
   SessionUsageSnapshot,
@@ -45,7 +52,12 @@ import type {
   SessionRateLimitWindow,
   StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isHandledSdkMessageType, isSdkResultMessage, sessionHealth } from "../types/index.js";
+import {
+  isHandledSdkMessageType,
+  isSdkResultMessage,
+  sessionHealth,
+  systemSubtypeDisposition,
+} from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -69,16 +81,30 @@ import {
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { debugLog, flushDebugLogs, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { AGENT_MCP_SERVER_NAME, getMcpRuntimeConfig } from "./mcp-config.js";
+import {
+  AGENT_MCP_SERVER_NAME,
+  getMcpRuntimeConfig,
+  mcpSourceScopeForPolicy,
+} from "./mcp-config.js";
 import {
   claudeDeniedTools,
-  effectiveExecutionPolicy,
   claudeReadOnlyAllowedTools,
   claudeReadOnlySandbox,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
 import { getPluginsForSdk } from "./plugin-config.js";
+import {
+  claudeSettingSources,
+  claudeTurnPolicy,
+  claudeWorkspaceCwd,
+} from "./claude-query-config.js";
+import {
+  appendLocalCommandResult,
+  readLiveCommandInventory,
+  recordCommandsChanged,
+  recordInitCommandInventory,
+} from "./session-manager-commands.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
@@ -187,7 +213,9 @@ import {
   PLAN_APPROVAL_TIMEOUT_MS,
   QUESTION_TIMEOUT_MS,
   applySessionPlanMode,
+  beginClaudeUsageQuery,
   buildClaudeUsageSnapshot,
+  claudeCliContinuesResumedUsage,
   claimedPromptDispatches,
   claudeExecutableOptions,
   createStructuredUsageRefreshCoordinator,
@@ -212,11 +240,19 @@ import {
 import {
   bashToolResultOutcomes,
   bashToolUseIdsFromAssistantMessage,
+  appendInterruptedNotice,
+  appendSubagentInterruptedNotice,
+  boundedNoticeText,
   buildMessageParts,
+  memoryRecallPart,
   parseMessageContent,
   provisionalBackgroundTaskId,
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
+  refreshSettledToolRows,
+  resultAnswersOtherInput,
+  taskNotificationNoticePart,
 } from "./session-manager-messages.js";
+export { memoryRecallPart } from "./session-manager-messages.js";
 import {
   ClaudeAttachmentError,
   attachmentTag,
@@ -348,8 +384,8 @@ function appendTranscriptNotice(
  *
  * These are the SDK's own diagnostics, so they are recorded as `provider`
  * notices. The severity split is what decides whether the tab shows the notice
- * at all: `info` and `warning` stay in the health panel, while `error` is
- * promoted into the transcript by the backend. Dedicated transcript rows,
+ * at all: `info` and `warning` stay in the health panel, while the backend
+ * raises `error` in the tab as a persistent toast. Dedicated transcript rows,
  * such as API retry progress, remain independent of this health severity.
  */
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
@@ -365,14 +401,12 @@ function supportsClaudeContext1m(model: string | undefined): boolean {
 }
 
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
-  status: "info",
   informational: "info",
   notification: "info",
-  // A hook running and reporting progress is inventory. A hook *response* is
-  // graded by its own outcome below, because a failed hook is the case this
-  // bridge cannot otherwise notice.
-  hook_started: "info",
-  hook_progress: "info",
+  // Hook progress never reaches here (`ignored` in the disposition table). A
+  // hook *response* only does when it failed, and is graded by its outcome
+  // below, because a failed hook is the case this bridge cannot otherwise
+  // notice.
   api_retry: "warning",
   model_refusal_fallback: "warning",
   model_refusal_no_fallback: "error",
@@ -406,6 +440,15 @@ function recordSystemMessageNotice(session: SessionState, message: SdkSystemMess
     ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
   });
 }
+
+/**
+ * Minimum spacing between published thinking-token estimates.
+ *
+ * The SDK sends one frame per thinking delta — thousands in a long turn — and
+ * every `session.updated` reaches each subscriber. A counter that ticks a few
+ * times a second reads as live; one frame per delta is only load.
+ */
+export const THINKING_TOKENS_EMIT_INTERVAL_MS = 500;
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
   if (typeof content !== "string" || content.trim().length === 0) return {};
@@ -494,6 +537,12 @@ export async function sendPrompt(
   // false`; leaving it false would let a concurrent `GET /:id/messages` replace
   // `session.messages` (and `taskRegistry`) out from under this turn.
   const needsTranscriptHydration = session.persistedMessagesLoaded === false;
+  // A bridge that attaches after the transcript already exists has no in-memory
+  // cumulative origin. Its first result must be bootstrapped from this query's
+  // streamed calls, or the whole transcript is published as one new turn.
+  let bootstrapClaudeUsage =
+    session.claudeUsageBaseline === undefined &&
+    (needsTranscriptHydration || session.messages.length > 0 || session.usage !== undefined);
   session.persistedMessagesLoaded = true;
   // Set when the pre-turn read fails. The claim above is still correct for the
   // duration of the turn, but leaving it set afterwards would hide the on-disk
@@ -598,11 +647,15 @@ export async function sendPrompt(
   // Build the SDK text prompt - excludes image attachments since those are sent as
   // inline base64 content blocks (bypassing the Read tool's 2000x2000 pixel limit).
   // File attachments are still included as XML tags so Claude can read them.
-  let sdkTextPrompt = prompt;
+  // A selected command sends its canonical SDK spelling plus the argument
+  // suffix exactly as typed; the transcript above still shows what the user
+  // wrote. The Claude CLI owns command semantics from here.
+  const providerPrompt = options?.providerPrompt ?? prompt;
+  let sdkTextPrompt = providerPrompt;
   const fileAttachments = options?.attachments?.filter((att) => att.type !== "image") ?? [];
   if (fileAttachments.length > 0) {
     const fileTags = fileAttachments.map(attachmentTag).join("\n");
-    sdkTextPrompt = `${prompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
+    sdkTextPrompt = `${providerPrompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
   }
   // Add user message with displayPrompt (what the user sees, without planning mode instruction).
   // Re-prompts (e.g. after plan rejection) use role "system" so they don't appear as user-typed.
@@ -667,6 +720,21 @@ export async function sendPrompt(
     stream.beginPostSteerScope();
   };
   const streamUsage = new ClaudeStreamUsageAccumulator();
+  const advanceBaselineForInterruptedStream = () => {
+    const baseline = session.claudeUsageBaseline;
+    if (!baseline) return;
+    const completed = streamUsage.completedTotals();
+    session.claudeUsageBaseline = {
+      input: baseline.input + completed.inputTokens,
+      output: baseline.output + completed.outputTokens,
+      cacheRead: baseline.cacheRead + completed.cacheReadTokens,
+      cacheWrite: baseline.cacheWrite + completed.cacheWriteTokens,
+      // Stream events expose tokens but no price. Leaving cost at the last
+      // terminal result makes the next cumulative result reconcile the missing
+      // interrupted cost exactly once.
+      cost: baseline.cost,
+    };
+  };
   const { toolTracker, taskRegistry, activeTaskIds } = stream;
   const recordInterruptedStructuredOutputIfCurrent = () => {
     if (
@@ -694,29 +762,33 @@ export async function sendPrompt(
     const effortLevel = options?.effort ?? "high";
     // Use CWD env var if set (for local environments where bridge runs from its own dir)
     // This allows the Claude SDK to operate on the actual project directory
-    const cwd = process.env.CWD || process.cwd();
+    const cwd = claudeWorkspaceCwd();
 
     // Re-derived at every turn, not read once at create. A session restored
     // from disk, or configured before this process took over, must not carry a
     // policy weaker than the one this process was launched to enforce.
-    const sessionPolicy = effectiveExecutionPolicy(session.executionPolicy);
-    const policy: NativeAgentExecutionPolicy | undefined = options?.readOnly
-      ? {
-          id: "coordinator-read-only",
-          sandbox: "provider",
-          approvals: "deny",
-          projectResources: false,
-          capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
-          networkAccess: "restricted",
-        }
-      : sessionPolicy;
+    const policy: NativeAgentExecutionPolicy | undefined = claudeTurnPolicy(
+      session.executionPolicy,
+      options?.readOnly,
+    );
+    // What a cold command-discovery probe must reproduce to answer for this
+    // session rather than for a default CLI (see `claude-query-config.ts`).
+    session.commandDiscoveryInputs = {
+      readOnly: options?.readOnly === true,
+      includeLocalSettings: options?.includeLocalSettings === true,
+    };
     const includeProjectResources = policy?.projectResources !== false;
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.
-    const [{ servers: mcpServers, names: mcpServerNames }, plugins] = await Promise.all([
-      getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, includeProjectResources),
-      getPluginsForSdk(cwd, includeProjectResources),
-    ]);
+    // A coordinator's inline set is the injected Orkestrator server(s) only:
+    // `mcpSourceScopeForPolicy` answers `none` for it, so a user-scope stdio
+    // server cannot ride in through the one channel the CLI still honours
+    // when `settingSources` is empty.
+    const [{ servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision }, plugins] =
+      await Promise.all([
+        getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
+        getPluginsForSdk(cwd, includeProjectResources),
+      ]);
 
     const mcpServerCount = Object.keys(mcpServers).length;
     const pluginCount = plugins.length;
@@ -784,7 +856,10 @@ export async function sendPrompt(
       testHooks?.afterAttachmentCanonicalValidation,
       testHooks?.afterAttachmentInitialValidation,
     );
-    const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
+    // Names this prompt on every result that answers it; see
+    // `resultAnswersOtherInput`.
+    const promptUuid = crypto.randomUUID();
+    const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
     /**
      * Closing stdin starts the CLI's exit. `session.queryControl` stays set
      * until this turn's `finally`, so without this marker a read-only control
@@ -798,6 +873,10 @@ export async function sendPrompt(
     };
     closeSdkInput = closeTurnInput;
     let receivedResult = false;
+    // Unlike `receivedResult`, never reset: a task notification re-arms the
+    // turn for a continuation whose result names no prompt at all.
+    let receivedPromptResult = false;
+    let localCommandOutputSeen = false;
     const ownsActiveTurn = () =>
       !abortController.signal.aborted &&
       sessions.get(sessionId) === session &&
@@ -812,6 +891,55 @@ export async function sendPrompt(
         sessionId,
         data: { contextUsage: session.inProgressUsage },
       });
+    };
+    const recordUnknownContentBlock = (blockType: string) =>
+      sessionHealth(session).recordUnknown(`block:${blockType}`);
+    let lastThinkingTokensEmitAt = 0;
+    /** Informational rows by the tool use they report on, so a repeat updates in place. */
+    const informationalRowsByToolUse = new Map<string, string>();
+    /**
+     * What the provider says it is doing, when that is not visible from the
+     * transcript itself. Session state rather than a row, so a tab mounted
+     * mid-compaction learns it from `GET /session/:id`.
+     */
+    const setTurnActivity = (activity: SessionTurnActivity | undefined) => {
+      if (!ownsActiveTurn() || session.activity === activity) return;
+      session.activity = activity;
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId,
+        data: { activity: activity ?? null },
+      });
+    };
+    /** Drop the thinking estimate once the thinking it measured is over. */
+    const clearThinkingTokens = () => {
+      if (session.thinkingTokens === undefined || !ownsActiveTurn()) return;
+      session.thinkingTokens = undefined;
+      lastThinkingTokensEmitAt = 0;
+      eventEmitter.emit({ type: "session.updated", sessionId, data: { thinkingTokens: null } });
+    };
+    /**
+     * Follow the CLI out of plan mode when a status frame reports it left.
+     * The ExitPlanMode handler covers the tool path; this covers exits that
+     * never reach `canUseTool`. Only a turn that itself started in plan mode
+     * may leave it this way: a turn started in another mode says nothing about
+     * the user's toggle.
+     *
+     * Deliberately one-way. Entering is the EnterPlanMode handler's job, and a
+     * status frame still saying `plan` just after an approved exit (the CLI
+     * reports its mode lazily) would otherwise turn the toggle back on.
+     */
+    const reconcilePlanModeFromStatus = async (reported: unknown) => {
+      if (typeof reported !== "string" || reported === "plan" || !ownsActiveTurn()) return;
+      if (session.planMode !== true || permissionMode !== "plan") return;
+      try {
+        await applySessionPlanMode(session, false);
+      } catch (error) {
+        console.warn("[session-manager] Could not record plan mode from a status frame", {
+          sessionId,
+          errorClass: diagnosticErrorClass(error),
+        });
+      }
     };
     const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
       if (!ownsActiveTurn()) return;
@@ -870,6 +998,12 @@ export async function sendPrompt(
       if (queryIteratorControl) {
         forgetRetainedQueryControl(session, queryIteratorControl);
       }
+      if (dispatchRequestId) {
+        session.retainedContinuationRequestIds?.delete(dispatchRequestId);
+        if (session.retainedContinuationRequestIds?.size === 0) {
+          session.retainedContinuationRequestIds = undefined;
+        }
+      }
     };
     // A silence watchdog, not a turn deadline: every frame received while it is
     // armed pushes it out again, so a slow continuation is never cut off.
@@ -903,6 +1037,9 @@ export async function sendPrompt(
     const waitForContinuationAfterNotification = () => {
       if (!queryIteratorControl) return;
       retainQueryControl(session, queryIteratorControl);
+      if (dispatchRequestId) {
+        (session.retainedContinuationRequestIds ??= new Set()).add(dispatchRequestId);
+      }
       armContinuationWatchdog();
     };
     const reclaimReleasedTurnForAssistant = (message: SdkMessageBase) => {
@@ -1157,17 +1294,18 @@ export async function sendPrompt(
         // A coordinator loads nothing: user settings can declare their own
         // hooks and MCP servers, both of which run programs this boundary is
         // supposed to exclude.
-        settingSources: coordinatorReadOnly
-          ? []
-          : policy?.projectResources !== false
-            ? options?.includeLocalSettings
-              ? ["user", "project", "local"]
-              : ["user", "project"]
-            : ["user"],
+        settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
         // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
         // Pass it through the flag-layer settings so the user can opt in per prompt.
         ...(fastMode && { settings: { fastMode: true } }),
-        // Also pass MCP servers explicitly for any project-local .mcp.json overrides
+        // Also pass MCP servers explicitly for any project-local .mcp.json overrides.
+        // The CLI (2.1.280) also loads the servers of every enabled settings
+        // source itself — `user` reads `$CLAUDE_CONFIG_DIR/.claude.json` (else
+        // `~/.claude.json`), `project` reads `.mcp.json`, `local` reads
+        // `projects[cwd]` — and an inline entry wins over a same-named native
+        // one. `strictMcpConfig` is deliberately NOT set: it would also drop
+        // every plugin-provided MCP server. The coordinator boundary instead
+        // rests on `settingSources: []` plus an inline set of `none` scope.
         mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
         // Load plugins from user config
         plugins: pluginCount > 0 ? plugins : undefined,
@@ -1188,7 +1326,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.276: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.280: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK
@@ -1499,7 +1637,20 @@ export async function sendPrompt(
     session.queryControl = liveQuery;
     queryIteratorControl = liveQuery;
     queryStarted = true;
+    // The configuration this query actually started with, recorded only once
+    // the query exists: a save made while the previous turn ran is "pending"
+    // until here, and one made after here is pending for the next query.
+    if (mcpConfigRevision) {
+      session.mcpConfigRevision = {
+        ...mcpConfigRevision,
+        sources: { ...mcpConfigRevision.sources },
+        queryStartedAt: new Date().toISOString(),
+      };
+    }
     testHooks?.onQueryStarted?.();
+    // One control read per turn, off the message path, so the inventory a
+    // selected command is validated against is the session's own.
+    readLiveCommandInventory(session, liveQuery);
     let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
     if (typeof queryIterator.supportedAgents === "function") {
       try {
@@ -1561,6 +1712,10 @@ export async function sendPrompt(
       if (message.type === "system" && message.subtype === "init") {
         // Store the SDK session ID for resume functionality
         const initMsg = message as SDKSystemMessage & Record<string, unknown>;
+        beginClaudeUsageQuery(session, initMsg.claude_code_version);
+        if (!claudeCliContinuesResumedUsage(initMsg.claude_code_version)) {
+          bootstrapClaudeUsage = false;
+        }
         const sdkSessionId = initMsg.session_id;
         if (sdkSessionId) {
           const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
@@ -1627,6 +1782,9 @@ export async function sendPrompt(
           mcpServers: mcpServerStatuses,
           plugins: pluginStatuses,
           slashCommands: initMsg.slash_commands,
+          ...(Array.isArray(initMsg.terminal_slash_commands)
+            ? { terminalSlashCommands: initMsg.terminal_slash_commands.slice(0, 512) }
+            : {}),
           skills: Array.isArray(initMsg.skills) ? initMsg.skills : [],
           apiKeySource: typeof initMsg.apiKeySource === "string" ? initMsg.apiKeySource : undefined,
           agents: supportedAgents,
@@ -1638,6 +1796,10 @@ export async function sendPrompt(
           pluginCount: pluginStatuses.length,
           slashCommandCount: initMsg.slash_commands?.length ?? 0,
         });
+
+        // Init names seed an empty inventory only; they never replace a
+        // live read or a `commands_changed` push.
+        recordInitCommandInventory(session);
 
         // Emit session.init event so frontend can update UI
         eventEmitter.emit({
@@ -1756,18 +1918,61 @@ export async function sendPrompt(
           });
         };
 
-        if (
+        if (sysMsg.subtype === "commands_changed") {
+          // A full replacement (SDKCommandsChangedMessage). Applied to the
+          // bridge-owned inventory whether or not anybody is subscribed.
+          recordCommandsChanged(session, message);
+        } else if (sysMsg.subtype === "local_command_output") {
+          // A command the CLI answered itself (SDKLocalCommandOutputMessage).
+          // Without this row the turn settles with nothing visible.
+          const output = (message as { content?: unknown }).content;
+          if (typeof output === "string") {
+            localCommandOutputSeen = true;
+            appendLocalCommandResult(
+              session,
+              output,
+              typeof sysMsg.uuid === "string"
+                ? sysMsg.uuid
+                : `${turnGeneration}:${sdkMessageCount}`,
+            );
+          }
+        } else if (
           (taskMessage.subtype === "task_started" ||
             taskMessage.subtype === "task_progress" ||
             taskMessage.subtype === "task_updated") &&
           taskMessage.task_id
         ) {
           const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
-          const previous = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
+          const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
+          // A `SendMessage` resume re-runs a finished agent under its old task
+          // id, announced by a `task_started` from the resuming call. That is a
+          // new run, not a late edge of the old one: left terminal, nothing
+          // held this query's input open for it, and the CLI stopped the agent
+          // once its idle wind-down ran out.
+          const resumedRun =
+            taskMessage.subtype === "task_started" &&
+            stored !== undefined &&
+            !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
+            typeof taskMessage.tool_use_id === "string" &&
+            taskMessage.tool_use_id !== stored.toolUseId;
+          if (resumedRun) {
+            // The finished run's parked snapshot must not describe this one.
+            const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
+            if (parked) closeQueryControlIfUnused(session, parked.owner);
+          }
+          const previous = resumedRun
+            ? {
+                ...stored,
+                status: "running" as const,
+                startedAt: Date.now(),
+                endedAt: undefined,
+                error: undefined,
+              }
+            : stored;
           const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
-          // Task ids are process-unique. Because level and edge messages may
-          // be delivered in either order, a late start/progress edge must
-          // enrich a terminal record rather than resurrect it.
+          // Within one run, level and edge messages may be delivered in either
+          // order, so a late start/progress edge must enrich a terminal record
+          // rather than resurrect it.
           const status =
             previous &&
             !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) &&
@@ -1947,6 +2152,147 @@ export async function sendPrompt(
             closeQueryControlIfUnused(session, owner);
           }
           emitBackgroundTasks();
+        } else if (sysMsg.subtype === "thinking_tokens") {
+          // A running estimate during the redacted-thinking phase, where the
+          // API otherwise streams only pings. Arrives once per delta, so the
+          // session keeps every value but publishes at most one per interval.
+          const estimate = (message as SDKThinkingTokensMessage).estimated_tokens;
+          if (
+            ownsActiveTurn() &&
+            typeof estimate === "number" &&
+            Number.isFinite(estimate) &&
+            estimate >= 0
+          ) {
+            session.thinkingTokens = Math.round(estimate);
+            const now = Date.now();
+            if (now - lastThinkingTokensEmitAt >= THINKING_TOKENS_EMIT_INTERVAL_MS) {
+              lastThinkingTokensEmitAt = now;
+              eventEmitter.emit({
+                type: "session.updated",
+                sessionId,
+                data: { thinkingTokens: session.thinkingTokens },
+              });
+            }
+          }
+        } else if (sysMsg.subtype === "status") {
+          const status = message as SDKStatusMessage;
+          setTurnActivity(status.status === "compacting" ? "compacting" : undefined);
+          // The compaction row is written by the PostCompact hook, which only
+          // runs on success. A failed compaction left nothing in the tab while
+          // the context stayed exactly as full as before.
+          if (status.compact_result === "failed") {
+            const reason = boundedNoticeText(status.compact_error);
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              severity: "warning",
+              content: reason ? `Compaction failed: ${reason}` : "Compaction failed",
+              createdAt: new Date().toISOString(),
+            });
+          }
+          await reconcilePlanModeFromStatus(status.permissionMode);
+        } else if (sysMsg.subtype === "hook_response") {
+          // Most of these are this bridge's own compaction and background-task
+          // hooks. Only a failed or cancelled hook says something is broken.
+          if ((message as SDKHookResponseMessage).outcome !== "success") {
+            recordSystemMessageNotice(session, sysMsg);
+          }
+        } else if (sysMsg.subtype === "informational") {
+          const info = message as SDKInformationalMessage;
+          const content = boundedNoticeText(info.content);
+          // `info` renders only in the CLI's verbose transcript mode and
+          // `notice` in inactive gray: inventory, not something to interrupt
+          // the tab with. A stopped continuation is always shown, because the
+          // turn ends on it and nothing else would say why.
+          const visible =
+            info.prevent_continuation === true ||
+            info.level === "warning" ||
+            info.level === "suggestion";
+          if (content && visible) {
+            const part: NormalizedPart = {
+              type: "status",
+              severity:
+                info.prevent_continuation === true || info.level === "warning" ? "warning" : "info",
+              content,
+              createdAt: new Date().toISOString(),
+            };
+            // The SDK repeats a progress line for one tool use; keep one row.
+            const existingId = info.tool_use_id
+              ? informationalRowsByToolUse.get(info.tool_use_id)
+              : undefined;
+            const existing = existingId
+              ? session.messages.find((candidate) => candidate.id === existingId)
+              : undefined;
+            if (existing) {
+              existing.content = part.content;
+              existing.parts = [part];
+              eventEmitter.emit({
+                type: "message.updated",
+                sessionId,
+                data: { message: existing },
+              });
+            } else {
+              const row = appendTranscriptNotice(
+                session,
+                sessionId,
+                (event) => eventEmitter.emit(event),
+                part,
+              );
+              if (info.tool_use_id) informationalRowsByToolUse.set(info.tool_use_id, row.id);
+            }
+          } else {
+            recordSystemMessageNotice(session, sysMsg);
+          }
+        } else if (sysMsg.subtype === "permission_denied") {
+          const denial = message as SDKPermissionDeniedMessage;
+          // The tool result that follows carries the rejection the model read.
+          // What only this frame says is *who* decided and why, so that is
+          // what is kept on the call, where the renderer shows it.
+          const reason = boundedNoticeText(denial.decision_reason ?? denial.message);
+          const marked =
+            typeof denial.tool_use_id === "string" &&
+            toolTracker.recordDenial(denial.tool_use_id, {
+              reason,
+              ...(typeof denial.decision_reason_type === "string"
+                ? { source: denial.decision_reason_type.slice(0, 64) }
+                : {}),
+            });
+          if (marked && stream.currentAssistantMessage) {
+            stream.currentAssistantMessage.parts = buildMessageParts(
+              stream.accumulatedOrderedParts,
+              toolTracker,
+            );
+            stream.emitCurrentAssistantMessage();
+          }
+          if (marked) {
+            refreshSettledToolRows(
+              session,
+              sessionId,
+              toolTracker,
+              [denial.tool_use_id],
+              stream.currentAssistantMessage,
+            );
+          } else {
+            // A call this turn never saw (a subagent's, or one from before a
+            // reconnect) still deserves to say it was refused.
+            const toolName = boundedNoticeText(denial.tool_name) ?? "A tool call";
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              severity: "warning",
+              content: reason ? `${toolName} was denied: ${reason}` : `${toolName} was denied`,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        } else if (sysMsg.subtype === "memory_recall") {
+          const recall = message as SDKMemoryRecallMessage;
+          const memories = Array.isArray(recall.memories) ? recall.memories : [];
+          if (memories.length > 0) {
+            appendTranscriptNotice(
+              session,
+              sessionId,
+              (event) => eventEmitter.emit(event),
+              memoryRecallPart(recall.mode, memories),
+            );
+          }
         }
         finishTurnInputIfSettled();
 
@@ -1956,7 +2302,8 @@ export async function sendPrompt(
         // which put arbitrary provider payload on the wire. Record them as
         // runtime notices instead, where they are bounded, redacted, carry a
         // severity, and reach the health panel. Only errors are additionally
-        // promoted into the tab by the backend.
+        // raised in the tab by the backend. Which subtypes are recorded at all
+        // is `SYSTEM_SUBTYPE_DISPOSITIONS`, applied at the end of this branch.
         if (sysMsg.subtype === "api_retry") {
           // A retry the user can see, rather than a silent stall. Recorded as a
           // pending row and settled by the next assistant message or by the
@@ -1984,7 +2331,13 @@ export async function sendPrompt(
             },
           ).id;
         }
-        if (sysMsg.subtype && sysMsg.subtype !== "init") {
+        const disposition = systemSubtypeDisposition(sysMsg.subtype);
+        if (disposition === undefined) {
+          // A subtype newer than the table: counted as drift, and still kept
+          // as a notice so whatever it said is not lost.
+          sessionHealth(session).recordUnknown(`system:${sysMsg.subtype ?? "(untyped)"}`);
+          recordSystemMessageNotice(session, sysMsg);
+        } else if (disposition === "notice" || disposition === "handled+notice") {
           recordSystemMessageNotice(session, sysMsg);
         }
       } else if (message.type === "assistant") {
@@ -2000,6 +2353,8 @@ export async function sendPrompt(
             },
           });
         }
+        // The thinking this estimate measured has produced its block.
+        clearThinkingTokens();
         // The retry above worked: the model answered. Settle the row rather
         // than leaving a spinner on a request that has already succeeded.
         settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
@@ -2026,6 +2381,7 @@ export async function sendPrompt(
           activeTaskIds,
           taskRegistry,
           receivedAt,
+          recordUnknownContentBlock,
         );
 
         // A foreground Bash call can become background work after a timeout or
@@ -2128,13 +2484,20 @@ export async function sendPrompt(
         stream.emitCurrentAssistantMessage();
       } else if (message.type === "user") {
         // User message with tool results - parse to update tool tracker
-        const { completedTaskIds } = parseMessageContent(
+        const {
+          completedTaskIds,
+          unattachedTaskNotifications,
+          attachedTaskToolUseIds,
+          interrupted,
+          subagentInterrupted,
+        } = parseMessageContent(
           message,
           toolTracker,
           mcpServerNames,
           activeTaskIds,
           taskRegistry,
           receivedAt,
+          recordUnknownContentBlock,
         );
 
         const sdkUserMessage = message as SDKUserMessage;
@@ -2207,6 +2570,39 @@ export async function sendPrompt(
 
           stream.emitCurrentAssistantMessage();
         }
+        // A task report can land on a call from an earlier message of this
+        // turn (one split off by a steer, say), whose parts the rebuild above
+        // does not reach.
+        refreshSettledToolRows(
+          session,
+          sessionId,
+          toolTracker,
+          attachedTaskToolUseIds,
+          stream.currentAssistantMessage,
+        );
+        for (const report of unattachedTaskNotifications) {
+          appendTranscriptNotice(
+            session,
+            sessionId,
+            (event) => eventEmitter.emit(event),
+            taskNotificationNoticePart(report, receivedAt ?? new Date().toISOString()),
+          );
+        }
+        if (interrupted) appendInterruptedNotice(session, sessionId);
+        else if (subagentInterrupted) {
+          const parentToolUseId = sdkUserMessage.parent_tool_use_id;
+          const stoppedTask = parentToolUseId
+            ? (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).find(
+                (task) => task.toolUseId === parentToolUseId,
+              )
+            : undefined;
+          appendSubagentInterruptedNotice(
+            session,
+            sessionId,
+            stoppedTask?.description,
+            parentToolUseId ?? undefined,
+          );
+        }
         // Skip adding user message replay as we already added it
       } else if (message.type === "auth_status") {
         const auth = message as SDKAuthStatusMessage;
@@ -2228,10 +2624,25 @@ export async function sendPrompt(
           createdAt: new Date().toISOString(),
         });
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
-        diagnostics?.terminalSettled("resolved");
         // Only allowlisted metadata reaches the shared debug sink.
         const resultMsg = message as SdkResultMessage;
+        // A resumed CLI can finish a turn of its own (a replayed task
+        // notification) before it reaches this prompt. That result says
+        // nothing about this turn; ending on it closed the CLI's input, which
+        // later stopped its background agents. Only this turn's first result
+        // is filtered: once it has arrived, a continuation's result is the
+        // legitimate end of the retained turn.
+        if (!receivedPromptResult && resultAnswersOtherInput(resultMsg, promptUuid)) {
+          debugLog("[session-manager] Result for other input skipped", {
+            sessionId,
+            subtype: resultMsg.subtype,
+            durationMs: resultMsg.duration_ms,
+          });
+          continue;
+        }
+        diagnostics?.terminalSettled("resolved");
         receivedResult = true;
+        receivedPromptResult = true;
         debugLog("[session-manager] Query result", {
           sessionId,
           subtype: resultMsg.subtype,
@@ -2259,12 +2670,21 @@ export async function sendPrompt(
         // Account allocation can advance during the last model request. Queue
         // one final coalesced refresh before publishing the completed token
         // snapshot, preserving the previous end-of-turn exactness.
+        if (!ownsActiveTurn()) {
+          if (abortController.signal.aborted) recordInterruptedStructuredOutputIfCurrent();
+          closeTurnInput();
+          return;
+        }
         await structuredUsageRefresh?.trigger();
         const exactUsage = await buildClaudeUsageSnapshot(
           session,
           resultMsg,
-          session.queryControl,
+          queryIteratorControl,
           options?.model,
+          {
+            ...(bootstrapClaudeUsage ? { bootstrapTurnTokens: streamUsage.completedTotals() } : {}),
+            stillOwnsTurn: ownsActiveTurn,
+          },
         );
         if (!ownsActiveTurn()) {
           if (abortController.signal.aborted) {
@@ -2277,6 +2697,7 @@ export async function sendPrompt(
           closeTurnInput();
           return;
         }
+        bootstrapClaudeUsage = false;
         const streamedUsage =
           session.inProgressUsageGeneration === turnGeneration
             ? session.inProgressUsage
@@ -2325,6 +2746,23 @@ export async function sendPrompt(
               requestId: structuredRequestId,
               value: resultMsg.structured_output,
             });
+          }
+          // A local command (`/cost`, `/context`, ...) can finish with its
+          // answer only in `result` — no assistant message, no output frame.
+          // Surface that text so the turn does not settle invisibly. Taken
+          // from the SDK's own result, never synthesized from the command.
+          if (
+            !options?.outputSchema &&
+            !localCommandOutputSeen &&
+            !stream.currentAssistantMessage &&
+            typeof resultMsg.result === "string" &&
+            resultMsg.result.trim()
+          ) {
+            appendLocalCommandResult(
+              session,
+              resultMsg.result,
+              `result:${typeof resultMsg.uuid === "string" ? resultMsg.uuid : turnGeneration}`,
+            );
           }
           debugLog("[session-manager] Query completed successfully", { sessionId });
           finishTurnInputIfSettled();
@@ -2376,6 +2814,14 @@ export async function sendPrompt(
           throw new Error(resultError);
         }
       } else if (message.type === "stream_event") {
+        // A resumed root turn can think for minutes before its first complete
+        // assistant record, streaming only partials meanwhile. Waiting for that
+        // record left the session idle — and the environment marked done —
+        // while Claude was still working, so the first root partial reclaims.
+        // Pings carry no content and are not evidence of a new model request.
+        if ((message as { event?: { type?: unknown } }).event?.type !== "ping") {
+          reclaimReleasedTurnForAssistant(message as SdkMessageBase);
+        }
         publishStreamUsage(message);
         stream.applyPartialAssistantMessage(message);
       } else if (message.type === "tool_progress") {
@@ -2631,10 +3077,26 @@ export async function sendPrompt(
     // it stamped only matter for as long as a disconnected client could still
     // be resuming from them; see `evictIdleHydratedTranscripts`.
     session.lastStreamedRevisionAt = Date.now();
+    // Nothing is compacting or thinking once the stream is over. Only the
+    // turn that owns the foreground clears it: a released turn ending must
+    // not wipe the indicator of the turn that replaced it.
+    if (session.latestTurnGeneration === turnGeneration) {
+      if (session.activity !== undefined) {
+        session.activity = undefined;
+        eventEmitter.emit({ type: "session.updated", sessionId, data: { activity: null } });
+      }
+      if (session.thinkingTokens !== undefined) {
+        session.thinkingTokens = undefined;
+        eventEmitter.emit({ type: "session.updated", sessionId, data: { thinkingTokens: null } });
+      }
+    }
     if (session.inProgressUsageGeneration === turnGeneration) {
       // Preserve tokens already observed on interrupted/error paths; the
       // provider may never send the terminal result that would reconcile them.
-      if (session.inProgressUsage) session.usage = session.inProgressUsage;
+      if (session.inProgressUsage) {
+        advanceBaselineForInterruptedStream();
+        session.usage = session.inProgressUsage;
+      }
       session.inProgressUsage = undefined;
       session.inProgressUsageGeneration = undefined;
     }
@@ -2660,6 +3122,12 @@ export async function sendPrompt(
     if (retainedContinuationTimer) {
       clearTimeout(retainedContinuationTimer);
       retainedContinuationTimer = null;
+    }
+    if (dispatchRequestId) {
+      session.retainedContinuationRequestIds?.delete(dispatchRequestId);
+      if (session.retainedContinuationRequestIds?.size === 0) {
+        session.retainedContinuationRequestIds = undefined;
+      }
     }
     // The loop above is the only consumer of this iterator, and it ends either
     // exhausted or through an abrupt exit — which invokes `return()`, i.e. the

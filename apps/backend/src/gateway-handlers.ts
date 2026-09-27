@@ -5,6 +5,7 @@ import {
   AUTH_COOKIE,
   API_PREFIX,
   MAX_INVOKE_BODY_BYTES,
+  INVOKE_COMMAND_BODY_LIMITS,
   DROPPABLE_EVENT_PREFIX,
   SSE_CLIENT_HARD_BUFFER_BYTES,
   MAX_CLIENT_METRICS_BODY_BYTES,
@@ -30,6 +31,7 @@ import type {
   DrainAwareEventClientWriter,
   GatewayEventClient,
 } from "./gateway-internals.js";
+import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 
 export abstract class GatewayHandlers extends GatewayAuth {
   protected commandIsRegistered(command: string, errorMessage: string): boolean {
@@ -74,6 +76,16 @@ export abstract class GatewayHandlers extends GatewayAuth {
     const args = body.args;
     if (typeof command !== "string") {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
+      return;
+    }
+    const commandLimit = Object.hasOwn(INVOKE_COMMAND_BODY_LIMITS, command)
+      ? INVOKE_COMMAND_BODY_LIMITS[command]
+      : undefined;
+    if (commandLimit !== undefined && requestBytes > commandLimit) {
+      // Structured so the MCP settings UI decodes a code rather than a transport failure.
+      jsonResponse(response, 413, {
+        error: `McpManagementError:invalid-request: The change is larger than ${Math.floor(commandLimit / 1024)} KiB.`,
+      });
       return;
     }
     const safeArgs =
@@ -290,6 +302,8 @@ export abstract class GatewayHandlers extends GatewayAuth {
       // Ring occupancy and eviction are otherwise invisible: a ring dropping
       // every gap looks exactly like one that never needed to retain anything.
       replay: { ...snapshot.replay, ring: this.eventReplay.getStats() },
+      // Additive: bounded, content-free recurring-work counters (kinds only).
+      recurringWork: recurringWorkDiagnostics(),
     });
   }
 

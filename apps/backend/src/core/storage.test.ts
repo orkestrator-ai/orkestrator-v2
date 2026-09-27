@@ -3186,6 +3186,14 @@ describe("environment completion and unread state", () => {
 
       expect(completed.hasUnreadWork).toBe(true);
       expect(Date.parse(completed.lastActivityAt!)).toBe(Date.parse(collision) + 1);
+      expect(completed.agentSessionCompletedAt).toBe(completed.lastActivityAt);
+      const next = await storage.recordEnvironmentSessionCompletion(environment.id, collision);
+      expect(Date.parse(next.agentSessionCompletedAt!)).toBe(
+        Date.parse(completed.agentSessionCompletedAt!) + 1,
+      );
+      expect((await storage.getEnvironment(environment.id))?.agentSessionCompletedAt).toBe(
+        next.agentSessionCompletedAt,
+      );
       await expect(
         storage.recordEnvironmentSessionCompletion(environment.id, "not-an-iso-time"),
       ).rejects.toThrow("occurredAt must be a valid ISO timestamp");

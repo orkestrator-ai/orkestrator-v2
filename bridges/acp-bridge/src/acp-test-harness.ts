@@ -30,7 +30,7 @@ import { promises as fs } from "node:fs";
 
 import os from "node:os";
 
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -234,6 +234,9 @@ export async function spawnBridge(
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
     ACP_STATE_DIR: stateDirectory,
+    // The bridge fingerprints Grok's MCP configuration at every child spawn;
+    // point it at a scratch home rather than the developer's own.
+    GROK_HOME: join(stateDirectory, "grok-home"),
   };
   delete env.ACP_MAX_SESSIONS;
   Object.assign(env, options.env);

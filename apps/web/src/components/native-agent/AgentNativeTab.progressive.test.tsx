@@ -25,6 +25,8 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
@@ -85,6 +87,7 @@ const identity: NativeAgentViewIdentity = {
 
 let transcriptUpdates: Array<() => Promise<NativeAgentTranscriptUpdate<TestMessage>>> = [];
 let stateUpdates: Array<() => Promise<NativeAgentSessionStateUpdate>> = [];
+let transcriptReads = 0;
 let dispatched: string[] = [];
 let backgroundTaskStops: string[] = [];
 
@@ -116,6 +119,7 @@ mock.module("@/lib/backend", () => ({
     throw new Error("joined projection must not run on the progressive path");
   },
   getNativeAgentTranscriptUpdate: async () => {
+    transcriptReads += 1;
     const next = transcriptUpdates.shift();
     if (next) return next();
     return {
@@ -283,6 +287,7 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
+  transcriptReads = 0;
   dispatched = [];
   backgroundTaskStops = [];
   dispatchNativeAgentIntentMock.mockClear();
@@ -709,13 +714,21 @@ describe("AgentNativeTab progressive controller", () => {
     ];
     stateUpdates = [async () => stateSnapshot("state-1")];
 
-    renderTab();
-    await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
-    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
-    expect(screen.queryByRole("status") === null).toBe(true);
+    // The read coordinator schedules the idle poll; a fake clock drives it.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      renderTab();
+      await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+      expect(screen.queryByRole("status") === null).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 1_600));
-    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
-    expect(screen.queryByRole("status") === null).toBe(true);
+      const readsBeforePoll = transcriptReads;
+      await act(() => clock.advance(1_500));
+      await waitFor(() => expect(transcriptReads).toBeGreaterThan(readsBeforePoll));
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+      expect(screen.queryByRole("status") === null).toBe(true);
+    } finally {
+      resetReadCoordinatorForTests();
+    }
   });
 });

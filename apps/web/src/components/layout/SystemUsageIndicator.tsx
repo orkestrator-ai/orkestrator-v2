@@ -9,20 +9,16 @@ import {
 } from "react";
 import { CircuitBoard, Cpu, HardDrive, MemoryStick, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { EnvironmentProcessGroup } from "@/lib/backend";
 import {
-  getEnvironmentProcessUsage,
-  getSystemUsage,
-  type EnvironmentProcessGroup,
-  type EnvironmentProcessUsageSnapshot,
-  type SystemUsageSnapshot,
-} from "@/lib/backend";
+  formatSampleTime,
+  useEnvironmentProcessUsage,
+  useSystemUsage,
+} from "@/hooks/useSystemUsage";
+import { getReadCoordinator } from "@/lib/read-coordinator";
 import { useProjectStore } from "@/stores";
 import { cn } from "@/lib/utils";
-import {
-  isSystemUsageFresh,
-  SYSTEM_USAGE_STALE_AFTER_MS,
-  SystemUsagePanel,
-} from "./AgentInfoButton.panels";
+import { SystemUsagePanel } from "./AgentInfoButton.panels";
 
 /** Cadence for the always-mounted title-bar meters. */
 export const SYSTEM_USAGE_POLL_INTERVAL_MS = 5_000;
@@ -154,12 +150,17 @@ interface UsageMetric {
  * selected process count in brackets after the Process column title.
  * Environments are ranked by total CPU when the panel first loads and then
  * stay in that order while it remains open.
- * Host meters keep polling whether the panel is open; `isSystemUsageFresh`
- * is the same staleness rule the agent-information popover uses.
+ * Host meters keep polling whether the panel is open. Every host-meter view
+ * (this one and the agent-information popover) shares one coordinated read
+ * and one staleness rule (`useSystemUsage`); a retained sample is never
+ * presented as current once its observation is old, and its backend sample
+ * time is shown in the meter tooltips.
  */
 export function SystemUsageIndicator({ className }: { className?: string }) {
-  const [usage, setUsage] = useState<SystemUsageSnapshot | null>(null);
-  const [checkedAt, setCheckedAt] = useState(() => Date.now());
+  // One shared read with every other host-meter consumer; the coordinator
+  // pauses it while the document is hidden and reconciles once on return.
+  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
+  const usage = usageView.sample;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
@@ -167,52 +168,6 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
   const close = useCallback(() => {
     restoreFocusRef.current = true;
     setOpen(false);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    let timer: number | undefined;
-    const clearTimer = () => {
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-        timer = undefined;
-      }
-    };
-    const schedule = () => {
-      clearTimer();
-      if (!active || document.visibilityState === "hidden") return;
-      timer = window.setTimeout(refresh, SYSTEM_USAGE_POLL_INTERVAL_MS);
-    };
-    const refresh = async () => {
-      if (document.visibilityState === "hidden") return;
-      try {
-        const snapshot = await getSystemUsage();
-        if (active && snapshot) {
-          setUsage(snapshot);
-          setCheckedAt(Date.now());
-        }
-      } catch {
-        // Resource meters are supplementary. Keep the last authoritative
-        // snapshot if a transient backend request fails.
-        if (active) setCheckedAt(Date.now());
-      } finally {
-        if (active) schedule();
-      }
-    };
-    const handleVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        clearTimer();
-        return;
-      }
-      void refresh();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    void refresh();
-    return () => {
-      active = false;
-      clearTimer();
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
   }, []);
 
   useEffect(() => {
@@ -233,7 +188,11 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [close, open]);
 
-  const freshUsage = isSystemUsageFresh(usage, checkedAt) ? usage : null;
+  const freshUsage = usage && !usageView.stale ? usage : null;
+  const sampleTime = formatSampleTime(usageView.sampledAt);
+  const sampleLabel = sampleTime
+    ? `${freshUsage ? "Sampled" : "Last sampled"} at ${sampleTime}`
+    : undefined;
   const metrics: UsageMetric[] = [
     {
       key: "cpu",
@@ -277,6 +236,8 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls="environment-process-usage-popover"
+        data-sampled-at={usageView.sampledAt ?? undefined}
+        data-stale={usage !== null && freshUsage === null ? "true" : undefined}
       >
         {metrics.map(({ key, label, icon: Icon, value }) => {
           const formatted = formatPercent(value);
@@ -285,7 +246,9 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
               key={key}
               role="img"
               aria-label={`${label}: ${formatted}`}
-              title={`${label}: ${formatted}`}
+              title={
+                sampleLabel ? `${label}: ${formatted} (${sampleLabel})` : `${label}: ${formatted}`
+              }
               className="flex items-center gap-0.5 font-mono text-[10px] tabular-nums"
             >
               <Icon className="h-3 w-3" aria-hidden="true" />
@@ -336,7 +299,12 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
           </div>
           {open ? (
             <div className="mt-3">
-              <SystemUsagePanel usage={usage} checkedAt={checkedAt} heading={false} />
+              <SystemUsagePanel
+                usage={usage}
+                stale={usageView.stale}
+                sampledAt={usageView.sampledAt}
+                heading={false}
+              />
             </div>
           ) : null}
         </header>
@@ -349,57 +317,35 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
 }
 
 function EnvironmentProcessPanel() {
-  const [snapshot, setSnapshot] = useState<EnvironmentProcessUsageSnapshot | null>(null);
-  const [checkedAt, setCheckedAt] = useState(() => Date.now());
+  // Mounted only while the popover is open: process enumeration stays demand
+  // driven, joins other clients' concurrent reads at the backend, and pauses
+  // with the document.
+  const processView = useEnvironmentProcessUsage({
+    intervalMs: ENVIRONMENT_PROCESS_POLL_INTERVAL_MS,
+  });
+  const snapshot = processView.sample;
+  // A reopened panel may first show the list retained from its last opening.
+  // Only a sample read while this panel is open decides the frozen ranking.
+  const [openedAt] = useState(() => getReadCoordinator().clock.now());
+  const rankable = processView.observedAt !== null && processView.observedAt >= openedAt;
   const [frozenIds, setFrozenIds] = useState<string[]>([]);
   const projects = useProjectStore((state) => state.projects);
 
-  useEffect(() => {
-    let active = true;
-    let requestPending = false;
-    let timer: number | undefined;
-    const refresh = async () => {
-      if (requestPending) return;
-      requestPending = true;
-      try {
-        const next = await getEnvironmentProcessUsage();
-        if (active && next) {
-          setSnapshot(next);
-          setCheckedAt(Date.now());
-        }
-      } catch {
-        if (active) setCheckedAt(Date.now());
-      } finally {
-        requestPending = false;
-        if (active) timer = window.setTimeout(refresh, ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
-      }
-    };
-    void refresh();
-    return () => {
-      active = false;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, []);
-
-  const sampledAt = snapshot ? Date.parse(snapshot.sampledAt) : Number.NaN;
-  const fresh =
-    Number.isFinite(sampledAt) && checkedAt - sampledAt <= SYSTEM_USAGE_STALE_AFTER_MS
-      ? snapshot
-      : null;
+  const fresh = snapshot && !processView.stale ? snapshot : null;
   const stale = snapshot !== null && fresh === null;
   const rawGroups = fresh?.environments ?? snapshot?.environments ?? [];
   const groups = orderEnvironmentProcessGroups(rawGroups, frozenIds);
 
   useEffect(() => {
     const nextGroups = snapshot?.environments ?? [];
-    if (nextGroups.length === 0) return;
+    if (!rankable || nextGroups.length === 0) return;
     setFrozenIds((current) => {
       const next = mergeFrozenEnvironmentIds(current, nextGroups);
       return next.length === current.length && next.every((id, index) => id === current[index])
         ? current
         : next;
     });
-  }, [snapshot]);
+  }, [rankable, snapshot]);
 
   if (snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading processes…</p>;

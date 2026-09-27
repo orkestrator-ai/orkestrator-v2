@@ -5,7 +5,7 @@ import type { Environment, Project } from "@/types";
 import { useConfigStore } from "@/stores/configStore";
 import { useUIStore } from "@/stores/uiStore";
 import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
-import { ProjectSearchBar } from "./ProjectSearchBar";
+import { ProjectSearchBar, searchShortcutLabel } from "./ProjectSearchBar";
 
 const project: Project = {
   id: "project-1",
@@ -134,6 +134,55 @@ describe("ProjectSearchBar", () => {
     expect(wrapperClass).not.toContain("py-2");
     expect(trigger.className).toContain("h-8");
     expect(trigger.className).toContain("md:h-7");
+  });
+
+  test("renders a borderless field aligned to the header, with the shortcut badge", () => {
+    renderSearchBar();
+
+    const wrapper = screen.getByTestId("project-search-bar");
+    const trigger = screen.getByTestId("project-search-trigger");
+    const triggerClasses = trigger.className.split(" ");
+
+    expect(wrapper.className.split(" ")).toContain("px-2");
+    expect(triggerClasses).not.toContain("border");
+    expect(triggerClasses).toContain("bg-input-surface");
+    expect(triggerClasses).toContain("pl-[3px]");
+    expect(triggerClasses).toContain("pr-[9px]");
+    expect(trigger.getAttribute("aria-keyshortcuts")).toBe("Meta+K Control+K");
+
+    const badge = screen.getByTestId("project-search-shortcut");
+    expect(trigger.contains(badge)).toBe(true);
+    expect(badge.tagName).toBe("KBD");
+    expect(badge.textContent).toBe(searchShortcutLabel());
+    expect(badge.className.split(" ")).toContain("ml-auto");
+  });
+
+  describe("searchShortcutLabel", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+
+    function setPlatform(value: string) {
+      Object.defineProperty(navigator, "platform", { value, configurable: true });
+    }
+
+    afterEach(() => {
+      if (originalPlatform) {
+        Object.defineProperty(navigator, "platform", originalPlatform);
+      } else {
+        delete (navigator as { platform?: string }).platform;
+      }
+    });
+
+    test("uses the command glyph on Apple platforms", () => {
+      setPlatform("MacIntel");
+      expect(searchShortcutLabel()).toBe("⌘K");
+    });
+
+    test("spells out Ctrl elsewhere", () => {
+      setPlatform("Linux x86_64");
+      expect(searchShortcutLabel()).toBe("Ctrl K");
+      setPlatform("Win32");
+      expect(searchShortcutLabel()).toBe("Ctrl K");
+    });
   });
 
   test("opens a palette of recent projects and environments, including containerized ones", async () => {

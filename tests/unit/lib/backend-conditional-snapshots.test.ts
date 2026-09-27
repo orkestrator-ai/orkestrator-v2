@@ -197,4 +197,33 @@ describe("conditional backend wrappers", () => {
       "Invalid get_build_pipeline response",
     );
   });
+
+  test("forwards a refresh request and validates the additive owner stamp", async () => {
+    const view = {
+      generation: "gen-1",
+      environmentId: "env-1",
+      targetGeneration: 2,
+      revision: 5,
+      freshness: "current",
+      watched: true,
+    };
+    invokeMock
+      .mockResolvedValueOnce({ unchanged: false, digest: "d", value: [], view })
+      .mockResolvedValueOnce({ unchanged: true, digest: "d", view: { ...view, revision: -1 } });
+
+    await expect(
+      getLocalGitStatusSnapshot("/worktree", "main", "known", { refresh: true }),
+    ).resolves.toEqual({ unchanged: false, digest: "d", value: [], view });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "get_local_git_status", {
+      worktreePath: "/worktree",
+      targetBranch: "main",
+      includeUncommitted: true,
+      knownDigest: "known",
+      refresh: true,
+    });
+    // A malformed stamp is an invalid response, never a legacy one.
+    await expect(getLocalFileTreeSnapshot("/worktree", "d")).rejects.toThrow(
+      "Invalid get_local_file_tree response",
+    );
+  });
 });

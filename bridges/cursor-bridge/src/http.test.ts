@@ -8,7 +8,16 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { useCursorAgentForTests } from "./agent-session.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  detachAgent,
+  ensureAgent,
+  setCursorMcpConfigHomeForTests,
+  setCursorMcpFingerprintForTests,
+  useCursorAgentForTests,
+} from "./agent-session.js";
 import { authToken } from "./config.js";
 import { route } from "./http.js";
 import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
@@ -403,6 +412,36 @@ describe("liveness routes", () => {
     await call(`/session/${state.id}/status`);
     expect(state.lastAccessed).toBeGreaterThan(0);
   });
+
+  test("runtime health reports the attached agent's MCP configuration without attaching", async () => {
+    const home = await mkdtemp(join(tmpdir(), "cursor-http-mcp-config-"));
+    setCursorMcpConfigHomeForTests(home);
+    const { restore } = stubEnsureAgentResume(fakeAgent());
+    try {
+      const state = await createSession();
+      await detachAgent(state);
+      state.agentId = "kept-conversation";
+      state.lastAccessed = 0;
+      const detached = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(detached.mcpConfig).toBeUndefined();
+      // The read attached nothing and refreshed nothing.
+      expect(state.agent).toBeNull();
+      expect(state.lastAccessed).toBe(0);
+
+      await ensureAgent(state);
+      const attached = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(attached.mcpConfig).toMatchObject({
+        fingerprint: expect.any(String),
+        sources: { user: "absent" },
+        builtAt: expect.any(String),
+      });
+      expect(state.lastAccessed).toBe(0);
+    } finally {
+      restore();
+      setCursorMcpConfigHomeForTests();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("prompt dispatch", () => {
@@ -612,7 +651,10 @@ describe("prompt dispatch", () => {
       method: "POST",
       body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
     });
-    expect(response.status).toBe(500);
+    // `send` was called, so whether the run started is unknown: a distinct
+    // answer the backend parks, never a plain failure it would resubmit.
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ kind: "dispatch-outcome-unknown" });
     expect(state.status).toBe("error");
     // Prompt claim, delivered token delta, then rollback. This proves the
     // estimate existed inside the failure window before the rollback cleared it.
@@ -622,9 +664,12 @@ describe("prompt dispatch", () => {
     expect((await (await call(`/session/${state.id}/status`)).json()) as object).not.toHaveProperty(
       "contextUsage.estimated",
     );
-    // The id was released, so the caller may retry under the same one: nothing
-    // ran, and that is provable rather than assumed.
-    expect(state.promptJournal.has("r1")).toBe(false);
+    // The record is kept as ambiguous evidence, so the dispatch probe cannot
+    // answer that this id was never sent.
+    expect(state.promptJournal.get("r1")).toMatchObject({ state: "ambiguous", sendFailed: true });
+    expect(await (await call(`/session/${state.id}/dispatch?requestId=r1`)).json()).toEqual({
+      dispatch: "unknown",
+    });
     expect(state.messages).toEqual([]);
     expect(state.uncheckedTranscriptBytes).toBe(0);
     // The SDK agent that refused `send` must not be reused. Leaving it attached
@@ -641,10 +686,10 @@ describe("prompt dispatch", () => {
       method: "POST",
       body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
     });
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
     expect(state.agentId).toBe(conversationId);
-    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
     expect(refused.sends).toHaveLength(1);
 
     const replacement = fakeAgent();
@@ -661,13 +706,69 @@ describe("prompt dispatch", () => {
       expect(state.agentId).toBe(conversationId);
       expect(refused.sends).toHaveLength(1);
       expect(replacement.sends).toHaveLength(1);
+      // A same-process retry of the parked id re-dispatches under the same
+      // SDK idempotency key, and its success settles the ambiguous record.
+      expect(replacement.sends[0]!.options).toMatchObject({ idempotencyKey: "r1" });
+      expect(["accepted", "completed"]).toContain(state.promptJournal.get("r1")!.state);
+      expect(state.promptJournal.get("r1")?.sendFailed).toBeUndefined();
       expect(state.messages[0]).toMatchObject({ role: "user", content: "hi" });
     } finally {
       restore();
     }
   });
 
-  test("a stalled detach does not hold the prompt 500 or steal a replacement agent", async () => {
+  test("a prompt adopts a config change at its own turn start and releases the claim if the resume fails", async () => {
+    const state = await createSession();
+    state.agentId = "kept-conversation";
+    const first = fakeAgent();
+    const { restore, resumed } = stubEnsureAgentResume(first);
+    const readsWhileClaimed: boolean[] = [];
+    let fingerprint = "before";
+    setCursorMcpFingerprintForTests(async (target) => {
+      readsWhileClaimed.push(target.dispatching);
+      return fingerprint;
+    });
+    const refuseResume = useCursorAgentForTests({
+      resume: async (agentId: string) => {
+        resumed.push(agentId);
+        if (resumed.length > 1) throw new Error("resume unavailable");
+        return first;
+      },
+      create: async () => {
+        throw new Error("a configuration change must never start a new conversation");
+      },
+    } as Parameters<typeof useCursorAgentForTests>[0]);
+    try {
+      expect(await ensureAgent(state)).toBe(first);
+      readsWhileClaimed.length = 0;
+      fingerprint = "after";
+
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "go", requestId: "config-1" }),
+      });
+
+      expect(response.status).toBe(500);
+      // Read under the prompt's own claim: only `atTurnStart` gets that far.
+      expect(readsWhileClaimed[0]).toBe(true);
+      expect(resumed).toEqual(["kept-conversation", "kept-conversation"]);
+      expect(first.sends).toHaveLength(0);
+      expect(state.agent).toBeNull();
+      expect(state.agentId).toBe("kept-conversation");
+      expect(state.configResumePending).toBe(true);
+      // The turn provably never ran: the claim and the prepared record go.
+      expect(state.dispatching).toBe(false);
+      expect(state.promptJournal.has("config-1")).toBe(false);
+      expect(state.status).toBe("idle");
+      expect(state.messages).toEqual([]);
+    } finally {
+      refuseResume();
+      restore();
+      setCursorMcpFingerprintForTests();
+    }
+  });
+
+  test("a stalled detach does not hold the prompt 502 or steal a replacement agent", async () => {
     const state = await createSession();
     let finishCleanup: () => void = () => undefined;
     const cleanup = new Promise<void>((resolve) => {
@@ -686,12 +787,12 @@ describe("prompt dispatch", () => {
         body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt 500 was held by detach cleanup")), 200),
+        setTimeout(() => reject(new Error("prompt 502 was held by detach cleanup")), 200),
       ),
     ]);
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
-    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
     expect(refused.sends).toHaveLength(1);
 
     const replacement = fakeAgent();
@@ -721,7 +822,7 @@ describe("prompt dispatch", () => {
     }
   });
 
-  test("a rejected detach still returns the prompt 500", async () => {
+  test("a rejected detach still returns the prompt 502", async () => {
     const state = await createSession();
     const refused = attachFake(state, {
       failToStart: new Error("provider refused"),
@@ -740,12 +841,12 @@ describe("prompt dispatch", () => {
         body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt 500 was held by a rejected detach")), 200),
+        setTimeout(() => reject(new Error("prompt 502 was held by a rejected detach")), 200),
       ),
     ]);
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
-    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
     expect(refused.sends).toHaveLength(1);
 
     const replacement = fakeAgent();
@@ -1244,7 +1345,106 @@ describe("routes the SDK has no surface for", () => {
     expect(await (await call(`/session/${state.id}/interactions`)).json()).toMatchObject({
       interactions: [],
     });
-    expect(await (await call("/global/slash-commands")).json()).toEqual({ commands: [] });
+    expect(await (await call("/global/slash-commands")).json()).toMatchObject({ commands: [] });
+  });
+});
+
+describe("provider commands", () => {
+  const unsupported = { catalogueVersion: 1, status: "unsupported", commands: [] };
+
+  test("legacy catalogue routes stay empty and the enhanced envelope says unsupported", async () => {
+    const state = await createSession();
+    state.lastAccessed = 0;
+    // `commands: []` is all an older backend reads; the envelope keeps a newer
+    // one from mistaking "no SDK surface" for an authoritative empty list.
+    expect(await (await call("/global/slash-commands")).json()).toEqual(unsupported);
+    expect(await (await call(`/session/${state.id}/commands`)).json()).toEqual(unsupported);
+    const refresh = await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+    expect(refresh.status).toBe(200);
+    expect(await refresh.json()).toMatchObject({ outcome: "unsupported" });
+    // Metadata reads never keep an idle agent attached.
+    expect(state.lastAccessed).toBe(0);
+  });
+
+  test("an unknown session is answered in band, never 404", async () => {
+    const commands = await call("/session/nope/commands");
+    expect(commands.status).toBe(200);
+    expect(await commands.json()).toEqual({
+      catalogueVersion: 1,
+      status: "missing",
+      commands: [],
+    });
+    const refresh = await call("/session/nope/commands/refresh", { method: "POST" });
+    expect(refresh.status).toBe(200);
+    expect(await refresh.json()).toMatchObject({ outcome: "unsupported" });
+  });
+
+  test("a selected command is refused before anything is journaled or sent", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "/review src",
+        requestId: "command-1",
+        allowProviderCommands: true,
+        command: {
+          id: "cursor:review",
+          name: "/review",
+          executionKind: "provider-prompt",
+          arguments: "src",
+        },
+      }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({
+      error: "Cursor exposes no provider commands",
+      kind: "command-unavailable",
+    });
+    expect(agent.sends).toHaveLength(0);
+    expect(state.promptJournal.has("command-1")).toBe(false);
+    expect(state.messages).toEqual([]);
+  });
+
+  test("malformed command fields are caller errors", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    for (const body of [
+      { prompt: "hello", allowProviderCommands: "no" },
+      { prompt: "hello", command: { id: "x" } },
+      {
+        prompt: "/review",
+        allowProviderCommands: false,
+        command: { id: "x", name: "/x", executionKind: "provider-prompt", arguments: "" },
+      },
+    ]) {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ ...body, requestId: "bad" }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(agent.sends).toHaveLength(0);
+    expect(state.promptJournal.has("bad")).toBe(false);
+  });
+
+  test("literal intent skips the local /steer reply and sends the text unchanged", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "/steer is a word in this workflow input",
+        requestId: "literal-1",
+        allowProviderCommands: false,
+      }),
+    });
+    expect(response.status).toBe(202);
+    await waitFor(() => agent.sends.length === 1);
+    expect(JSON.stringify(agent.sends[0]?.message)).toContain(
+      "/steer is a word in this workflow input",
+    );
+    expect(state.promptJournal.get("literal-1")?.local).toBeUndefined();
   });
 });
 

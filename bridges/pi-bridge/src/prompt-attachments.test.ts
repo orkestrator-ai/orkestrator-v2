@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 import {
   assertStableRead,
   MAX_PROMPT_ATTACHMENTS,
@@ -24,6 +25,43 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+
+/** A solid grey `size`×`size` 8-bit greyscale PNG. */
+function squarePng(size: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8; // bit depth
+  header[9] = 0; // greyscale
+  const rows = Buffer.alloc(size * (size + 1), 0x80);
+  for (let row = 0; row < size; row += 1) rows[row * (size + 1)] = 0; // filter: none
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(rows)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** Width of a PNG or baseline/progressive JPEG, read from its header. */
+function imageWidth(base64: string): number {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes[0] === 0x89) return bytes.readUInt32BE(16);
+  for (let offset = 2; offset < bytes.length;) {
+    const marker = bytes[offset + 1]!;
+    if (marker === 0xc0 || marker === 0xc2) return bytes.readUInt16BE(offset + 7);
+    offset += 2 + bytes.readUInt16BE(offset + 2);
+  }
+  throw new Error("no image header");
+}
 
 let workspace: string;
 let outside: string;
@@ -110,6 +148,21 @@ describe("readPromptImages", () => {
       filename: "Screenshot.png",
       data: PNG.toString("base64"),
     });
+  });
+
+  test("applies a model's resize profile when one is passed", async () => {
+    // Pi 0.87 resizes `prompt()` images per model, but queues steer and
+    // follow-up images untouched, so those callers hand the profile in here.
+    await writeFile(join(workspace, "wide.png"), squarePng(64));
+    const attachment = [{ type: "image" as const, path: "wide.png" }];
+
+    const [unbounded] = await readPromptImages(attachment, workspace);
+    const [bounded] = await readPromptImages(attachment, workspace, {
+      maxWidth: 16,
+      maxHeight: 16,
+    });
+    expect(imageWidth(unbounded!.data)).toBe(64);
+    expect(imageWidth(bounded!.data)).toBe(16);
   });
 
   test("ignores file attachments and an empty list", async () => {

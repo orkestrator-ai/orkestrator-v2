@@ -24,6 +24,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  type ProviderMcpConfigEvidence,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
@@ -41,9 +42,10 @@ import type {
 import {
   EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   isNativeAgentExecutionPolicy,
+  parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
-import type { PromptAttachment } from "./prompt-attachments.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
+import { readBridgeMcpConfigEvidence } from "./http-bridge-mcp-evidence.js";
 import {
   refreshHttpBridgeRuntimeMetadata,
   type HttpBridgeRuntimeMetadata,
@@ -61,8 +63,13 @@ import {
 } from "./agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
+import { bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
-import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
+import {
+  claudeBackgroundObservation,
+  claudeTurnActivityFromPayload,
+  normalizeClaudeBackgroundTasks,
+} from "./http-bridge-claude-runtime.js";
 import {
   readHttpBridgeAuthoritativeSessionState,
   readHttpBridgeLegacyTranscript,
@@ -80,32 +87,9 @@ import {
   resolvePromptAttachments,
   sessionSnapshotBudget,
   type HttpBridgeProviderDependencies,
+  bridgePromptAttachments,
 } from "./http-bridge-transport.js";
-
-/**
- * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
- * the workspace itself.
- *
- * Those bridges read every attachment's bytes from the workspace and ignore
- * `dataUrl`, but they cap a request body at 2MiB. Forwarding the data URL
- * spends that whole budget on a copy the bridge discards, so a screenshot much
- * over 1.5MB would come back as HTTP 413 — a terminal rejection of a prompt the
- * bridge is perfectly able to read from disk. The Claude and Codex bridges do
- * consume `dataUrl`, so this is deliberately scoped to the ones that do not.
- */
-function bridgePromptAttachments(
-  agent: HttpBridgeProvider["agent"],
-  attachments: PromptAttachment[] | undefined,
-): PromptAttachment[] | undefined {
-  if (!attachments || (agent !== "cursor" && agent !== "grok" && agent !== "pi")) {
-    return attachments;
-  }
-  return attachments.map((attachment) => ({
-    type: attachment.type,
-    path: attachment.path,
-    ...(attachment.filename ? { filename: attachment.filename } : {}),
-  }));
-}
+import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -320,47 +304,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `/session/${encodeURIComponent(sessionId)}/prompt`,
         {
           method: "POST",
-          body: JSON.stringify({
-            prompt,
-            requestId: options.requestId,
-            attachments,
-            outputSchema: options.schema,
-            readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
-            parameterValues: options.parameterValues,
-            persistDefaults: options.persistDefaults,
-            ...(this.agent === "claude"
-              ? {
-                  model: options.model ?? this.connection.model,
-                  effort: options.effort ?? this.connection.effort,
-                  fastMode: options.fastMode ?? this.connection.fastMode,
-                  agent: options.subAgent,
-                  includeLocalSettings: options.includeLocalSettings,
-                  promptSuggestions: options.promptSuggestions,
-                  agentMcp: options.agentMcp,
-                  permissionMode: options.readOnly
-                    ? "dontAsk"
-                    : options.mode === "plan"
-                      ? "plan"
-                      : typeof options.parameterValues?.permissionMode === "string"
-                        ? options.parameterValues.permissionMode
-                        : "bypassPermissions",
-                }
-              : this.agent === "codex"
-                ? {
-                    fastMode: options.fastMode ?? this.connection.fastMode,
-                    agentMcp: options.agentMcp,
-                    workflowResultTool: options.workflowResultTool,
-                  }
-                : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
-                  ? {
-                      fastMode: options.fastMode ?? this.connection.fastMode,
-                      model: options.model ?? this.connection.model,
-                      reasoningEffort: options.effort ?? this.connection.effort,
-                      mode: options.mode,
-                      agentMcp: options.agentMcp,
-                    }
-                  : { fastMode: options.fastMode ?? this.connection.fastMode }),
-          }),
+          body: JSON.stringify(
+            bridgePromptBody(this.agent, this.connection, prompt, options, attachments),
+          ),
         },
         this.fetchImpl,
         "prompt",
@@ -376,6 +322,19 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         });
       }
       throw error;
+    }
+    // A 500 or 502 is not evidence that the turn never started: a handler can
+    // fail after its provider call (a crash, a failed send, a proxy error), and
+    // Cursor's explicit `dispatch-outcome-unknown` says exactly that. Retrying
+    // it as a fresh dispatch — or letting the user resend under a new id — can
+    // run the same turn twice, so both park as ambiguous with the existing
+    // retry-under-the-same-id and discard controls. Statuses that mean "not
+    // processed" (503 unavailable, including a failed mandatory publication,
+    // 408/425/429, 404/409) keep the retryable mapping below.
+    if (response.status === 500 || response.status === 502) {
+      throw new AmbiguousPromptDispatchError(
+        `${this.agent} prompt dispatch outcome is unknown (HTTP ${response.status})`,
+      );
     }
     // A session can briefly disappear while a bridge reconciles a restarted
     // provider, and an idle status read can race with another client starting a
@@ -406,6 +365,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         detailText &&
         detail?.kind === "authentication-required"
       ) {
+        throw new PromptRejectedError(detailText);
+      }
+      // A selected command the bridge could no longer run was refused before
+      // anything was sent. Its message is already user-facing and specific.
+      if (response.status === 422 && detailText && detail?.kind === "command-unavailable") {
         throw new PromptRejectedError(detailText);
       }
       const detailMessage = detailText ? `: ${detailText}` : "";
@@ -545,6 +509,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       contextUsage.sessionTokens === undefined
         ? { usagePending: true }
         : {}),
+      ...claudeBackgroundObservation(body, status),
     };
   }
 
@@ -645,6 +610,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     } catch {
       return { summary: {}, notices: [], authoritative: false };
     }
+  }
+
+  /** Backend-only MCP apply evidence; see `http-bridge-mcp-evidence.ts`. */
+  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined> {
+    const { connection, fetchImpl, agent } = this;
+    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {
@@ -769,6 +740,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         composer: composer as unknown as NativeAgentComposerState,
         ...(readiness ? { readiness } : {}),
         providerRevision: providerRevision as number,
+        ...(Number.isSafeInteger(payload?.commandRevision)
+          ? { commandCatalogueRevision: payload!.commandRevision as number }
+          : {}),
         ...(contextUsage ? { contextUsage } : {}),
         ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
@@ -901,6 +875,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(Number.isSafeInteger(payload.engineGeneration)
           ? { providerGeneration: payload.engineGeneration as number }
           : {}),
+        ...(Number.isSafeInteger(payload.commandRevision)
+          ? { commandCatalogueRevision: payload.commandRevision as number }
+          : {}),
         ...(codexContextUsage ? { contextUsage: codexContextUsage } : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
         ...(runtime ? { runtime } : {}),
@@ -974,6 +951,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       }
     }
     const claudeContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
+    const claudeTurnActivity = claudeTurnActivityFromPayload(payload);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
       ...(runtime ? { runtime } : {}),
@@ -994,6 +972,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
+      ...(claudeTurnActivity ? { turnActivity: claudeTurnActivity } : {}),
       ...(claudeContextUsage ? { contextUsage: claudeContextUsage } : {}),
       ...(isNativeAgentExecutionPolicy(payload.policy) ? { policy: payload.policy } : {}),
       ...(normalizeProviderRateLimits(payload.rateLimits).length > 0
@@ -1157,6 +1136,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.catalogAdapter.slashCommands(sessionId);
   }
 
+  commandCatalogue(sessionId?: string) {
+    return this.catalogAdapter.commandCatalogue(sessionId);
+  }
+
+  refreshCommands(sessionId?: string) {
+    return this.catalogAdapter.refreshCommands(sessionId);
+  }
+
   mcpServers(sessionId: string) {
     return this.catalogAdapter.mcpServers(sessionId);
   }
@@ -1167,6 +1154,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     action: Parameters<HttpBridgeCatalogAdapter["mcpServerAction"]>[2],
   ) {
     return this.catalogAdapter.mcpServerAction(sessionId, serverId, action);
+  }
+
+  reloadMcpConfiguration() {
+    return this.catalogAdapter.reloadMcpConfiguration();
   }
 
   authStatus() {
@@ -1385,7 +1376,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const payload = asRecord(
         await boundedJson(response, `${this.agent} steer`).catch(() => ({})),
       );
-      if (payload?.outcome === "unknown") {
+      // Only the exact 429 refusal contract for this request id proves "not
+      // sent". A generic 429/5xx or a malformed refusal stays ambiguous.
+      const rejection = parseNativeAgentSteerRejection(response.status, payload, action.requestId);
+      if (rejection) return rejection;
+      if (payload?.outcome === "unknown" || payload?.outcome === "rejected") {
         return { outcome: "unknown", requestId: action.requestId };
       }
       if (payload?.outcome === "idle") return { outcome: "idle" };
@@ -1487,14 +1482,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     assertOk(response, `${this.agent} hard abort`);
   }
 
+  // Non-destructive POST close; never Claude's destructive DELETE (bridge-session-close.ts).
   async closeSession(sessionId: string): Promise<void> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}`,
-      { method: "DELETE" },
-      this.fetchImpl,
+    await closeBridgeSessionRetaining(this.agent, sessionId, (method, path) =>
+      bridgeFetch(this.connection, path, { method }, this.fetchImpl),
     );
-    if (response.status !== 404) await assertOkWithErrorDetail(response, `${this.agent} close`);
+    this.releaseSession(sessionId);
+  }
+
+  releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
   }
 }

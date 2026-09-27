@@ -1,0 +1,26 @@
+diff --git a/dist/gen/core/serverSentEvents.gen.js b/dist/gen/core/serverSentEvents.gen.js
+index 51b0e275621e9140e0307ca80de29fdf23c925b1..4c168a1d196d8fac4818eaaa34d95a73a272244a 100644
+--- a/dist/gen/core/serverSentEvents.gen.js
++++ b/dist/gen/core/serverSentEvents.gen.js
+@@ -26,7 +26,7 @@ export const createSseClient = ({ onSseError, onSseEvent, responseTransformer, r
+                 let buffer = "";
+                 const abortHandler = () => {
+                     try {
+-                        void reader.cancel();
++                        void reader.cancel().catch(() => {});
+                     }
+                     catch {
+                         // noop
+diff --git a/dist/v2/gen/core/serverSentEvents.gen.js b/dist/v2/gen/core/serverSentEvents.gen.js
+index 9684cb4f19593266b94f78e933f5039dc362c5a9..ac83a22e82d0fb104c362368bddec4df33cb48fd 100644
+--- a/dist/v2/gen/core/serverSentEvents.gen.js
++++ b/dist/v2/gen/core/serverSentEvents.gen.js
+@@ -40,7 +40,7 @@ export const createSseClient = ({ onRequest, onSseError, onSseEvent, responseTra
+                 let buffer = "";
+                 const abortHandler = () => {
+                     try {
+-                        reader.cancel();
++                        void reader.cancel().catch(() => {});
+                     }
+                     catch {
+                         // noop

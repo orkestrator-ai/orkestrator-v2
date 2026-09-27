@@ -16,6 +16,7 @@ import {
   PendingNativeAgentSteerError,
   StorageService,
 } from "./storage.js";
+import { createNativeAgentDisplayTail } from "./native-agent-display-tails.js";
 
 async function withStorage(
   run: (first: StorageService, second: StorageService) => Promise<void>,
@@ -1484,6 +1485,26 @@ describe("StorageService native agent sessions", () => {
 
       expect(await first.getNativeAgentSession(input.key)).toBeNull();
       expect((await first.getNativeAgentSession(other.key))?.providerSessionId).toBe("provider-2");
+    });
+  });
+
+  test("a retried environment delete clears display tails its sessions no longer point to", async () => {
+    await withStorage(async (first) => {
+      const tail = createNativeAgentDisplayTail({
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: input.logicalSessionKey,
+        providerSessionId: "provider-1",
+        historyEpoch: "epoch-1",
+        messages: [],
+        updatedAt: new Date(0).toISOString(),
+      })!;
+      // What an earlier, partly failed delete leaves: no session, a tail.
+      expect(await first.putNativeAgentDisplayTail(input.key, tail)).toBe(true);
+
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+
+      expect(await first.getNativeAgentDisplayTail(input.key)).toBeNull();
     });
   });
 

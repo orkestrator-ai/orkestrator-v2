@@ -25,6 +25,12 @@
   (0.8s).
 - **Failure evidence:** `/tmp/orkestrator-test-run.p4oV62/summary.json` and
   `/tmp/orkestrator-test-run.p4oV62/root-and-agent-support-tests.log.gz`.
+- **2026-09-21 fixture correction:** the event-stream case now establishes the
+  real loopback connection while the session has its normal lifetime, captures
+  the production expiry callback, then expires the credential and invokes that
+  callback. This removes the 40 ms connection/expiry race while retaining the
+  client-abort and server-client-map assertions. The broader case remains open
+  until the registry's normal aggregate recurrence criteria are satisfied.
 
 ### Subsequent aggregate timeout cluster
 

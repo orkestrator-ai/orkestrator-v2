@@ -352,6 +352,23 @@ export class AppServerSupervisor {
   }
 
   /**
+   * Issues a request on the current generation only if one is already ready.
+   * Never starts, restarts or waits for a child: `null` means nothing is
+   * running (or a generation is being replaced), and whichever generation
+   * starts next reads its configuration from disk anyway.
+   */
+  async requestIfReady<T = unknown>(
+    method: string,
+    params?: unknown,
+    options: { timeoutMs?: number } = {},
+  ): Promise<{ result: T; generation: EngineGeneration } | null> {
+    if (this.drainPromise || this.stopping || !this.isReady() || !this.current) return null;
+    const generation = this.current;
+    const result = await generation.client.request<T>(method, params, options);
+    return { result, generation: generation.id };
+  }
+
+  /**
    * Issues a request and reports which generation served it, so callers doing
    * recovery can tell whether a restart happened underneath them.
    */
@@ -677,7 +694,13 @@ export class AppServerSupervisor {
     signal: string | null,
   ): void {
     if (this.current?.id !== generationId) return;
+    const exited = this.current;
     this.current = null;
+    // The only durable record of *how* the child died. Without it a SIGKILL from
+    // outside, an OOM kill and a Codex exit(1) all read as "stdout ended".
+    console.error(
+      `[codex-bridge][app-server:${generationId}] exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}, pid=${exited.child.pid ?? "unknown"}, uptimeMs=${Math.max(0, this.now() - exited.startedAt)})`,
+    );
     this.options.onGenerationExit?.(generationId);
     if (this.stopping) {
       this.setState("stopped");

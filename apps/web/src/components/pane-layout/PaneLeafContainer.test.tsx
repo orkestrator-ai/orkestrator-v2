@@ -528,6 +528,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
+    expect(container.firstElementChild?.hasAttribute("data-pane-leaf")).toBe(true);
     fireEvent.click(container.firstElementChild as HTMLElement);
 
     expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(

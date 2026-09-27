@@ -808,6 +808,24 @@ describe("unexpected exit", () => {
     expect(health.lastExitSignal).toBe("SIGSEGV");
   });
 
+  test("logs how an unexpected exit happened, but not an intentional restart", async () => {
+    const h = harness();
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await h.supervisor.ensureReady();
+      await h.supervisor.restartNow("test reason");
+      expect(error.mock.calls.flat().map(String).join("\n")).not.toContain("exited unexpectedly");
+
+      h.children[1]!.exit(null, "SIGKILL");
+      const output = error.mock.calls.flat().map(String).join("\n");
+      expect(output).toMatch(
+        /\[codex-bridge\]\[app-server:2\] exited unexpectedly \(code=null, signal=SIGKILL, pid=\S+, uptimeMs=\d+\)/,
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("refuses to answer a server request from a dead generation", async () => {
     const h = harness();
     await h.supervisor.ensureReady();
@@ -1694,6 +1712,31 @@ describe("child stderr metadata", () => {
 });
 
 describe("request and health plumbing", () => {
+  test("requestIfReady never starts a child and answers null when nothing runs", async () => {
+    const h = harness();
+    await expect(h.supervisor.requestIfReady("config/mcpServer/reload")).resolves.toBeNull();
+    expect(h.children).toHaveLength(0);
+
+    await h.supervisor.ensureReady();
+    h.children[0]!.exit(1);
+    // A dead generation is not restarted by a management reload either.
+    await expect(h.supervisor.requestIfReady("config/mcpServer/reload")).resolves.toBeNull();
+    expect(h.children).toHaveLength(1);
+  });
+
+  test("requestIfReady uses the live generation when one is ready", async () => {
+    const h = harness();
+    await h.supervisor.ensureReady();
+    const pending = h.supervisor.requestIfReady("config/mcpServer/reload");
+    await flushMicrotasks();
+    const sent = h.children[0]!.stdin.parsed().find(
+      (message) => message.method === "config/mcpServer/reload",
+    );
+    h.children[0]!.stdout.pushMessage({ jsonrpc: "2.0", id: sent!.id, result: {} });
+    await expect(pending).resolves.toEqual({ result: {}, generation: 1 });
+    expect(h.children).toHaveLength(1);
+  });
+
   test("requestWithGeneration reports which generation served the call", async () => {
     const h = harness();
     await h.supervisor.ensureReady();

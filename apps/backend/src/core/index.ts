@@ -1,4 +1,37 @@
 import { DesignService } from "./design-service.js";
+import { PreviewRuntime } from "./preview-runtime.js";
+import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { WorkAdmissionPool } from "./work-admission.js";
+import {
+  keyedSchedulingEnabled,
+  type KeyedWorkflowOwner,
+  type WorkflowWakeReason,
+} from "./workflow-supervisor.js";
+import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
+import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+
+/** Former activity-bundle cadence, per named job. */
+const ACTIVITY_JOB_MS = 2_000;
+/** Elapsed maintenance deadline (coordinator repair, retention, tab cleanup). */
+const MAINTENANCE_JOB_MS = 60_000;
+/** Safety cadence for rename intent when none is pending. */
+const RENAME_SAFETY_MS = 30_000;
+import { WebAnnotationService } from "./web-annotation-service.js";
+import { WebAnnotationRollout } from "./web-annotation-rollout.js";
+import { WebAnnotationDispatchAdapter } from "./web-annotation-dispatch.js";
+import {
+  compileWebAnnotationBrief,
+  composeWebAnnotationDispatchText,
+} from "./web-annotation-brief.js";
+import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+import {
+  createMcpRuntimeProbe,
+  mcpRolloutLoader,
+  readContainerMcpFile,
+} from "./commands-registry-mcp.js";
+import { McpManagementService } from "./mcp-management/service.js";
 import {
   closeLocalServerAdmission,
   createCommandRegistry,
@@ -59,6 +92,19 @@ import {
   flushTerminalHistories,
   pruneTerminalHistoryStorage,
 } from "./terminal-history.js";
+import {
+  cancelScheduledEnvironmentCleanup,
+  runStartupEnvironmentCleanup,
+} from "./environment-cleanup-reconciler.js";
+
+/**
+ * One observed attempt of an activity-sweep step that has no overlap guard of
+ * its own. A synchronous throw still escapes exactly as it did unobserved.
+ */
+function observeSweepStep(kind: RecurringJobKind, run: () => unknown): Promise<unknown> {
+  recurringWorkMetrics.requested(kind);
+  return recurringWorkMetrics.observe(kind, () => Promise.resolve(run()));
+}
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
@@ -76,11 +122,26 @@ export class OrkestratorBackend {
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   private readonly workflowResultRollout: WorkflowResultRollout;
+  /**
+   * Bounded `workflow-provider` admission shared by every keyed workflow
+   * owner (step 08): a pass holds one slot for its environment while it
+   * reads providers, so many active workflows cannot all hit providers at once.
+   */
+  private readonly workflowAdmission = new WorkAdmissionPool({ name: "workflow-provider" });
+  private readonly webAnnotations: WebAnnotationService;
+  private readonly webAnnotationRollout: WebAnnotationRollout;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
+  private hostSuspendDetector: HostSuspendDetector | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
+  /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
+  private activityJobs: BackendActivityJobs | null = null;
+  private readonly keyedActivityJobs: boolean;
+  private readonly activityJobClock:
+    | { now: () => number; timers: import("./recurring-scheduler.js").RecurringTimerFactory }
+    | undefined;
   private setupStartupReconciled = false;
   private terminalStartupReconciled = false;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
@@ -130,13 +191,32 @@ export class OrkestratorBackend {
     >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     environmentLifecycleDrainTimeoutMs?: number;
+    /**
+     * Step 08 named due jobs for the activity bundle and maintenance. `false`
+     * selects the previous 2 s bundle and 60 s timer (never both); defaults
+     * to `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` not naming `backend-activity`.
+     */
+    keyedActivityJobs?: boolean;
+    /** Test seam: the activity jobs' monotonic clock and timers. */
+    activityJobClock?: {
+      now: () => number;
+      timers: import("./recurring-scheduler.js").RecurringTimerFactory;
+    };
   }) {
+    this.keyedActivityJobs =
+      options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
+    this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
     this.workflowResults = new WorkflowResultService(options.dataDir);
     this.workflowResultRollout = new WorkflowResultRollout(
       async () => (await storage.loadConfig()).global.workflowResultTools,
     );
     const design = new DesignService(options.dataDir, options.emit);
+    const previews = new PreviewRuntime({
+      storage,
+      emit: options.emit,
+      strictDockerOwner: options.strictDockerOwner ?? false,
+    });
     this.agentTools =
       options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults, design);
     const resolveAgentToolConnection = this.agentTools.workflowResultConnection
@@ -175,6 +255,7 @@ export class OrkestratorBackend {
     const context = {
       storage,
       design,
+      previews,
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
@@ -198,6 +279,8 @@ export class OrkestratorBackend {
       if (!handler) return;
       await handler({ environmentId }, context);
     };
+    context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
+      this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
     this.coordinators = new CoordinatorService(
       storage,
@@ -232,6 +315,8 @@ export class OrkestratorBackend {
       },
       {
         interactionMonitorMode,
+        // Rollback for step 07's observation sharing; fences stay either way.
+        observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
         onActivityTransition: (event) => {
@@ -239,6 +324,17 @@ export class OrkestratorBackend {
             environment_id: event.environmentId,
             previous_state: event.previousState,
             state: event.state,
+            // Additive (step 07): which session, and the observer's stamp so a
+            // client can invalidate exactly that view and detect a missed
+            // transition as a revision gap. Older clients ignore these.
+            ...(event.agent ? { agent: event.agent } : {}),
+            ...(event.logicalSessionKey ? { logical_session_key: event.logicalSessionKey } : {}),
+            ...(event.observation
+              ? {
+                  generation: event.observation.generation,
+                  revision: event.observation.revision,
+                }
+              : {}),
           });
           // An agent that just ended a turn may have run `gh pr create` itself,
           // and an environment with no stored PR carries no polling timer that
@@ -249,6 +345,12 @@ export class OrkestratorBackend {
           // idle reading would be a `gh` call per idle environment per sweep.
           // A first observation (`previousState === undefined`) is a backend
           // restart or a newly adopted session, not a turn that ended here.
+          // A provider transition in an environment is a hint for the
+          // workflows running there; it pulls their next pass forward and is
+          // dropped while one is already running.
+          if (event.owner !== "coordinator") {
+            this.wakeWorkflows(event.environmentId, "provider-transition");
+          }
           if (isAgentTurnEndTransition(event)) {
             // A coordinator has no environment row and no PR to probe for.
             if (event.owner !== "coordinator") {
@@ -331,6 +433,45 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    context.mcpManagement = new McpManagementService({
+      dataDir: options.dataDir,
+      storage,
+      emit: options.emit,
+      probe: createMcpRuntimeProbe(context),
+      readContainerFile: readContainerMcpFile,
+      loadRollout: mcpRolloutLoader(context),
+    });
+    // Web annotations: backend-owned threads and requests. Execution goes
+    // through the native queue via the dispatch adapter; the tool host is
+    // installed on the agent tools server when it supports annotation tools.
+    const annotationTools = this.agentTools as {
+      setWebAnnotationToolHost?: (host: WebAnnotationToolHost | null) => void;
+      hasWebAnnotationTools?: () => boolean;
+    };
+    // Rollout switch: `config.global.webAnnotations.mode`, overridden by
+    // ORKESTRATOR_WEB_ANNOTATIONS_MODE. Defaults to enabled.
+    this.webAnnotationRollout = new WebAnnotationRollout(
+      async () => (await storage.loadConfig()).global.webAnnotations,
+    );
+    this.webAnnotations = new WebAnnotationService({
+      dataDir: options.dataDir,
+      emit: options.emit,
+      rolloutMode: () => this.webAnnotationRollout.mode,
+      storage,
+      dispatch: new WebAnnotationDispatchAdapter({
+        storage,
+        nativeAgents: this.nativeAgents,
+        invoke: (command, args) => this.invoke(command, args),
+        resultToolsAvailable: () => annotationTools.hasWebAnnotationTools?.() ?? false,
+      }),
+      compileBrief: compileWebAnnotationBrief,
+      composeText: composeWebAnnotationDispatchText,
+      invoke: (command, args) => this.invoke(command, args),
+      resultTools: typeof annotationTools.setWebAnnotationToolHost === "function",
+    });
+    annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
+    context.webAnnotations = this.webAnnotations;
+    context.webAnnotationRollout = this.webAnnotationRollout;
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       const workspace = await storage.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
@@ -378,6 +519,7 @@ export class OrkestratorBackend {
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
+        workflowAdmission: this.workflowAdmission,
       },
     );
     context.buildPipelines = this.buildPipelines;
@@ -395,6 +537,7 @@ export class OrkestratorBackend {
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
+        workflowAdmission: this.workflowAdmission,
       },
     );
     context.loopedReviews = this.loopedReviews;
@@ -418,6 +561,7 @@ export class OrkestratorBackend {
           ),
         recoverAddressSession: (workflow, replacement) =>
           recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
+        workflowAdmission: this.workflowAdmission,
         invalidateAddressSession: async (workflow, session) => {
           await storage.invalidateNativeAgentSession(
             nativeAgentSessionStorageKey(workflow.environmentId, session.agent, session.sessionKey),
@@ -438,6 +582,7 @@ export class OrkestratorBackend {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
+        workflowAdmission: this.workflowAdmission,
       },
     );
     context.featurePlanning = this.featurePlanning;
@@ -454,9 +599,52 @@ export class OrkestratorBackend {
     );
     this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues);
     context.drainAgentMail = () => this.agentMail.drainInjects();
+    // Scoped workflow wakeups (step 08), subscribed before any owner's first
+    // discovery so nothing that commits during startup is missed. Each wake
+    // reaches only the indexed keys of one environment; a durable record the
+    // index does not hold yet is found by that owner's discovery instead.
+    this.workflowResults.onAccepted(({ environmentId }) => {
+      this.wakeWorkflows(environmentId, "result-accepted");
+    });
+    storage.addResourceChangeListener((change) => {
+      // Readiness and execution identity (status, setup, bridge port/token)
+      // all live on the environment record.
+      if (change.resource === "environment" && !change.deleted) {
+        this.wakeWorkflows(change.id, "environment-change");
+        // A rename intent is recorded on the environment.
+        this.activityJobs?.wake("pending-renames");
+      }
+      if (change.resource === "prompt-queue") this.activityJobs?.wake("tmux-queues");
+    });
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
       options.startupReapers?.claudeTmuxRuntimes ?? reapOrphanedClaudeTmuxRuntimes;
+  }
+
+  /** Owners driven by a keyed supervisor; an owner on its rollback driver ignores wakes. */
+  private keyedWorkflowOwners(): KeyedWorkflowOwner[] {
+    // Read lazily: a storage change can be announced while the constructor is
+    // still building the owners.
+    const owners: (KeyedWorkflowOwner | undefined)[] = [
+      this.featurePlanning,
+      this.buildPipelines,
+      this.loopedReviews,
+      this.multiReviews,
+    ];
+    return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
+  }
+
+  private wakeWorkflows(environmentId: string, reason: WorkflowWakeReason): void {
+    for (const owner of this.keyedWorkflowOwners()) {
+      try {
+        owner.wakeEnvironment(environmentId, reason);
+      } catch (error) {
+        console.warn(
+          "[backend] Failed to wake workflow work:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
   }
 
   /**
@@ -466,6 +654,15 @@ export class OrkestratorBackend {
    * not slow down, or fail, because GitHub is slow. The probe itself is
    * idempotent — an environment already being monitored just gets its next
    * check brought forward.
+   */
+  /**
+   * The single PR-monitor call site for a native turn-end edge.
+   *
+   * Called once per `isAgentTurnEndTransition` edge from `onActivityTransition`
+   * — never per idle observation, and never for a fenced pre-dispatch idle,
+   * which the observer refuses to apply (step 07). It reaches the PR monitor's
+   * completion wakeup via `pr_monitor_probe_environment` →
+   * `wakePrMonitorForCompletion` (step 05).
    */
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(
@@ -480,7 +677,40 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
-    await this.context.design?.initialize();
+    // Design startup recovery (interrupted operations, migrations, exports)
+    // degrades the design feature on failure, never the backend; every design
+    // command retries initialization lazily.
+    await this.context.design?.initialize().catch((error: unknown) => {
+      console.warn(
+        "[backend] Design storage failed to initialize:",
+        (error as NodeJS.ErrnoException)?.code ?? "error",
+      );
+    });
+    await this.webAnnotationRollout.refresh();
+    // Unreadable annotation storage degrades that feature, not the backend.
+    await this.webAnnotations.initialize().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to initialize web annotations:",
+        error instanceof Error ? error.name : "unknown",
+      );
+    });
+    // Preview definitions load before the gateway accepts commands; resolving
+    // targets happens in the background so a slow Docker daemon cannot delay
+    // startup. A registry that fails to load disables previews, not the backend.
+    await this.context.previews?.init().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to initialize preview services:",
+        error instanceof Error ? error.message : error,
+      );
+    });
+    // Recovers interrupted MCP configuration operations. A failure disables
+    // management, not the backend.
+    await this.context.mcpManagement?.init().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to initialize MCP configuration management:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
     configureTerminalHistoryRetention({
       enabled: terminalHistoryConfig.terminalHistoryEnabled,
@@ -504,6 +734,7 @@ export class OrkestratorBackend {
       this.context.storage,
     );
     await this.agentTools.start();
+    this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted
     // later — the aggregate is a max — so a renderer that quit mid-turn would
@@ -512,11 +743,22 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to clear stale agent activity:", error);
     });
     this.activityLeaseSweep ??= setInterval(() => {
-      void this.context.storage.expireFrontendAgentActivityLeases().catch((error) => {
-        console.warn("[backend] Failed to expire agent activity leases:", error);
-      });
+      recurringWorkMetrics.requested("activity-lease-expiry");
+      void recurringWorkMetrics
+        .observe("activity-lease-expiry", () =>
+          this.context.storage.expireFrontendAgentActivityLeases(),
+        )
+        .catch((error) => {
+          console.warn("[backend] Failed to expire agent activity leases:", error);
+        });
     }, FRONTEND_AGENT_ACTIVITY_LEASE_MS / 2);
     this.activityLeaseSweep.unref?.();
+    // Monotonic deadlines do not count time the host spent asleep; on resume
+    // every scheduler runs its overdue keys once instead of waiting it out.
+    this.hostSuspendDetector ??= new HostSuspendDetector({
+      onSuspend: (suspendedMs) => recurringDiagnosticsRegistry.notifySuspension(suspendedMs),
+    });
+    this.hostSuspendDetector.start();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -607,6 +849,10 @@ export class OrkestratorBackend {
         console.warn(`[backend] Interrupted deletion remains pending for ${environmentId}`);
       });
     }
+    // Finishes cleanup that earlier deletions could not, and removes bridge
+    // state whose environment is gone. Background work: it never blocks the
+    // gateway and never rejects.
+    void runStartupEnvironmentCleanup(this.context);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
       await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
@@ -708,6 +954,9 @@ export class OrkestratorBackend {
     await this.nativeAgents.reconcileAgentActivity().catch((error) => {
       console.warn("[backend] Failed to restore native agent activity:", error);
     });
+    // Annotation requests reconcile against native dispatch state, so start
+    // only once native sessions are restored. Runs with no renderer mounted.
+    this.webAnnotations.startReconciler();
     const reconcileClaudeState = this.commands.get("reconcile_claude_state_polling");
     if (reconcileClaudeState) {
       await Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
@@ -729,8 +978,14 @@ export class OrkestratorBackend {
     });
     let tabTeardownReconcileInFlight: Promise<void> | null = null;
     const reconcileTabTeardownsOnce = (): void => {
-      if (!reconcileTabTeardowns || tabTeardownReconcileInFlight) return;
-      tabTeardownReconcileInFlight = Promise.resolve(reconcileTabTeardowns({}, this.context))
+      if (!reconcileTabTeardowns) return;
+      recurringWorkMetrics.requested("tab-cleanup");
+      if (tabTeardownReconcileInFlight) {
+        recurringWorkMetrics.coalesced("tab-cleanup");
+        return;
+      }
+      tabTeardownReconcileInFlight = recurringWorkMetrics
+        .observe("tab-cleanup", () => Promise.resolve(reconcileTabTeardowns({}, this.context)))
         .then(() => undefined)
         .catch((error: unknown) => {
           console.warn("[backend] Failed to reconcile tab teardowns:", error);
@@ -741,8 +996,16 @@ export class OrkestratorBackend {
     };
     let orphanReconcileInFlight: Promise<void> | null = null;
     const reconcileOrphanedTabResourcesOnce = (): void => {
-      if (!reconcileOrphanedTabResources || orphanReconcileInFlight) return;
-      orphanReconcileInFlight = Promise.resolve(reconcileOrphanedTabResources({}, this.context))
+      if (!reconcileOrphanedTabResources) return;
+      recurringWorkMetrics.requested("tab-cleanup");
+      if (orphanReconcileInFlight) {
+        recurringWorkMetrics.coalesced("tab-cleanup");
+        return;
+      }
+      orphanReconcileInFlight = recurringWorkMetrics
+        .observe("tab-cleanup", () =>
+          Promise.resolve(reconcileOrphanedTabResources({}, this.context)),
+        )
         .then(() => undefined)
         .catch((error: unknown) => {
           console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
@@ -755,13 +1018,20 @@ export class OrkestratorBackend {
     let coordinatorWorkflowTick = 0;
     let coordinatorWorkflowReconcileInFlight: Promise<void> | null = null;
     const reconcileCoordinatorWorkflows = () => {
-      if (coordinatorWorkflowReconcileInFlight) return;
-      coordinatorWorkflowReconcileInFlight = this.coordinators
-        .reconcileWorkflowNotifications()
-        // A delegation closed by an edge whose wake never reached the mail
-        // store — a crash, a storage fault — is finished here. The wake is
-        // idempotent on `wokenAt`, so a delivered one is not repeated.
-        .then(() => this.coordinators.reconcileWorkerDelegations())
+      recurringWorkMetrics.requested("coordinator-repair");
+      if (coordinatorWorkflowReconcileInFlight) {
+        recurringWorkMetrics.coalesced("coordinator-repair");
+        return;
+      }
+      coordinatorWorkflowReconcileInFlight = recurringWorkMetrics
+        .observe("coordinator-repair", () =>
+          this.coordinators
+            .reconcileWorkflowNotifications()
+            // A delegation closed by an edge whose wake never reached the mail
+            // store — a crash, a storage fault — is finished here. The wake is
+            // idempotent on `wokenAt`, so a delivered one is not repeated.
+            .then(() => this.coordinators.reconcileWorkerDelegations()),
+        )
         .catch((error) => {
           console.warn(
             "[backend] Failed to reconcile coordinator workflow notifications:",
@@ -772,54 +1042,202 @@ export class OrkestratorBackend {
           coordinatorWorkflowReconcileInFlight = null;
         });
     };
-    this.nativeActivitySweep ??= setInterval(() => {
-      void this.nativeAgents.reconcileAgentActivity().catch((error) => {
-        console.warn("[backend] Failed to reconcile native agent activity:", error);
-      });
+    if (this.keyedActivityJobs && !this.activityJobs) {
+      // Step 08: every part of the former 2 s bundle and the 60 s maintenance
+      // is its own named due job (see backend-activity-jobs.ts).
+      const warn = (label: string) => (error: unknown) => {
+        console.warn(
+          `[backend] Failed to ${label}:`,
+          error instanceof Error ? error.message : error,
+        );
+      };
+      const jobs: BackendActivityJob[] = [
+        {
+          name: "activity",
+          kind: "native-activity-sweep",
+          priority: "progress",
+          intervalMs: ACTIVITY_JOB_MS,
+          fixedRate: true,
+          run: () => this.nativeAgents.reconcileAgentActivity(),
+          onError: warn("reconcile native agent activity"),
+        },
+        {
+          name: "tmux-queues",
+          kind: "tmux-queue-drain",
+          priority: "progress",
+          intervalMs: ACTIVITY_JOB_MS,
+          fixedRate: true,
+          run: () => this.promptQueues.drainAll(),
+          onError: warn("drain tmux prompt queues"),
+        },
+        {
+          name: "mail-presence",
+          kind: "mail-presence",
+          priority: "progress",
+          // Presence entries expire after 4 s; a 2 s refresh keeps them live.
+          intervalMs: ACTIVITY_JOB_MS,
+          fixedRate: true,
+          run: () => this.agentMail.refreshPresence(),
+          onError: warn("refresh agent mail presence"),
+        },
+        {
+          name: "mail-injection",
+          kind: "mail-injection",
+          priority: "progress",
+          intervalMs: ACTIVITY_JOB_MS,
+          fixedRate: true,
+          run: () => this.agentMail.drainInjects(),
+          onError: warn("drain agent mail"),
+        },
+        {
+          name: "coordinator-repair",
+          kind: "coordinator-repair",
+          priority: "maintenance",
+          intervalMs: MAINTENANCE_JOB_MS,
+          run: async () => {
+            reconcileCoordinatorWorkflows();
+            await coordinatorWorkflowReconcileInFlight;
+          },
+          onError: warn("reconcile coordinator workflow notifications"),
+        },
+        {
+          name: "mail-retention",
+          kind: "mail-retention",
+          priority: "maintenance",
+          intervalMs: MAINTENANCE_JOB_MS,
+          run: async () => {
+            await observeSweepStep("mail-retention", () =>
+              this.context.storage
+                .loadConfig()
+                .then((config) =>
+                  this.context.storage.pruneAgentMail(
+                    config.global.agentMessaging?.retentionDays ?? 14,
+                  ),
+                ),
+            );
+          },
+          onError: warn("prune agent mail"),
+        },
+        {
+          name: "tab-teardowns",
+          kind: "tab-cleanup",
+          priority: "maintenance",
+          intervalMs: MAINTENANCE_JOB_MS,
+          run: async () => {
+            reconcileTabTeardownsOnce();
+            await tabTeardownReconcileInFlight;
+          },
+          onError: warn("reconcile tab teardowns"),
+        },
+        {
+          name: "tab-orphans",
+          kind: "tab-cleanup",
+          priority: "maintenance",
+          intervalMs: MAINTENANCE_JOB_MS,
+          run: async () => {
+            reconcileOrphanedTabResourcesOnce();
+            await orphanReconcileInFlight;
+          },
+          onError: warn("reconcile orphaned tab resources"),
+        },
+      ];
       if (reconcileClaudeState) {
-        void Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
-          console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
+        jobs.push({
+          name: "claude-state",
+          kind: "claude-state-reconcile",
+          priority: "progress",
+          intervalMs: ACTIVITY_JOB_MS,
+          fixedRate: true,
+          run: async () => {
+            await observeSweepStep("claude-state-reconcile", () =>
+              reconcileClaudeState({}, this.context),
+            );
+          },
+          onError: warn("reconcile Claude terminal activity"),
         });
       }
-      void this.promptQueues.drainAll().catch((error) => {
-        console.warn("[backend] Failed to drain tmux prompt queues:", error);
-      });
-      void this.agentMail.refreshPresence().catch((error) => {
-        console.warn("[backend] Failed to refresh agent mail presence:", error);
-      });
-      void this.agentMail.drainInjects().catch((error) => {
-        console.warn("[backend] Failed to drain agent mail:", error);
-      });
-      coordinatorWorkflowTick += 1;
-      if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
-      mailRetentionTick += 1;
-      if (mailRetentionTick % 30 === 0) {
-        void this.context.storage
-          .loadConfig()
-          .then((config) =>
-            this.context.storage.pruneAgentMail(config.global.agentMessaging?.retentionDays ?? 14),
-          )
-          .catch((error) => {
+      if (reconcilePendingEnvironmentRenames) {
+        jobs.push({
+          name: "pending-renames",
+          kind: "pending-rename-reconcile",
+          priority: "progress",
+          intervalMs: ACTIVITY_JOB_MS,
+          fixedRate: true,
+          // Rename intent (task 9): every 2 s while an environment carries
+          // one, else a 30 s safety pass; an environment change wakes it.
+          run: async () => {
+            const result = (await observeSweepStep("pending-rename-reconcile", () =>
+              reconcilePendingEnvironmentRenames({}, this.context),
+            )) as { pending?: unknown } | undefined;
+            return typeof result?.pending === "number" && result.pending === 0
+              ? RENAME_SAFETY_MS
+              : undefined;
+          },
+          onError: warn("reconcile pending environment renames"),
+        });
+      }
+      this.activityJobs = new BackendActivityJobs(
+        jobs,
+        this.activityJobClock
+          ? { now: this.activityJobClock.now, timers: this.activityJobClock.timers }
+          : {},
+      );
+      this.activityJobs.start();
+    } else if (!this.keyedActivityJobs) {
+      this.nativeActivitySweep ??= setInterval(() => {
+        void this.nativeAgents.reconcileAgentActivity().catch((error) => {
+          console.warn("[backend] Failed to reconcile native agent activity:", error);
+        });
+        if (reconcileClaudeState) {
+          void observeSweepStep("claude-state-reconcile", () =>
+            reconcileClaudeState({}, this.context),
+          ).catch((error: unknown) => {
+            console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
+          });
+        }
+        void this.promptQueues.drainAll().catch((error) => {
+          console.warn("[backend] Failed to drain tmux prompt queues:", error);
+        });
+        void this.agentMail.refreshPresence().catch((error) => {
+          console.warn("[backend] Failed to refresh agent mail presence:", error);
+        });
+        void this.agentMail.drainInjects().catch((error) => {
+          console.warn("[backend] Failed to drain agent mail:", error);
+        });
+        coordinatorWorkflowTick += 1;
+        if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
+        mailRetentionTick += 1;
+        if (mailRetentionTick % 30 === 0) {
+          void observeSweepStep("mail-retention", () =>
+            this.context.storage
+              .loadConfig()
+              .then((config) =>
+                this.context.storage.pruneAgentMail(
+                  config.global.agentMessaging?.retentionDays ?? 14,
+                ),
+              ),
+          ).catch((error) => {
             console.warn("[backend] Failed to prune agent mail:", error);
           });
-      }
-      if (reconcilePendingEnvironmentRenames) {
-        void Promise.resolve(reconcilePendingEnvironmentRenames({}, this.context)).catch(
-          (error: unknown) => {
+        }
+        if (reconcilePendingEnvironmentRenames) {
+          void observeSweepStep("pending-rename-reconcile", () =>
+            reconcilePendingEnvironmentRenames({}, this.context),
+          ).catch((error: unknown) => {
             console.warn("[backend] Failed to reconcile pending environment renames:", error);
-          },
-        );
-      }
-    }, 2_000);
-    this.nativeActivitySweep.unref?.();
-    // Interrupted tab cleanup is durable and orphan reaping has a one-hour
-    // grace period. A one-minute, coalesced sweep is responsive enough without
-    // repeatedly parsing layouts or overlapping destructive work.
-    this.tabResourceSweep ??= setInterval(() => {
-      reconcileTabTeardownsOnce();
-      reconcileOrphanedTabResourcesOnce();
-    }, 60_000);
-    this.tabResourceSweep.unref?.();
+          });
+        }
+      }, 2_000);
+      this.nativeActivitySweep.unref?.();
+      // Interrupted tab cleanup is durable and orphan reaping has a one-hour
+      // grace period. A one-minute, coalesced sweep is responsive enough without
+      // repeatedly parsing layouts or overlapping destructive work.
+      this.tabResourceSweep ??= setInterval(() => {
+        reconcileTabTeardownsOnce();
+        reconcileOrphanedTabResourcesOnce();
+      }, 60_000);
+      this.tabResourceSweep.unref?.();
+    }
     // This credential persists across restarts, so an already configured MCP
     // client can reconnect the instant the listener binds. Publish it only
     // after every authoritative recovery and service initializer above has
@@ -830,6 +1248,7 @@ export class OrkestratorBackend {
       // opening so the user can diagnose it.
       console.warn("[backend] Failed to start control MCP:", error);
     });
+    this.reserveOwnedPreviewPorts();
     reconcileCoordinatorWorkflows();
   }
 
@@ -842,6 +1261,26 @@ export class OrkestratorBackend {
    */
   hasCommand(command: string): boolean {
     return this.commands.has(command);
+  }
+
+  /** Orkestrator's own listeners can never be registered as preview targets. */
+  private reserveOwnedPreviewPorts(): void {
+    const ports: number[] = [];
+    const agentToolsPort = (
+      this.agentTools as { listeningPort?: () => number | null }
+    ).listeningPort?.();
+    if (agentToolsPort) ports.push(agentToolsPort);
+    const controlUrl = this.controlMcp.getInfo()?.url;
+    if (controlUrl) {
+      const port = Number(new URL(controlUrl).port);
+      if (port > 0) ports.push(port);
+    }
+    this.context.previews?.reservePorts("backend", ports);
+  }
+
+  /** Backend-owned preview services, for gateway transport adapters. */
+  get previews(): PreviewRuntime | undefined {
+    return this.context.previews;
   }
 
   getControlMcpInfo(): ControlMcpInfo | null {
@@ -862,10 +1301,15 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    // Stop new annotation reconciliation; pending requests stay as persisted
+    // (never marked failed) and resume on the next start.
+    this.webAnnotations.stopReconciler();
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
     }
+    this.hostSuspendDetector?.stop();
+    this.hostSuspendDetector = null;
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;
@@ -874,10 +1318,13 @@ export class OrkestratorBackend {
       clearInterval(this.tabResourceSweep);
       this.tabResourceSweep = null;
     }
+    this.activityJobs?.stop();
+    this.activityJobs = null;
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
+    cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
@@ -927,15 +1374,27 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain agent mail:", error);
         }
+        this.workflowAdmission.close();
         await lifecycleDrain;
         await flushTerminalHistories(true);
         await shutdownLocalServers({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {
+        this.context.previews?.dispose();
+        this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
         await this.context.design?.close();
+        await Promise.race([
+          this.webAnnotations.close().catch((error: unknown) => {
+            console.warn(
+              "[backend] Failed to flush web annotations:",
+              error instanceof Error ? error.name : "unknown",
+            );
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
+        ]);
       }
     })();
     this.shutdownPromise = attempt;

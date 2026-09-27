@@ -59,6 +59,51 @@ describe("WorkflowResultService", () => {
     return resultKey;
   }
 
+  test("environment deletion removes only that environment's slots, open or settled", async () => {
+    const open = await prepare();
+    const accepted = await prepare();
+    await service.submit(scope, accepted, { phase: "confirming", title: "T", summary: "S" });
+    const other = crypto.randomUUID();
+    await service.prepare({
+      resultKey: other,
+      kind: "feature-plan-state",
+      environmentId: "env-2",
+      projectId: scope.projectId,
+      provider: "codex",
+    });
+
+    expect(await service.deleteByEnvironment(scope.environmentId)).toBe(2);
+    expect(await service.registered(open)).toBe(false);
+    expect(await service.registered(accepted)).toBe(false);
+    expect(await service.registered(other)).toBe(true);
+    expect(await service.deleteByEnvironment(scope.environmentId)).toBe(0);
+  });
+
+  test("announces a first acceptance after its commit, once, to isolated listeners", async () => {
+    const resultKey = await prepare();
+    const seen: { resultKey: string; environmentId: string; committed: boolean }[] = [];
+    service.onAccepted(() => {
+      throw new Error("a faulty listener must not fail the submission");
+    });
+    const unsubscribe = service.onAccepted((event) => {
+      // Fired after the durable commit: a fresh service already reads it.
+      void new WorkflowResultService(dataDir).structured(event.resultKey).then((result) => {
+        seen.push({ ...event, committed: result !== null });
+      });
+    });
+    const value = { phase: "confirming", title: "Tool results", summary: "Use callbacks." };
+    expect(await service.submit(scope, resultKey, value)).toMatchObject({ ok: true });
+    // A duplicate submission of the same result is not a new acceptance.
+    expect(await service.submit(scope, resultKey, value)).toMatchObject({ duplicate: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(seen).toEqual([{ resultKey, environmentId: "env-1", committed: true }]);
+    unsubscribe();
+    const second = await prepare();
+    await service.submit(scope, second, value);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(seen).toHaveLength(1);
+  });
+
   test("persists an accepted result and receipt across service restarts", async () => {
     const resultKey = await prepare();
     const value = { phase: "confirming", title: "Tool results", summary: "Use callbacks." };

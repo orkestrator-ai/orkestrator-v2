@@ -33,6 +33,12 @@ export function serializeAsyncQuestionAnswers(
 export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPart }) {
   const { responses, respond, draftScope } = useContext(AsyncQuestionResponseContext);
   const questions = part.asyncQuestion.questions;
+  // Codex can repeat a question title in the accompanying message. Keep the
+  // fieldset legend as its accessible label and show only distinct context above it.
+  const normalizedContent = part.content.trim().replace(/\s+/g, " ");
+  const showContent =
+    normalizedContent.length > 0 &&
+    !questions.some((question) => question.title.trim().replace(/\s+/g, " ") === normalizedContent);
   const draftKey = draftScope
     ? nativeAsyncQuestionDraftKey(draftScope, part.asyncQuestion.itemId)
     : undefined;
@@ -73,7 +79,7 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
         <MessageCircleQuestion className="size-4 text-primary" />
         Codex has a question
       </div>
-      {part.content.trim() ? (
+      {showContent ? (
         <div className="mb-3">
           <TextPart
             content={part.content}

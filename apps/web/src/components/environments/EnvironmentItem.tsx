@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
@@ -727,6 +728,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   This environment has an associated PR that will remain open.
                 </span>
               )}
+              <DesignEnvironmentDeletionNotice
+                environmentId={environment.id}
+                open={showDeleteDialog}
+              />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

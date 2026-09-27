@@ -2,6 +2,11 @@ import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, runCommand } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
+import {
+  recurringWorkMetrics,
+  type RecurringWorkMetrics,
+  type RecurringWorkSpan,
+} from "./recurring-work-metrics.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -54,6 +59,8 @@ export type ClaudeStatePollManagerOptions = {
   cancel?: (timer: unknown) => void;
   now?: () => string;
   nowMs?: () => number;
+  /** Content-free cost accounting; defaults to the process-wide recorder. */
+  metrics?: RecurringWorkMetrics;
 };
 
 /** How long the agent has to answer before a state read is abandoned. */
@@ -92,8 +99,10 @@ export class ClaudeStatePollManager {
   private readonly cancel: (timer: unknown) => void;
   private readonly now: () => string;
   private readonly nowMs: () => number;
+  private readonly metrics: RecurringWorkMetrics;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
+    this.metrics = options.metrics ?? recurringWorkMetrics;
     this.readState =
       options.readState ??
       (async (containerId) => {
@@ -161,11 +170,14 @@ export class ClaudeStatePollManager {
 
   private requestPoll(containerId: string, poll: ClaudeStatePoll): void {
     if (!poll.active || this.polls.get(containerId) !== poll) return;
+    this.metrics.requested("tmux-poll");
     if (poll.inFlight) {
+      this.metrics.coalesced("tmux-poll");
       poll.pollRequested = true;
       return;
     }
-    poll.inFlight = this.poll(containerId, poll)
+    poll.inFlight = this.metrics
+      .observe("tmux-poll", (span) => this.poll(containerId, poll, span))
       .catch(() => undefined)
       .finally(() => {
         poll.inFlight = undefined;
@@ -191,7 +203,11 @@ export class ClaudeStatePollManager {
     );
   }
 
-  private async poll(containerId: string, poll: ClaudeStatePoll): Promise<void> {
+  private async poll(
+    containerId: string,
+    poll: ClaudeStatePoll,
+    span?: RecurringWorkSpan,
+  ): Promise<void> {
     const state = (await this.readState(containerId).catch(() => "")).trim();
     if (!this.isCurrent(containerId, poll)) return;
 
@@ -199,6 +215,8 @@ export class ClaudeStatePollManager {
     if (known) poll.failedReads = 0;
     else poll.failedReads += 1;
     const changed = known && (state !== poll.lastState || poll.stale);
+    if (changed) span?.changed();
+    else span?.unchanged();
     // A tick that observed nothing new must cost nothing beyond the state read.
     // Loading environments here parses the whole environments file, once per
     // second per running container, to answer a question whose answer has not

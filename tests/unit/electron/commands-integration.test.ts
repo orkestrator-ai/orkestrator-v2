@@ -246,6 +246,48 @@ describe("storage-backed command delegation", () => {
       ),
     ).resolves.toEqual({ name: "renamed" });
     await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: "git@github.com:acme/moved.git" } },
+        context,
+      ),
+    ).resolves.toEqual({ gitUrl: "git@github.com:acme/moved.git" });
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: "/tmp/repo" } },
+        context,
+      ),
+    ).rejects.toThrow("Git URL must be an HTTPS, SSH, or git@ remote URL");
+    await expect(
+      commands.get("update_project")?.(
+        {
+          projectId: "project-1",
+          updates: { name: "renamed", gitUrl: "  git@github.com:acme/moved.git  " },
+        },
+        context,
+      ),
+    ).resolves.toEqual({ name: "renamed", gitUrl: "  git@github.com:acme/moved.git  " });
+    const legacyProject = { ...project, gitUrl: "/tmp/origin.git" };
+    storage.getProject.mockResolvedValueOnce(legacyProject);
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { name: "legacy renamed", gitUrl: "/tmp/origin.git" } },
+        context,
+      ),
+    ).resolves.toEqual({ name: "legacy renamed", gitUrl: "/tmp/origin.git" });
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: 42 } },
+        context,
+      ),
+    ).rejects.toThrow("updates.gitUrl");
+    storage.updateProject.mockRejectedValueOnce(new Error("Duplicate project URL"));
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: "https://github.com/acme/duplicate.git" } },
+        context,
+      ),
+    ).rejects.toThrow("Duplicate project URL");
+    await expect(
       commands.get("reorder_projects")?.({ projectIds: ["project-2", "project-1"] }, context),
     ).resolves.toEqual(["project-2", "project-1"]);
     expect(
@@ -464,6 +506,10 @@ describe("storage-backed command delegation", () => {
 
     expect(storage.removeProject).toHaveBeenCalledWith("project-1");
     expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });
+    expect(storage.updateProject).toHaveBeenCalledWith("project-1", {
+      gitUrl: "git@github.com:acme/moved.git",
+    });
+    expect(storage.updateProject).not.toHaveBeenCalledWith("project-1", { gitUrl: "/tmp/repo" });
     expect(storage.updateRepositorySettings).toHaveBeenCalledWith("project-1", repositoryConfig);
     expect(storage.updateRepositoryConfig).not.toHaveBeenCalled();
   });
@@ -1478,6 +1524,62 @@ exit 0
     }
   });
 
+  test("new environments use an updated project remote when created and started", async () => {
+    const project = {
+      id: "project-1",
+      name: "Moved repository",
+      gitUrl: "https://git.example.invalid/old.git",
+      localPath: null,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    };
+    const { context } = createContext([], { project });
+    Object.assign(context.storage, {
+      updateProject: mock(async (_id: string, updates: { gitUrl?: string }) => {
+        if (updates.gitUrl !== undefined) project.gitUrl = updates.gitUrl;
+        return project;
+      }),
+    });
+    const commands = createCommandRegistry();
+    const movedUrl = "https://git.example.invalid/moved.git";
+    const gitLog = path.join(await createTempDir("ork-updated-remote-"), "git.log");
+
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: project.id, updates: { gitUrl: movedUrl } },
+        context,
+      ),
+    ).resolves.toMatchObject({ gitUrl: movedUrl });
+
+    await withGitArgumentStub(
+      `  *ls-remote*) printf '%s\\n' "$*" >> '${gitLog}'; exit 0 ;;`,
+      async () => {
+        const created = (await commands.get("create_environment")?.(
+          { projectId: project.id, name: "after-move", networkAccessMode: "full" },
+          context,
+        )) as Environment;
+        expect(created.projectId).toBe(project.id);
+        expect(await fs.readFile(gitLog, "utf8")).toContain(movedUrl);
+
+        await withFakeDocker(
+          `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then exit 42; fi
+exit 0
+`,
+          async (logs) => {
+            await commands
+              .get("start_environment")?.({ environmentId: created.id }, context)
+              .catch(() => undefined);
+            const dockerCalls = await fs.readFile(logs.all, "utf8");
+            expect(dockerCalls).toContain(`GIT_URL=${movedUrl}`);
+            expect(dockerCalls).not.toContain("GIT_URL=https://git.example.invalid/old.git");
+          },
+        );
+      },
+    );
+  });
+
   test("forwards a host-inherited Cursor API key but reports its source to the renderer", async () => {
     const hostCursorApiKey = "cursor_host_env_key";
     const previousCursorApiKey = process.env.CURSOR_API_KEY;
@@ -1681,6 +1783,8 @@ exit 0
         // a client would otherwise only have learned from the event.
         const rehydrated = (await commands.get("get_environment_diff_stats")?.({}, context)) as {
           entries: Array<{ environmentId: string; stats: Record<string, unknown> }>;
+          generation: string;
+          revision: number;
         };
         expect(rehydrated.entries).toContainEqual(
           expect.objectContaining({
@@ -1688,6 +1792,33 @@ exit 0
             stats: { additions: 3, deletions: 0, filesChanged: 2, truncated: false },
           }),
         );
+
+        // The stamped legacy shape doubles as the client's known position: a
+        // conditional read at that position is answered without a body, and
+        // an older position receives the captured snapshot.
+        expect(rehydrated.revision).toBeGreaterThan(0);
+        await expect(
+          commands.get("get_environment_diff_stats")?.(
+            { knownGeneration: rehydrated.generation, knownRevision: rehydrated.revision },
+            context,
+          ),
+        ).resolves.toEqual({
+          status: "unchanged",
+          generation: rehydrated.generation,
+          revision: rehydrated.revision,
+        });
+        const older = (await commands.get("get_environment_diff_stats")?.(
+          { knownGeneration: rehydrated.generation, knownRevision: rehydrated.revision - 1 },
+          context,
+        )) as { status: string; snapshot: { entries: unknown[] } };
+        expect(older.status).toBe("snapshot");
+        expect(older.snapshot.entries).toEqual(rehydrated.entries);
+        await expect(
+          commands.get("get_environment_diff_stats")?.(
+            { knownGeneration: "another-generation", knownRevision: 0 },
+            context,
+          ),
+        ).resolves.toMatchObject({ status: "reset", reason: "generation" });
       } finally {
         await commands
           .get("delete_environment")?.({ environmentId: environment.id }, context)
@@ -2178,14 +2309,17 @@ exit 1
               truncated: true,
             });
 
-            const execsBefore = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
+            // Status-script execs only: the container fetch policy may run its
+            // own (separate) fetch exec in the background after the first scan.
+            const statusExecs = async () =>
+              (await fs.readFile(logs.exec, "utf8")).split("ORKESTRATOR_NAME_STATUS").length - 1;
+            const execsBefore = await statusExecs();
             const files = (await commands.get("get_git_status")?.(
               { containerId: environment.containerId, targetBranch: "main" },
               context,
             )) as Array<{ path: string }>;
             expect(files).toHaveLength(2_001);
-            const execsAfter = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
-            expect(execsAfter).toBe(execsBefore);
+            expect(await statusExecs()).toBe(execsBefore);
           },
         );
       } finally {

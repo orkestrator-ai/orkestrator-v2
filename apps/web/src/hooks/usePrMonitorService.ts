@@ -8,10 +8,20 @@
  * the kanban side effects, and persists PR state. This hook only mirrors the
  * monitor into the store and raises user-facing notifications for transitions.
  *
- * Snapshot + incremental, like useEnvironmentDiffStats: the event stream has no
- * replay buffer, so the authoritative `get_pr_monitor_state` snapshot is read
- * after subscribing on mount and again on every reconnect, with live events
- * buffered while a snapshot is in flight.
+ * Snapshot + incremental through the bounded hydration controller
+ * (`@/lib/bounded-hydration`): subscribe first, then hydrate; updates that land
+ * while a snapshot is in flight are held per environment within fixed bounds
+ * and applied only when newer than the snapshot's revision. Reconnects fence
+ * in-flight reads, and the resource-sync safety cadence runs a compact
+ * conditional check that normally answers `unchanged` without a body.
+ *
+ * State convergence and notifications are separate contracts. The store always
+ * converges to the backend's announced state. The "Branch merged" toast is
+ * best-effort: it is raised for merged transitions this client observes, after
+ * their state is applied, deduplicated per (environment, PR URL, state) in a
+ * bounded set so a re-delivered or retried transition never toasts twice and a
+ * replacement PR (new URL) still does. Transitions announced while this client
+ * was disconnected are not replayed; the current PR state still is.
  */
 
 import { useEffect } from "react";
@@ -20,83 +30,102 @@ import {
   PR_MONITOR_CHANGED_EVENT,
   isPrMonitorEvent,
   isPrMonitorSnapshot,
+  type PrMonitorEnvironmentState,
   type PrMonitorEvent,
+  type PrMonitorSnapshot,
 } from "@orkestrator/protocol/pr-monitor";
+import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
+import {
+  BoundedKeySet,
+  createBoundedHydration,
+  readViewSnapshot,
+  type BoundedHydrationLimits,
+  type HydrationClock,
+  type HydrationEntry,
+  type HydrationUpdate,
+} from "@/lib/bounded-hydration";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import { onViewSafetyCheck } from "@/lib/resource-sync";
 import { playConfiguredNotificationSound } from "@/lib/notification-sounds";
 
-export function usePrMonitorService(): void {
+/** Merged-transition keys remembered for deduplication. */
+export const PR_TRANSITION_DEDUPE_LIMIT = 256;
+
+export interface PrMonitorServiceOptions {
+  /** Test seams; production uses real timers and default bounds. */
+  clock?: HydrationClock;
+  limits?: Partial<BoundedHydrationLimits>;
+}
+
+function toEntries(snapshot: PrMonitorSnapshot): HydrationEntry<PrMonitorEnvironmentState>[] {
+  return snapshot.entries.map((entry) => ({ key: entry.environmentId, value: entry }));
+}
+
+/** Reads the PR monitor view, conditionally when a revisioned position is known. */
+export function fetchPrMonitorView(known: ViewRevisionStamp | null) {
+  return readViewSnapshot(
+    "get_pr_monitor_state",
+    () => backend.getPrMonitorState(known ?? undefined),
+    isPrMonitorSnapshot,
+    toEntries,
+  );
+}
+
+export function toPrMonitorUpdate(
+  event: PrMonitorEvent,
+): HydrationUpdate<PrMonitorEnvironmentState> {
+  const stamp = readViewRevisionStamp(event, "event");
+  return {
+    key: event.environmentId,
+    value: "removed" in event ? null : event.state,
+    // Validated by isPrMonitorEvent, so never "invalid" here.
+    stamp: stamp === "invalid" ? null : stamp,
+  };
+}
+
+export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void {
   const applySnapshot = usePrMonitorStore((s) => s.applySnapshot);
   const applyEvent = usePrMonitorStore((s) => s.applyEvent);
+  const setSyncStatus = usePrMonitorStore((s) => s.setSyncStatus);
+  const { clock, limits } = options;
 
   useEffect(() => {
     let disposed = false;
     const unlisteners: UnlistenFn[] = [];
     let stopChanges: UnlistenFn | null = null;
     let changeSubscriptionPending = false;
-    let rehydrating = false;
-    let rehydrateRequested = false;
-    let bufferedEvents: PrMonitorEvent[] = [];
-    // Transitions already announced to the user. Effect-lifetime rather than
-    // per-event because the backend may legitimately re-emit a transition (it
-    // announces before persisting, and a persist failure retries), and the
-    // same merge must not toast twice.
-    const notifiedTransitions = new Set<string>();
+    // Effect-lifetime rather than per-event because an event can be delivered
+    // twice (replay plus live, or a transition re-announced after a failed
+    // persist), and the same merge must not toast twice. Bounded: old keys are
+    // evicted first, and a PR URL is merged at most once in practice.
+    const notifiedTransitions = new BoundedKeySet(PR_TRANSITION_DEDUPE_LIMIT);
 
-    const handleEvent = (event: PrMonitorEvent) => {
-      applyEvent(event);
+    const hydration = createBoundedHydration<PrMonitorEnvironmentState>({
+      name: "pr-monitor",
+      fetchSnapshot: ({ known }) => fetchPrMonitorView(known),
+      replaceAll: (entries) => applySnapshot(entries.map((entry) => entry.value)),
+      applyUpdate: (environmentId, state) =>
+        applyEvent(state ? { environmentId, state } : { environmentId, removed: true }),
+      onStatusChange: setSyncStatus,
+      clock,
+      limits,
+    });
+
+    const announceMerge = (event: PrMonitorEvent) => {
       if ("removed" in event) return;
       const transition = event.transition;
       if (!transition || transition.state !== "merged") return;
       const key = [event.environmentId, transition.url, transition.state].join("\0");
-      if (notifiedTransitions.has(key)) return;
-      notifiedTransitions.add(key);
+      if (!notifiedTransitions.add(key)) return;
       const environment = useEnvironmentStore.getState().getEnvironmentById(event.environmentId);
       toast.success("Branch merged", {
         description: environment?.branch,
         id: `branch-merged-${event.environmentId}`,
       });
       void playConfiguredNotificationSound("pr-merged");
-    };
-
-    const requestRehydrate = () => {
-      rehydrateRequested = true;
-      if (rehydrating || disposed) return;
-      rehydrating = true;
-
-      void (async () => {
-        try {
-          // Reconnects may overlap a slow snapshot. Serialising requests keeps
-          // an older response from landing after a newer one; a reconnect that
-          // arrives mid-request causes one more pass through the loop.
-          while (!disposed && rehydrateRequested) {
-            rehydrateRequested = false;
-
-            try {
-              const snapshot: unknown = await backend.getPrMonitorState();
-              if (!disposed && isPrMonitorSnapshot(snapshot)) {
-                applySnapshot(snapshot.entries);
-              }
-            } catch {
-              // Non-critical: buffered changes still apply below, and the next
-              // reconnect will request another authoritative snapshot.
-            }
-
-            if (disposed) return;
-            const pending = bufferedEvents;
-            bufferedEvents = [];
-            // Replayed over the snapshot so an update that raced the request
-            // is not overwritten — and so a transition that arrived mid-flight
-            // still notifies.
-            for (const event of pending) handleEvent(event);
-          }
-        } finally {
-          rehydrating = false;
-        }
-      })();
     };
 
     const ensureChangeSubscription = async () => {
@@ -106,11 +135,12 @@ export function usePrMonitorService(): void {
         const stop = await listen<unknown>(PR_MONITOR_CHANGED_EVENT, (event) => {
           // The payload crosses a process boundary; validate rather than trust.
           if (!isPrMonitorEvent(event.payload)) return;
-          if (rehydrating) {
-            bufferedEvents.push(event.payload);
-          } else {
-            handleEvent(event.payload);
-          }
+          const payload = event.payload;
+          const hasMerge = !("removed" in payload) && payload.transition?.state === "merged";
+          hydration.receive(
+            toPrMonitorUpdate(payload),
+            hasMerge ? () => announceMerge(payload) : undefined,
+          );
         });
         if (disposed) stop();
         else stopChanges = stop;
@@ -123,6 +153,8 @@ export function usePrMonitorService(): void {
     };
 
     const subscribe = async () => {
+      // Subscribe before the snapshot so nothing announced after its capture
+      // can fall between the two.
       await ensureChangeSubscription();
 
       if (disposed) return;
@@ -130,7 +162,7 @@ export function usePrMonitorService(): void {
       try {
         const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
           void ensureChangeSubscription();
-          requestRehydrate();
+          hydration.onReconnect();
         });
         if (disposed) stopReconnects();
         else unlisteners.push(stopReconnects);
@@ -138,16 +170,18 @@ export function usePrMonitorService(): void {
         // The initial snapshot still runs. Remounting retries the listener.
       }
 
-      if (!disposed) requestRehydrate();
+      if (disposed) return;
+      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck()));
+      hydration.request("initial");
     };
 
     void subscribe();
 
     return () => {
       disposed = true;
-      bufferedEvents = [];
+      hydration.dispose();
       stopChanges?.();
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [applySnapshot, applyEvent]);
+  }, [applySnapshot, applyEvent, setSyncStatus, clock, limits]);
 }

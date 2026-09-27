@@ -94,6 +94,10 @@ export interface OrkestratorGatewayOptions {
   compression?: GatewayCompressionMode;
   keepaliveMs?: number;
   proxyBodyIdleTimeoutMs?: number;
+  /** Legacy browser-preview connect+headers deadline (default 30 s). */
+  browserPreviewHeadersTimeoutMs?: number;
+  /** Backend preview services; enables the desktop preview tunnel. */
+  previews?: import("./core/preview-runtime.js").PreviewRuntime;
   eventReplay?: {
     frameCapacity?: number;
     maxBytes?: number;
@@ -146,6 +150,17 @@ export const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
  * request actually approaches it.
  */
 export const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
+/**
+ * Tighter per-command caps, checked after the body is read and before the
+ * command runs. The command name travels inside the JSON body, so the shared
+ * cap above still bounds what is buffered; this only stops an oversized
+ * request from reaching a command whose own contract is far smaller. The
+ * slack covers the `{command, args}` envelope around the mutation.
+ */
+export const INVOKE_COMMAND_BODY_LIMITS: Readonly<Record<string, number>> = Object.freeze({
+  validate_mcp_mutation: 256 * 1024 + 4 * 1024,
+  mutate_mcp_definition: 256 * 1024 + 4 * 1024,
+});
 export const KEEPALIVE_MS = 25_000;
 export const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 export const REVALIDATED_DOCUMENT_CACHE_CONTROL = "no-cache";
@@ -228,7 +243,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * timing breakdown both incomplete and different on every run.
  * `tests/unit/electron/gateway-support-extra.test.ts` pins these against the real registry.
  */
-export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 512;
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 640;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 export const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 export const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;

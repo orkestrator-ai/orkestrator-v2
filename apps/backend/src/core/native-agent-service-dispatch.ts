@@ -1,6 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
 import { randomUUID } from "node:crypto";
-import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentSteerRejectionMessage,
+  nativeAsyncQuestionItemId,
+} from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   BUILD_PIPELINE_AGENTS,
@@ -461,6 +464,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
           error: "The steering instruction is still being reconciled.",
         };
       }
+      if (outcome.outcome === "rejected") {
+        return { outcome: "rejected", error: nativeAgentSteerRejectionMessage(outcome) };
+      }
       return {
         outcome: "rejected",
         error:
@@ -492,6 +498,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         promptSuggestions: pending.promptSuggestions,
         model: pending.model,
         reasoningEffort: pending.reasoningEffort,
+        // The same resolved intent, never re-derived from the text: a retry of
+        // a command must run that command or fail, not become a prompt.
+        ...(pending.command ? { command: pending.command } : {}),
       },
       true,
     );
@@ -986,6 +995,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       input.interactionId,
       input.resolution,
     );
+    // Observers must re-read instead of reporting an answered question as pending.
+    this.forgetPendingInteractions(resolved.key);
     void this.refreshProjection(input, true).catch(() => undefined);
     return outcome;
   }

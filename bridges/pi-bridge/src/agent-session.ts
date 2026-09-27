@@ -23,21 +23,31 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
+  NativeAgentCommandRefreshOutcome,
   NativeAgentResumeEntry,
-  NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   agentDirectory,
   CATALOG_TIMEOUT_MS,
   MAX_RESUME_ENTRIES,
-  MAX_SLASH_COMMANDS,
   sessionDirectory,
   workingDirectory,
 } from "./config.js";
+import {
+  markCommandCatalogueStale,
+  noteCommandError,
+  readSessionCommandCatalogue,
+} from "./commands.js";
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
-import { closePiMcp, mcpConnectionNeedsRefresh, piMcpExtension, preparePiMcp } from "./mcp.js";
+import {
+  closePiMcp,
+  mcpConfigNeedsRefresh,
+  mcpConnectionNeedsRefresh,
+  piMcpExtension,
+  preparePiMcp,
+} from "./mcp.js";
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -74,6 +84,35 @@ import {
 /** Bridge sessions that have been permanently closed by their owner. */
 const closingSessions = new WeakSet<SessionState>();
 
+/**
+ * Whether this bridge session has been permanently closed (DELETE or close).
+ * Marked synchronously, before the close's first await, so a prompt still
+ * preparing can observe it at its next boundary and never reach Pi.
+ */
+/** Work refused because the session's permanent close has begun. Answered 409. */
+export class SessionClosingError extends Error {
+  override readonly name = "SessionClosingError";
+
+  constructor() {
+    super("This Pi session is closing; retry once the close completes");
+  }
+}
+
+export function isSessionClosed(state: SessionState): boolean {
+  return closingSessions.has(state);
+}
+
+/**
+ * Mark a bridge session permanently closed, synchronously.
+ *
+ * Close and DELETE call this before their first await: from here on no prompt
+ * is admitted (409), a prompt already preparing settles at its next boundary,
+ * and a cold attach in flight refuses to publish. Idempotent.
+ */
+export function markSessionClosed(state: SessionState): void {
+  closingSessions.add(state);
+}
+
 /** One in-flight adoption per canonical Pi session file. */
 const sessionResumptions = new Map<string, Promise<SessionState>>();
 
@@ -93,6 +132,7 @@ export interface AgentSessionTestHooks {
   createAgentSession?: (state: SessionState) => Promise<AgentSession>;
   hydrateComposer?: typeof hydrateComposer;
   resolveModel?: typeof resolveModel;
+  mcpConfigNeedsRefresh?: typeof mcpConfigNeedsRefresh;
 }
 
 let agentSessionTestHooks: AgentSessionTestHooks = {};
@@ -230,6 +270,7 @@ export function newSessionState(
     uncheckedTranscriptBytes: 0,
     queue: { steering: [], followUp: [] },
     slashCommands: [],
+    commandCatalogue: { status: "stale", revision: 0 },
     compacting: false,
     lastAccessed: Date.now(),
     health: new RuntimeHealthRecorder(),
@@ -252,6 +293,10 @@ export async function createSession(
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
+    // A session whose close is in flight is never handed back: the caller
+    // would receive an id that is about to disappear. Once the close settles
+    // the key is released and a deliberate create gets a new session.
+    if (existing && isSessionClosed(existing)) throw new SessionClosingError();
     if (existing) {
       const resolved = resolvePiExecutionPolicy(policy);
       if (policy || resolved.id === "coordinator-read-only") existing.policy = resolved;
@@ -300,7 +345,7 @@ export async function createSession(
  * rather than a corner case.
  */
 export async function ensureSession(state: SessionState): Promise<AgentSession> {
-  if (closingSessions.has(state)) throw new Error("This Pi session is closed");
+  if (closingSessions.has(state)) throw new SessionClosingError();
   if (state.session) return state.session;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -327,7 +372,8 @@ async function attach(state: SessionState): Promise<AgentSession> {
 }
 
 /**
- * Rebuild an attached session when its tab-scoped MCP credential changed.
+ * Rebuild an attached session when its tab-scoped MCP credential or its saved
+ * MCP configuration changed.
  *
  * Prompt, create, resume and attach all store a possibly rotated `agentMcp`,
  * but a live Pi session's MCP extension keeps whatever connection it was built
@@ -336,10 +382,37 @@ async function attach(state: SessionState): Promise<AgentSession> {
  * `ensureSession` prepare from the new credential. A session with no live
  * runtime is left alone: the next attach prepares it.
  */
-export async function reconcileAgentMcp(state: SessionState): Promise<void> {
+export async function reconcileAgentMcp(
+  state: SessionState,
+  options: { atTurnStart?: boolean } = {},
+): Promise<void> {
   if (!state.session) return;
-  if (!mcpConnectionNeedsRefresh(state)) return;
-  await detachSession(state);
+  if (mcpConnectionNeedsRefresh(state)) {
+    await detachSession(state);
+    return;
+  }
+  // A saved configuration change is adopted only between turns. The prompt
+  // path has already claimed `dispatching` for the turn it is about to start,
+  // which is exactly the boundary; any other busy state keeps the current
+  // generation, and its tools, until the work finishes.
+  const busy =
+    state.status === "running" || state.compacting || (!options.atTurnStart && state.dispatching);
+  if (busy) return;
+  // The read yields, so everything checked above can change underneath it.
+  // Another caller may already have detached this generation and started the
+  // replacement attach, whose MCP runtime is the one `detachSession` would now
+  // close — leaving the new session live without its tools. Only the caller
+  // that still sees the generation it read, with no attach in flight, owns
+  // the detach.
+  const live = state.session;
+  if (
+    (await (agentSessionTestHooks.mcpConfigNeedsRefresh ?? mcpConfigNeedsRefresh)(state)) &&
+    state.session === live &&
+    !state.attaching &&
+    (options.atTurnStart || (state.status !== "running" && !state.compacting && !state.dispatching))
+  ) {
+    await detachSession(state);
+  }
 }
 
 async function createPiAgentSession(state: SessionState): Promise<AgentSession> {
@@ -445,6 +518,9 @@ export async function bindSessionExtensions(
       // Not a terminal. `rpc` is the mode Pi's own programmatic host uses.
       mode: "rpc",
       onError: (error) => {
+        // A command handler that throws is caught by Pi and reported only
+        // here; the turn running it needs the failure as its outcome.
+        noteCommandError(state, error);
         // Extension paths are absolute and can name a user's home directory,
         // so only the basename is kept; the message is bounded by the recorder.
         const extension = error.extensionPath.split(/[\\/]/).pop() ?? "extension";
@@ -499,7 +575,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
       // The state is already closed. Disposal is best-effort, and the attach
       // still fails authoritatively below rather than resurrecting it.
     }
-    throw new Error("This Pi session was closed while it was attaching");
+    throw new SessionClosingError();
   }
   state.session = session;
   state.piSessionId = session.sessionId;
@@ -508,7 +584,10 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // release it: a listener left attached to a disposed session keeps the whole
   // object graph — messages, tools, extension runner — alive.
   state.unsubscribe = session.subscribe((event) => applySessionEvent(state, event));
-  state.slashCommands = readSlashCommands(session);
+  // A fresh runtime loaded its resources from scratch, so this read is also
+  // the reload any refresh deferred while the session was detached or busy.
+  state.commandReloadPending = false;
+  readSessionCommandCatalogue(state, session);
   // The catalogue read at create time may have preceded a provider signing in.
   // Re-selecting from the live session is what makes the picker agree with what
   // the turn will actually use.
@@ -521,6 +600,136 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   }
   state.revision += 1;
   return session;
+}
+
+export interface CommandRefreshResult {
+  outcome: NativeAgentCommandRefreshOutcome;
+  message?: string;
+}
+
+const RELOAD_DEFERRED_MESSAGE =
+  "Pi is busy; its commands reload when the current turn finishes. The previous list is kept until then.";
+
+/**
+ * Whether reloading Pi's resources now could disturb work in flight.
+ *
+ * `AgentSession.reload()` fires `session_shutdown`, invalidates the extension
+ * runner the running turn's hooks belong to (including this bridge's approval
+ * gate), resets the API provider registry and rebuilds the tool registry. Pi's
+ * own terminal refuses `/reload` while `isStreaming` or `isCompacting`
+ * (interactive-mode `handleReloadCommand`), so this bridge does too.
+ */
+function commandReloadBlocked(state: SessionState, session: AgentSession): boolean {
+  return (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    Boolean(state.attaching) ||
+    session.isIdle === false
+  );
+}
+
+function boundReload(operation: Promise<CommandRefreshResult>): Promise<CommandRefreshResult> {
+  return withTimeout(operation, CATALOG_TIMEOUT_MS, "Pi is still reloading its commands").catch(
+    () => ({
+      outcome: "failed" as const,
+      message: "Pi is still reloading its commands; the previous list is kept.",
+    }),
+  );
+}
+
+/**
+ * Reload Pi's resources and re-read the command list, now.
+ *
+ * Callers have established the session is idle. The operation is published on
+ * the state so a prompt arriving meanwhile waits for it rather than being
+ * dispatched into a half-rebuilt extension runtime.
+ */
+function reloadSessionCommands(
+  state: SessionState,
+  session: AgentSession,
+): Promise<CommandRefreshResult> {
+  state.commandReloadPending = false;
+  const operation: Promise<CommandRefreshResult> = (async (): Promise<CommandRefreshResult> => {
+    try {
+      await session.reload();
+      // Detached mid-reload: the next attach reads a fresh runtime anyway.
+      if (state.session !== session) {
+        return { outcome: "deferred", message: "Pi reads its commands again on its next attach." };
+      }
+      // A reload rebuilds the tool registry; the session's tool policy must
+      // not be widened by it.
+      applyPiToolPolicy(session, state.policy);
+      return readSessionCommandCatalogue(state, session)
+        ? { outcome: "reloaded" }
+        : { outcome: "failed", message: "Pi's command list could not be read." };
+    } catch (error) {
+      markCommandCatalogueStale(state);
+      state.health.recordNotice({
+        message: "Pi could not reload its resources; the previous command list is kept",
+        method: "session/reload",
+        severity: "error",
+        source: "provider",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        outcome: "failed",
+        message: "Pi could not reload its commands; the previous list is kept.",
+      };
+    }
+  })().finally(() => {
+    if (state.commandReload === operation) state.commandReload = undefined;
+  });
+  state.commandReload = operation;
+  return boundReload(operation);
+}
+
+/**
+ * Reload one session's commands, or say why that has to wait.
+ *
+ * Never aborts a turn: a busy session keeps its current list (reported
+ * `stale`) and reloads once the turn settles. A detached session is attached,
+ * which loads every resource from scratch.
+ */
+export async function refreshSessionCommands(state: SessionState): Promise<CommandRefreshResult> {
+  const inFlight = state.commandReload as Promise<CommandRefreshResult> | undefined;
+  if (inFlight) return boundReload(inFlight);
+  const session = state.session;
+  if (!session) {
+    if (state.dispatching || state.attaching) {
+      // An attach is already under way and reads the list when it lands.
+      return { outcome: "deferred", message: "Pi reads its commands when this session attaches." };
+    }
+    try {
+      await ensureSession(state);
+    } catch (error) {
+      return {
+        outcome: "failed",
+        message: error instanceof Error && error.message.trim() ? error.message.trim() : undefined,
+      };
+    }
+    return state.commandCatalogue.status === "ready"
+      ? { outcome: "reloaded" }
+      : { outcome: "failed", message: "Pi's command list could not be read." };
+  }
+  if (commandReloadBlocked(state, session)) {
+    state.commandReloadPending = true;
+    markCommandCatalogueStale(state);
+    return { outcome: "deferred", message: RELOAD_DEFERRED_MESSAGE };
+  }
+  return reloadSessionCommands(state, session);
+}
+
+/**
+ * Run a reload a busy refresh deferred, if the session is now idle.
+ *
+ * Called from the points where a session stops being busy. Never rejects.
+ */
+export async function runDeferredCommandReload(state: SessionState): Promise<void> {
+  const session = state.session;
+  if (!state.commandReloadPending || !session || state.commandReload) return;
+  if (commandReloadBlocked(state, session)) return;
+  await reloadSessionCommands(state, session);
 }
 
 /** Project-local resource switches passed to Pi's default loader. */
@@ -736,7 +945,7 @@ export async function detachSession(state: SessionState): Promise<void> {
  * the mark and dispose itself before this function returns.
  */
 export async function closeSession(state: SessionState): Promise<void> {
-  closingSessions.add(state);
+  markSessionClosed(state);
   await state.attaching?.catch(() => undefined);
   await detachSession(state);
 }
@@ -936,12 +1145,22 @@ export async function resumeSession(
   // structure Pi resumes and forks from — so a repeat resume adopts the
   // session that already owns the file.
   for (const existing of sessions.values()) {
-    if (existing.sessionFile === resolved) {
+    const ownedFile = existing.sessionFile;
+    if (!ownedFile) continue;
+    // Restored and SDK-created sessions may retain /var while `realpath`
+    // resolves the requested file through macOS's /private/var alias.
+    const sameFile =
+      ownedFile === resolved ||
+      ownedFile === sessionFile ||
+      (await realpath(ownedFile).catch(() => undefined)) === resolved;
+    if (sameFile) {
+      if (isSessionClosed(existing)) throw new SessionClosingError();
       if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
         if (existing.status === "running" || existing.dispatching) {
           throw new Error("The Pi session is already running");
         }
         await detachSession(existing);
+        if (isSessionClosed(existing)) throw new SessionClosingError();
         existing.policy = resolvePiExecutionPolicy(policy);
       }
       applyComposerPatch(existing, patch);
@@ -957,6 +1176,7 @@ export async function resumeSession(
   const inFlight = sessionResumptions.get(resolved);
   if (inFlight) {
     const existing = await inFlight;
+    if (isSessionClosed(existing)) throw new SessionClosingError();
     applyComposerPatch(existing, patch);
     existing.lastAccessed = Date.now();
     return existing;
@@ -1152,6 +1372,10 @@ function appendHistoricNotice(
  * transcript disagree with the one it was reproducing.
  *
  * `label` and `session_info` entries stay out: they are naming, not history.
+ * `usage` entries (a cache-warm refresh's token spend) stay out too: they are
+ * accounting, and `getSessionStats` already counts them. `context_edit` entries
+ * change what the model sees without changing the conversation — Pi's own UI
+ * keeps showing the edited entries — so the transcript does the same.
  */
 function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
   switch (entry.type) {
@@ -1195,6 +1419,8 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     case "custom_message":
     case "label":
     case "session_info":
+    case "usage":
+    case "context_edit":
       return;
     case "message":
       break;
@@ -1323,44 +1549,4 @@ function pushMessage(
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
-}
-
-/**
- * The slash commands this session offers.
- *
- * Pi's are file-backed: prompt templates and skills discovered from the agent
- * directory and, when project resources are enabled, from the workspace. They
- * are read from the attached session rather than the loader so an extension
- * that registered one is included too.
- */
-function readSlashCommands(session: AgentSession): NativeAgentSlashCommand[] {
-  const commands: NativeAgentSlashCommand[] = [];
-  for (const template of session.promptTemplates) {
-    if (commands.length >= MAX_SLASH_COMMANDS) break;
-    commands.push({
-      name: `/${template.name}`,
-      source: "template",
-      ...(template.description?.trim() ? { description: template.description.trim() } : {}),
-      ...(template.argumentHint?.trim() ? { argumentHint: template.argumentHint.trim() } : {}),
-    });
-  }
-  for (const skill of session.resourceLoader?.getSkills?.().skills ?? []) {
-    if (commands.length >= MAX_SLASH_COMMANDS) break;
-    commands.push({
-      name: `/skill:${skill.name}`,
-      description: skill.description,
-      source: "skill",
-      scope: skill.sourceInfo.scope === "project" ? "session" : "global",
-    });
-  }
-  for (const command of session.extensionRunner?.getRegisteredCommands?.() ?? []) {
-    if (commands.length >= MAX_SLASH_COMMANDS) break;
-    commands.push({
-      name: `/${command.invocationName || command.name}`,
-      ...(command.description ? { description: command.description } : {}),
-      source: "extension",
-      scope: command.sourceInfo.scope === "project" ? "session" : "global",
-    });
-  }
-  return commands;
 }

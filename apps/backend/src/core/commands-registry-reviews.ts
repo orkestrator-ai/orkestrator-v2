@@ -7,6 +7,9 @@ import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
+  isMultiReviewStepControlInput,
+  isMultiReviewReviewerTranscriptRequest,
+  isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
   isStartLoopedReviewInput,
   isStartMultiReviewInput,
@@ -39,12 +42,22 @@ export function registerReviewWorkflowCommands(
       ),
     );
   }
-  register("get_review_validation_output", ({ environmentId, runId, resultId }, context) =>
+  register("stop_review_validation_command", ({ environmentId, run, resultId }, context) =>
+    controlReviewValidation(
+      asNonBlankString(environmentId, "environmentId"),
+      run,
+      "stop-command",
+      context,
+      asNonBlankString(resultId, "resultId"),
+    ),
+  );
+  register("get_review_validation_output", ({ environmentId, runId, resultId, known }, context) =>
     readReviewValidationOutput(
       asNonBlankString(environmentId, "environmentId"),
       asNonBlankString(runId, "runId"),
       asNonBlankString(resultId, "resultId"),
       context,
+      known,
     ),
   );
 
@@ -222,13 +235,27 @@ export function registerReviewWorkflowCommands(
         .then((records) => records.map(stripLoopedReviewRendererSecrets)),
     ),
   );
-  register("get_multi_review_reviewer_transcript", ({ workflowId, reviewerId }, context) => {
-    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    return context.multiReviews.reviewerTranscript(
-      asNonBlankString(workflowId, "workflowId"),
-      asNonBlankString(reviewerId, "reviewerId"),
-    );
-  });
+  register(
+    "get_multi_review_reviewer_transcript",
+    ({ workflowId, reviewerId, knownSourceToken }, context) => {
+      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+      const request = {
+        workflowId: asNonBlankString(workflowId, "workflowId"),
+        reviewerId: asNonBlankString(reviewerId, "reviewerId"),
+        ...(knownSourceToken === undefined ? {} : { knownSourceToken }),
+      };
+      // The token is renderer-supplied and forwarded toward a provider, so it
+      // is bounded here; the backend still ignores one that is stale or foreign.
+      if (!isMultiReviewReviewerTranscriptRequest(request)) {
+        throw new Error("Invalid multi review reviewer transcript source token");
+      }
+      return context.multiReviews.reviewerTranscript(
+        request.workflowId,
+        request.reviewerId,
+        request.knownSourceToken,
+      );
+    },
+  );
   register("start_multi_review", (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");
@@ -287,6 +314,12 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripLoopedReviewSnapshotSecrets);
   });
+  register("stop_multi_review_validation", ({ workflowId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews
+      .stopValidation(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
   register("restart_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews
@@ -296,13 +329,31 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripLoopedReviewSnapshotSecrets);
   });
-  register("restart_multi_review_step", ({ workflowId, kind }, context) => {
+  register("restart_multi_review_step", (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    if (kind !== "prepare" && kind !== "consolidate" && kind !== "fix") {
-      throw new Error("Invalid multi review step");
+    if (!isRestartMultiReviewStepInput(args)) {
+      throw new Error("Invalid multi review step restart request");
     }
     return context.multiReviews
-      .restartStep(asNonBlankString(workflowId, "workflowId"), kind)
+      .restartStep(args.workflowId, args.kind, args.model)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("pause_multi_review_step", (args, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewStepControlInput(args)) {
+      throw new Error("Invalid multi review step pause request");
+    }
+    return context.multiReviews
+      .pauseStep(args.workflowId, args.kind)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("resume_multi_review_step", (args, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewStepControlInput(args)) {
+      throw new Error("Invalid multi review step resume request");
+    }
+    return context.multiReviews
+      .resumeStep(args.workflowId, args.kind)
       .then(stripLoopedReviewSnapshotSecrets);
   });
   register("unstick_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {

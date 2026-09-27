@@ -7,6 +7,11 @@ import {
   MACOS_TAILSCALE_APP_CLI,
   parseOptions,
 } from "./options.js";
+import {
+  SERVER_BOOLEAN_FLAGS,
+  SERVER_VALUE_FLAGS,
+  validateServerArguments,
+} from "./server-flags.js";
 
 describe("standalone backend options", () => {
   test("uses platform-specific default data directories", () => {
@@ -239,5 +244,36 @@ describe("standalone backend options", () => {
     expect(() => assertSupportedPlatform("darwin")).not.toThrow();
     expect(() => assertSupportedPlatform("linux")).not.toThrow();
     expect(() => assertSupportedPlatform("win32")).toThrow("does not support Windows");
+  });
+});
+
+describe("service flag inventory", () => {
+  test("lists exactly the flags parseOptions reads", async () => {
+    const source = await Bun.file(new URL("./options.ts", import.meta.url)).text();
+    const valueFlags = new Set(
+      [...source.matchAll(/valueAfter\(args, "(--[a-z0-9-]+)"\)/g)].map((match) => match[1]!),
+    );
+    const booleanFlags = new Set(
+      [...source.matchAll(/args\.includes\("(--[a-z0-9-]+)"\)/g)].map((match) => match[1]!),
+    );
+    // The published launcher classifies invocations with this inventory; a flag
+    // parsed here but missing there would be refused as a typo.
+    expect([...SERVER_VALUE_FLAGS].sort()).toEqual([...valueFlags].sort());
+    expect([...SERVER_BOOLEAN_FLAGS].sort()).toEqual([...booleanFlags].sort());
+  });
+
+  test("validates service argument lists without echoing unexpected values", () => {
+    expect(validateServerArguments([])).toBeNull();
+    expect(
+      validateServerArguments(["--host", "127.0.0.1", "--port", "0", "--allow-non-tailscale-bind"]),
+    ).toBeNull();
+    expect(validateServerArguments(["--port"])).toBe("Missing value for --port");
+    expect(validateServerArguments(["--port", "--host"])).toBe("Missing value for --port");
+    expect(validateServerArguments(["--prot", "1"])).toBe("Unknown service option: --prot");
+    expect(validateServerArguments(["--prompt=secret words"])).toBe(
+      "Unknown service option: --prompt",
+    );
+    const positional = validateServerArguments(["secret prompt text"]);
+    expect(positional).not.toContain("secret");
   });
 });

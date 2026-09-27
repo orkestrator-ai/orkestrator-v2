@@ -19,7 +19,8 @@ with [agent-testing.md](agent-testing.md).
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
 | Check format, lint, and types | `mise run test:logged -- --name check -- mise run check` | Static validation; this does not run tests |
 | Run browser component tests | `mise run test:logged -- --name browser -- mise run test:browser` | Playwright component/browser coverage |
-| Run isolated-stack agent tests | `mise run test:logged -- --name agent-browser -- mise run test:agent:browser` | Real browser against an agent-test profile |
+| Run isolated-stack agent tests | `mise run test:agent:browser:isolated` | Creates a disposable profile, runs browser tests, and cleans up |
+| Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
 
@@ -106,6 +107,79 @@ mise run test:logged -- --name codex-bridge-example -- \
   --parallel=1 --only-failures
 ```
 
+### Opt-in preview checks
+
+Service preview checks that need Docker, a pinned framework, or a real
+browser are skipped unless their variable is set. They use throwaway data
+directories, CAs, and owner labels. Install the Vite fixture into an isolated
+copy first (see `test-fixtures/preview-vite/README.md`).
+
+```bash
+# Real Docker: same-port containers, host decoy, recreation, docker exec relay
+ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
+ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE=orkestrator-v2:latest \
+  mise run test:logged -- --name preview-docker -- bun test --cwd apps/backend \
+  ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+
+# Real Chromium against private preview origins (add the Vite variable for HMR)
+ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
+  mise run test:logged -- --name preview-browser -- \
+  bunx playwright test --config e2e/preview/playwright.preview.config.ts
+
+# Loopback route latency for the evidence log
+ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
+  bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
+```
+
+Record results in `docs/improvements/browser/plan/evidence.md`.
+
+### CLI scenarios
+
+The published client has targeted scenarios that start isolated backends
+through the packaged launcher (disposable data and worktree roots, no Electron
+or Vite), drive the packaged `orkestrator` executable with argv only, assert on
+JSON envelopes and authoritative state, and clean up what they created. The
+package suite already runs a subset (`packages/cli/tests/cli-client.test.ts`);
+the full matrix is a separate task:
+
+```bash
+# Credential-free: read-only, local-lifecycle, retry-and-retention,
+# setup-failure, client-exit, exec, wrong-profile
+mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
+
+# One scenario, keeping its root for inspection on failure
+mise run test:cli:scenarios -- --scenario exec --keep-on-failure
+
+# Opt-in, credentialed, real tokens: one bounded turn plus a follow-up
+ORKESTRATOR_SCENARIO_MODEL=gpt-5.6-sol \
+  mise run test:cli:scenarios -- --scenario live-session --provider codex
+
+# Container variants against this worktree's own image (never `latest`);
+# docker:build:dev prints the tag it built
+mise run docker:build:dev
+mise run test:cli:scenarios -- --environment-type container \
+  --docker-image orkestrator-v2:dev-<worktree hash>
+```
+
+`mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
+(CLI changes seen by an open and a reloaded renderer). Its live question test
+needs a profile started with Claude credentials:
+
+```bash
+mise run dev:test --profile qa-cli-live --fixture --credential-source claude --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-cli-live ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 \
+  mise run test:agent:browser -- e2e/agent-testing/cli-ui.spec.ts
+mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-live
+```
+
+The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
+`output/cli-scenarios/<run>/manifest.json`. Record live results in
+`docs/improvements/cli-commands/plan/14-targeted-testing-and-qualification.md`.
+See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
+
+To drive a running `dev:test` profile with the CLI during manual or agent QA,
+follow [cli-testing.md](cli-testing.md).
+
 For an intentionally unlogged interactive invocation, use `mise exec -- bun`
 rather than an ambient Bun installation. Agent-operated validation should use
 the logged form above.
@@ -140,10 +214,12 @@ mise run test:logged -- --name web-typecheck -- \
   bun run --cwd apps/web typecheck
 
 mise run test:logged -- --name agent-browser -- \
-  mise run test:agent:browser
+  mise run test:agent:browser:isolated
 ```
 
 Run checks separately so each exit status and artifact belongs to one command.
+The logged wrapper above is for manual evidence capture. Review discovery uses
+the registered one-shot command verbatim, without the logging wrapper.
 Do not add `tee`: it duplicates potentially large or sensitive output while the
 runner is already retaining a bounded copy.
 
@@ -280,12 +356,45 @@ this is not a distributed scheduler or a physical-host container quota manager.
 
 ### Multi Review validation
 
+Non-cooperative review commands use their declared absolute timeout by default;
+silence alone is not evidence that a compiler, build, or integration stage is
+stuck. An exact repository `commandProfiles` entry may opt a lifecycle command
+into a `noProgressTimeoutMs` watchdog (bounded from one second to two hours).
+`ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS` overrides that value only for commands
+that already opted in; it does not add a watchdog to arbitrary discovered
+commands. The clock starts after capacity admission and resets on stdout or
+stderr bytes, so queue waits do not consume it. A declared stall produces
+incomplete evidence, terminates the process group, and records the reason.
+`lastOutputAt` is persisted in each command result for status/reconnect readers
+without retaining output content in status metadata. Cooperative commands
+continue to use their scheduler heartbeat and execution clock instead.
+
+For service-backed browser checks, select the exact one-shot tasks documented
+above. `dev:test` stays attached after readiness and is never a sequential setup
+step before Playwright. Do not invent foreground lifecycle shell wrappers.
+
 The environment-owned worker persists queued/running command states and separate
 queue/execution durations alongside its heartbeat. Switching environments,
 closing the validation view, or reconnecting the backend does not start another
 command; the UI rehydrates from that state. Cancellation removes pending tickets
 and terminates owned processes. A stale worker remains uncertain until explicitly
 cancelled, never automatically retried.
+
+A single command can also be stopped from its row in the validation table
+(`stop_review_validation_command`). The control writes a per-command tombstone
+beside the run's state, so the request survives backend restarts. The worker
+terminates that command's process group, keeps its partial output, and records
+it as `incomplete` with a user-stop limitation; a command that has not started
+yet is recorded as `incomplete` without running. Commands that depend on it are
+skipped, and every other command continues, so the run still completes and its
+partial evidence is packaged for review.
+
+Discovery scopes the plan to the change. It reads `AGENTS.md` (and
+`CLAUDE.md` or equivalents) at the root and in changed directories and follows
+their guidance on which suites a given kind of change needs, omitting suites for
+areas the change cannot affect and naming the omission in one limitation. When
+the instructions require a suite for every change, or the change's reach is
+uncertain, the full relevant coverage runs.
 
 Ordinary discovered commands reserve half the per-suite budget (`weight: 1`) or
 its whole budget (`weight: 2`), capped at eight slots even when the host ceiling

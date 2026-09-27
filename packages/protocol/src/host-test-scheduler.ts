@@ -374,7 +374,13 @@ export const HOST_TEST_SCHEDULER_SOURCE = `(options) => (${createHostTestSchedul
 
 /** Exact, repository-owned declarations; never infer coverage from command names. */
 export function testSchedulingPolicy(config: unknown) {
-  type Profile = { resources?: string[]; workers?: number; memoryMiB?: number; covers?: string[] };
+  type Profile = {
+    resources?: string[];
+    workers?: number;
+    memoryMiB?: number;
+    covers?: string[];
+    noProgressTimeoutMs?: number;
+  };
   const profiles: Record<string, Profile> = Object.create(null);
   if (!config || typeof config !== "object" || Array.isArray(config))
     throw new Error("Invalid test scheduling configuration");
@@ -413,9 +419,13 @@ export function testSchedulingPolicy(config: unknown) {
         (profile.memoryMiB !== undefined &&
           (!Number.isSafeInteger(profile.memoryMiB) ||
             profile.memoryMiB < 1 ||
-            profile.memoryMiB > 1048576))
+            profile.memoryMiB > 1048576)) ||
+        (profile.noProgressTimeoutMs !== undefined &&
+          (!Number.isSafeInteger(profile.noProgressTimeoutMs) ||
+            profile.noProgressTimeoutMs < 1000 ||
+            profile.noProgressTimeoutMs > 7200000))
       )
-        throw new Error("Invalid test command resource requirements");
+        throw new Error("Invalid test command profile");
       profiles[command] = profile;
     }
   }

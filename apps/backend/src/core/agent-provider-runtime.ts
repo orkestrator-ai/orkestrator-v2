@@ -14,6 +14,7 @@ import {
   MAX_NATIVE_AGENT_DRIFT_KIND_LENGTH,
   NATIVE_AGENT_NOTICE_SEVERITIES,
   NATIVE_AGENT_NOTICE_SOURCES,
+  normalizeNativeAgentRuntimeSteerJournal,
   type NativeAgentContextUsage,
   type NativeAgentNotice,
   type NativeAgentNoticeSeverity,
@@ -364,6 +365,9 @@ export function normalizeProviderRuntimeSummary(
   if (typeof raw.version === "string" && raw.version) summary.version = raw.version.slice(0, 64);
   const drift = normalizeProviderDrift(raw.drift);
   if (drift) summary.drift = drift;
+  // Counts and limits only; the protocol normalizer copies no other field.
+  const steer = normalizeNativeAgentRuntimeSteerJournal(raw.steer);
+  if (steer) summary.steer = steer;
   const notices = normalizeProviderRuntimeNotices(raw.notices);
   if (notices.length > 0) summary.notices = notices;
   return Object.keys(summary).length > 0 ? summary : undefined;

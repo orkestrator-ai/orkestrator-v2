@@ -7,15 +7,15 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.276`, Anthropic SDK `0.126.0`, CLI `2.1.276` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.155.0` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.31` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.31` (latest stable, verified 2026-09-17) |
-| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.34` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` completes the SDK's runtime closure | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.85.1` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.280`, Anthropic SDK `0.128.0`, CLI `2.1.280` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.155.1` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.32` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.32` (latest stable, verified 2026-09-22) |
+| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.41` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.87.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-09-18.
+Verified against upstream stable releases on 2026-09-22.
 
 ## What is enforced, and what is not
 
@@ -60,12 +60,18 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.31 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.0.32 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
 sufficient. Re-identify those bindings and verify the controller still awaits
-each response write before advancing its execution iterator. Run the Cursor
+each response write before advancing its execution iterator. The two classes
+are found by their field lists: the stall detector opens with
+`timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
+initializer that names `@anysphere/agent-client:stall-detector` (which the
+export must call first); the controller is the class opening with
+`serverStream;clientStream;controlledExecManager`. In 1.0.32 those are `LA0`,
+`Im0` and `BA0`. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.
@@ -604,9 +610,12 @@ published two ways:
 - `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent`, the two
   packages it exposes types from (`@earendil-works/pi-ai` and
   `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
-  `0.85.0` public entry point imported without declaring. Version `0.85.1`
-  removes that experimental import; all four packages remain pinned exactly
-  and vendored as runtime roots.
+  `0.85.0` public entry point imported without declaring. Since `0.85.1` no
+  published SDK file imports it — as of `0.87.0` pi-coding-agent lists it only
+  as a devDependency — so nothing at runtime needs it. It stays pinned and
+  vendored as a runtime root anyway: dropping it means changing the vendor
+  script, its test and the drift test together, for no behavioural gain. Check
+  on each bump that the SDK still does not import it.
 - `apps/desktop/electron/toolchain-manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.

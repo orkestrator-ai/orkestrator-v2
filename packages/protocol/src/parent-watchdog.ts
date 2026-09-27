@@ -43,6 +43,28 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/**
+ * The interval primitives a watchdog or lifecycle owner arms.
+ *
+ * Injected so tests can drive time deterministically and count what is still
+ * armed after a shutdown, rather than sleeping and hoping. Production passes
+ * nothing and gets the runtime's own timers.
+ */
+export interface IntervalTimers {
+  setInterval(callback: () => void, ms: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
+export const runtimeIntervalTimers: IntervalTimers = {
+  setInterval: (callback, ms) => {
+    const handle = setInterval(callback, ms);
+    // A watchdog or sweep must never be what keeps a process alive.
+    (handle as { unref?: () => void }).unref?.();
+    return handle;
+  },
+  clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+};
+
 export interface ParentWatchdogOptions {
   parentPid: number;
   /** Invoked exactly once, when the parent process no longer exists. */
@@ -50,18 +72,27 @@ export interface ParentWatchdogOptions {
   pollIntervalMs?: number;
   /** Injected in tests. */
   isAlive?: (pid: number) => boolean;
+  /** Injected in tests. */
+  timers?: IntervalTimers;
 }
 
-/** Returns a stop function; the timer never holds the process open. */
+/** Returns an idempotent stop function; the timer never holds the process open. */
 export function startParentWatchdog(options: ParentWatchdogOptions): () => void {
   const isAlive = options.isAlive ?? isProcessAlive;
-  const timer = setInterval(() => {
-    if (isAlive(options.parentPid)) return;
-    clearInterval(timer);
+  const timers = options.timers ?? runtimeIntervalTimers;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    timers.clearInterval(timer);
+  };
+  const timer = timers.setInterval(() => {
+    // A callback that was already due when `stop` ran must not fire.
+    if (stopped || isAlive(options.parentPid)) return;
+    stop();
     options.onParentExit();
   }, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
-  timer.unref?.();
-  return () => clearInterval(timer);
+  return stop;
 }
 
 export interface ReparentWatchdogOptions {

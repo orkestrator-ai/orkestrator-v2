@@ -16,6 +16,12 @@
  * that just happened, which no persisted record captures.
  */
 
+import {
+  hasValidOptionalViewStamp,
+  type ViewGeneration,
+  type ViewSnapshotOutcome,
+} from "./view-sync.js";
+
 /** SSE/IPC event name carrying a {@link PrMonitorEvent}. */
 export const PR_MONITOR_CHANGED_EVENT = "pr-monitor-changed";
 
@@ -101,6 +107,15 @@ export interface PrMonitorEnvironmentState {
   consecutiveErrors: number;
   /** ISO timestamp of the last completed check, or null before the first. */
   lastCheckAt: string | null;
+  /**
+   * ISO timestamp of the last check GitHub actually answered, or null before
+   * the first. Unlike `lastCheckAt` it does not move on a failed or
+   * rate-limited attempt, so a client can tell "checked" from "fresh".
+   * Optional: absent from backends before lifecycle-aware monitoring. Like
+   * `lastCheckAt` it is carried by the next announced event, not announced on
+   * its own.
+   */
+  lastSuccessfulCheckAt?: string | null;
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
@@ -112,6 +127,12 @@ export interface PrMonitorEnvironmentState {
  * A confirmed change of the PR itself, distinct from monitoring bookkeeping.
  * Emitted exactly once per observed change so clients can notify without
  * diffing snapshots.
+ *
+ * Transitions are best-effort notifications, not state. A client that was
+ * disconnected when one was announced does not receive it later; the current
+ * PR state still converges through the snapshot. Clients deduplicate by
+ * `(environmentId, url, state)` so a re-delivered transition never notifies
+ * twice. See `docs/architecture/event-snapshot-recovery.md`.
  */
 export interface PrMonitorTransition {
   url: string;
@@ -119,24 +140,49 @@ export interface PrMonitorTransition {
   previousState: PrState | null;
 }
 
-export interface PrMonitorStateEvent {
+/**
+ * Optional owner ordering carried by current backends (see `view-sync.ts`).
+ *
+ * `generation` identifies one lifetime of the backend PR monitor service and
+ * `revision` increases by one per announced event within it. Both are absent
+ * from legacy backends; clients then keep conservative reconnect hydration.
+ */
+export interface PrMonitorRevisionFields {
+  generation?: ViewGeneration;
+  revision?: number;
+}
+
+export interface PrMonitorStateEvent extends PrMonitorRevisionFields {
   environmentId: string;
   state: PrMonitorEnvironmentState;
   transition?: PrMonitorTransition;
 }
 
 /** Emitted when an environment stops being monitored. */
-export interface PrMonitorRemovalEvent {
+export interface PrMonitorRemovalEvent extends PrMonitorRevisionFields {
   environmentId: string;
   removed: true;
 }
 
 export type PrMonitorEvent = PrMonitorStateEvent | PrMonitorRemovalEvent;
 
-/** Full snapshot returned by the `get_pr_monitor_state` command. */
-export interface PrMonitorSnapshot {
+/**
+ * Full snapshot returned by the `get_pr_monitor_state` command.
+ *
+ * On a current backend `entries` is exactly the fold of every announced event
+ * up to `revision` — announced state only, so an unannounced provisional probe
+ * never appears in a snapshot it could later vanish from without an event.
+ */
+export interface PrMonitorSnapshot extends PrMonitorRevisionFields {
   entries: PrMonitorEnvironmentState[];
 }
+
+/**
+ * Answer to `get_pr_monitor_state` called with `knownGeneration` and
+ * `knownRevision`. Legacy backends ignore those arguments and return a plain
+ * {@link PrMonitorSnapshot}.
+ */
+export type PrMonitorSnapshotOutcome = ViewSnapshotOutcome<PrMonitorSnapshot>;
 
 const PR_STATES: ReadonlySet<string> = new Set(["open", "merged", "closed"]);
 const MODE_SET: ReadonlySet<string> = new Set(PR_MONITOR_MODES);
@@ -176,6 +222,9 @@ export function isPrMonitorEnvironmentState(value: unknown): value is PrMonitorE
     Number.isSafeInteger(candidate.consecutiveErrors) &&
     (candidate.consecutiveErrors as number) >= 0 &&
     (candidate.lastCheckAt === null || typeof candidate.lastCheckAt === "string") &&
+    (candidate.lastSuccessfulCheckAt === undefined ||
+      candidate.lastSuccessfulCheckAt === null ||
+      typeof candidate.lastSuccessfulCheckAt === "string") &&
     (candidate.prUrl === null || typeof candidate.prUrl === "string") &&
     isPrStateOrNull(candidate.prState) &&
     (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean") &&
@@ -201,6 +250,7 @@ export function isPrMonitorEvent(value: unknown): value is PrMonitorEvent {
   if (typeof candidate.environmentId !== "string" || candidate.environmentId.length === 0) {
     return false;
   }
+  if (!hasValidOptionalViewStamp(candidate, "event")) return false;
   if (candidate.removed === true) return true;
   if (!isPrMonitorEnvironmentState(candidate.state)) return false;
   if (candidate.state.environmentId !== candidate.environmentId) return false;
@@ -210,5 +260,9 @@ export function isPrMonitorEvent(value: unknown): value is PrMonitorEvent {
 export function isPrMonitorSnapshot(value: unknown): value is PrMonitorSnapshot {
   if (typeof value !== "object" || value === null) return false;
   const entries = (value as Record<string, unknown>).entries;
-  return Array.isArray(entries) && entries.every(isPrMonitorEnvironmentState);
+  return (
+    Array.isArray(entries) &&
+    entries.every(isPrMonitorEnvironmentState) &&
+    hasValidOptionalViewStamp(value, "snapshot")
+  );
 }

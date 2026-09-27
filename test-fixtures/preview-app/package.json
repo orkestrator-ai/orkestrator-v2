@@ -1,0 +1,8 @@
+{
+  "name": "orkestrator-preview-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun server.ts"
+  }
+}

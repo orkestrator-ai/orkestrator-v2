@@ -1,5 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import { asString, asNumber } from "./commands-helpers.js";
+import { isFrozenPromptQueueMessage } from "./storage-prompts.js";
 
 export function registerPromptCommands(
   register: CommandRegistrar,
@@ -17,6 +19,11 @@ export function registerPromptCommands(
   register(
     "enqueue_prompt_queue_message",
     async ({ queueKey, environmentId, message }, { storage, nativeAgents }) => {
+      // Typed origins are backend-authored (annotation requests publish
+      // through their own idempotent path). A client cannot declare one.
+      if (isFrozenPromptQueueMessage(message)) {
+        throw new Error("Prompt queue message origin is assigned by the backend");
+      }
       const key = asString(queueKey, "queueKey");
       const queue = await storage.enqueuePromptQueueMessage(
         key,
@@ -37,12 +44,37 @@ export function registerPromptCommands(
       message,
     ),
   );
-  register("remove_prompt_queue_message", ({ queueKey, environmentId, messageId }, { storage }) =>
-    storage.removePromptQueueMessage(
-      asString(queueKey, "queueKey"),
-      asString(environmentId, "environmentId"),
-      asString(messageId, "messageId"),
-    ),
+  register(
+    "remove_prompt_queue_message",
+    async ({ queueKey, environmentId, messageId }, { storage, webAnnotations }) => {
+      const key = asString(queueKey, "queueKey");
+      const environment = asString(environmentId, "environmentId");
+      const id = asString(messageId, "messageId");
+      // Removing an annotation request from the chat queue is a cancellation
+      // of that request: route it through annotation cancellation so its
+      // thread settles and its reservation is released. The storage removal
+      // below still records a tombstone if this path is unavailable.
+      const queue = webAnnotations ? await storage.getPromptQueue(key) : null;
+      const message = queue?.messages.find(
+        (candidate) =>
+          typeof candidate === "object" &&
+          candidate !== null &&
+          (candidate as { id?: unknown }).id === id,
+      );
+      const origin = webAnnotationQueueOrigin(message);
+      if (origin && webAnnotations && queue?.environmentId === environment) {
+        const cancelled = await webAnnotations
+          .cancelFromChatQueue(environment, origin.requestId)
+          .catch(() => null);
+        if (cancelled) {
+          return {
+            removed: cancelled.removed ? (message ?? null) : null,
+            queue: await storage.getPromptQueue(key),
+          };
+        }
+      }
+      return storage.removePromptQueueMessage(key, environment, id);
+    },
   );
   register(
     "move_prompt_queue_message",
@@ -111,14 +143,26 @@ export function registerPromptCommands(
   );
   register(
     "save_compose_draft",
-    ({ draftKey, ownerType, ownerId, value, expectedRevision }, { storage }) =>
-      storage.saveComposeDraft(
+    async (
+      { draftKey, ownerType, ownerId, value, expectedRevision },
+      { storage, webAnnotations },
+    ) => {
+      // A legacy browser note that already lives in a web annotation thread is
+      // saved as a lightweight migrated reference instead of fanning out again.
+      const mapped = webAnnotations
+        ? await webAnnotations.mapMigratedComposeDraft(String(ownerType), String(ownerId), value)
+        : null;
+      const saved = await storage.saveComposeDraft(
         asString(draftKey, "draftKey"),
         asString(ownerType, "ownerType") as "environment" | "project",
         asString(ownerId, "ownerId"),
-        value,
+        mapped?.value ?? value,
         expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
-      ),
+      );
+      return mapped && mapped.references.length > 0
+        ? { ...saved, webAnnotationMigration: { references: mapped.references } }
+        : saved;
+    },
   );
   register("delete_compose_draft", ({ draftKey, expectedRevision }, { storage }) =>
     storage.deleteComposeDraft(

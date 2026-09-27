@@ -50,6 +50,23 @@ describe("StorageService project folders", () => {
     expect((await storage.loadProjects()).map(({ id }) => id)).toEqual(["gamma", "alpha", "beta"]);
   });
 
+  test("reloads a persisted folder sort from a fresh authoritative snapshot", async () => {
+    await storage.arrangeProjects(["beta", "alpha", "gamma"], {
+      alpha: "Work",
+      beta: "Work",
+    });
+
+    const rehydratedStorage = new StorageService(dataDir);
+    await rehydratedStorage.init();
+    const rehydrated = await rehydratedStorage.loadProjects();
+
+    expect(rehydrated.map(({ id, order, folder }) => ({ id, order, folder }))).toEqual([
+      { id: "beta", order: 0, folder: "Work" },
+      { id: "alpha", order: 1, folder: "Work" },
+      { id: "gamma", order: 2, folder: undefined },
+    ]);
+  });
+
   test("normalizes a typed name before it is stored", async () => {
     await storage.arrangeProjects(["alpha", "beta", "gamma"], { alpha: "  Work   Projects \n" });
     expect((await storage.getProject("alpha"))?.folder).toBe("Work Projects");

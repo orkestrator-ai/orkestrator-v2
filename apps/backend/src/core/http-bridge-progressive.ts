@@ -22,7 +22,10 @@ import {
 } from "./agent-provider-runtime.js";
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
-import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
+import {
+  claudeTurnActivityFromPayload,
+  normalizeClaudeBackgroundTasks,
+} from "./http-bridge-claude-runtime.js";
 import type { HttpBridgeRuntimeMetadata } from "./http-bridge-runtime-metadata.js";
 import { snapshotNotices } from "./http-bridge-runtime-health.js";
 import {
@@ -128,8 +131,19 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     typeof value.contentEpoch === "string" || Number.isSafeInteger(value.contentEpoch)
       ? String(value.contentEpoch)
       : "legacy";
+  const messageWindow = asRecord(value.messageWindow);
+  const omittedParts = messageWindow?.omittedParts;
+  const omittedMessages = messageWindow?.omittedMessages;
   return {
     messages: value.messages,
+    ...(Number.isSafeInteger(omittedParts) && (omittedParts as number) > 0
+      ? { omittedParts: omittedParts as number }
+      : {}),
+    ...(messageWindow?.truncationReason === "bytes" &&
+    Number.isSafeInteger(omittedMessages) &&
+    (omittedMessages as number) > 0
+      ? { byteOmittedMessages: omittedMessages as number }
+      : {}),
     ...(Number.isSafeInteger(value.startIndex) && (value.startIndex as number) >= 0
       ? { historyStartIndex: value.startIndex as number }
       : {}),
@@ -226,9 +240,12 @@ export async function readHttpBridgeSessionState(input: {
   const policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
   const reportedKinds = asRecord(asRecord(payload.capabilities)?.interactions)?.kinds;
   const backgroundTasks = normalizeClaudeBackgroundTasks(payload.backgroundTasks);
+  const turnActivity =
+    input.agent === "claude" ? claudeTurnActivityFromPayload(payload) : undefined;
   return {
     status,
     phase,
+    ...(turnActivity ? { turnActivity } : {}),
     ...(typeof payload.resumableSessionId === "string" && payload.resumableSessionId.trim()
       ? { resumableSessionId: payload.resumableSessionId.trim() }
       : input.agent === "codex" && typeof payload.threadId === "string" && payload.threadId.trim()
@@ -255,6 +272,9 @@ export async function readHttpBridgeSessionState(input: {
         : {}),
     ...(Number.isSafeInteger(payload.engineGeneration)
       ? { providerGeneration: payload.engineGeneration as number }
+      : {}),
+    ...(Number.isSafeInteger(payload.commandRevision)
+      ? { commandCatalogueRevision: payload.commandRevision as number }
       : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...(runtime ? { runtime } : {}),

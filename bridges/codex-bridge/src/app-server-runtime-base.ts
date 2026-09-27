@@ -13,6 +13,7 @@
  */
 import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
+import { CodexCommandCatalogue } from "./commands/codex-command-catalogue.js";
 import type {
   ApprovalDecision,
   ApprovalResolvedDecision,
@@ -79,17 +80,6 @@ import {
   type NormalizedPart,
 } from "./messages/types.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
-import {
-  buildPromptInput,
-  expandPromptTemplate,
-  getAvailableSlashCommandDefinitions,
-  isCodexCliNativeSlashCommand,
-  parseCodexSteerCommand,
-  parseSlashCommandPrompt,
-  wrapPromptForConversationMode,
-  type ConversationMode,
-  type PromptSlashCommand,
-} from "./prompts/slash-commands.js";
 import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
@@ -169,6 +159,10 @@ export interface AppServerRuntimeOptions {
   /** Test/embedding override for dispatch-journal admission limits. */
   dispatchJournalMaxRecords?: number;
   dispatchJournalMaxBytes?: number;
+  /** Test/embedding override for how long a skill inventory is trusted. */
+  skillInventoryTtlMs?: number;
+  /** Test/embedding override for the coalesced `skills/changed` re-read delay. */
+  skillRefreshDebounceMs?: number;
 }
 
 export interface OrderedRuntimeEvent {
@@ -687,6 +681,12 @@ export abstract class AppServerRuntimeBase {
       requestedAt: string;
     }
   >();
+  /**
+   * Executable command catalogue: built-ins, prompt templates and the private
+   * skill registry. Shared by the picker route, `/help` and prompt dispatch so
+   * all three resolve names identically.
+   */
+  protected readonly commandCatalogue: CodexCommandCatalogue;
   protected accountRateLimits: EngineRateLimitWindow[] = [];
   protected accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
@@ -740,6 +740,17 @@ export abstract class AppServerRuntimeBase {
       cwd: options.cwd,
       now: this.now,
       retentionMs: options.sessionRetentionMs,
+    });
+    this.commandCatalogue = new CodexCommandCatalogue({
+      engine: options.engine,
+      cwd: options.cwd,
+      now: this.now,
+      ...(options.skillInventoryTtlMs !== undefined
+        ? { skillTtlMs: options.skillInventoryTtlMs }
+        : {}),
+      ...(options.skillRefreshDebounceMs !== undefined
+        ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
+        : {}),
     });
     options.engine.subscribe((event) => this.onEngineEvent(event));
 

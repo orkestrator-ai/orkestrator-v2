@@ -7,6 +7,8 @@ import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
+  isMultiReviewStepControlInput,
+  isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
   isStartMultiReviewInput,
   isLaunchMultiReviewActionInput,
@@ -43,6 +45,30 @@ const report: StructuredReviewReport = {
 };
 
 describe("multi review protocol", () => {
+  test("validates step restarts with an optional model override", () => {
+    const restart = {
+      workflowId: "multi-1",
+      kind: "consolidate",
+      model: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    };
+    expect(isRestartMultiReviewStepInput(restart)).toBe(true);
+    expect(isRestartMultiReviewStepInput({ workflowId: "multi-1", kind: "fix" })).toBe(true);
+    expect(isRestartMultiReviewStepInput({ ...restart, kind: "reviewers" })).toBe(false);
+    expect(isRestartMultiReviewStepInput({ ...restart, model: { agent: "codex" } })).toBe(false);
+    expect(isRestartMultiReviewStepInput({ ...restart, rendererOnly: true })).toBe(false);
+  });
+
+  test("validates strict pause and resume step inputs", () => {
+    expect(isMultiReviewStepControlInput({ workflowId: "multi-1", kind: "prepare" })).toBe(true);
+    expect(isMultiReviewStepControlInput({ workflowId: "multi-1", kind: "consolidate" })).toBe(
+      true,
+    );
+    expect(isMultiReviewStepControlInput({ workflowId: "multi-1", kind: "reviewers" })).toBe(false);
+    expect(
+      isMultiReviewStepControlInput({ workflowId: "multi-1", kind: "fix", rendererOnly: true }),
+    ).toBe(false);
+  });
+
   test("complete launch validates bounded caller identity and exact dialog selections", () => {
     const input = {
       environmentId: "env",
@@ -124,13 +150,41 @@ describe("multi review protocol", () => {
       backendRevision: 2,
     };
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        consolidationModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      }),
+    ).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, consolidationModel: { agent: "unknown" } })).toBe(
+      false,
+    );
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: true })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: false })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: "true" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: null })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: "yes" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "next-fix-session" })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        phase: "paused",
+        pausedFromPhase: "consolidating",
+        pausedStep: "consolidate",
+      }),
+    ).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        phase: "paused",
+        pausedFromPhase: "consolidating",
+        pausedStep: "fix",
+      }),
+    ).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, phase: "paused" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, consolidatedReport: undefined })).toBe(false);
     expect(
       isMultiReviewWorkflow({
@@ -345,6 +399,7 @@ describe("multi review protocol", () => {
     expect(isMultiReviewTerminalPhase("cancelled")).toBe(true);
     expect(isMultiReviewTerminalPhase("ready")).toBe(false);
     expect(isMultiReviewTerminalPhase("fixing")).toBe(false);
+    expect(isMultiReviewTerminalPhase("paused")).toBe(false);
   });
 
   test("accepts a pending address dispatch only on an interactive workflow", () => {

@@ -2,6 +2,12 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Eye, Plus, Trash2, Wrench } from "lucide-react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import { MULTI_REVIEW_MAX_REVIEWERS } from "@orkestrator/protocol/multi-review";
+import {
+  multiReviewDuplicateReviewerGroups,
+  multiReviewDuplicateWarning,
+  multiReviewWorkEstimate,
+  multiReviewWorkSummary,
+} from "@orkestrator/protocol/multi-review-launch";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   openCodeModelDisplayLabel,
@@ -391,6 +397,19 @@ export function MultiReviewLaunchDialog({
   );
   const [autoFix, setAutoFix] = useState(defaultAutoFix);
   const wasOpen = useRef(false);
+  // Normalized launch identity, not display labels. Joined into one string so
+  // the live region's text — and so its announcement — changes only when the
+  // set of duplicates does, not on every render.
+  const duplicateWarnings = useMemo(
+    () =>
+      multiReviewDuplicateReviewerGroups(reviewers.map(cleanRow))
+        .map(multiReviewDuplicateWarning)
+        .join(" "),
+    [reviewers],
+  );
+  const workSummary = multiReviewWorkSummary(
+    multiReviewWorkEstimate({ reviewerCount: reviewers.length, autoFix }),
+  );
 
   // Only the closed -> open edge reconfigures the rows, and it runs as a layout
   // effect so the first paint is already the action default rather than the
@@ -516,6 +535,17 @@ export function MultiReviewLaunchDialog({
                   />
                 ))}
               </div>
+              <p
+                aria-live="polite"
+                data-testid="multi-review-duplicate-warning"
+                className={
+                  duplicateWarnings
+                    ? "mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-200"
+                    : "sr-only"
+                }
+              >
+                {duplicateWarnings}
+              </p>
 
               <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
                 <span className="h-px flex-1 bg-zinc-800" />
@@ -564,6 +594,13 @@ export function MultiReviewLaunchDialog({
                 />
                 <Label htmlFor="multi-review-launch-auto-fix">Auto-fix after consolidation</Label>
               </div>
+              <p
+                aria-live="polite"
+                data-testid="multi-review-work-summary"
+                className="mt-4 text-xs leading-relaxed text-zinc-500"
+              >
+                {workSummary}
+              </p>
             </fieldset>
           </div>
 

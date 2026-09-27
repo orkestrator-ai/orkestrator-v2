@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
   SESSION_TITLE_MODEL,
   SESSION_TITLE_REASONING_EFFORT,
@@ -128,6 +129,11 @@ describe("Codex session titles", () => {
     expect(buildFallbackSessionTitle("<tag> `*_#[]{}()`")).toBe("Codex session");
     expect(buildFallbackSessionTitle("Handle emoji 😀 safely!!!")).toBe("Handle emoji 😀 safely");
     expect(buildFallbackSessionTitle("  ")).toBe("Codex session");
+  });
+
+  test("derives a fallback from the brief after framed canvas guidance", () => {
+    const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server. Canvas ID: canvas-1")}\n\nMock up the sidebar`;
+    expect(buildFallbackSessionTitle(prompt)).toBe("Mock up the sidebar");
   });
 
   test("sanitizes model titles without splitting Unicode", () => {

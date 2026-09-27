@@ -6,7 +6,14 @@
  * it produces a bounded summary, with no connection, no session and no fetch.
  * That makes it directly testable, and keeps the provider module — which is
  * already at its reviewed size limit — about talking to bridges.
+ *
+ * The same body may carry `mcpConfig`: digests of the MCP files a runtime was
+ * built from. {@link bridgeRuntimeSummary} never copies it — the summary is
+ * renderer-facing, and an unkeyed digest of a file holding a low-entropy
+ * secret lets its holder confirm a guess. {@link bridgeMcpConfigEvidence}
+ * reads it for the backend's apply scheduler only.
  */
+import type { ProviderMcpConfigEvidence } from "./agent-provider-contract.js";
 import {
   NATIVE_AGENT_NOTICE_SEVERITIES,
   type NativeAgentNotice,
@@ -179,4 +186,55 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
         }
       : {}),
   };
+}
+
+const MCP_DIGEST = /^sha256:[A-Za-z0-9_-]{43}$/;
+
+function mcpSourceDigest(value: unknown): string | undefined {
+  if (value === "absent" || value === "excluded") return value;
+  return typeof value === "string" && MCP_DIGEST.test(value) ? value : undefined;
+}
+
+function mcpObservedAt(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 64) return undefined;
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+
+function mcpSources(value: unknown): ProviderMcpConfigEvidence["sources"] | undefined {
+  const sources = asRecord(value);
+  if (!sources) return undefined;
+  const user = mcpSourceDigest(sources.user);
+  const project = mcpSourceDigest(sources.project);
+  if (!user && !project) return undefined;
+  return { ...(user ? { user } : {}), ...(project ? { project } : {}) };
+}
+
+/**
+ * Read the `mcpConfig` a bridge reports beside its runtime health, or
+ * undefined when there is none or it is malformed. Three shapes arrive:
+ *
+ * - Claude: `{ sources, queryStartedAt, ... }` — the most recent query.
+ * - Cursor and Pi: `{ sources, builtAt, ... }` — the live MCP generation.
+ * - Grok (ACP): `{ inventoryScope: "process", loaded?: { sources, observedAt } }`
+ *   — whichever child reported last, not attributable to one session.
+ *
+ * Only well-formed digests and a parseable timestamp survive; everything
+ * else, including the opaque combined fingerprint, is dropped here.
+ */
+export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvidence | undefined {
+  const config = asRecord(asRecord(payload)?.mcpConfig);
+  if (!config) return undefined;
+  if (config.inventoryScope === "process") {
+    const loaded = asRecord(config.loaded);
+    const sources = mcpSources(loaded?.sources);
+    const observedAt = mcpObservedAt(loaded?.observedAt);
+    return sources && observedAt ? { sources, observedAt, scope: "process" } : undefined;
+  }
+  const sources = mcpSources(config.sources);
+  const observedAt = mcpObservedAt(config.queryStartedAt ?? config.builtAt);
+  if (!sources || !observedAt) return undefined;
+  // Claude keeps user and private-local entries in one file, but a query whose
+  // source scope is narrower than `all` read only the user map from it.
+  if (config.scope === "all" && sources.user) sources.local = sources.user;
+  return { sources, observedAt, scope: "session" };
 }

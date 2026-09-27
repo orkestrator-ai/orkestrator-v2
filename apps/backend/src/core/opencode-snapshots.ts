@@ -18,7 +18,7 @@ import type {
   NativeAgentNotice,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
-import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
+import { normalizeOpenCodeTranscriptMessages } from "./opencode-messages.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 
 // One more than the sessions we can track, so a full tracking set still leaves
@@ -45,10 +45,10 @@ export async function openCodeTranscriptSnapshot(input: {
     }
     const rawMessages = current ?? (await input.readMessages(input.options.limit));
     if (!current) input.replaceMessages(rawMessages);
-    const messages = rawMessages.slice(-input.options.limit).flatMap((message, index) => {
-      const normalized = normalizeOpenCodeInteractiveMessage(message, index, input.recordUnknown);
-      return normalized ? [normalized] : [];
-    });
+    const messages = normalizeOpenCodeTranscriptMessages(
+      rawMessages.slice(-input.options.limit),
+      input.recordUnknown,
+    );
     const title = input.title();
     return {
       messages,

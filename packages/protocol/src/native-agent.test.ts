@@ -10,6 +10,7 @@ import {
   fallbackReasoningId,
   isNativeAgentExecutionPolicy,
   isNativeAgentTabData,
+  normalizeNativeAgentTurnActivity,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
   migrateOpenCodeModelProviders,
@@ -1133,5 +1134,33 @@ describe("native agent execution policy guard", () => {
     ).toBe(false);
     expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: {} })).toBe(false);
     expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: [1] } })).toBe(false);
+  });
+});
+
+describe("normalizeNativeAgentTurnActivity", () => {
+  test("says nothing when the provider reports nothing", () => {
+    expect(normalizeNativeAgentTurnActivity({})).toBeUndefined();
+    expect(
+      normalizeNativeAgentTurnActivity({ compacting: false, thinkingTokens: 0 }),
+    ).toBeUndefined();
+    expect(normalizeNativeAgentTurnActivity({ thinkingTokens: "12" })).toBeUndefined();
+    expect(normalizeNativeAgentTurnActivity({ thinkingTokens: Number.NaN })).toBeUndefined();
+  });
+
+  test("quantizes the estimate so each delta is not a new projection revision", () => {
+    expect(normalizeNativeAgentTurnActivity({ thinkingTokens: 3 })).toEqual({ thinkingTokens: 10 });
+    expect(normalizeNativeAgentTurnActivity({ thinkingTokens: 487 })).toEqual({
+      thinkingTokens: 490,
+    });
+    expect(normalizeNativeAgentTurnActivity({ thinkingTokens: 1_249 })).toEqual({
+      thinkingTokens: 1_200,
+    });
+  });
+
+  test("keeps compaction alongside an estimate", () => {
+    expect(normalizeNativeAgentTurnActivity({ compacting: true, thinkingTokens: 2_000 })).toEqual({
+      compacting: true,
+      thinkingTokens: 2_000,
+    });
   });
 });

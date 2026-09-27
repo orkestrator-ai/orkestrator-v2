@@ -23,6 +23,11 @@ function workflow(id: string): MultiReviewWorkflow {
   };
 }
 
+/** The store's private data directory, for inspecting files on disk. */
+function storeDir(storage: StorageService): string {
+  return (storage as unknown as { dataDir: string }).dataDir;
+}
+
 async function withStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-storage-multi-review-"));
   try {
@@ -95,6 +100,80 @@ test("Multi Review storage fences revisions and controller ownership", async () 
     );
     expect((await storage.claimMultiReviewController("multi-1", "owner-2", 2_000)).granted).toBe(
       true,
+    );
+  });
+});
+
+test("Multi Review lease writes do not rotate workflow backups", async () => {
+  await withStorage(async (storage) => {
+    await storage.createMultiReviewWorkflowIfNoActive("multi-1", "env-1", 1, workflow("multi-1"));
+    const first = await storage.saveMultiReviewWorkflow(
+      "multi-1",
+      "env-1",
+      1,
+      { ...workflow("multi-1"), phase: "consolidating" },
+      1,
+    );
+    await storage.saveMultiReviewWorkflow(
+      "multi-1",
+      "env-1",
+      1,
+      workflow("multi-1"),
+      first.revision,
+    );
+    const file = path.join(storeDir(storage), "multi-reviews.json");
+    const olderBackup = await fs.readFile(`${file}.bak.2`, "utf8");
+    const backupsBefore = (await fs.readdir(storeDir(storage))).filter((name) =>
+      name.startsWith("multi-reviews.json.bak."),
+    );
+
+    for (let renewal = 0; renewal < 6; renewal++) {
+      const claimed = await storage.claimMultiReviewController(
+        "multi-1",
+        `owner-${renewal}`,
+        2_000,
+      );
+      expect(claimed.granted).toBe(true);
+      await storage.releaseMultiReviewController("multi-1", `owner-${renewal}`, claimed.token);
+    }
+
+    const backupsAfter = (await fs.readdir(storeDir(storage))).filter((name) =>
+      name.startsWith("multi-reviews.json.bak."),
+    );
+    expect(backupsAfter.sort()).toEqual(backupsBefore.sort());
+    // Older recovery points still hold content-commit snapshots, not lease churn.
+    expect(await fs.readFile(`${file}.bak.2`, "utf8")).toBe(olderBackup);
+    // The primary is intact and still parses after lease-only writes.
+    expect((await storage.getMultiReviewWorkflow("multi-1"))?.revision).toBe(3);
+  });
+});
+
+test("Multi Review fence checks follow every write to the store", async () => {
+  await withStorage(async (storage) => {
+    await storage.createMultiReviewWorkflowIfNoActive("multi-1", "env-1", 1, workflow("multi-1"));
+    const claimed = await storage.claimMultiReviewController("multi-1", "owner-1", 2_000);
+    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token)).toBe(
+      true,
+    );
+    // Repeated checks against an unchanged store stay correct.
+    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token)).toBe(
+      true,
+    );
+    expect(await storage.validateMultiReviewController("multi-1", "owner-2", claimed.token)).toBe(
+      false,
+    );
+
+    // A write from another process replaces the file; the next check sees it.
+    const file = path.join(storeDir(storage), "multi-reviews.json");
+    const stored = JSON.parse(await fs.readFile(file, "utf8"));
+    delete stored["multi-1"].controllerLease;
+    await fs.writeFile(`${file}.external`, JSON.stringify(stored));
+    await fs.rename(`${file}.external`, file);
+    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token)).toBe(
+      false,
+    );
+    expect(await storage.validateMultiReviewController("missing", "owner-1", claimed.token)).toBe(
+      false,
     );
   });
 });

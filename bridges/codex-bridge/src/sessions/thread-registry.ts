@@ -51,6 +51,13 @@ export type ExternalSessionStatus = "idle" | "running" | "error";
 export const MAX_LOCAL_MESSAGES = 50;
 export const MAX_ASYNC_QUESTION_ITEM_IDS = 64;
 export const MAX_ASYNC_QUESTION_ITEM_ID_LENGTH = 2_048;
+export const CODEX_RESTARTED_MID_TURN_MESSAGE =
+  "Codex restarted before this turn finished, so its work stopped partway. Send a message to continue.";
+
+/** One content-free, bounded notice for the last restart-interrupted turn. */
+export interface RestartFailureNotice {
+  turnId: string;
+}
 
 function appendAsyncQuestionItemIds(
   target: string[],
@@ -108,6 +115,7 @@ export interface BridgeSession {
   structuredOutputRequestId?: string;
   /** Bounded turn ledger used to reproduce live filtering after rollout hydration. */
   structuredOutputTurns?: StructuredOutputTurnRecord[];
+  restartFailure?: RestartFailureNotice;
   /** Bridge-observed turn reroutes that Codex does not write to its rollout. */
   confirmedModelsByTurn?: Record<string, string>;
   lastAccessed: number;
@@ -291,6 +299,7 @@ export class ThreadRegistry {
     const record: BridgeSession = {
       ...session,
       structuredOutputTurns: session.structuredOutputTurns?.map((entry) => ({ ...entry })),
+      restartFailure: session.restartFailure ? { ...session.restartFailure } : undefined,
       pendingAttachments: [],
       localMessages: [],
       localMessagesTrimmed: false,
@@ -330,6 +339,7 @@ export class ThreadRegistry {
     const record: BridgeSession = {
       ...session,
       structuredOutputTurns: session.structuredOutputTurns?.map((entry) => ({ ...entry })),
+      restartFailure: session.restartFailure ? { ...session.restartFailure } : undefined,
       pendingAttachments: [],
       localMessages: [],
       localMessagesTrimmed: false,
@@ -447,7 +457,8 @@ export class ThreadRegistry {
         messages: [],
         asyncQuestionItemIds: [...(session?.asyncQuestionItemIds ?? [])],
         activeTurn: null,
-        phase: "idle",
+        phase: session?.restartFailure ? "failed" : "idle",
+        error: session?.restartFailure ? CODEX_RESTARTED_MID_TURN_MESSAGE : undefined,
         dispatchInFlight: false,
         compacting: false,
         unsubscribed: false,

@@ -1,3 +1,9 @@
+import {
+  terminateProcessTree,
+  type ProcessTreeChild,
+  type TerminateProcessTreeOptions,
+} from "./process-tree.js";
+
 export type PtyExitEvent = {
   exitCode: number;
   signal?: number;
@@ -13,8 +19,19 @@ export type PtyProcess = {
   onExit: (callback: (event: PtyExitEvent) => void) => PtyDisposable;
   write: (data: string) => void;
   resize: (cols: number, rows: number) => void;
+  /** Signals the direct child only and does not wait. */
   kill: () => void;
+  /**
+   * Terminates the direct child and every descendant, escalating to SIGKILL,
+   * and resolves `true` once all of them have exited. `kill()` is not enough
+   * before removing a worktree: a shell's foreground job runs in its own
+   * process group and can keep writing into the directory after the shell
+   * itself has gone.
+   */
+  terminate: (options?: PtyTerminateOptions) => Promise<boolean>;
 };
+
+export type PtyTerminateOptions = Partial<TerminateProcessTreeOptions>;
 
 export type SpawnPtyOptions = {
   cwd?: string;
@@ -45,6 +62,13 @@ const PTY_COALESCE_WINDOW_MS = 16;
  * the cap flushes immediately rather than waiting out the window.
  */
 const PTY_MAX_PENDING_CHARS = 256 * 1024;
+
+/**
+ * Interactive shells ignore SIGTERM, so a terminal tree usually needs the
+ * SIGKILL escalation. The grace stays short because deletion waits on it.
+ */
+const PTY_TERMINATE_GRACE_MS = 2_000;
+const PTY_TERMINATE_KILL_WAIT_MS = 1_000;
 
 export function isPtyPlatformSupported(platform: NodeJS.Platform): boolean {
   return platform !== "win32";
@@ -220,6 +244,26 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
     kill() {
       if (exitEvent) return;
       spawned.kill();
+    },
+    terminate(options = {}) {
+      const root: ProcessTreeChild = {
+        pid: spawned.pid,
+        get exitCode() {
+          return spawned.exitCode;
+        },
+        get signalCode() {
+          return spawned.signalCode;
+        },
+        kill(signal) {
+          spawned.kill(signal);
+          return true;
+        },
+      };
+      return terminateProcessTree(root, {
+        graceMs: PTY_TERMINATE_GRACE_MS,
+        killWaitMs: PTY_TERMINATE_KILL_WAIT_MS,
+        ...options,
+      });
     },
   };
 }

@@ -5,9 +5,10 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import { reviewValidationArtifactPaths } from "@orkestrator/protocol/review-artifacts";
-import type {
-  LegacyReviewPackage,
-  ReviewPackageReference,
+import {
+  buildReviewBody,
+  type LegacyReviewPackage,
+  type ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
 import {
   createDiscoveryPrompt,
@@ -171,6 +172,42 @@ describe("backend looped-review prompt contracts", () => {
     expect(discovery).toContain("## Structured report structural preflight");
     expect(discovery).toContain("use only the schema-derived enum lists above");
     expect(discovery).toContain("Remove a finding below 75");
+  });
+
+  test("gives packaged reviewers the same rubric as an interactive review", () => {
+    // Discovery once carried only a one-line mandate, and reviewers reported
+    // a fraction of the issues the same model found interactively.
+    const discovery = createDiscoveryPrompt({ reviewPackage });
+    const interactive = buildReviewBody({
+      targetBranch: "main",
+      allowClarifyingQuestions: true,
+      outputFormat: "markdown",
+    });
+    const rubric = (prompt: string, from: string, to: string) => {
+      const start = prompt.indexOf(from);
+      return prompt.slice(start, prompt.indexOf(to, start));
+    };
+    const sharedRubric = rubric(interactive, "2. Before judging the change", "\n8. ");
+    const sharedCoverage = rubric(
+      interactive,
+      "Review coverage for behavior changed",
+      "\n\n## Output Format",
+    );
+
+    expect(sharedRubric).toContain("what happens the second time this runs");
+    expect(sharedRubric).toContain("Security review");
+    expect(sharedRubric).toContain("Do not stop after the first finding");
+    expect(sharedCoverage).toContain("Identify changed production behavior");
+    expect(discovery).toContain("## Code review");
+    expect(discovery).toContain(sharedRubric);
+    expect(discovery).toContain("## Test coverage review");
+    expect(discovery).toContain(sharedCoverage);
+    expect(discovery).toContain("Do not ask clarifying questions");
+    expect(discovery).toContain("do not rerun the full test suite, typecheck, or build");
+    // The structural preflight stays last so it is checked immediately before emitting.
+    expect(discovery.indexOf("## Structured report structural preflight")).toBeGreaterThan(
+      discovery.indexOf("## Test coverage review"),
+    );
   });
 
   test("serializes the complete report and finding pool into later phases", () => {
@@ -480,7 +517,8 @@ describe("prompt contract edge cases", () => {
     expect(prompt).toContain(reference.filePath);
     expect(prompt).toContain(reference.sha256);
     expect(prompt).toContain("Read the review package");
-    expect(prompt.length).toBeLessThan(10_000);
+    // Fixed instructions and the shared rubric only; the 850 KB package stays on disk.
+    expect(prompt.length).toBeLessThan(15_000);
     expect(prompt).not.toContain("completeDiff");
     expect(prompt).toContain("Private ticket context");
     expect(prompt).toContain("immediately before dispatch");

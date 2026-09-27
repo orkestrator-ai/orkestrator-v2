@@ -7,18 +7,28 @@
  * that renderer pulls in.
  */
 
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type {
+  StructuredReviewFindings,
+  StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** The finding counts shared by a full report and a fix prompt's findings. */
+export function structuredReviewFindingsSummary(findings: StructuredReviewFindings): string {
+  return [
+    plural(findings.issues.length, "issue"),
+    plural(findings.testCoverageGaps.length, "coverage gap"),
+  ].join(" · ");
 }
 
 /** One line of substance for a report whose sections are all collapsed. */
 export function structuredReviewVerdictSummary(report: StructuredReviewReport): string {
   return [
     `Ready: ${report.verdict.ready}`,
-    plural(report.issues.length, "issue"),
-    plural(report.testCoverageGaps.length, "coverage gap"),
+    structuredReviewFindingsSummary(report),
     `${report.riskProfile.overallRisk} risk`,
   ].join(" · ");
 }

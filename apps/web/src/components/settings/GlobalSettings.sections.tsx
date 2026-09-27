@@ -564,6 +564,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         modelCatalogScopeDescription={
           platform === "opencode" ? openCodeCatalogScopeDescription : undefined
         }
+        showMcpServersLink
       >
         {extras}
       </AgentPlatformPane>

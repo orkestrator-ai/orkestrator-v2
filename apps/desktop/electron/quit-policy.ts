@@ -37,3 +37,60 @@ export function registerWindowAllClosedQuit(options: {
     },
   };
 }
+
+/**
+ * Turns a request to open the app while it is quitting into a relaunch.
+ *
+ * `before-quit` stops the Local backend, but the process lingers while the
+ * log flush holds `will-quit` open. macOS "Quit & Reopen" (after a privacy
+ * grant such as Full Disk Access) asks LaunchServices to open the app during
+ * that window; LaunchServices finds the dying process and sends it a reopen
+ * instead of starting a new one. Answering with a window leaves a renderer
+ * bound to a stopped backend, and no fresh process is started to replace it.
+ * Relaunching after exit gives the user the new instance they asked for.
+ */
+export function registerQuitReopenRelaunch(options: {
+  app: Pick<Electron.App, "on" | "relaunch">;
+  /** Agent-test launchers supervise one process; never spawn a replacement. */
+  allowRelaunch: boolean;
+}): {
+  isQuitting(): boolean;
+  scheduleRelaunch(): void;
+  deferReopenWhileQuitting(): boolean;
+} {
+  let quitting = false;
+  let relaunchScheduled = false;
+  const scheduleRelaunch = (): void => {
+    if (relaunchScheduled) return;
+    relaunchScheduled = true;
+    options.app.relaunch();
+  };
+  options.app.on("before-quit", () => {
+    quitting = true;
+  });
+  return {
+    isQuitting: () => quitting,
+    scheduleRelaunch,
+    deferReopenWhileQuitting(): boolean {
+      if (!quitting) return false;
+      if (options.allowRelaunch && !relaunchScheduled) {
+        scheduleRelaunch();
+      }
+      // The pending quit resumes after the logging shutdown flushes its tail.
+      // A second quit here would bypass that will-quit hold.
+      return true;
+    },
+  };
+}
+
+/** Startup promises can reject after before-quit has stopped their backend. */
+export function handleStartupFailure(options: {
+  isQuitting(): boolean;
+  error: unknown;
+  report(error: unknown): void;
+  quit(): void;
+}): void {
+  if (options.isQuitting()) return;
+  options.report(options.error);
+  options.quit();
+}

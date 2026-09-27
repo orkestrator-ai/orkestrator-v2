@@ -327,6 +327,8 @@ describe("context windows", () => {
     expect(contextWindowForModelId("grok-4.6")).toBe(500_000);
     expect(contextWindowForModelId("grok-4-6-fast")).toBe(500_000);
     expect(contextWindowForModelId("Claude-Opus-5")).toBe(1_000_000);
+    expect(contextWindowForModelId("claude-opus-5.5")).toBe(1_000_000);
+    expect(contextWindowForModelId("claude-opus-5-5-fast")).toBe(1_000_000);
   });
 
   test("answers an inherited object key with no window", () => {

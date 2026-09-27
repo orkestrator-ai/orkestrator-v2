@@ -3,13 +3,17 @@
  *
  * The whole payload sits behind a single closed disclosure: an agent working to
  * a schema emits these repeatedly, and expanded they would bury the prose around
- * them. A payload that validates as a structured review report gets that
- * report's own renderer; anything else gets the generic labelled tree.
+ * them. A payload that validates as a structured review report — or as just
+ * that report's findings — gets the report's own renderer; anything else gets
+ * the generic labelled tree.
  */
 
 import { Braces, CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import {
+  StructuredReviewFindingsView,
+  StructuredReviewReportView,
+} from "@/components/review/StructuredReviewReportView";
 import { jsonPayloadSummary, jsonPayloadTitle, type JsonPayload } from "@/lib/chat/json-payload";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { cn } from "@/lib/utils";
@@ -18,6 +22,7 @@ import { JsonTree } from "./JsonTree";
 function PayloadIcon({ payload }: { payload: JsonPayload }) {
   switch (payload.kind) {
     case "structured-review":
+    case "review-findings":
       return <ClipboardCheck className="size-3.5 shrink-0 text-cyan-300/90" />;
     case "verification":
       return payload.verdict.complete ? (
@@ -33,6 +38,7 @@ function PayloadIcon({ payload }: { payload: JsonPayload }) {
 function borderClass(payload: JsonPayload): string {
   switch (payload.kind) {
     case "structured-review":
+    case "review-findings":
       return "border-cyan-500/25";
     case "verification":
       return payload.verdict.complete ? "border-emerald-500/25" : "border-red-500/30";
@@ -121,6 +127,13 @@ export function JsonPayloadPart({
               sectionExpansionKey={`${expansionKey}/report-section`}
               showRawJson={false}
               showHeading={false}
+            />
+          ) : payload.kind === "review-findings" ? (
+            <StructuredReviewFindingsView
+              className="border-0 bg-transparent p-0 shadow-none @sm:p-0"
+              findings={payload.findings}
+              collapsibleSections
+              sectionExpansionKey={`${expansionKey}/report-section`}
             />
           ) : payload.kind === "verification" ? (
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">

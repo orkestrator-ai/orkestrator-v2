@@ -171,6 +171,12 @@ export interface StructuredReviewReport {
   reviewSummary: string;
 }
 
+/**
+ * The findings a fix turn is asked to address: the report's issues and
+ * coverage gaps without the review's scope, risk, test and verdict fields.
+ */
+export type StructuredReviewFindings = Pick<StructuredReviewReport, "issues" | "testCoverageGaps">;
+
 export type ReviewPoolId = string;
 
 export interface PooledReviewIssue extends ReviewIssue {
@@ -213,5 +219,6 @@ export interface ReviewReconciliation {
 
 export type ReviewContractName =
   | "structured-review-report"
+  | "structured-review-findings"
   | "review-finding-pool"
   | "review-reconciliation";

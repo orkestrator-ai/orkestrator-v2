@@ -318,6 +318,10 @@ describe("mcp config resolution", () => {
       });
     });
 
+    // The `user` scope (legacy boolean `false`) is what a session without
+    // project resources runs under: its own servers yes, the repository's no.
+    // A coordinator is stricter still — see `mcp-config-scope.test.ts`, which
+    // pins that the same fixture yields no configured server at all.
     test("excludes both forms of project MCP configuration when requested", async () => {
       await writeClaudeJson({
         mcpServers: { global: { command: "global-command" } },
@@ -328,9 +332,13 @@ describe("mcp config resolution", () => {
         JSON.stringify({ mcpServers: { projectFile: { command: "file-command" } } }),
       );
 
-      const { servers, names } = await getMcpRuntimeConfig(cwd, {}, undefined, false);
-      expect(Object.keys(servers)).toEqual(["global"]);
-      expect([...names]).toEqual(["global"]);
+      for (const scope of [false, "user"] as const) {
+        const { servers, names, revision } = await getMcpRuntimeConfig(cwd, {}, undefined, scope);
+        expect(Object.keys(servers)).toEqual(["global"]);
+        expect([...names]).toEqual(["global"]);
+        expect(revision.scope).toBe("user");
+        expect(revision.sources.project).toBe("excluded");
+      }
     });
 
     test("injects the agent server into runtime servers and names", async () => {

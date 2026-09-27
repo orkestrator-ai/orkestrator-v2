@@ -1,5 +1,25 @@
-import type { NativeAgentBackgroundTaskSummary } from "@orkestrator/protocol/native-agent";
+import {
+  normalizeNativeAgentTurnActivity,
+  type NativeAgentBackgroundTaskSummary,
+  type NativeAgentTurnActivity,
+} from "@orkestrator/protocol/native-agent";
 import { asRecord } from "./agent-provider-runtime.js";
+
+/**
+ * The turn activity a Claude bridge snapshot reports: `activity` names what the
+ * CLI said it is doing (only `compacting` today) and `thinkingTokens` is the
+ * live thinking estimate. Absent unless the session is running, so an estimate
+ * left over from a finished turn can never decorate an idle tab.
+ */
+export function claudeTurnActivityFromPayload(
+  payload: Record<string, unknown> | undefined,
+): NativeAgentTurnActivity | undefined {
+  if (!payload || payload.status !== "running") return undefined;
+  return normalizeNativeAgentTurnActivity({
+    compacting: payload.activity === "compacting",
+    thinkingTokens: payload.thinkingTokens,
+  });
+}
 
 function isoFromEpoch(value: unknown): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -12,9 +32,12 @@ function startedAtField(startedAt: unknown): { startedAt?: string } {
   return value ? { startedAt: value } : {};
 }
 
+function isLiveTaskStatus(status: unknown): boolean {
+  return status === "pending" || status === "running" || status === "paused";
+}
+
 function settledAtFromEndedAt(endedAt: unknown, status: unknown): { settledAt?: string } {
-  const live = status === "pending" || status === "running" || status === "paused";
-  if (live) return {};
+  if (isLiveTaskStatus(status)) return {};
   const settledAt = isoFromEpoch(endedAt);
   return settledAt ? { settledAt } : {};
 }
@@ -45,4 +68,29 @@ export function normalizeClaudeBackgroundTasks(
         },
       ];
     });
+}
+
+/**
+ * Whether a session snapshot still holds a background task that can do work.
+ *
+ * Claude releases a turn to `idle` as soon as its root result arrives, even
+ * when that turn launched background agents or commands. The SDK re-enters the
+ * same session once they settle, so an idle session with live tasks has not
+ * finished the work its prompt asked for.
+ */
+export function hasLiveClaudeBackgroundTask(value: unknown): boolean {
+  return (normalizeClaudeBackgroundTasks(value) ?? []).some((task) =>
+    isLiveTaskStatus(task.status),
+  );
+}
+
+export function claudeBackgroundObservation(body: Record<string, unknown>, status: string) {
+  if (status !== "idle") return {};
+  const ids = body.retainedContinuationRequestIds;
+  return {
+    ...(hasLiveClaudeBackgroundTask(body.backgroundTasks) ? { backgroundWorkLive: true } : {}),
+    ...(Array.isArray(ids)
+      ? { retainedContinuationRequestIds: ids.filter((id): id is string => typeof id === "string") }
+      : {}),
+  };
 }

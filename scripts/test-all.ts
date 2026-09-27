@@ -659,6 +659,7 @@ export function buildConcurrentGroups(
       args: [
         "turbo",
         "run",
+        "build",
         "test:workspace",
         "--cwd",
         ".",
@@ -686,6 +687,7 @@ export function buildConcurrentGroups(
         "test",
         "./tests",
         "./e2e/agent-testing/artifact-sanitizer.test.ts",
+        "./scripts/opencode-live-compatibility-probe.test.ts",
         "./test-fixtures/agent-project/server.test.ts",
         "--only-failures",
         ...changedArguments,

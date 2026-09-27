@@ -3,6 +3,8 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import { bundleElectron, formatBuildLogs } from "./electron-bundle.js";
+
 if (process.platform === "win32") {
   throw new Error("Orkestrator desktop builds support macOS and Linux only.");
 }
@@ -10,33 +12,42 @@ if (process.platform === "win32") {
 const packageRoot = path.resolve(import.meta.dir, "..");
 const output = path.join(packageRoot, "dist");
 
-function run(command: string, args: string[]): void {
+function run(command: string, args: string[]): number {
   const result = spawnSync(command, args, { cwd: packageRoot, stdio: "inherit", env: process.env });
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  return result.status ?? 1;
 }
 
-run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]);
-rmSync(output, { recursive: true, force: true });
+export async function buildDesktop(
+  dependencies: {
+    typecheck?: () => number;
+    removeOutput?: () => void;
+    bundle?: typeof bundleElectron;
+    reportError?: (message: string) => void;
+    reportArtifact?: (message: string) => void;
+  } = {},
+): Promise<number> {
+  const status = (
+    dependencies.typecheck ??
+    (() => run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]))
+  )();
+  if (status !== 0) return status;
+  (dependencies.removeOutput ?? (() => rmSync(output, { recursive: true, force: true })))();
 
-const result = await Bun.build({
-  entrypoints: [
-    path.join(packageRoot, "electron/main.ts"),
-    path.join(packageRoot, "electron/preload.ts"),
-    path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts"),
-  ],
-  outdir: path.join(output, "electron"),
-  target: "node",
-  // ESM preloads require sandbox: false on BrowserWindow. A sandboxed
-  // Chromium context evaluates preloads as CommonJS and cannot load these.
-  format: "esm",
-  external: ["electron"],
-  sourcemap: "external",
-});
-if (!result.success) {
-  for (const log of result.logs) console.error(log);
-  process.exit(1);
+  const result = await (dependencies.bundle ?? bundleElectron)(
+    packageRoot,
+    path.join(output, "electron"),
+  );
+  if (!result.success) {
+    (dependencies.reportError ?? console.error)(formatBuildLogs(result));
+    return 1;
+  }
+
+  for (const artifact of result.outputs) {
+    (dependencies.reportArtifact ?? console.log)(
+      `${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`,
+    );
+  }
+  return 0;
 }
 
-for (const artifact of result.outputs) {
-  console.log(`${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`);
-}
+if (import.meta.main) process.exitCode = await buildDesktop();

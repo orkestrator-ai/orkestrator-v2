@@ -26,9 +26,16 @@ plugins.get("/", async (c) => {
 });
 
 /**
- * Get available slash commands from plugins, project, and built-ins.
- * This endpoint allows the frontend to discover commands before the first
- * SDK query (which is when session.init normally provides them).
+ * Legacy, display-only command list for clients that predate the enhanced
+ * session catalogue (`GET /session/:id/commands`, catalogue version 1).
+ *
+ * It is a filesystem scan plus a fixed list, not SDK discovery: it has no
+ * session scope, cannot see skills, MCP prompts or the session's settings
+ * sources, and its rows carry no execution identity. It is therefore never
+ * merged into a session's catalogue and never used to validate a selected
+ * command. Kept in its legacy `{ commands: string[] }` shape because the
+ * backend still falls back to it for a bridge whose session route is absent,
+ * and replacing it with SDK discovery would spawn a CLI per request.
  */
 plugins.get("/commands", async (c) => {
   try {

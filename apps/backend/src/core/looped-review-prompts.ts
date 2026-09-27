@@ -5,6 +5,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import {
+  buildReviewAnalysisSections,
   buildReviewInstructionBlock,
   buildStructuredReviewOutputGuide,
   type PersistedReviewPackage,
@@ -343,7 +344,7 @@ Target branch: \`${input.targetBranch}\`
 1. Inspect \`git status --porcelain\`, staged/unstaged diffs, and untracked files.
 2. Commit only relevant changes using the existing conventional-commit and hook safety rules. Record excluded files with their actual reasons.
 3. Create the Git-excluded directory \`${artifactDirectory}\`. Use deterministic filenames \`validation-01.stdout.txt\`, \`validation-01.stderr.txt\`, then 02, 03, and so on. The ordinal is the command's 1-based position in the \`validation\` array you return, zero-padded to at least two digits, counting skipped commands, so entry N always uses ordinal N.
-4. Run the project's relevant full tests, typechecking, and build validation exactly once for this round. Redirect each command's stdout and stderr directly to its two artifact files. Capture the original exit code and elapsed milliseconds even when the command fails; a failed validation command must not stop preparation of the remaining evidence.
+4. Run the project's relevant full tests, typechecking, and build validation exactly once for this round. Redirect each command's stdout and stderr directly to its two artifact files. Capture the original exit code and elapsed milliseconds even when the command fails; a failed validation command must not stop preparation of the remaining evidence. Choose the commands from the repository's agent instructions (AGENTS.md, CLAUDE.md, or an equivalent) and any testing guide they reference: when they scope a suite to particular paths, platforms, or kinds of change, run it only when this change meets that condition; run the full relevant coverage when they require it or the change's reach is uncertain, and name any deliberately omitted suite in \`limitations\`.
 5. Return only the preparation metadata matching the enforced JSON Schema:
    - \`command\` is the exact command that was executed.
    - \`uncommittedFiles\` lists every remaining non-ignored Git status path and why it was excluded. Remaining generated or tool-cache files are recorded as an environment-state note and do not block the package.
@@ -377,8 +378,6 @@ export function createDiscoveryPrompt(input: {
 
 ${buildReviewInstructionBlock(input.reviewPackage.targetBranch, input.reviewInstruction)}
 
-${buildStructuredReviewOutputGuide()}
-
 ## Review package
 
 ${
@@ -387,7 +386,20 @@ ${
     : JSON.stringify(input.reviewPackage, null, 2)
 }
 
-${reference ? PACKAGED_REVIEW_WORKING_RULES : INLINE_REVIEW_WORKING_RULES}`;
+${reference ? PACKAGED_REVIEW_WORKING_RULES : INLINE_REVIEW_WORKING_RULES}
+
+${buildReviewAnalysisSections({
+  codeReviewHeading: "## Code review",
+  coverageHeading: "## Test coverage review",
+  scopeStep:
+    "Review the complete range the package pins, obtained as described under How to work above.",
+  clarifyingStep:
+    "Do not ask clarifying questions — this is an automated review. Make your best judgment for any ambiguous points and record the assumption as a limitation.",
+  validationStep:
+    "Incorporate the package's validation evidence as described under How to work above; do not rerun the full test suite, typecheck, or build.",
+})}
+
+${buildStructuredReviewOutputGuide()}`;
 }
 
 /**

@@ -46,6 +46,19 @@ describe("getEffectivePrMonitorInterval", () => {
   });
 });
 
+describe("lastSuccessfulCheckAt", () => {
+  test("is optional, nullable, and otherwise a string", () => {
+    const event = (value: unknown) => ({
+      environmentId: "env-1",
+      state: { ...state(), lastSuccessfulCheckAt: value },
+    });
+    expect(isPrMonitorEvent({ environmentId: "env-1", state: state() })).toBe(true);
+    expect(isPrMonitorEvent(event(null))).toBe(true);
+    expect(isPrMonitorEvent(event("2026-07-28T00:00:00.000Z"))).toBe(true);
+    expect(isPrMonitorEvent(event(42))).toBe(false);
+  });
+});
+
 describe("isPrMonitorMode", () => {
   test("accepts the three modes and rejects everything else", () => {
     expect(isPrMonitorMode("normal")).toBe(true);
@@ -150,5 +163,28 @@ describe("isPrMonitorSnapshot", () => {
     expect(isPrMonitorSnapshot({ entries: null })).toBe(false);
     expect(isPrMonitorSnapshot([])).toBe(false);
     expect(isPrMonitorSnapshot(null)).toBe(false);
+  });
+});
+
+describe("optional revision metadata", () => {
+  test("accepts stamped and legacy events, rejecting a partial or malformed stamp", () => {
+    const base = { environmentId: "env-1", state: state() };
+    expect(isPrMonitorEvent(base)).toBe(true);
+    expect(isPrMonitorEvent({ ...base, generation: "gen-1", revision: 4 })).toBe(true);
+    expect(
+      isPrMonitorEvent({ environmentId: "env-1", removed: true, generation: "g", revision: 5 }),
+    ).toBe(true);
+    expect(isPrMonitorEvent({ ...base, generation: "gen-1" })).toBe(false);
+    expect(isPrMonitorEvent({ ...base, generation: "gen-1", revision: 0 })).toBe(false);
+    expect(isPrMonitorEvent({ environmentId: "env-1", removed: true, revision: 5 })).toBe(false);
+  });
+
+  test("accepts a stamped snapshot at revision zero and rejects a malformed stamp", () => {
+    expect(isPrMonitorSnapshot({ entries: [], generation: "gen-1", revision: 0 })).toBe(true);
+    expect(isPrMonitorSnapshot({ entries: [state()], generation: "gen-1", revision: 12 })).toBe(
+      true,
+    );
+    expect(isPrMonitorSnapshot({ entries: [], generation: "gen 1", revision: 0 })).toBe(false);
+    expect(isPrMonitorSnapshot({ entries: [], revision: 3 })).toBe(false);
   });
 });

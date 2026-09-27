@@ -85,7 +85,10 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageReviews } from "./storage-reviews.ts";
-import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentSteerRejectedOutcome,
+  type NativeAgentSessionActionOutcome,
+} from "@orkestrator/protocol/native-agent";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
@@ -814,7 +817,9 @@ export abstract class StorageNative extends StorageReviews {
       }
       // Only a real deletion is worth waking every client for.
       if (removed) this.announce("native-agent-session", environmentId);
-      if (removed) await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
+      // Unconditional: a retry after a partial failure finds the sessions
+      // already gone, and must still clear the tails that failure left.
+      await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
 
       // Rotating the primary file leaves the deleted environment's logical keys,
       // provider session ids and dispatch journal readable in its backups. Scrub
@@ -1034,6 +1039,8 @@ export abstract class StorageNative extends StorageReviews {
    * A provider exception is ambiguous by default: once the request was handed
    * off, this layer cannot prove which side of admission it occurred on. The
    * exact record therefore stays parked as `unknown` and every retry reuses it.
+   * Only a returned, verified `rejected` outcome (never a thrown error) proves
+   * the provider refused the request before delivery.
    */
   async dispatchNativeAgentSteerOnce(
     key: string,
@@ -1100,6 +1107,15 @@ export abstract class StorageNative extends StorageReviews {
       try {
         outcome = await dispatch(session);
       } catch {
+        outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
+      }
+      // A refusal is definitive only in its verified shape for this exact
+      // request. It then settles like idle/mismatch: the parked record and its
+      // backups go, and the id never joins the delivered history.
+      if (
+        outcome.outcome === "rejected" &&
+        !isNativeAgentSteerRejectedOutcome(outcome, pendingSteer.requestId)
+      ) {
         outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
       }
 
@@ -1328,6 +1344,7 @@ export abstract class StorageNative extends StorageReviews {
           this.promptQueueMessageFingerprint(candidate) ===
             previous.dispatchError?.messageFingerprint,
       );
+    const removedOrigins = this.promptQueueRemovedOrigins(previous, messages, outstandingClaim);
     const saved: PersistedPromptQueue = {
       queueKey,
       environmentId,
@@ -1335,6 +1352,7 @@ export abstract class StorageNative extends StorageReviews {
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
       ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
       ...(outstandingClaim ? { outstandingClaim } : {}),
+      ...(removedOrigins.length > 0 ? { removedOrigins } : {}),
       updatedAt: nowIso(),
       revision: (previous?.revision ?? 0) + 1,
     };
@@ -1343,6 +1361,85 @@ export abstract class StorageNative extends StorageReviews {
     this.announce("prompt-queue", environmentId);
     this.schedulePromptQueueClaimRecovery(queues);
     return saved;
+  }
+
+  /**
+   * Tombstones for backend-authored items (a typed `origin` with a request id)
+   * that leave `messages` in this save without moving into the claim or the
+   * in-flight reservation: they were removed or replaced before dispatch.
+   * Reservation writes the in-flight record directly and never comes through
+   * here, so a dispatched item can never be tombstoned.
+   */
+  protected promptQueueRemovedOrigins(
+    previous: PersistedPromptQueue | undefined,
+    messages: readonly unknown[],
+    outstandingClaim: PersistedPromptQueue["outstandingClaim"] | null,
+  ): Array<{ requestId: string; removedAt: string }> {
+    const existing = previous?.removedOrigins ?? [];
+    if (!previous) return existing;
+    const kept = new Set<unknown>();
+    for (const candidate of [...messages, outstandingClaim?.message, previous.inFlight?.message]) {
+      if (isRecord(candidate)) kept.add(candidate.id);
+    }
+    const added: Array<{ requestId: string; removedAt: string }> = [];
+    for (const candidate of previous.messages) {
+      if (!isRecord(candidate) || kept.has(candidate.id) || !isRecord(candidate.origin)) continue;
+      const requestId = candidate.origin.requestId;
+      if (!isNonBlankString(requestId) || requestId.length > 512) continue;
+      if (existing.some((entry) => entry.requestId === requestId)) continue;
+      added.push({ requestId, removedAt: nowIso() });
+    }
+    return added.length === 0 ? existing : [...existing, ...added].slice(-64);
+  }
+
+  /**
+   * Record how one dispatched request's turn ended, once. The outcome comes
+   * from a provider status read made for another reason (the queue drain) or
+   * an on-demand observer, and is bounded and content-free.
+   */
+  async recordNativeAgentTurnOutcome(
+    key: string,
+    providerSessionId: string,
+    outcome: import("./models.js").PersistedNativeAgentTurnOutcome,
+  ): Promise<boolean> {
+    if (
+      !isNonBlankString(key) ||
+      !isNonBlankString(providerSessionId) ||
+      !isNonBlankString(outcome.requestId) ||
+      (outcome.outcome !== "completed" && outcome.outcome !== "failed")
+    ) {
+      throw new Error("Native agent turn outcome is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (
+        !session ||
+        session.providerSessionId !== providerSessionId ||
+        !session.dispatchedRequestIds?.includes(outcome.requestId) ||
+        session.turnOutcomes?.some((entry) => entry.requestId === outcome.requestId)
+      ) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = {
+        ...session,
+        turnOutcomes: [
+          ...(session.turnOutcomes ?? []).slice(-49),
+          {
+            requestId: outcome.requestId,
+            outcome: outcome.outcome,
+            ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
+            observedAt: outcome.observedAt,
+          },
+        ],
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      return true;
+    });
   }
 
   protected schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {

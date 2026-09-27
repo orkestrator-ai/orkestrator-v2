@@ -9,7 +9,11 @@ import {
   wrapSystemInstructions,
   type ReviewEvidenceFrameDisplayContract,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+} from "@orkestrator/protocol/multi-review";
+import { structuredReviewFindings } from "@orkestrator/protocol/structured-review";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
 import type { JsonPayload } from "@/lib/chat/json-payload";
@@ -503,6 +507,42 @@ describe("NativeMessage find-index alignment", () => {
 
     fireEvent.click(screen.getByText("Structured review report"));
     expect(screen.getByText("Review Scope")).toBeTruthy();
+  });
+
+  test("a build pipeline address prompt renders its findings as a report, not raw JSON", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const findings = JSON.stringify(
+      structuredReviewFindings(TEST_STRUCTURED_REVIEW_REPORT),
+      null,
+      2,
+    );
+    const source = `${wrapSystemInstructions(
+      STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+      `${contract.openMarker}\n${findings}\n${contract.closeMarker}`,
+    )}\n\n${contract.continuationPrefix}\n\n${wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
+    const message = makeMessage(source, "user");
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+    const text = view.container.textContent ?? "";
+
+    expect(text).toContain("Review findings");
+    expect(text).toContain("1 issue · 1 coverage gap");
+    expect(text).not.toContain("JSON payload");
+    expect(text.indexOf("Review findings")).toBeLessThan(text.indexOf(contract.continuationPrefix));
+    expect(searchText).toBe(renderedSearchText(view.container));
+
+    fireEvent.click(screen.getByText("Review findings"));
+    fireEvent.click(screen.getByText("Issues · 1"));
+    fireEvent.click(screen.getByText("Test Coverage Gaps · 1"));
+
+    // The report's own finding card: severity badge, confidence and location.
+    expect(screen.getByText("P1")).toBeTruthy();
+    expect(screen.getByText("95% confidence")).toBeTruthy();
+    expect(screen.getByText("1. Retry state is not persisted")).toBeTruthy();
+    expect(
+      screen.getByText("Recovery after a transport disconnect.", { exact: false }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Raw JSON") === null).toBe(true);
   });
 
   test("a malformed fix-phase report falls back to the omission in display and find", () => {

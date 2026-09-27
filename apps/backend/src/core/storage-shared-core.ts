@@ -30,6 +30,7 @@ import {
   isTerminalFeaturePlanningPhase,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
+import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
 import { parseClaudeTmuxStateKey } from "@orkestrator/protocol/tmux-prompt";
 import {
   getReviewInstructionValidationError,
@@ -726,10 +727,15 @@ export function isPortNumber(value: unknown): value is number {
 }
 
 export function isPortMapping(value: unknown): value is PortMapping {
+  if (!isRecord(value)) return false;
+  // Automatic allocation is explicit; a 0 host port is valid only in that mode.
+  const hostPortValid =
+    value.hostPortMode === "auto"
+      ? value.hostPort === 0
+      : value.hostPortMode === undefined && isPortNumber(value.hostPort);
   return (
-    isRecord(value) &&
     isPortNumber(value.containerPort) &&
-    isPortNumber(value.hostPort) &&
+    hostPortValid &&
     (value.protocol === "tcp" || value.protocol === "udp")
   );
 }
@@ -952,6 +958,8 @@ export function isPersistedNativeAgentSession(
         (value.pendingDispatch.promptSuggestions === undefined ||
           typeof value.pendingDispatch.promptSuggestions === "boolean") &&
         (value.pendingDispatch.schema === undefined || isRecord(value.pendingDispatch.schema)) &&
+        (value.pendingDispatch.command === undefined ||
+          parseNativeAgentCommandIntent(value.pendingDispatch.command) !== undefined) &&
         (value.pendingDispatch.images === undefined ||
           (Array.isArray(value.pendingDispatch.images) &&
             value.pendingDispatch.images.length <= 64 &&

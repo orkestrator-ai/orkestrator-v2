@@ -24,13 +24,15 @@ const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 // froze a different token and every request here would 401 — a failure that
 // looks like broken routing rather than a test that was never self-sufficient.
 const { authToken: TOKEN } = await import("./config.js");
-const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
+const { isSessionClosed, newSessionState, setAgentSessionTestHooks } =
+  await import("./agent-session.js");
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
-const { loadPersistedState } = await import("./persistence.js");
+const { loadPersistedState, setPersistWriteGateForTests } = await import("./persistence.js");
 const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
+const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
 
 let origin: string;
 
@@ -118,7 +120,7 @@ function resetTestDependencies(): void {
 }
 
 function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession {
-  return {
+  const session = {
     sessionId: "pi-session-test",
     sessionFile: "/tmp/pi-session-test.jsonl",
     promptTemplates: [],
@@ -134,8 +136,9 @@ function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession
     getContextUsage: () => undefined,
     getSessionStats: () => ({ cost: 0 }),
     getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
-    ...overrides,
   } as unknown as AgentSession;
+  Object.defineProperties(session, Object.getOwnPropertyDescriptors(overrides));
+  return session;
 }
 
 describe("authentication", () => {
@@ -255,12 +258,12 @@ describe("authorized global routes", () => {
     }
   });
 
-  test("serves bridge-owned commands before a session exists", async () => {
+  test("serves an empty global list: Pi's commands are per session", async () => {
+    // `/compact` is no longer advertised here: `session.prompt` does not run
+    // Pi's interactive builtins, and compaction is the backend's session action.
     const response = await call("/plugins/commands");
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      commands: [{ name: "/compact", description: "Summarize the conversation to free context" }],
-    });
+    expect(await response.json()).toEqual({ commands: [] });
   });
 });
 
@@ -444,6 +447,50 @@ describe("successful lifecycle routes", () => {
       const { closePiMcp, setPiMcpTransportForTests: reset } = await import("./mcp.js");
       await closePiMcp(state);
       reset();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
+  test("a prompt adopts a config change at its own turn start and releases the claim if the rebuild fails", async () => {
+    installRuntime();
+    let disposed = 0;
+    const readsWhileClaimed: boolean[] = [];
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => composer,
+      // Reached only through `atTurnStart`: without it, the prompt's own
+      // `dispatching` claim makes the reconcile return before reading.
+      mcpConfigNeedsRefresh: async (target) => {
+        readsWhileClaimed.push(target.dispatching);
+        return true;
+      },
+      createAgentSession: async () => {
+        throw new Error("rebuild refused");
+      },
+    });
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      dispose: () => {
+        disposed += 1;
+      },
+    });
+    try {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "go", requestId: "reattach-1" }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(readsWhileClaimed).toEqual([true]);
+      expect(disposed).toBe(1);
+      expect(state.session).toBeNull();
+      // The turn provably never ran: the claim and the prepared record go, so
+      // the caller can retry under the same id.
+      expect(state.dispatching).toBe(false);
+      expect(state.promptJournal.has("reattach-1")).toBe(false);
+      expect(state.status).toBe("idle");
+      expect(state.messages).toHaveLength(0);
+    } finally {
       sessions.delete(state.id);
       resetTestDependencies();
     }
@@ -860,6 +907,33 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("an attach racing close answers session-closing", async () => {
+    const state = seedSession();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setAgentSessionTestHooks({
+      createAgentSession: async () => {
+        await gate;
+        return fakeAgentSession();
+      },
+    });
+    try {
+      const attaching = call(`/session/${state.id}/attach`, { method: "POST", body: "{}" });
+      await waitFor(() => state.attaching !== undefined);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await attaching).status).toBe(409);
+      expect((await closing).status).toBe(200);
+    } finally {
+      release();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
   test("accepts and completes a prompt through the HTTP route", async () => {
     const state = seedSession();
     const prompts: string[] = [];
@@ -1032,7 +1106,7 @@ describe("session routes", () => {
     });
   });
 
-  test("reports a parked approval as blocked rather than merely busy", async () => {
+  test("reports a parked approval as waiting rather than merely busy", async () => {
     const state = seedSession();
     state.approvals.set("a1", {
       id: "a1",
@@ -1044,8 +1118,10 @@ describe("session routes", () => {
       settle: () => undefined,
     });
 
+    // The shared activity vocabulary: the backend observer rejects anything
+    // else, and `blocked` used to fail the whole provider group.
     expect(await (await call(`/session/${state.id}/activity`)).json()).toEqual({
-      activity: "blocked",
+      activity: "waiting",
     });
   });
 
@@ -1066,6 +1142,41 @@ describe("session routes", () => {
 
     await call(`/session/${state.id}/status`);
     expect(state.lastAccessed).toBeGreaterThan(0);
+  });
+
+  test("reports the attached generation's MCP configuration without touching liveness", async () => {
+    const { preparePiMcp, closePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+    setPiMcpTransportForTests({
+      connect: async () => ({ tools: [], call: async () => ({}), close: async () => {} }),
+    });
+    const root = await mkdtemp(join(tmpdir(), "pi-http-mcp-config-"));
+    try {
+      await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+      const state = seedSession();
+      state.lastAccessed = 0;
+      await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+      // Detached: nothing loaded, nothing reported.
+      expect(
+        (await (await call(`/session/${state.id}/runtime-health`)).json()).mcpConfig,
+      ).toBeUndefined();
+
+      state.session = {} as never;
+      const body = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(body.mcpConfig).toMatchObject({
+        fingerprint: expect.any(String),
+        sources: {
+          user: expect.stringMatching(/^sha256:[A-Za-z0-9_-]{43}$/),
+          project: "excluded",
+        },
+        builtAt: expect.any(String),
+      });
+      expect(state.lastAccessed).toBe(0);
+      state.session = null;
+      await closePiMcp(state);
+    } finally {
+      setPiMcpTransportForTests();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("serves a message window anchored to the retained base index", async () => {
@@ -1309,6 +1420,49 @@ describe("cancel", () => {
 });
 
 describe("steering", () => {
+  test("withdraws a steer whose session closes during the Pi call", async () => {
+    const state = seedSession();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      steer: async () => {
+        entered = true;
+        await gate;
+      },
+      clearQueue: () => {
+        clears += 1;
+        return { steering: [], followUp: [] };
+      },
+      pendingMessageCount: 1,
+    });
+    state.status = "running";
+    state.promptSequence = 3;
+    try {
+      const steering = call(`/session/${state.id}/steer`, {
+        method: "POST",
+        body: JSON.stringify({
+          input: "late instruction",
+          requestId: "steer-close",
+          expectedRunId: piRunId(state),
+        }),
+      });
+      await waitFor(() => entered);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await steering).status).toBe(409);
+      expect(clears).toBe(1);
+      await closing;
+    } finally {
+      release();
+      sessions.delete(state.id);
+    }
+  });
+
   test("answers idle rather than failing when no turn is running", async () => {
     const state = seedSession();
     // The caller's view of the turn is a poll behind, so a steer that lands
@@ -1384,19 +1538,11 @@ describe("steering", () => {
         timestamp: Date.now(),
       },
     });
-    expect(state.pendingSteerDeliveries).toHaveLength(1);
-    expect(state.steerJournal.get("steer-4")?.state).toBe("queued");
-    expect(state.messages).toHaveLength(0);
-
-    applySessionEvent(state, {
-      type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: request.input }],
-        timestamp: Date.now(),
-      },
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "a different instruction",
     });
-    expect(state.messages.at(-1)).toMatchObject({ role: "user", content: request.input });
     expect(state.steerJournal.get("steer-4")?.state).toBe("delivered");
     expect(
       await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-4`)).json(),
@@ -1473,6 +1619,169 @@ describe("steering", () => {
     });
   });
 
+  test("withdraws a steer Pi queued after its run settled", async () => {
+    // Pi 0.87 awaits extension `input` handlers inside `steer()` before it
+    // queues. A run that settles in that window has already had its queue
+    // cleared, so the late instruction would otherwise wait for the next prompt.
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let queued = 0;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(true);
+        return new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      },
+      steer: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+        queued += 1;
+      },
+      clearQueue: () => {
+        clears += 1;
+        queued = 0;
+        return { steering: [], followUp: [] };
+      },
+      get pendingMessageCount() {
+        return queued;
+      },
+    });
+
+    const prompt = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first", requestId: "prompt-late-steer" }),
+    });
+    expect(prompt.status).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "arrives too late",
+        requestId: "steer-late",
+        expectedRunId: piRunId(state),
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ outcome: "idle" });
+    // Once by `settleTurn`, once more for the instruction queued after it.
+    expect(clears).toBe(2);
+    expect(queued).toBe(0);
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("steer-late")?.state).toBe("dropped");
+    expect(
+      await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-late`)).json(),
+    ).toEqual({ dispatch: "absent" });
+  });
+
+  test("leaves a late steer ambiguous when a replacement run owns multiple queued messages", async () => {
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let queued = 0;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(true);
+        return new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      },
+      steer: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+        state.status = "running";
+        state.promptSequence += 1;
+        queued = 2;
+      },
+      clearQueue: () => {
+        clears += 1;
+        queued = 0;
+        return { steering: [], followUp: [] };
+      },
+      get pendingMessageCount() {
+        return queued;
+      },
+    });
+
+    expect(
+      (
+        await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "first", requestId: "prompt-before-replacement" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+    const expectedRunId = piRunId(state);
+
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "late steer",
+        requestId: "steer-replacement-ambiguous",
+        expectedRunId,
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(state.steerJournal.get("steer-replacement-ambiguous")?.state).toBe("ambiguous");
+    expect(queued).toBe(2);
+    // The terminal cleanup cleared the old run once; withdrawal did not clear
+    // the replacement run's queue.
+    expect(clears).toBe(1);
+  });
+
+  test("leaves a late steer ambiguous when Pi refuses queue cleanup", async () => {
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let clearAttempts = 0;
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(true);
+        return new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      },
+      steer: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+      },
+      clearQueue: () => {
+        clearAttempts += 1;
+        throw new Error("queue unavailable");
+      },
+      get pendingMessageCount() {
+        return 1;
+      },
+    });
+
+    expect(
+      (
+        await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "first", requestId: "prompt-before-clear-failure" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "late steer",
+        requestId: "steer-clear-ambiguous",
+        expectedRunId: piRunId(state),
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(state.steerJournal.get("steer-clear-ambiguous")?.state).toBe("ambiguous");
+    expect(clearAttempts).toBe(2);
+  });
+
   test("refuses steering while the initial prompt is still in preflight", async () => {
     const state = seedSession();
     let announcePreflight: (accepted: boolean) => void = () => undefined;
@@ -1530,6 +1839,89 @@ describe("steering", () => {
 });
 
 describe("provider-owned follow-ups", () => {
+  test("close during prepared-journal publication prevents a follow-up enqueue", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "pi-follow-up-close-"));
+    const previous = process.env.PI_BRIDGE_STATE_DIR;
+    process.env.PI_BRIDGE_STATE_DIR = stateDirectory;
+    const state = seedSession();
+    state.status = "running";
+    let followUps = 0;
+    state.session = fakeAgentSession({
+      followUp: async () => {
+        followUps += 1;
+      },
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    setPersistWriteGateForTests(async () => {
+      if (!held && state.promptJournal.get("follow-up-barrier")?.state === "prepared") {
+        held = true;
+        await gate;
+      }
+    });
+    try {
+      const following = call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "Do this next", requestId: "follow-up-barrier" }),
+      });
+      await waitFor(() => held);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await following).status).toBe(409);
+      expect(followUps).toBe(0);
+      await closing;
+    } finally {
+      release();
+      setPersistWriteGateForTests();
+      sessions.delete(state.id);
+      if (previous === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
+      else process.env.PI_BRIDGE_STATE_DIR = previous;
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("withdraws a follow-up whose session closes during Pi input handling", async () => {
+    const state = seedSession();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      followUp: async () => {
+        entered = true;
+        await gate;
+      },
+      clearQueue: () => {
+        clears += 1;
+        return { steering: [], followUp: [] };
+      },
+      pendingMessageCount: 1,
+    });
+    state.status = "running";
+    try {
+      const following = call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "Do this next", requestId: "follow-up-close" }),
+      });
+      await waitFor(() => entered);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await following).status).toBe(409);
+      expect(clears).toBe(1);
+      await closing;
+    } finally {
+      release();
+      sessions.delete(state.id);
+    }
+  });
+
   test("journals and exposes a second prompt while a turn is running", async () => {
     const state = seedSession();
     const followUps: string[] = [];
@@ -1571,6 +1963,69 @@ describe("provider-owned follow-ups", () => {
 
     expect(response.status).toBe(500);
     expect(state.promptJournal.has("follow-up-failed")).toBe(false);
+  });
+
+  test("withdraws a follow-up Pi queues after its target run settles", async () => {
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let promptCalls = 0;
+    let queued = 0;
+    const queuedAtLaterPrompt: number[] = [];
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        promptCalls += 1;
+        options.preflightResult?.(true);
+        if (promptCalls === 1) {
+          return new Promise<void>((resolve) => {
+            finishRun = resolve;
+          });
+        }
+        queuedAtLaterPrompt.push(queued);
+        return Promise.resolve();
+      },
+      followUp: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+        queued += 1;
+        state.queue.followUp = ["late follow-up"];
+      },
+      clearQueue: () => {
+        queued = 0;
+        return { steering: [], followUp: [] };
+      },
+      get pendingMessageCount() {
+        return queued;
+      },
+    });
+
+    expect(
+      (
+        await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "first", requestId: "prompt-before-follow-up" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "late follow-up", requestId: "late-follow-up" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ accepted: false, outcome: "idle" });
+    expect(state.promptJournal.get("late-follow-up")?.state).toBe("dropped");
+    expect(state.queue.followUp).toEqual([]);
+    expect(queued).toBe(0);
+
+    const later = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "ordinary later prompt", requestId: "later-prompt" }),
+    });
+    expect(later.status).toBe(202);
+    await waitFor(() => state.status === "idle");
+    expect(queuedAtLaterPrompt).toEqual([0]);
   });
 });
 
@@ -2028,6 +2483,462 @@ describe("interaction capability", () => {
     } finally {
       if (previous === undefined) delete process.env[gate];
       else process.env[gate] = previous;
+    }
+  });
+});
+
+interface CommandSeedOptions {
+  templates?: Array<Record<string, unknown>>;
+  skills?: Array<Record<string, unknown>>;
+  extensions?: Array<Record<string, unknown>>;
+  overrides?: Record<string, unknown>;
+}
+
+/**
+ * An attached session whose command list was built by the real builder.
+ *
+ * `prompts` records exactly what reached Pi and whether expansion was on.
+ */
+function commandSeed(options: CommandSeedOptions = {}) {
+  const state = seedSession();
+  const prompts: Array<{ text: string; expandPromptTemplates?: boolean }> = [];
+  const extensions = options.extensions ?? [];
+  const session = fakeAgentSession({
+    promptTemplates: options.templates ?? [],
+    resourceLoader: { getSkills: () => ({ skills: options.skills ?? [], diagnostics: [] }) },
+    extensionRunner: {
+      getRegisteredCommands: () => extensions,
+      getCommand: (name: string) =>
+        extensions.find((command) => (command.invocationName ?? command.name) === name),
+    },
+    isIdle: true,
+    prompt: (
+      text: string,
+      opts: { expandPromptTemplates?: boolean; preflightResult?: (ok: boolean) => void },
+    ) => {
+      prompts.push({ text, expandPromptTemplates: opts.expandPromptTemplates });
+      opts.preflightResult?.(true);
+      return Promise.resolve();
+    },
+    ...options.overrides,
+  });
+  state.session = session;
+  publishCommandCatalogue(state, buildCommandCatalogue(session));
+  return { state, session, prompts };
+}
+
+function template(name: string, path = `/home/someone/.pi/agent/prompts/${name}.md`) {
+  return {
+    name,
+    description: `${name} template`,
+    content: "Do $@",
+    filePath: path,
+    sourceInfo: { path, source: "local", scope: "user", origin: "top-level" },
+  };
+}
+
+function selection(
+  state: ReturnType<typeof seedSession>,
+  id: string,
+  args: string,
+): Record<string, unknown> {
+  const row = state.slashCommands.find((command) => command.id === id)!;
+  return {
+    id,
+    name: row.name,
+    executionKind: row.executionKind,
+    bindingRevision: row.bindingRevision,
+    arguments: args,
+  };
+}
+
+async function postPrompt(state: { id: string }, body: Record<string, unknown>) {
+  return call(`/session/${state.id}/prompt`, { method: "POST", body: JSON.stringify(body) });
+}
+
+describe("command catalogue routes", () => {
+  test("serves the enhanced catalogue without touching liveness", async () => {
+    const { state } = commandSeed({ templates: [template("review")] });
+    state.lastAccessed = 1;
+    try {
+      const body = await (await call(`/session/${state.id}/commands`)).json();
+      expect(body).toMatchObject({
+        catalogueVersion: 1,
+        status: "ready",
+        revision: 1,
+        freshness: "ttl",
+        commands: [{ name: "/review", id: "pi:template:review" }],
+      });
+      expect(typeof body.generation).toBe("string");
+      // A catalogue read is metadata; it must not keep an idle session warm.
+      expect(state.lastAccessed).toBe(1);
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("answers an unknown session in band as missing, never 404", async () => {
+    const read = await call("/session/does-not-exist/commands");
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      catalogueVersion: 1,
+      status: "missing",
+      commands: [],
+    });
+    const refresh = await call("/session/does-not-exist/commands/refresh", { method: "POST" });
+    expect(refresh.status).toBe(200);
+    expect((await refresh.json()).outcome).toBe("failed");
+  });
+
+  test("publishes the inventory revision on status and session reads", async () => {
+    // The same array the fake session serves, so a reload can change it.
+    const templates = [template("review")];
+    const { state } = commandSeed({
+      templates,
+      overrides: {
+        reload: async () => {
+          templates.push(template("deploy"));
+        },
+      },
+    });
+    try {
+      const before = (await (await call(`/session/${state.id}/status`)).json()).commandRevision;
+      expect(before).toBe(state.commandCatalogue.revision);
+      expect((await (await call(`/session/${state.id}`)).json()).commandRevision).toBe(before);
+
+      await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+
+      const after = (await (await call(`/session/${state.id}/status`)).json()).commandRevision;
+      expect(after).toBeGreaterThan(before);
+      expect((await (await call(`/session/${state.id}/commands`)).json()).revision).toBe(after);
+      // Unknown until this process has read a list.
+      const fresh = seedSession();
+      expect("commandRevision" in (await (await call(`/session/${fresh.id}/status`)).json())).toBe(
+        false,
+      );
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("refresh reloads an idle session and defers a busy one without aborting it", async () => {
+    let reloads = 0;
+    const { state } = commandSeed({
+      templates: [template("review")],
+      overrides: {
+        reload: async () => {
+          reloads += 1;
+        },
+        abort: async () => {
+          throw new Error("refresh must never abort a turn");
+        },
+      },
+    });
+    try {
+      const idle = await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+      expect(await idle.json()).toEqual({ outcome: "reloaded" });
+      expect(reloads).toBe(1);
+
+      state.status = "running";
+      const busy = await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+      expect((await busy.json()).outcome).toBe("deferred");
+      expect(reloads).toBe(1);
+      const read = await (await call(`/session/${state.id}/commands`)).json();
+      expect(read.status).toBe("stale");
+      expect(read.commands.map((command: { name: string }) => command.name)).toEqual(["/review"]);
+      expect(state.commandReloadPending).toBe(true);
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("a prompt waits for a reload in flight instead of racing it", async () => {
+    const order: string[] = [];
+    let release: (() => void) | undefined;
+    const { state, prompts } = commandSeed({
+      templates: [template("review")],
+      overrides: {
+        reload: async () => {
+          order.push("reload-start");
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          order.push("reload-end");
+        },
+      },
+    });
+    installRuntime();
+    try {
+      const refresh = call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+      await waitFor(() => release !== undefined);
+      const prompt = postPrompt(state, { prompt: "hello", requestId: "req-after-reload" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(prompts).toEqual([]);
+      release!();
+      expect((await refresh).status).toBe(200);
+      expect((await prompt).status).toBe(202);
+      expect(order).toEqual(["reload-start", "reload-end"]);
+      expect(prompts.map((entry) => entry.text)).toEqual(["hello"]);
+    } finally {
+      release?.();
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test("the global refresh reloads attached sessions with bounded concurrency", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    let reloads = 0;
+    installRuntime();
+    try {
+      for (let index = 0; index < 7; index += 1) {
+        commandSeed({
+          overrides: {
+            reload: async () => {
+              inFlight += 1;
+              peak = Math.max(peak, inFlight);
+              await new Promise((resolve) => setTimeout(resolve, 10));
+              inFlight -= 1;
+              reloads += 1;
+            },
+          },
+        });
+      }
+      const response = await call("/global/refresh-catalog", { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(reloads).toBe(7);
+      expect(peak).toBeLessThanOrEqual(4);
+    } finally {
+      sessions.clear();
+      clientSessionKeys.clear();
+      resetTestDependencies();
+    }
+  });
+});
+
+describe("command dispatch", () => {
+  test("sends a selected template as its canonical invocation with arguments verbatim", async () => {
+    const { state, prompts } = commandSeed({ templates: [template("review")] });
+    installRuntime();
+    try {
+      const response = await postPrompt(state, {
+        prompt: "/review  src/a.ts\n  keep this",
+        requestId: "req-template",
+        command: selection(state, "pi:template:review", "src/a.ts\n  keep this"),
+      });
+
+      expect(response.status).toBe(202);
+      expect(prompts).toEqual([
+        { text: "/review src/a.ts\n  keep this", expandPromptTemplates: true },
+      ]);
+      await waitFor(() => state.status === "idle");
+      expect(state.promptJournal.get("req-template")?.state).toBe("completed");
+      // The transcript shows what the user typed.
+      expect(state.messages[0]).toMatchObject({
+        role: "user",
+        content: "/review  src/a.ts\n  keep this",
+      });
+    } finally {
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test("dispatches the extension that shadows a template, and refuses the shadowed row", async () => {
+    const extensions = [{ name: "review", description: "Extension review", sourceInfo: {} }];
+    const { state, prompts } = commandSeed({ templates: [template("review")], extensions });
+    installRuntime();
+    try {
+      expect(state.slashCommands.map((command) => command.id)).toEqual(["pi:extension:review"]);
+      const shadowed = await postPrompt(state, {
+        prompt: "/review x",
+        requestId: "req-shadowed",
+        command: {
+          id: "pi:template:review",
+          name: "/review",
+          executionKind: "provider-prompt",
+          arguments: "x",
+        },
+      });
+      expect(shadowed.status).toBe(422);
+      expect(prompts).toEqual([]);
+
+      const response = await postPrompt(state, {
+        prompt: "/review x",
+        requestId: "req-extension",
+        command: selection(state, "pi:extension:review", "x"),
+      });
+      expect(response.status).toBe(202);
+      expect(prompts).toEqual([{ text: "/review x", expandPromptTemplates: true }]);
+      await waitFor(() => state.status === "idle");
+      // The extension produced no model turn; the outcome says so durably.
+      expect(state.messages.at(-1)?.id).toBe("command-outcome:req-extension");
+      expect(state.promptJournal.get("req-extension")?.state).toBe("completed");
+    } finally {
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test.each([
+    ["a changed binding revision", { bindingRevision: "0000000000000000" }],
+    ["a forged id", { id: "pi:template:not-listed", name: "/not-listed" }],
+    ["a mismatched name", { name: "/other" }],
+    ["a different execution kind", { executionKind: "provider-command" }],
+  ])("refuses %s with 422 before journaling or dispatching", async (_label, change) => {
+    const { state, prompts } = commandSeed({ templates: [template("review")] });
+    installRuntime();
+    try {
+      const response = await postPrompt(state, {
+        prompt: "/review x",
+        requestId: "req-stale",
+        command: { ...selection(state, "pi:template:review", "x"), ...change },
+      });
+
+      expect(response.status).toBe(422);
+      expect((await response.json()).kind).toBe("command-unavailable");
+      expect(prompts).toEqual([]);
+      expect(state.promptJournal.has("req-stale")).toBe(false);
+      expect(state.messages).toEqual([]);
+      expect(state.status).toBe("idle");
+      expect(state.dispatching).toBe(false);
+    } finally {
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test("rejects malformed command fields and a command carried by a literal prompt", async () => {
+    const { state, prompts } = commandSeed({ templates: [template("review")] });
+    try {
+      const literalCommand = await postPrompt(state, {
+        prompt: "/review x",
+        allowProviderCommands: false,
+        command: selection(state, "pi:template:review", "x"),
+      });
+      expect(literalCommand.status).toBe(400);
+      const badFlag = await postPrompt(state, { prompt: "x", allowProviderCommands: "no" });
+      expect(badFlag.status).toBe(400);
+      expect(prompts).toEqual([]);
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("literal intent reaches Pi with every command path off", async () => {
+    const { state, prompts } = commandSeed({
+      templates: [template("review")],
+      skills: [{ name: "lint", description: "Lint", filePath: "/s/lint/SKILL.md", sourceInfo: {} }],
+      extensions: [{ name: "deploy", sourceInfo: {} }],
+    });
+    installRuntime();
+    try {
+      for (const [index, prompt] of ["/review x", "/skill:lint", "/deploy now"].entries()) {
+        const response = await postPrompt(state, {
+          prompt,
+          requestId: `req-literal-${index}`,
+          allowProviderCommands: false,
+        });
+        expect(response.status).toBe(202);
+        await waitFor(() => state.status === "idle");
+      }
+      expect(prompts).toEqual([
+        { text: "/review x", expandPromptTemplates: false },
+        { text: "/skill:lint", expandPromptTemplates: false },
+        { text: "/deploy now", expandPromptTemplates: false },
+      ]);
+      // Literal text is a model turn, never an extension command outcome.
+      expect(state.messages.some((message) => message.id.startsWith("command-outcome:"))).toBe(
+        false,
+      );
+    } finally {
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test("a legacy /compact is answered locally and never sent to Pi", async () => {
+    const { state, prompts } = commandSeed();
+    try {
+      const response = await postPrompt(state, { prompt: "/compact", requestId: "req-compact" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ accepted: true, local: true });
+      expect(prompts).toEqual([]);
+      expect(state.messages.at(-1)?.content).toContain("terminal command");
+      expect(state.slashCommands.some((command) => command.name === "/compact")).toBe(false);
+
+      const duplicate = await postPrompt(state, { prompt: "/compact", requestId: "req-compact" });
+      expect(await duplicate.json()).toEqual({ accepted: true, local: true, duplicate: true });
+      expect(state.messages).toHaveLength(2);
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("a session's own /compact template is a provider command, not the builtin", async () => {
+    const { state, prompts } = commandSeed({ templates: [template("compact")] });
+    installRuntime();
+    try {
+      const response = await postPrompt(state, { prompt: "/compact", requestId: "req-own" });
+      expect(response.status).toBe(202);
+      expect(prompts).toEqual([{ text: "/compact", expandPromptTemplates: true }]);
+    } finally {
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test("refuses an extension command, and a literal command-like follow-up, mid-turn", async () => {
+    const followUps: string[] = [];
+    const { state, prompts } = commandSeed({
+      templates: [template("review")],
+      extensions: [{ name: "deploy", sourceInfo: {} }],
+      overrides: {
+        followUp: async (text: string) => {
+          followUps.push(text);
+        },
+      },
+    });
+    state.status = "running";
+    try {
+      const extension = await postPrompt(state, {
+        prompt: "/deploy",
+        requestId: "req-busy-ext",
+        command: selection(state, "pi:extension:deploy", ""),
+      });
+      expect(extension.status).toBe(409);
+
+      // Pi's `followUp` always expands templates, so a literal `/review` has
+      // no faithful queue; it is refused rather than run as the template.
+      const literal = await postPrompt(state, {
+        prompt: "/review x",
+        requestId: "req-busy-literal",
+        allowProviderCommands: false,
+      });
+      expect(literal.status).toBe(409);
+
+      // Literal text Pi would not interpret still queues.
+      const plain = await postPrompt(state, {
+        prompt: "/not/a/command",
+        requestId: "req-busy-plain",
+        allowProviderCommands: false,
+      });
+      expect(plain.status).toBe(202);
+
+      const template = await postPrompt(state, {
+        prompt: "/review y",
+        requestId: "req-busy-template",
+        command: selection(state, "pi:template:review", "y"),
+      });
+      expect(template.status).toBe(202);
+
+      expect(followUps).toEqual(["/not/a/command", "/review y"]);
+      expect(prompts).toEqual([]);
+      expect(state.promptJournal.has("req-busy-ext")).toBe(false);
+      expect(state.promptJournal.has("req-busy-literal")).toBe(false);
+    } finally {
+      sessions.clear();
     }
   });
 });

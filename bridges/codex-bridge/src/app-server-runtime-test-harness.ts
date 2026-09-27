@@ -308,6 +308,7 @@ export async function harness(
     initialPromptRetryDelayMs?: number;
     dispatchJournalMaxRecords?: number;
     dispatchJournalMaxBytes?: number;
+    skillRefreshDebounceMs?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -398,6 +399,9 @@ export async function harness(
       : {}),
     ...(options.dispatchJournalMaxBytes !== undefined
       ? { dispatchJournalMaxBytes: options.dispatchJournalMaxBytes }
+      : {}),
+    ...(options.skillRefreshDebounceMs !== undefined
+      ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
       : {}),
   });
   if (options.deferStart !== true) await runtime.start();

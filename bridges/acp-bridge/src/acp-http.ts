@@ -7,6 +7,15 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+} from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  commandCatalogue,
+  refreshCommandCatalogue,
+  resolveSelectedCommand,
+} from "./acp-commands.js";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   parsePromptAttachments,
@@ -35,6 +44,7 @@ import {
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
   PROMPT_TIMEOUT_MS,
+  SESSION_CLOSING_ERROR,
   HttpError,
   authToken,
   agentRuntime,
@@ -45,6 +55,7 @@ import {
   provider,
   sessions,
   isObject,
+  publicMcpConfigStatus,
   publicRuntime,
   workingDirectory,
   type BridgeFilePart,
@@ -60,6 +71,7 @@ import {
   parseFromIndex,
   publicApprovals,
   publicInteractions,
+  publicCommandRevision,
   publicContextUsage,
   publicSession,
   publicSessionReference,
@@ -68,6 +80,7 @@ import {
 } from "./acp-public.js";
 import { listNormalizedModels } from "./acp-persistence.js";
 import { persistState } from "./acp-persist-writer.js";
+import { closeSessionRetaining, denyPendingRequests } from "./acp-session-close.js";
 import {
   cancelCursorToolMetadataReconcile,
   scheduleCursorToolMetadataReconcile,
@@ -78,6 +91,9 @@ import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
+
+/** A selected command stopped matching the live inventory before dispatch. */
+class CommandUnavailableError extends Error {}
 
 export async function route(
   request: IncomingMessage,
@@ -117,8 +133,16 @@ export async function route(
   ) {
     return json(response, 405, { error: "Authentication is managed by the agent CLI" });
   }
+  // Nothing here is refreshable on demand: the model catalogue is merged from
+  // live sessions and each agent pushes its own commands per session. Answer
+  // 200 so the backend's cache-only refresh proceeds, but do not claim a
+  // refresh that did not happen. `POST /session/:id/commands/refresh` is the
+  // per-session command answer.
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
-    return json(response, 200, { refreshed: true });
+    return json(response, 200, {
+      refreshed: false,
+      commands: { outcome: "unsupported", message: `${provider} pushes commands per session` },
+    });
   }
   if (url.pathname === "/global/models" && request.method === "GET") {
     const models = await listNormalizedModels(clientSignal);
@@ -178,7 +202,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -189,9 +213,36 @@ export async function route(
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
     if (match[2] === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    // The enhanced catalogue contract: an unknown session is answered in band.
+    if (match[2] === "commands" && request.method === "GET") {
+      return json(response, 200, commandCatalogue(undefined));
+    }
+    if (match[2] === "commands/refresh" && request.method === "POST") {
+      return json(response, 200, refreshCommandCatalogue(undefined));
+    }
+    // Close is idempotent and answered in band: 404/405 from this route must
+    // only ever mean "this bridge predates it".
+    if (match[2] === "close" && request.method === "POST") {
+      return json(response, 200, { closed: true, missing: true });
+    }
     return json(response, 404, { error: "Session not found" });
   }
   const action = match[2];
+  // A closing session stays registered (and readable) until its close lands,
+  // but admits no new work: nothing may start, attach or be answered on a
+  // session whose child is being stopped. Close itself joins the one close in
+  // flight; cancel/abort and reads stay harmless.
+  if (
+    state.closing &&
+    request.method === "POST" &&
+    (action === "prompt" ||
+      action === "attach" ||
+      action === "config" ||
+      action?.startsWith("approvals/") ||
+      action?.startsWith("interactions/"))
+  ) {
+    return json(response, 409, { error: SESSION_CLOSING_ERROR });
+  }
   if (!action && request.method === "GET") {
     boundTranscriptForRead(state);
     return json(response, 200, publicSession(state));
@@ -233,6 +284,7 @@ export async function route(
         : {}),
       ...(state.policy ? { policy: state.policy } : {}),
       ...(contextUsage ? { contextUsage } : {}),
+      ...publicCommandRevision(state),
       runtime: publicRuntime(state),
     });
   }
@@ -258,18 +310,34 @@ export async function route(
     }
     return json(response, 200, state.sessionConfig.composer);
   }
+  // Metadata, like `/activity`: never attaches, spawns or reloads anything.
+  // Old clients read `commands` only and still get the same rows.
   if (action === "commands" && request.method === "GET") {
-    return json(response, 200, { commands: state.availableCommands ?? [] });
+    return json(response, 200, commandCatalogue(state));
+  }
+  // Honest by construction: re-reads the pushed list or says it cannot. It
+  // never restarts an agent to make it announce again.
+  if (action === "commands/refresh" && request.method === "POST") {
+    return json(response, 200, refreshCommandCatalogue(state));
   }
   if (action === "mcp" && request.method === "GET") {
     configuredAcpMcpServers();
-    return json(response, 200, { servers: agentRuntime.mcp ?? [] });
+    // `mcpConfig.inventoryScope` is `process`: this listing is shared by every
+    // session on the bridge, not exact truth for this one.
+    return json(response, 200, {
+      servers: agentRuntime.mcp ?? [],
+      mcpConfig: await publicMcpConfigStatus(),
+    });
   }
   /** Liveness only: no touch, transcript hydration, or re-attach. */
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: no liveness touch, no transcript hydration, no
     // re-attach.
-    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
+    return json(response, 200, {
+      summary: publicRuntime(state),
+      ...state.health.snapshot(),
+      mcpConfig: await publicMcpConfigStatus(),
+    });
   }
   if (action === "activity" && request.method === "GET") {
     return json(response, 200, {
@@ -317,6 +385,8 @@ export async function route(
     const body = await readJson(request).catch(() => ({}) as JsonObject);
     storeAgentMcp(state, body.agentMcp);
     await ensureSessionProcess(state, clientSignal);
+    // A close that started during the attach terminates the child it produced.
+    if (state.closing) return json(response, 409, { error: SESSION_CLOSING_ERROR });
     return json(response, 200, { attached: true });
   }
   if (action === "approvals" && request.method === "GET")
@@ -386,13 +456,29 @@ export async function route(
   }
   if (action === "prompt" && request.method === "POST") {
     const body = await readJson(request);
-    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
     const readOnly = body.readOnly;
     if (readOnly !== undefined && typeof readOnly !== "boolean") {
       return json(response, 400, { error: "readOnly must be a boolean" });
     }
+    // `allowProviderCommands: false` (literal intent) changes nothing here:
+    // ACP has no way to tell an agent not to interpret a leading `/name`, and
+    // this bridge has no resolver of its own to skip. The backend refuses a
+    // literal prompt whose leading token names a known command before it gets
+    // here (`literalCommandSuppression`), so the text is passed unchanged.
+    const commandFields = readBridgePromptCommandFields(body);
+    if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
+    const selectedCommand = commandFields.command;
+    if (selectedCommand && schema) {
+      return json(response, 400, {
+        error: "A structured-output prompt cannot carry a command selection",
+      });
+    }
+    // A selected command is sent as its canonical text with the arguments
+    // exactly as typed; the typed `prompt` is display text only.
+    const displayPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    let prompt = selectedCommand ? "" : displayPrompt;
     // Shape validation happens before the turn is claimed: a malformed
     // attachment list is a caller error, not a turn that half-started.
     let attachments;
@@ -402,7 +488,7 @@ export async function route(
       if (!(error instanceof PromptAttachmentError)) throw error;
       return json(response, 400, { error: error.message });
     }
-    if (!prompt && attachments.length === 0) {
+    if (!selectedCommand && !prompt && attachments.length === 0) {
       return json(response, 400, { error: "prompt or image attachment is required" });
     }
     if (state.subagentLimitExceeded) {
@@ -429,6 +515,16 @@ export async function route(
     }
     if (state.status === "running" || state.dispatching) {
       return json(response, 409, { error: "Session is already running" });
+    }
+    // After the duplicate check — a retry of an accepted command must still
+    // read as a duplicate even if the inventory changed since — and before
+    // anything is journaled. A command the live agent no longer offers, or a
+    // list only restored from disk, is refused outright: sending the text as
+    // an ordinary prompt is exactly what a selection must never become.
+    if (selectedCommand && state.commandsLive) {
+      const resolved = resolveSelectedCommand(state, selectedCommand);
+      if (!resolved.ok) return json(response, 422, commandUnavailableResponse(resolved.message));
+      prompt = resolved.text;
     }
     // Claim the turn synchronously. `ensureSessionProcess` yields even on its
     // attached fast path, so a second request would otherwise pass both the
@@ -471,6 +567,16 @@ export async function route(
       }
       const promptPatch = parseComposerPatch(body);
       if (promptPatch) await applyComposerPatch(state, promptPatch, clientSignal);
+      // Attaching can reload the session, and the agent re-announces its
+      // inventory when it does. Check the selection against that list too.
+      if (selectedCommand) {
+        const resolved = resolveSelectedCommand(state, selectedCommand);
+        if (!resolved.ok) throw new CommandUnavailableError(resolved.message);
+        prompt = resolved.text;
+      }
+      // A close that began while this turn was still preparing owns the
+      // session now; the turn must not reach the agent.
+      if (state.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
     } catch (error) {
       // The turn definitely did not run, so release the claim and let the
       // caller retry with the same requestId.
@@ -482,22 +588,29 @@ export async function route(
         state.retryCancelledPromptSequence = undefined;
       }
       if (requestId) state.promptJournal.delete(requestId);
+      // Whatever failed (the fence itself, or an RPC against the child the
+      // close is stopping), the turn was refused because the session is closing.
+      if (state.closing) return json(response, 409, { error: SESSION_CLOSING_ERROR });
       if (error instanceof PromptAttachmentError) {
         return json(response, 400, { error: error.message });
+      }
+      if (error instanceof CommandUnavailableError) {
+        return json(response, 422, commandUnavailableResponse(error.message));
       }
       throw error;
     }
     const userMessageId = randomBytes(12).toString("hex");
+    const userVisiblePrompt = selectedCommand ? displayPrompt || prompt : prompt;
     state.messages.push({
       id: userMessageId,
       role: "user",
-      content: prompt,
+      content: userVisiblePrompt,
       parts: [
-        ...(prompt
+        ...(userVisiblePrompt
           ? [
               {
                 type: "text" as const,
-                content: prompt,
+                content: userVisiblePrompt,
                 sourcePartId: `${userMessageId}:0`,
                 sourceMessageId: userMessageId,
               },
@@ -526,6 +639,22 @@ export async function route(
     state.revision += 1;
     boundTranscript(state);
     await persistState();
+    if (state.closing) {
+      // The close started during that write. The turn has not been handed to
+      // the agent, so withdraw it exactly as a failed preparation would.
+      if (state.messages.at(-1)?.id === userMessageId) state.messages.pop();
+      state.status = "idle";
+      state.dispatching = false;
+      state.turnStartedAt = undefined;
+      state.currentTurnUsage = undefined;
+      state.currentTurnRequestId = undefined;
+      state.currentTurnSawVendorUsage = undefined;
+      state.currentTurnOutput = null;
+      if (requestId) state.promptJournal.delete(requestId);
+      state.revision += 1;
+      schedulePersist();
+      return json(response, 409, { error: SESSION_CLOSING_ERROR });
+    }
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     const promptCompletion = dispatchAcpPrompt(
       state,
@@ -567,7 +696,7 @@ export async function route(
     // The turn is now dispatched and `status` is "running", so the busy check
     // is authoritative again and the claim can be released.
     state.dispatching = false;
-    void promptCompletion.then(
+    const turnCompletion = promptCompletion.then(
       (result) => {
         const stopReason = promptStopReason(result);
         if (stopReason !== "end_turn" && stopReason !== "cancelled") {
@@ -674,10 +803,21 @@ export async function route(
         schedulePersist();
       },
     );
+    // What close awaits after `session/cancel`: the turn's own bookkeeping has
+    // run, whichever way the prompt ended. Owning the rejection here also keeps
+    // a throwing completion handler from becoming an unhandled rejection.
+    state.turnSettlement = turnCompletion.then(
+      () => undefined,
+      () => undefined,
+    );
     return json(response, 202, { accepted: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
-    for (const approval of Array.from(state.approvals.values())) approval.respond();
+    // Fail closed, exactly as close does: every request parked on a person —
+    // permission, Grok question and plan approval — is answered with its
+    // cancel outcome. Denying only permissions left a question or plan card
+    // actionable against a turn the user had already stopped.
+    denyPendingRequests(state);
     if (state.dispatching) {
       // The turn is claimed but has not taken its sequence yet, and dispatch can
       // sit in a process spawn for seconds. Record the sequence it is about to
@@ -690,8 +830,25 @@ export async function route(
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return json(response, 202, { accepted: true });
   }
+  if (action === "close" && request.method === "POST") {
+    // Ordinary tab close: release this session, keep the vendor conversation.
+    return (await closeSessionRetaining(state)) === "closed"
+      ? json(response, 200, { closed: true, retained: true })
+      : json(response, 503, {
+          closed: false,
+          pending: true,
+          error: "Session close did not complete",
+        });
+  }
   if (!action && request.method === "DELETE") {
-    for (const approval of Array.from(state.approvals.values())) approval.respond();
+    // DELETE is the legacy release (vendor history is kept either way). Racing
+    // a close, it joins that close rather than tearing down underneath it.
+    if (state.closing) {
+      return (await closeSessionRetaining(state)) === "closed"
+        ? json(response, 200, { deleted: true })
+        : json(response, 503, { error: "Session close did not complete" });
+    }
+    denyPendingRequests(state);
     cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);

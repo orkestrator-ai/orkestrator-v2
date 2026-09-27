@@ -10,25 +10,30 @@ import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   authenticate,
+  CATALOG_TIMEOUT_MS,
   COMPOSER_HYDRATION_WAIT_MS,
   MAX_BODY_BYTES,
   PROVIDER,
   workingDirectory,
 } from "./config.js";
 import { authStatus, CredentialError } from "./credentials.js";
-import {
-  denyAllApprovals,
-  publicApprovals,
-  publicInteractions,
-  resolveApproval,
-} from "./interactions.js";
+import { publicApprovals, publicInteractions, resolveApproval } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
-import { mcpConnectionNeedsRefresh, publicPiMcpServers } from "./mcp.js";
+import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
-import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
+import {
+  dispatchPrompt,
+  errorText,
+  journal,
+  PromptStartupTimeoutError,
+  requestTurnCancellation,
+  setPromptJournal,
+  settleCancelledBeforeSend,
+} from "./prompt.js";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
@@ -54,8 +59,21 @@ import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
+import {
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+} from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  commandCatalogueResponse,
+  effectiveCommandKind,
+  legacyCompactReply,
+  missingCommandCatalogueResponse,
+  resolveCommandSelection,
+  type CommandSelection,
+} from "./commands.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
+import { closeSessionRetaining } from "./session-close.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -65,19 +83,28 @@ import {
   ensureSession,
   forkSession,
   hydrateSessionComposer,
+  isSessionClosed,
+  SessionClosingError,
   listResumableSessions,
+  markSessionClosed,
   navigateSessionHistory,
   parseComposerPatch,
   reconcileAgentMcp,
+  refreshSessionCommands,
   resumeSession,
+  runDeferredCommandReload,
   setSessionReadOnly,
   setSessionTitle,
 } from "./agent-session.js";
 import {
+  cancelRequestedFor,
+  claimPromptTurn,
   clientSessionKeys,
   isObject,
   nonBlank,
   piRunId,
+  releasePromptClaim,
+  reservePromptAdmission,
   setSteerJournal,
   sessions,
   type BridgeFilePart,
@@ -95,13 +122,61 @@ class HttpError extends Error {
   }
 }
 
+/** A selected command that no longer matches this session's registry. */
+class CommandUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommandUnavailableError";
+  }
+}
+
+/** A prompt whose cancellation won before Pi was invoked. Never leaves the route. */
+class CancelledBeforeSendError extends Error {
+  constructor() {
+    super("The prompt was cancelled before it was sent to Pi");
+    this.name = "CancelledBeforeSendError";
+  }
+}
+
+/**
+ * Refuse new work on a session whose close (or DELETE) has begun.
+ *
+ * A closing session stays registered until its removal is published, so a
+ * retried close can reach it. Admitting a prompt meanwhile would either run a
+ * turn nobody owns or be settled as a cancel the caller never asked for, so it
+ * is refused plainly: 409, which the backend reads as a retryable race.
+ */
+function assertSessionOpen(state: SessionState): void {
+  if (isSessionClosed(state)) throw new HttpError(409, "Session is closed");
+}
+
+/**
+ * The prompt route's claim reserved at its entry, and whether the turn took it.
+ * An untaken reservation is released when the route returns, whatever path.
+ */
+interface PromptAdmission {
+  claim: number | undefined;
+  transferred: boolean;
+}
+
+/** Sessions a global refresh reloads at once. */
+const GLOBAL_REFRESH_CONCURRENCY = 4;
+
 const DEFAULT_DELETE_CANCEL_TIMEOUT_MS = 5_000;
+/** How long `/cancel` waits for an abort to land before answering "pending". */
+const DEFAULT_CANCEL_ACK_TIMEOUT_MS = 5_000;
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 let deleteCancelTimeoutMs = DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+let cancelAckTimeoutMs = DEFAULT_CANCEL_ACK_TIMEOUT_MS;
 
 /** Shorten the best-effort DELETE cancellation budget in deterministic tests. */
 export function setDeleteCancelTimeoutForTests(timeoutMs?: number): void {
   deleteCancelTimeoutMs = timeoutMs ?? DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+}
+
+/** Shorten how long `/cancel` waits for a hanging abort in deterministic tests. */
+export function setCancelAckTimeoutForTests(timeoutMs?: number): void {
+  cancelAckTimeoutMs = timeoutMs ?? DEFAULT_CANCEL_ACK_TIMEOUT_MS;
 }
 
 /**
@@ -144,6 +219,9 @@ export async function route(
   } catch (error) {
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
     if (error instanceof CredentialError) return json(response, 401, { error: error.message });
+    if (error instanceof SessionClosingError) {
+      return json(response, 409, { error: error.message, kind: "session-closing" });
+    }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
@@ -172,31 +250,37 @@ async function routeGlobal(
     // layer's generation guard stops that probe publishing, and this ordering
     // ensures even a result that landed just before settlement is discarded.
     refreshModels();
-    await Promise.all(
-      Array.from(sessions.values()).map(async (state) => {
-        const session = state.session;
-        if (!session) return;
-        await session.reload();
-        state.slashCommands = readSessionCommands(session);
-        state.revision += 1;
-      }),
+    // Bounded, and only for sessions that are attached: a detached one reads
+    // a fresh list on its next attach, and attaching every idle session here
+    // would cold-start them all at once. A busy session is never reloaded
+    // underneath its turn; its reload is deferred until it is idle.
+    await forEachBounded(
+      Array.from(sessions.values()).filter((state) => state.session),
+      GLOBAL_REFRESH_CONCURRENCY,
+      async (state) => {
+        if (state.session) await refreshSessionCommands(state);
+      },
     );
     // Restored sessions intentionally hold no persisted model rows. A manual
     // refresh must repair those session snapshots too, otherwise the global
     // catalogue changes while the open tab keeps saying no models are
     // available until its ordinary retry deadline passes.
-    await Promise.all(
-      Array.from(sessions.values()).map((state) => hydrateSessionComposer(state, { force: true })),
+    await forEachBounded(Array.from(sessions.values()), GLOBAL_REFRESH_CONCURRENCY, (state) =>
+      hydrateSessionComposer(state, { force: true }),
     );
+    schedulePersist();
     json(response, 200, { ok: true });
     return true;
   }
-  // Pi's slash commands are prompt templates and skills, which are discovered
-  // per session because a workspace can contribute its own. There is no global
-  // list, so this answers empty rather than 404 — the backend reads a 404 as a
-  // bridge that predates the route.
+  // Pi's slash commands are prompt templates, skills and extension commands,
+  // all discovered per session because a workspace can contribute its own.
+  // There is no global list, so this answers empty rather than 404 — the
+  // backend reads a 404 as a bridge that predates the route. `/compact` used
+  // to be advertised here, but `session.prompt` does not implement Pi's
+  // interactive builtins; compaction is the backend's session action over
+  // `/session/:id/compact`.
   if (url.pathname === "/plugins/commands" && request.method === "GET") {
-    json(response, 200, { commands: globalSlashCommands() });
+    json(response, 200, { commands: [] });
     return true;
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
@@ -248,6 +332,7 @@ async function routeGlobal(
       throw new HttpError(409, "Session is already running");
     }
     await reconcileAgentMcp(state);
+    assertSessionOpen(state);
     if (typeof body.readOnly === "boolean") {
       if (
         (state.readOnly === true) !== body.readOnly &&
@@ -280,6 +365,7 @@ async function routeGlobal(
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     ).catch((error) => {
+      if (error instanceof SessionClosingError) throw error;
       throw new HttpError(400, errorText(error));
     });
     storeAgentMcp(state, body.agentMcp);
@@ -290,41 +376,8 @@ async function routeGlobal(
   return false;
 }
 
-function readSessionCommands(session: NonNullable<SessionState["session"]>) {
-  const commands = [
-    ...session.promptTemplates.map((template) => ({
-      name: `/${template.name}`,
-      description: template.description,
-      source: "template" as const,
-      ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
-    })),
-    ...session.resourceLoader.getSkills().skills.map((skill) => ({
-      name: `/skill:${skill.name}`,
-      description: skill.description,
-      source: "skill" as const,
-    })),
-    ...session.extensionRunner.getRegisteredCommands().map((command) => ({
-      name: `/${command.invocationName || command.name}`,
-      description: command.description,
-      source: "extension" as const,
-    })),
-  ];
-  return commands.slice(0, 512);
-}
-
-/**
- * Slash commands available before a session exists.
- *
- * Only the ones this bridge implements itself. Pi's own file-backed commands
- * are per-session and reported through the session config instead, because a
- * workspace can contribute prompt templates the global list has never seen.
- */
-function globalSlashCommands(): Array<{ name: string; description: string }> {
-  return [{ name: "/compact", description: "Summarize the conversation to free context" }];
-}
-
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -338,6 +391,17 @@ async function routeSession(
   const action = match[2];
   const subject = match[3];
   if (!state) {
+    // An enhanced catalogue read answers an unknown session in band too; the
+    // backend must never fall back from a missing session to a global list.
+    if (action === "commands" && !subject && request.method === "GET") {
+      return json(response, 200, missingCommandCatalogueResponse());
+    }
+    if (action === "commands" && subject === "refresh" && request.method === "POST") {
+      return json(response, 200, {
+        outcome: "failed",
+        message: "This Pi session is not held by the bridge.",
+      });
+    }
     // Answered in band so the backend can tell "this session is gone" from
     // "this bridge predates the route" — a 404 here would have it delete a
     // live session mapping against an older bridge.
@@ -346,6 +410,11 @@ async function routeSession(
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
     if (action === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    // Close is idempotent and answered in band for the same reason: 404/405
+    // from this route must only ever mean "this bridge predates it".
+    if (action === "close" && !subject && request.method === "POST") {
+      return json(response, 200, { closed: true, missing: true });
+    }
     return json(response, 404, { error: "Session not found" });
   }
 
@@ -356,7 +425,9 @@ async function routeSession(
     action !== "activity" &&
     action !== "runtime-health" &&
     action !== "dispatch" &&
-    !(action === "steer" && subject === "dispatch")
+    !(action === "steer" && subject === "dispatch") &&
+    // A catalogue read is metadata; it must not keep an idle session warm.
+    !(action === "commands" && request.method === "GET")
   ) {
     state.lastAccessed = Date.now();
   }
@@ -393,6 +464,18 @@ async function routeSession(
   if (!action && request.method === "DELETE") {
     return await handleDelete(response, state);
   }
+  if (action === "close" && !subject && request.method === "POST") {
+    // Ordinary tab close. Pi's JSONL conversation is kept, exactly as DELETE
+    // keeps it; close additionally refuses to confirm an unproven stop.
+    const outcome = await closeSessionRetaining(state, deleteCancelTimeoutMs);
+    return outcome === "closed"
+      ? json(response, 200, { closed: true, retained: true })
+      : json(response, 503, {
+          closed: false,
+          pending: true,
+          error: "Session close did not complete",
+        });
+  }
   if (action === "messages" && request.method === "GET") {
     boundTranscriptForRead(state);
     return json(
@@ -428,8 +511,15 @@ async function routeSession(
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: it must not touch liveness, hydrate, or
     // re-attach, or the backend's two-second sweep would keep every session
-    // permanently warm.
-    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
+    // permanently warm. `mcpConfig` names the saved MCP files the attached
+    // generation was built from (digests only), so the backend can report a
+    // configuration change as applied on evidence rather than assumption.
+    const mcpConfig = publicPiMcpConfig(state);
+    return json(response, 200, {
+      summary: publicRuntime(state),
+      ...state.health.snapshot(),
+      ...(mcpConfig ? { mcpConfig } : {}),
+    });
   }
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));
@@ -440,8 +530,14 @@ async function routeSession(
   if (action === "queue" && request.method === "GET") {
     return json(response, 200, publicQueue(state));
   }
-  if (action === "commands" && request.method === "GET") {
-    return json(response, 200, { commands: state.slashCommands });
+  if (action === "commands" && !subject && request.method === "GET") {
+    // Metadata only: never attaches, hydrates or reloads.
+    return json(response, 200, commandCatalogueResponse(state));
+  }
+  if (action === "commands" && subject === "refresh" && request.method === "POST") {
+    const result = await refreshSessionCommands(state);
+    schedulePersist();
+    return json(response, 200, result);
   }
   if (action === "mcp" && request.method === "GET") {
     return json(response, 200, { servers: publicPiMcpServers(state) });
@@ -462,7 +558,9 @@ async function routeSession(
     // bridge has no persisted one, so without this the warm-up would connect
     // the process-env identity and the prompt would have to rebuild the session
     // to correct it.
+    assertSessionOpen(state);
     const body = await readJson(request);
+    assertSessionOpen(state);
     const previousAgentMcp = state.agentMcp;
     storeAgentMcp(state, body.agentMcp);
     if (
@@ -477,6 +575,7 @@ async function routeSession(
     // which is exactly the check `ensureSession` itself makes.
     const wasAttached = Boolean(state.session);
     await ensureSession(state);
+    assertSessionOpen(state);
     // `sessionFile` is what re-attaches to the same Pi conversation after a
     // restart. Create persists the bridge id; this persists the pointer — but
     // only on the call that actually minted one. The backend attaches before
@@ -558,15 +657,22 @@ async function routeSession(
  * copy.
  */
 async function handleDelete(response: ServerResponse, state: SessionState): Promise<void> {
-  denyAllApprovals(state, "The session was closed before this request was answered.");
+  // Closed before the first await, exactly as `/close` does: no prompt is
+  // admitted from here on, and one still preparing settles as cancelled at
+  // its next boundary instead of reaching Pi for a session that is going away.
+  markSessionClosed(state);
   // Cancelling first means a turn in flight stops writing into a transcript
   // nothing will read, rather than running to completion against a detached
-  // session.
+  // session. A prompt in Pi's preflight has its auto-compaction aborted now
+  // and its run aborted on acceptance.
+  const { cancel } = requestTurnCancellation(
+    state,
+    "The session was closed before this request was answered.",
+  );
   try {
-    const cancel = state.cancelTurn;
     if (cancel) {
       await withTimeout(
-        cancel(),
+        cancel,
         deleteCancelTimeoutMs,
         "Pi cancellation timed out while deleting the session",
       );
@@ -588,10 +694,17 @@ async function handleConfig(
   state: SessionState,
 ): Promise<void> {
   const body = await readJson(request);
+  assertSessionOpen(state);
   // Claimed before the first await, exactly as the prompt route does: applying
   // a patch reaches the live session, and a prompt admitted in that window
-  // would plan against a composer that is about to change under it.
-  if (state.status === "running" || state.dispatching) {
+  // would plan against a composer that is about to change under it. A prompt
+  // claim — even one still reading its body — owns the turn already.
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.commandReload ||
+    state.promptClaim !== undefined
+  ) {
     throw new HttpError(409, "Session is already running");
   }
   const patch = parseComposerPatch(body);
@@ -611,17 +724,55 @@ async function handleConfig(
   return json(response, 200, { ...state.composer, commands: state.slashCommands });
 }
 
+/**
+ * Cancel the admitted prompt, whatever phase it has reached.
+ *
+ * `/cancel`, `/abort` and `/hard-abort` all land here with identical ownership
+ * and acknowledgement. The owner is captured synchronously: the prompt claim
+ * names the turn this request means to stop, so a cancel is recorded against
+ * that turn even while attachment reads, MCP reconciliation, a cold attach,
+ * the durability barrier or Pi's own preflight mean no cancel handle exists
+ * yet. That case answers 202 `{ cancelled: false, pending: true }`, the shape
+ * the Cursor bridge established: recorded, not yet stopped. The prompt path
+ * consumes it at its next boundary, or aborts the run the moment Pi accepts.
+ *
+ * Configuration and compaction also hold `dispatching`, but they have no
+ * prompt claim, so nothing is parked against a future prompt here.
+ */
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
-  const cancel = state.cancelTurn;
-  // A parked tool hook is part of the run being aborted. Answer it first so
-  // the SDK never observes a disappearing run as implicit permission, and so
-  // abort cannot leave the hook awaiting a promise nobody will settle.
-  denyAllApprovals(state, "The turn was cancelled before this tool call was approved.");
-  if (cancel) await cancel();
-  // The run's own terminal path settles the transcript. Reporting idle here
-  // would race it and let a caller start a second turn into a run that has not
-  // actually stopped yet.
-  return json(response, 200, { cancelled: Boolean(cancel) });
+  // Recorded synchronously, before anything else, so an approval hook reached
+  // while the cancellation is being applied is refused rather than parked. In
+  // Pi's preflight this also aborts an auto-compaction at once.
+  const { claim, cancel } = requestTurnCancellation(
+    state,
+    "The turn was cancelled before this tool call was approved.",
+  );
+  if (cancel) {
+    // Bounded: a provider abort that hangs must not hang this route, or the
+    // caller's own escalation (a hard stop after a grace period) could never
+    // be reached. Past the bound the cancellation is still in flight and is
+    // reported as recorded rather than done. A rejected abort is not a
+    // cancellation either: it is reported pending, the claim keeps status
+    // running, and the next request (the hard-stop escalation) retries it.
+    const landed = await withTimeout(
+      cancel.then(
+        () => true,
+        () => false,
+      ),
+      cancelAckTimeoutMs,
+      "Pi cancellation is still in flight",
+    ).catch(() => false);
+    // The run's own terminal path settles the transcript. Reporting idle here
+    // would race it and let a caller start a second turn into a run that has
+    // not actually stopped yet.
+    return landed
+      ? json(response, 200, { cancelled: true })
+      : json(response, 202, { cancelled: false, pending: true });
+  }
+  if (claim !== undefined) {
+    return json(response, 202, { cancelled: false, pending: true });
+  }
+  return json(response, 200, { cancelled: false });
 }
 
 /**
@@ -632,7 +783,14 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
  * user is watching in order to shrink its context.
  */
 async function handleCompact(response: ServerResponse, state: SessionState): Promise<void> {
-  if (state.status === "running" || state.dispatching || state.compacting) {
+  assertSessionOpen(state);
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    state.commandReload ||
+    state.promptClaim !== undefined
+  ) {
     throw new HttpError(409, "Session is already running");
   }
   // Claimed synchronously, before the first await, exactly as the prompt route
@@ -651,6 +809,9 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
     state.dispatching = false;
     state.revision += 1;
     schedulePersist();
+    void runDeferredCommandReload(state)
+      .then(() => schedulePersist())
+      .catch(() => undefined);
   }
   return json(response, 200, { compacted: true });
 }
@@ -671,7 +832,11 @@ async function handleSteer(
   const body = await readJson(request);
   const text = readBoundedString(body.input, 64 * 1024, "input");
   const attachments = parsePromptAttachments(body.attachments);
-  const images = await readPromptImages(attachments, workingDirectory);
+  const images = await readPromptImages(
+    attachments,
+    workingDirectory,
+    state.session?.model?.inputLimits?.images?.resize,
+  );
   const requestId = readBoundedString(body.requestId, 512, "requestId");
   const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
   if (!text) throw new HttpError(400, "input is required");
@@ -716,6 +881,7 @@ async function handleSteer(
   if (
     state.session !== session ||
     state.status !== "running" ||
+    isSessionClosed(state) ||
     state.dispatching ||
     piRunId(state) !== expectedRunId
   ) {
@@ -726,10 +892,12 @@ async function handleSteer(
     });
   }
 
-  // Register correlation before entering Pi. `steer()` queues synchronously
-  // inside an async method, so its delivery event may win the microtask race
-  // with this continuation.
-  state.pendingSteerDeliveries.push({ requestId, text });
+  // Register correlation before entering Pi: its delivery event may win the
+  // microtask race with this continuation. `steer()` is not a synchronous
+  // enqueue, though — since 0.87 it awaits the extensions' `input` handlers
+  // first, so the run can settle (and `settleTurn` clear Pi's queue) before
+  // the instruction is queued at all. That window is closed after the await.
+  state.pendingSteerDeliveries.push({ requestId, text, expectedRunId });
   try {
     await session.steer(
       text,
@@ -744,6 +912,20 @@ async function handleSteer(
     await persistBarrier();
     return json(response, 503, { outcome: "unknown", requestId });
   }
+  if (
+    state.steerJournal.get(requestId)?.state !== "delivered" &&
+    !steerStillPendingOnRun(state, session, requestId, expectedRunId)
+  ) {
+    // The run this steer was pinned to settled while Pi ran its input
+    // handlers, so the instruction reached Pi's queue after `settleTurn`
+    // cleared it. Left there, the next ordinary prompt would consume it.
+    const outcome = withdrawLateSteer(state, session, requestId);
+    setSteerJournal(state, { ...prepared, state: outcome });
+    await persistBarrier();
+    return outcome === "dropped"
+      ? json(response, 409, { outcome: "idle" })
+      : json(response, 503, { outcome: "unknown", requestId });
+  }
   if (state.steerJournal.get(requestId)?.state !== "delivered") {
     setSteerJournal(state, { ...prepared, state: "queued" });
   }
@@ -757,6 +939,52 @@ async function handleSteer(
       ? { outcome: "applied", requestId }
       : { outcome: "unknown", requestId },
   );
+}
+
+/** True while the steer is still waiting on the live run it was pinned to. */
+function steerStillPendingOnRun(
+  state: SessionState,
+  session: AgentSession,
+  requestId: string,
+  expectedRunId: string,
+): boolean {
+  return (
+    state.session === session &&
+    state.status === "running" &&
+    !isSessionClosed(state) &&
+    !state.dispatching &&
+    piRunId(state) === expectedRunId &&
+    state.pendingSteerDeliveries.some((candidate) => candidate.requestId === requestId)
+  );
+}
+
+/**
+ * Take a steer that outlived its run back out of Pi's queue.
+ *
+ * Pi has no selective removal, so `clearQueue()` is only safe when nothing
+ * else legitimate is queued: either no turn is live (anything left is stale,
+ * exactly as at `settleTurn`), or this steer is the only queued message. A
+ * replacement turn with its own queue is left alone and the steer reported
+ * ambiguous — clearing would silently discard that turn's instructions.
+ */
+function withdrawLateSteer(
+  state: SessionState,
+  session: AgentSession,
+  requestId: string,
+): "dropped" | "ambiguous" {
+  const pendingIndex = state.pendingSteerDeliveries.findIndex(
+    (candidate) => candidate.requestId === requestId,
+  );
+  if (pendingIndex >= 0) state.pendingSteerDeliveries.splice(pendingIndex, 1);
+  const liveTurn = state.session === session && (state.status === "running" || state.dispatching);
+  if (liveTurn && session.pendingMessageCount > 1) return "ambiguous";
+  try {
+    session.clearQueue();
+  } catch {
+    return "ambiguous";
+  }
+  if (!liveTurn && state.session === session) state.queue.steering = [];
+  return "dropped";
 }
 
 async function handleFork(
@@ -801,13 +1029,50 @@ async function handleApprovalDecision(
   return json(response, 200, { resolved: true });
 }
 
+/**
+ * `POST /session/:id/prompt`.
+ *
+ * Admission starts at route entry, not after the body is read. When nothing
+ * else owns the session the claim is reserved here, synchronously, so a cancel
+ * that arrives while the body is read, validated, or waits out a command
+ * reload is recorded against this prompt (202 pending) instead of answering
+ * `{ cancelled: false }` + idle and then letting the prompt run anyway. The
+ * reservation is released on every path that does not become a turn — a
+ * validation error, a duplicate, a local answer, a busy refusal — and it
+ * clears only its own cancel record, so a stale cancel cannot reach a later
+ * prompt. Configuration and compaction take no claim, so a cancel during them
+ * reserves nothing; a busy session reserves nothing either, because a cancel
+ * then belongs to the work that owns it.
+ */
 async function handlePrompt(
   request: IncomingMessage,
   response: ServerResponse,
   state: SessionState,
   clientSignal: AbortSignal,
 ): Promise<void> {
+  assertSessionOpen(state);
+  const admission: PromptAdmission = {
+    claim: reservePromptAdmission(state, isSessionClosed(state)),
+    transferred: false,
+  };
+  try {
+    return await handleAdmittedPrompt(request, response, state, clientSignal, admission);
+  } finally {
+    if (!admission.transferred) releasePromptClaim(state, admission.claim);
+  }
+}
+
+async function handleAdmittedPrompt(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: SessionState,
+  clientSignal: AbortSignal,
+  admission: PromptAdmission,
+): Promise<void> {
   const body = await readJson(request);
+  const commandFields = readBridgePromptCommandFields(body);
+  if (!commandFields.ok) throw new HttpError(400, commandFields.error);
+  const { allowProviderCommands, command } = commandFields;
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = readBoundedString(body.requestId, 512, "requestId");
   const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
@@ -815,9 +1080,25 @@ async function handlePrompt(
   // Shape validation happens before the turn is claimed: a malformed
   // attachment list is a caller error, not a turn that half-started.
   const attachments = parsePromptAttachments(body.attachments);
-  if (!prompt && attachments.length === 0) {
+  if (!prompt && attachments.length === 0 && !command) {
     throw new HttpError(400, "prompt or attachment is required");
   }
+  // The structured-output instruction is appended to the prompt text, which
+  // for a command would become part of its arguments.
+  if (command && schema) {
+    throw new HttpError(400, "A command selection cannot request structured output");
+  }
+  // A resource reload rebuilds the extension runtime underneath the session.
+  // Wait it out, bounded, rather than dispatch into a half-built one.
+  if (state.commandReload) {
+    await withTimeout(
+      state.commandReload,
+      CATALOG_TIMEOUT_MS,
+      "Pi is still reloading its commands",
+    ).catch(() => undefined);
+  }
+  // Closed while the body was read or the reload was waited out.
+  assertSessionOpen(state);
   if (requestId && state.promptJournal.has(requestId)) {
     const journaled = state.promptJournal.get(requestId)!;
     if (journaled.local) {
@@ -835,40 +1116,105 @@ async function handlePrompt(
     }
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");
+    if (journaled.state === "dropped") {
+      throw new HttpError(409, "The queued follow-up outlived its target turn and was dropped");
+    }
     return json(response, 202, { accepted: true, duplicate: true });
   }
-  const idleSteer = idleSteerPromptReply(prompt, "Pi");
-  if (idleSteer) {
-    if (state.status === "running" || state.dispatching || state.compacting) {
-      throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
+
+  // A selected command is checked against this session's own registry before
+  // anything is journaled. A mismatch is refused (422), never sent on as text.
+  let selection: Extract<CommandSelection, { ok: true }> | undefined;
+  if (command) {
+    const resolved = resolveCommandSelection(state, command);
+    if (!resolved.ok) return json(response, 422, commandUnavailableResponse(resolved.message));
+    if (resolved.kind === "extension" && attachments.length > 0) {
+      throw new HttpError(400, "Pi extension commands take no attachments");
     }
-    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
-    appendLocalExchange(state, prompt, idleSteer, requestId);
-    if (requestId) {
-      setPromptJournal(state, {
-        requestId,
-        state: "completed",
-        acceptedAt: Date.now(),
-        local: true,
-      });
+    selection = resolved;
+  }
+  // What Pi receives: the canonical invocation for a selection, otherwise the
+  // text as typed. The transcript shows what the user typed.
+  const providerPrompt = selection ? selection.text : prompt;
+  const displayPrompt = prompt || providerPrompt;
+
+  // Local answers exist only for interpreted text. Literal intent means the
+  // text is never matched against a command, local or provider.
+  if (!command && allowProviderCommands) {
+    const idleSteer = idleSteerPromptReply(prompt, "Pi");
+    if (idleSteer) {
+      if (state.status === "running" || state.dispatching || state.compacting) {
+        throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
+      }
+      if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
+      return answerLocally(response, state, prompt, idleSteer, requestId, "idle-steer");
     }
-    state.revision += 1;
-    schedulePersist();
-    return json(response, 200, { accepted: true, local: true });
+    const compactReply = legacyCompactReply(prompt, state.slashCommands);
+    if (compactReply) {
+      if (state.status === "running" || state.dispatching || state.compacting) {
+        throw new HttpError(409, "Session is already running");
+      }
+      if (schema) throw new HttpError(400, "/compact cannot be used with structured output");
+      return answerLocally(response, state, prompt, compactReply, requestId, "compact");
+    }
   }
   // A second ordinary prompt is a provider-owned follow-up. Pi keeps this
   // queue with the live run, and its state events rehydrate `/queue` even when
   // the renderer that submitted it is no longer mounted.
   if (state.status === "running" && !state.dispatching && !state.compacting && state.session) {
-    const images = await readPromptImages(attachments, workingDirectory);
+    const session = state.session;
+    const expectedRunId = piRunId(state);
+    if (selection?.kind === "extension") {
+      // Pi refuses to queue an extension command, and running one mid-turn is
+      // not qualified; its descriptor says `busy: idle`.
+      throw new HttpError(409, "Pi extension commands run only while the session is idle");
+    }
+    if (selection) {
+      const live = effectiveCommandKind(session, selection.text);
+      if (live?.kind !== selection.kind || live.invocation !== selection.invocation) {
+        return json(
+          response,
+          422,
+          commandUnavailableResponse(
+            `${command!.name} no longer resolves to the same Pi command. Choose it again.`,
+          ),
+        );
+      }
+    }
+    if (!allowProviderCommands && effectiveCommandKind(session, providerPrompt)) {
+      // `followUp` always expands skills and templates and refuses extension
+      // commands, and Pi has no literal queue. Queuing this would run it as a
+      // command; refusing keeps the literal promise.
+      throw new HttpError(
+        409,
+        "Pi would read this literal prompt as a command, so it cannot be queued behind the running turn; send it when the session is idle",
+      );
+    }
+    const images = await readPromptImages(
+      attachments,
+      workingDirectory,
+      session.model?.inputLimits?.images?.resize,
+    );
     const files = await resolvePromptFiles(attachments, workingDirectory);
-    const text = prompt + promptFileReferences(files);
+    const text = providerPrompt + promptFileReferences(files);
     if (requestId) {
       setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
       await persistBarrier();
     }
+    if (
+      state.session !== session ||
+      state.status !== "running" ||
+      isSessionClosed(state) ||
+      state.dispatching ||
+      state.compacting ||
+      piRunId(state) !== expectedRunId
+    ) {
+      if (requestId) state.promptJournal.delete(requestId);
+      await persistBarrier();
+      return json(response, 409, { accepted: false, outcome: "idle" });
+    }
     try {
-      await state.session.followUp(
+      await session.followUp(
         text,
         images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
       );
@@ -877,15 +1223,40 @@ async function handlePrompt(
       schedulePersist();
       throw error;
     }
+    if (
+      state.session !== session ||
+      state.status !== "running" ||
+      isSessionClosed(state) ||
+      state.dispatching ||
+      state.compacting ||
+      piRunId(state) !== expectedRunId
+    ) {
+      const outcome = withdrawLateFollowUp(state, session);
+      if (requestId) journal(state, requestId, outcome);
+      await persistBarrier();
+      return outcome === "dropped"
+        ? json(response, 409, { accepted: false, outcome: "idle" })
+        : json(response, 503, { accepted: false, outcome: "unknown", requestId });
+    }
     journal(state, requestId, "accepted");
     schedulePersist();
     return json(response, 202, { accepted: true, queued: true });
   }
   // `compacting` counts as busy: Pi's compaction aborts whatever is running,
   // so a prompt admitted alongside one is a turn that gets cancelled out from
-  // under the user.
-  if (state.status === "running" || state.dispatching || state.compacting) {
+  // under the user. A reload still in flight after the bounded wait above is
+  // busy too, and so is another prompt's claim — one still reading its body,
+  // or one whose startup deadline passed while Pi may still accept it.
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    (state.promptClaim !== undefined && state.promptClaim !== admission.claim)
+  ) {
     throw new HttpError(409, "Session is already running");
+  }
+  if (state.commandReload) {
+    throw new HttpError(409, "Pi is reloading its commands; retry shortly");
   }
 
   if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
@@ -896,43 +1267,101 @@ async function handlePrompt(
   // fast path, so a second request would otherwise pass both the duplicate and
   // the busy check and dispatch the same prompt twice.
   state.dispatching = true;
+  // The admitted-turn token: the one reserved at route entry when there was
+  // one, otherwise reserved now in the same synchronous step as the claim.
+  // From here to the turn's terminal state, a cancel belongs to this prompt
+  // even before any cancel handle exists.
+  const claim = admission.claim ?? claimPromptTurn(state);
+  admission.transferred = true;
   if (requestId) {
     setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
   }
 
-  let images: PiPromptImage[];
-  let files: PiPromptFile[];
+  let images: PiPromptImage[] = [];
+  let files: PiPromptFile[] = [];
   let session: Awaited<ReturnType<typeof ensureSession>>;
+  // Checked after every preparation boundary. Pi has not been invoked yet, so
+  // a cancel (or the session's deletion) that won is settled locally below.
+  const stopIfCancelled = (): void => {
+    if (cancelRequestedFor(state, claim) || isSessionClosed(state)) {
+      throw new CancelledBeforeSendError();
+    }
+  };
   try {
+    // A cancel recorded while the body was read or validated.
+    stopIfCancelled();
     // Read attachments first: an unreadable image must fail before a session is
     // attached, and it is far cheaper than a cold start.
     images = await readPromptImages(attachments, workingDirectory);
     files = await resolvePromptFiles(attachments, workingDirectory);
+    stopIfCancelled();
     if (typeof body.readOnly === "boolean") await setSessionReadOnly(state, body.readOnly);
     applyComposerPatch(state, parseComposerPatch(body));
     // A rotated tab credential has to rebuild the SDK session before the turn
     // is dispatched, or the model reaches the mailbox under the previous
-    // identity while `/mcp` already reports the new one.
-    await reconcileAgentMcp(state);
+    // identity while `/mcp` already reports the new one. A saved MCP
+    // configuration change is adopted at this same boundary.
+    await reconcileAgentMcp(state, { atTurnStart: true });
+    stopIfCancelled();
     session = await ensureSession(state);
     await applyComposerToSession(state);
+    stopIfCancelled();
+    if (command) {
+      // A cold attach re-read the list from a fresh runtime. Hold the
+      // selection to that list *and* to Pi's own dispatch order, so it runs
+      // exactly the binding it was chosen as or nothing at all.
+      const again = resolveCommandSelection(state, command);
+      if (!again.ok) throw new CommandUnavailableError(again.message);
+      const live = effectiveCommandKind(session, again.text);
+      if (live?.kind !== again.kind || live.invocation !== again.invocation) {
+        throw new CommandUnavailableError(
+          `${command.name} no longer resolves to the same Pi command. Choose it again.`,
+        );
+      }
+    }
     // The prepared record must be on disk before Pi can possibly accept the
     // prompt. After this point a crash is ambiguous, so restart must refuse to
     // dispatch the same request id rather than infer that it never ran.
     if (requestId) await persistBarrier();
+    // The last boundary before Pi is invoked. Everything from here to
+    // `session.prompt` is synchronous, so a cancel cannot slip in between.
+    stopIfCancelled();
   } catch (error) {
+    // A close or DELETE that landed during preparation settles the prompt the
+    // same way whichever boundary noticed it — including a cold attach that
+    // refused to publish into the closed session — so both routes give the
+    // prompt one answer: cancelled before send, never a 500.
+    if (error instanceof CancelledBeforeSendError || isSessionClosed(state)) {
+      // Cancellation won before Pi saw anything. The user's message is kept
+      // as the honest record of what they sent, and the turn ends as a
+      // cancelled one does, without an artificial prompt reaching Pi.
+      appendUserMessage(state, displayPrompt, images, files);
+      settleCancelledBeforeSend(state, claim, {
+        ...(requestId ? { requestId } : {}),
+        ...(schema ? { schema } : {}),
+      });
+      return json(response, 202, { accepted: true, cancelled: true });
+    }
     // The turn provably did not run, so release the claim and let the caller
     // retry under the same request id.
     state.dispatching = false;
+    releasePromptClaim(state, claim);
     if (requestId) state.promptJournal.delete(requestId);
     schedulePersist();
+    if (error instanceof CommandUnavailableError) {
+      return json(response, 422, commandUnavailableResponse(error.message));
+    }
     throw error;
   }
 
-  const text = prompt + promptFileReferences(files);
+  const text = providerPrompt + promptFileReferences(files);
+  // Pi runs an extension command's handler inside `prompt()`; the dispatcher
+  // needs to know so it can accept it at once and give it an outcome.
+  const live = allowProviderCommands ? effectiveCommandKind(session, text) : undefined;
+  const extensionCommand = live?.kind === "extension" ? live.invocation : undefined;
   const messageStart = state.messages.length;
   const uncheckedBeforePrompt = state.uncheckedTranscriptBytes;
-  appendUserMessage(state, prompt, images, files);
+  appendUserMessage(state, displayPrompt, images, files);
   state.status = "running";
   state.error = undefined;
   state.promptSequence += 1;
@@ -948,8 +1377,24 @@ async function handlePrompt(
       images: images.map((image) => ({ mimeType: image.mimeType, data: image.data })),
       ...(schema ? { schema } : {}),
       ...(requestId ? { requestId } : {}),
+      expandCommands: allowProviderCommands,
+      ...(extensionCommand ? { extensionCommand } : {}),
     });
   } catch (error) {
+    if (error instanceof PromptStartupTimeoutError) {
+      // Failed explicitly and boundedly. `dispatchPrompt` has already marked
+      // the turn failed and kept the claim, the journal entry and the user's
+      // message: Pi may still accept, and that late run is aborted and
+      // observed before the claim is released (see `abandonStartup`). 424
+      // rather than a 5xx so the backend surfaces this message instead of
+      // reading a transient outage it would retry.
+      return json(response, 424, {
+        accepted: false,
+        outcome: "startup-timeout",
+        error: error.message,
+        ...(requestId ? { requestId } : {}),
+      });
+    }
     // Pi refused the prompt before the run started, so nothing ran. Roll the
     // turn back rather than leaving the session wedged as running or showing
     // a user message for work the agent never accepted.
@@ -959,6 +1404,8 @@ async function handlePrompt(
     state.error = errorText(error);
     state.dispatching = false;
     state.cancelTurn = undefined;
+    // A cancel recorded during preflight goes with the claim it targeted.
+    releasePromptClaim(state, claim);
     state.currentAssistantMessageId = undefined;
     state.openTextParts.clear();
     state.toolInputs.clear();
@@ -967,6 +1414,7 @@ async function handlePrompt(
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();
+    void runDeferredCommandReload(state).catch(() => undefined);
     throw error;
   }
 
@@ -983,16 +1431,59 @@ async function handlePrompt(
   return json(response, 202, { accepted: true });
 }
 
+/**
+ * Answer a prompt without starting a turn, durably and idempotently.
+ *
+ * Used for the texts that name something Pi's prompt path cannot run — `/steer`
+ * with no turn to steer, Pi's terminal-only `/compact` — so they never reach
+ * the model as prose.
+ */
+function answerLocally(
+  response: ServerResponse,
+  state: SessionState,
+  prompt: string,
+  reply: string,
+  requestId: string | undefined,
+  kind: "idle-steer" | "compact",
+): void {
+  appendLocalExchange(state, prompt, reply, requestId, kind);
+  if (requestId) {
+    setPromptJournal(state, {
+      requestId,
+      state: "completed",
+      acceptedAt: Date.now(),
+      local: true,
+    });
+  }
+  state.revision += 1;
+  schedulePersist();
+  return json(response, 200, { accepted: true, local: true });
+}
+
+/** Remove a follow-up that Pi enqueued after the run it targeted had ended. */
+function withdrawLateFollowUp(state: SessionState, session: AgentSession): "dropped" | "ambiguous" {
+  const liveTurn = state.session === session && (state.status === "running" || state.dispatching);
+  if (liveTurn && session.pendingMessageCount > 1) return "ambiguous";
+  try {
+    session.clearQueue();
+  } catch {
+    return "ambiguous";
+  }
+  if (state.session === session) state.queue.followUp = [];
+  return "dropped";
+}
+
 function appendLocalExchange(
   state: SessionState,
   prompt: string,
   reply: string,
-  requestId?: string,
+  requestId: string | undefined,
+  kind: "idle-steer" | "compact",
 ): void {
-  const userId = requestId ? `idle-steer:${requestId}` : undefined;
+  const userId = requestId ? `${kind}:${requestId}` : undefined;
   if (userId && state.messages.some((message) => message.id === userId)) return;
   appendUserMessage(state, prompt, [], [], userId);
-  const messageId = requestId ? `idle-steer-reply:${requestId}` : randomBytes(12).toString("hex");
+  const messageId = requestId ? `${kind}-reply:${requestId}` : randomBytes(12).toString("hex");
   state.messages.push({
     id: messageId,
     role: "assistant",
@@ -1044,6 +1535,28 @@ function appendUserMessage(
     createdAt: new Date().toISOString(),
   });
   chargeTranscript(state, Buffer.byteLength(prompt) + 256 * (attachments.length + 1));
+}
+
+/**
+ * Run `task` over `items` with at most `limit` in flight.
+ *
+ * Replaces an unbounded `Promise.all` fan-out: a global refresh used to reload
+ * every attached session at once, each rebuilding its extension runtime.
+ */
+async function forEachBounded<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<unknown>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next]!;
+      next += 1;
+      await task(item);
+    }
+  });
+  await Promise.all(workers);
 }
 
 function storeAgentMcp(state: SessionState, value: unknown): void {

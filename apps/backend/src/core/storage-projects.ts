@@ -11,6 +11,7 @@ import {
 import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
+import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
@@ -113,7 +114,7 @@ import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folder
  * serialize identically. That keeps projects.json from accumulating a null
  * folder on every record the first time anyone uses the feature.
  */
-function applyProjectFolder(project: Project, folder: unknown): void {
+export function applyProjectFolder(project: Project, folder: unknown): void {
   const normalized = normalizeProjectFolderName(folder);
   if (normalized) project.folder = normalized;
   else delete project.folder;
@@ -184,6 +185,30 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
+const MAX_PROJECT_REMOVAL_FENCES = 1_000;
+
+/** A project still owns environments; removal would orphan them. */
+export class ProjectHasEnvironmentsError extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly environmentCount: number,
+  ) {
+    super(`Project has ${environmentCount} environment(s); delete them before removing it`);
+    this.name = "ProjectHasEnvironmentsError";
+  }
+}
+
+/** A control request ID was reused with a different creation intent. */
+export class ControlRequestConflictError extends Error {
+  constructor(
+    readonly controlRequestId: string,
+    readonly environmentId: string,
+  ) {
+    super("controlRequestId was already used with a different environment request");
+    this.name = "ControlRequestConflictError";
+  }
+}
+
 export abstract class StorageProjects extends StorageBase {
   async loadProjects(): Promise<Project[]> {
     const projects = await this.loadJsonCached<Project[]>(this.projectsFile(), () => []);
@@ -233,12 +258,24 @@ export abstract class StorageProjects extends StorageBase {
 
   async updateProject(
     projectId: string,
-    updates: Partial<Pick<Project, "name" | "localPath" | "folder">>,
+    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
   ): Promise<Project> {
     const project = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
       const project = projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (typeof updates.gitUrl === "string") {
+        // A repository that moved keeps its project: settings, environments,
+        // and history are keyed by project id, not by remote URL.
+        const gitUrl = withoutUrlCredentials(updates.gitUrl.trim());
+        if (!gitUrl) throw new Error("Git URL cannot be empty");
+        if (
+          projects.some((candidate) => candidate.id !== projectId && candidate.gitUrl === gitUrl)
+        ) {
+          throw new Error(`Duplicate project URL: ${gitUrl}`);
+        }
+        project.gitUrl = gitUrl;
+      }
       if (typeof updates.name === "string") project.name = updates.name;
       if ("localPath" in updates) project.localPath = updates.localPath ?? null;
       if ("folder" in updates) applyProjectFolder(project, updates.folder);
@@ -379,6 +416,57 @@ export abstract class StorageProjects extends StorageBase {
     );
   }
 
+  protected projectRemovalFencesFile(): string {
+    return this.file("project-removal-fences.json");
+  }
+
+  /** Projects whose removal was admitted; read under the environment lock. */
+  protected async loadProjectRemovalFences(): Promise<Record<string, string>> {
+    const value = await this.loadJsonCached<unknown>(this.projectRemovalFencesFile(), () => ({}));
+    if (!isRecord(value)) return {};
+    const fences: Record<string, string> = {};
+    for (const [projectId, requestedAt] of Object.entries(value)) {
+      if (typeof requestedAt === "string") fences[projectId] = requestedAt;
+    }
+    return fences;
+  }
+
+  /**
+   * Admit the removal of a project that has no environments.
+   *
+   * The emptiness check and the fence are written under the environment lock,
+   * and `addEnvironment` consults the fence under the same lock, so a create
+   * racing the removal either lands first (and the removal is refused) or is
+   * refused itself. The fence outlives the removal, so a late create can never
+   * attach an environment to a project that no longer exists.
+   */
+  async fenceEmptyProjectForRemoval(projectId: string): Promise<void> {
+    await this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const count = environments.filter(
+        (environment) => environment.projectId === projectId,
+      ).length;
+      if (count > 0) throw new ProjectHasEnvironmentsError(projectId, count);
+      const fences = await this.loadProjectRemovalFences();
+      if (fences[projectId]) return;
+      fences[projectId] = new Date().toISOString();
+      const entries = Object.entries(fences)
+        .sort(([, a], [, b]) => a.localeCompare(b))
+        .slice(-MAX_PROJECT_REMOVAL_FENCES);
+      await this.saveJson(this.projectRemovalFencesFile(), Object.fromEntries(entries));
+    });
+  }
+
+  /** Undo a fence whose removal did not complete, so the project stays usable. */
+  async releaseProjectRemovalFence(projectId: string): Promise<void> {
+    await this.enqueueEnvironmentMutation(async () => {
+      const fences = await this.loadProjectRemovalFences();
+      if (!fences[projectId]) return;
+      delete fences[projectId];
+      await this.saveJson(this.projectRemovalFencesFile(), fences);
+    });
+  }
+
   async addEnvironment(environment: Environment): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -388,7 +476,21 @@ export abstract class StorageProjects extends StorageBase {
             candidate.projectId === environment.projectId &&
             candidate.controlRequestId === environment.controlRequestId,
         );
-        if (existing) return existing;
+        if (existing) {
+          // Legacy records carry no fingerprint and cannot prove the intent
+          // matches; they converge as before. A recorded fingerprint must match.
+          if (
+            existing.controlRequestFingerprint &&
+            environment.controlRequestFingerprint &&
+            existing.controlRequestFingerprint !== environment.controlRequestFingerprint
+          ) {
+            throw new ControlRequestConflictError(environment.controlRequestId, existing.id);
+          }
+          return existing;
+        }
+      }
+      if ((await this.loadProjectRemovalFences())[environment.projectId]) {
+        throw new Error(`Project is being removed: ${environment.projectId}`);
       }
       environment.order =
         Math.max(
@@ -631,6 +733,12 @@ export abstract class StorageProjects extends StorageBase {
         if (value == null) environment.initialAgentPlatform = undefined;
         else if (isAgentPlatform(value)) environment.initialAgentPlatform = value;
         else throw new Error("Invalid initial agent platform");
+      }
+      if ("initialConversationMode" in updates) {
+        const value = updates.initialConversationMode;
+        if (value == null) environment.initialConversationMode = undefined;
+        else if (value === "plan" || value === "build") environment.initialConversationMode = value;
+        else throw new Error("Invalid initial conversation mode");
       }
       if ("initialFastMode" in updates) {
         const value = updates.initialFastMode;
@@ -1157,7 +1265,8 @@ export abstract class StorageProjects extends StorageBase {
    * Backend observations are serialized but may share a millisecond with the
    * preceding working edge. Advance the durable token on a collision rather
    * than dropping a real completion as stale. Callers must invoke this exactly
-   * once per observed per-session transition.
+   * once per observed per-session transition. The separate completion token
+   * lets readers observe this edge while the aggregate remains working.
    */
   async recordEnvironmentSessionCompletion(
     environmentId: string,
@@ -1179,6 +1288,12 @@ export abstract class StorageProjects extends StorageBase {
           ? previousTime + 1
           : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
+      const previousCompletionTime = Date.parse(environment.agentSessionCompletedAt ?? "");
+      environment.agentSessionCompletedAt = new Date(
+        Number.isFinite(previousCompletionTime)
+          ? Math.max(acceptedTime, previousCompletionTime + 1)
+          : acceptedTime,
+      ).toISOString();
       environment.hasUnreadWork = true;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);

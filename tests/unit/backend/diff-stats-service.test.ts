@@ -8,7 +8,11 @@ import {
 
 interface Harness {
   service: DiffStatsService;
+  /** Diff-stat events only; worktree-snapshot events are in `snapshotEvents`. */
   emitted: Array<{ event: string; payload: any }>;
+  snapshotEvents: any[];
+  /** One-shot retry timers the service armed; fired only on request. */
+  delayed: Array<{ callback: () => void; delayMs: number; cancelled: boolean }>;
   warnings: Array<{ message: string; error: unknown }>;
   scans: DiffStatsTarget[];
   /** Fires the interval registered for a target, if any. */
@@ -37,6 +41,8 @@ function createHarness(
 ): Harness {
   const watchable = options.watchable ?? true;
   const emitted: Array<{ event: string; payload: any }> = [];
+  const snapshotEvents: any[] = [];
+  const delayed: Array<{ callback: () => void; delayMs: number; cancelled: boolean }> = [];
   const warnings: Array<{ message: string; error: unknown }> = [];
   const scans: DiffStatsTarget[] = [];
   const clock = { value: 1_000 };
@@ -67,7 +73,20 @@ function createHarness(
       scans.push(target);
       return scan(target);
     },
-    emit: options.emit ?? ((event, payload) => emitted.push({ event, payload })),
+    emit:
+      options.emit ??
+      ((event, payload) => {
+        if (event === DIFF_STATS_CHANGED_EVENT) emitted.push({ event, payload });
+        else snapshotEvents.push(payload);
+      }),
+    delay: (callback, delayMs) => {
+      const record = { callback, delayMs, cancelled: false };
+      delayed.push(record);
+      return record;
+    },
+    cancelDelay: (timer) => {
+      (timer as { cancelled: boolean }).cancelled = true;
+    },
     onWarning: (message, error) => warnings.push({ message, error }),
     now: () => new Date(clock.value).toISOString(),
     monotonicNow: () => clock.value,
@@ -132,6 +151,8 @@ function createHarness(
   return {
     service,
     emitted,
+    snapshotEvents,
+    delayed,
     warnings,
     scans,
     clock,
@@ -291,6 +312,7 @@ describe("DiffStatsService", () => {
     expect(harness.service.isWatching("env-container")).toBe(false);
     expect(harness.intervalFor("env-container")).toBe(15_000);
 
+    harness.clock.value += 15_000;
     harness.tick("env-container");
     await settle();
     expect(harness.scans).toHaveLength(2);
@@ -448,9 +470,14 @@ describe("DiffStatsService", () => {
         stats: stats({ additions: 7 }),
       }),
     ]);
-    expect(
-      harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "develop", 3_000),
-    ).toEqual([{ path: "replacement.ts" }]);
+    await expect(
+      harness.service.readFileList({
+        lookup: { worktreePath: "/tmp/env-local-worktree" },
+        comparisonRef: "develop",
+        includeUncommitted: true,
+      }),
+    ).resolves.toMatchObject({ changes: [{ path: "replacement.ts" }] });
+    expect(harness.scans).toHaveLength(2);
   });
 
   test("tracking an unchanged target is a no-op", async () => {
@@ -618,7 +645,7 @@ describe("DiffStatsService", () => {
 
     expect(harness.scans).toHaveLength(2);
     expect(harness.service.snapshot()).toHaveLength(1);
-    expect(harness.warnings).toEqual([
+    expect(harness.warnings.filter((warning) => warning.message.includes("diff stats"))).toEqual([
       expect.objectContaining({ message: "Failed to emit diff stats for env-local" }),
     ]);
   });
@@ -671,102 +698,69 @@ describe("DiffStatsService", () => {
     }
   });
 
-  describe("shared scan cache", () => {
-    test("serves a recent file list to a second reader", async () => {
+  describe("shared file-list reads", () => {
+    const read = (
+      harness: Harness,
+      lookup: { worktreePath?: string; containerId?: string },
+      comparisonRef = "main",
+      extra: { refresh?: boolean; includeUncommitted?: boolean } = {},
+    ) =>
+      harness.service.readFileList({
+        lookup,
+        comparisonRef,
+        includeUncommitted: extra.includeUncommitted ?? true,
+        refresh: extra.refresh,
+      });
+    const local = { worktreePath: "/tmp/env-local-worktree" };
+    const container = { containerId: "container-1" };
+
+    test("a watched worktree serves its scan until something changes, however old", async () => {
       const harness = createHarness();
       harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
       harness.service.track(localTarget());
       await settle();
 
-      expect(
-        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
-      ).toEqual([{ path: "a.ts" }]);
-    });
-
-    test("withholds a file list older than the caller accepts", async () => {
-      const harness = createHarness();
-      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
-      harness.service.track(localTarget());
-      await settle();
-
-      harness.clock.value += 5_000;
-
-      expect(
-        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
-      ).toBeUndefined();
-    });
-
-    test("serves a file list at the exact maximum-age boundary", async () => {
-      const harness = createHarness();
-      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "boundary.ts" }] }));
-      harness.service.track(localTarget());
-      await settle();
-      harness.clock.value += 3_000;
-
-      expect(
-        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
-      ).toEqual([{ path: "boundary.ts" }]);
-    });
-
-    test("withholds a file list measured against a different ref", async () => {
-      const harness = createHarness();
-      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
-      harness.service.track(localTarget());
-      await settle();
-
-      expect(
-        harness.service.cachedChanges(
-          { worktreePath: "/tmp/env-local-worktree" },
-          "develop",
-          3_000,
-        ),
-      ).toBeUndefined();
-    });
-
-    test("adopts a scan performed elsewhere so the next reader shares it", async () => {
-      const harness = createHarness();
-      harness.service.track(containerTarget());
-      await settle();
       harness.clock.value += 60_000;
+      await expect(read(harness, local)).resolves.toMatchObject({ changes: [{ path: "a.ts" }] });
+      expect(harness.scans).toHaveLength(1);
 
-      harness.service.adoptScan({ containerId: "container-1" }, "main", [{ path: "b.ts" }]);
-
-      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000)).toEqual([
-        { path: "b.ts" },
-      ]);
+      harness.signalChange("env-local");
+      await settle();
+      expect(harness.scans).toHaveLength(2);
     });
 
-    test("does not adopt a scan measured against the wrong ref", async () => {
+    test("an unwatched target serves its scan only within the age bound", async () => {
       const harness = createHarness();
-      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "original.ts" }] }));
+      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
       harness.service.track(containerTarget());
       await settle();
 
-      harness.service.adoptScan({ containerId: "container-1" }, "develop", [{ path: "wrong.ts" }]);
+      harness.clock.value += 3_000;
+      await read(harness, container);
+      expect(harness.scans).toHaveLength(1);
 
-      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000)).toEqual([
-        { path: "original.ts" },
-      ]);
-      expect(
-        harness.service.cachedChanges({ containerId: "container-1" }, "develop", 3_000),
-      ).toBeUndefined();
+      harness.clock.value += 2_000;
+      await read(harness, container);
+      expect(harness.scans).toHaveLength(2);
     });
 
-    test("invalidates a matching cached file list after a mutation", async () => {
+    test("another comparison ref or a committed-only list is a separate identity", async () => {
       const harness = createHarness();
-      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "before.ts" }] }));
+      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
       harness.service.track(localTarget());
       await settle();
 
-      harness.service.invalidateChanges({ worktreePath: "/tmp/env-local-worktree" });
-
-      expect(
-        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
-      ).toBeUndefined();
-      expect(harness.service.snapshot()).toHaveLength(1);
+      await expect(read(harness, local, "develop")).resolves.toMatchObject({
+        changes: [{ path: "a.ts" }],
+      });
+      // Served ad hoc: no owner view, and the tracked identity was not reused.
+      expect(harness.scans.map((target) => target.comparisonRef)).toEqual(["main", "develop"]);
+      await expect(read(harness, local, "main", { includeUncommitted: false })).rejects.toThrow(
+        "Committed-only file lists are not configured",
+      );
     });
 
-    test("invalidation rejects a pre-mutation in-flight result and rescans", async () => {
+    test("a mutation rejects a pre-mutation in-flight result and rescans", async () => {
       const harness = createHarness();
       let scanNumber = 0;
       let releaseStale: (() => void) | undefined;
@@ -789,16 +783,15 @@ describe("DiffStatsService", () => {
       harness.service.track(localTarget());
       await settle();
 
-      harness.service.invalidateChanges({ worktreePath: "/tmp/env-local-worktree" });
+      harness.service.invalidateChanges(local);
+      const reading = read(harness, local);
       releaseStale?.();
       await settle();
 
       expect(harness.scans).toHaveLength(2);
       expect(harness.emitted).toHaveLength(1);
       expect(harness.emitted[0]?.payload.stats.additions).toBe(2);
-      expect(
-        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
-      ).toEqual([{ path: "fresh.ts" }]);
+      await expect(reading).resolves.toMatchObject({ changes: [{ path: "fresh.ts" }] });
     });
 
     test("invalidating an unknown target is safe", () => {
@@ -806,23 +799,19 @@ describe("DiffStatsService", () => {
       expect(() => harness.service.invalidateChanges({ containerId: "missing" })).not.toThrow();
     });
 
-    test("ignores an adopted scan for an untracked target", () => {
-      const harness = createHarness();
-      expect(() => harness.service.adoptScan({ containerId: "nope" }, "main", [])).not.toThrow();
-      expect(harness.service.cachedChanges({ containerId: "nope" }, "main", 3_000)).toBeUndefined();
-    });
-
-    test("a paused environment serves no file list", async () => {
+    test("a paused environment's file list is dropped and read ad hoc", async () => {
       const harness = createHarness();
       harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
       harness.service.track(containerTarget());
       await settle();
 
       harness.service.pause("env-container");
+      harness.setScan(async () => {
+        throw new Error("container is stopped");
+      });
 
-      expect(
-        harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000),
-      ).toBeUndefined();
+      await expect(read(harness, container)).rejects.toThrow("container is stopped");
+      expect(harness.service.snapshot()).toHaveLength(1);
     });
   });
 });

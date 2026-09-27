@@ -2,8 +2,12 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
+import {
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+} from "@orkestrator/protocol/agent-command-catalogue";
 import {
   createOrRecoverSession,
   getSession,
@@ -31,7 +35,10 @@ import {
   stopBackgroundTask,
   setSessionPreferences,
   clearPromptSuggestion,
-  readSessionCommands,
+  readClaudeCommandCatalogue,
+  refreshClaudeCommandCatalogue,
+  resolveClaudeCommandInvocation,
+  typedCommandUnavailableMessage,
   readSessionMcpServers,
   performSessionMcpAction,
   steerClaudeSession,
@@ -58,6 +65,7 @@ import {
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
+import { registerSessionCloseRoute } from "./session-close.js";
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
@@ -297,14 +305,26 @@ session.get("/:id", async (c) => {
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,
     promptSuggestion: sessionData.promptSuggestion,
+    // Turn-scoped progress hints: the backend projects them onto the running
+    // indicator. Both are cleared when the turn ends.
+    activity: sessionData.activity,
+    thinkingTokens: sessionData.thinkingTokens,
     planMode: sessionData.planMode,
     turnId:
       sessionData.status === "running" && sessionData.latestTurnGeneration !== undefined
         ? String(sessionData.latestTurnGeneration)
         : undefined,
     backgroundTasks: sessionData.backgroundTasks ?? {},
+    retainedContinuationRequestIds: Array.from(sessionData.retainedContinuationRequestIds ?? []),
     completionBlockedByBackgroundTasks: sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,
+    // The bridge-owned command inventory revision, the same number the
+    // enhanced catalogue reports. In-memory only; a change tells the backend
+    // to revalidate its cached catalogue, so a `commands_changed` push reaches
+    // an inactive tab without polling the catalogue route.
+    ...(sessionData.commandInventoryState
+      ? { commandRevision: sessionData.commandInventoryState.revision }
+      : {}),
   });
 });
 
@@ -417,8 +437,30 @@ session.post("/:id/config", async (c) => {
   return c.json({ ok: true, policy: sessionData.executionPolicy });
 });
 
+/**
+ * The enhanced command catalogue (version 1).
+ *
+ * Deliberately not `resolveSession`: a catalogue read is metadata and must not
+ * touch the session's idle clock, hydrate its transcript or re-attach it. An
+ * unknown session is answered in band as `missing`, never with a 404 (which
+ * means "this bridge predates the contract"). A failed read with nothing
+ * retained is an error, never an empty `ready` list.
+ */
 session.get("/:id/commands", async (c) => {
-  return c.json({ commands: await readSessionCommands(c.req.param("id")) });
+  try {
+    return c.json(await readClaudeCommandCatalogue(c.req.param("id")));
+  } catch (error) {
+    console.warn(
+      "[session] Command catalogue read failed:",
+      error instanceof Error ? error.message : "unknown error",
+    );
+    return c.json({ error: errorMessage(error, "Claude command discovery failed") }, 503);
+  }
+});
+
+/** Reload or re-read commands, reporting what actually happened. */
+session.post("/:id/commands/refresh", async (c) => {
+  return c.json(await refreshClaudeCommandCatalogue(c.req.param("id")));
 });
 
 session.get("/:id/mcp", async (c) => {
@@ -575,6 +617,17 @@ session.post("/:id/prompt", async (c) => {
   try {
     const body = await c.req.json();
     const prompt = body.prompt;
+    // `allowProviderCommands: false` is literal intent. The Claude Agent SDK
+    // has no command-suppression option — the CLI interprets a leading `/`
+    // itself — so there is nothing to switch off here. The backend refuses a
+    // literal prompt whose leading token names a known command before it gets
+    // this far (`literalCommandSuppression`); this bridge passes text through.
+    const commandFields = readBridgePromptCommandFields(
+      body && typeof body === "object" && !Array.isArray(body) ? body : {},
+    );
+    if (!commandFields.ok) {
+      return c.json({ error: commandFields.error }, 400);
+    }
     const model = body.model as string | undefined;
     const rawEffort = body.effort as string | undefined;
     const effort =
@@ -711,7 +764,30 @@ session.post("/:id/prompt", async (c) => {
       }
     }
 
-    if (sessionData.status !== "running" && idleSteerPromptReply(prompt, "Claude")) {
+    // A selected command is revalidated against this session's own inventory
+    // before anything is journaled or sent. Anything that no longer matches is
+    // refused outright; it is never downgraded to ordinary prompt text.
+    let providerPrompt: string | undefined;
+    if (commandFields.command) {
+      const resolution = await resolveClaudeCommandInvocation(sessionData, commandFields.command);
+      if (!resolution.ok) {
+        return c.json(commandUnavailableResponse(resolution.message), 422);
+      }
+      providerPrompt = resolution.providerPrompt;
+    } else if (commandFields.allowProviderCommands && typeof prompt === "string") {
+      // Typed text the CLI would itself run as a command this bridge cannot
+      // follow (e.g. `/clear`). Refused even when the backend had no catalogue.
+      const unavailable = typedCommandUnavailableMessage(sessionData, prompt);
+      if (unavailable) {
+        return c.json(commandUnavailableResponse(unavailable), 422);
+      }
+    }
+
+    if (
+      !providerPrompt &&
+      sessionData.status !== "running" &&
+      idleSteerPromptReply(prompt, "Claude")
+    ) {
       if (outputSchema !== undefined) {
         return c.json({ error: "/steer cannot be used with structured output" }, 400);
       }
@@ -741,6 +817,7 @@ session.post("/:id/prompt", async (c) => {
             promptSuggestions,
             parameterValues,
             ...(agentMcp ? { agentMcp } : {}),
+            ...(providerPrompt !== undefined ? { providerPrompt } : {}),
             requestId,
           },
           {
@@ -806,6 +883,7 @@ session.post("/:id/prompt", async (c) => {
       promptSuggestions,
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
+      ...(providerPrompt !== undefined ? { providerPrompt } : {}),
       outputSchema,
       requestId,
     }).catch((error) => {
@@ -873,7 +951,8 @@ session.post("/:id/hard-abort", (c) => {
   return c.json({ status: abortSession(id) ? "aborted" : "not_running" });
 });
 
-// Delete a session
+// Permanently delete a session, including its Claude rollout. Tab close must
+// use POST /:id/close instead.
 session.delete("/:id", async (c) => {
   const id = c.req.param("id");
   try {
@@ -890,6 +969,10 @@ session.delete("/:id", async (c) => {
     );
   }
 });
+
+// Ordinary tab close: stop owned work and release the mapping, keep history.
+// DELETE above stays the explicit, destructive operation.
+registerSessionCloseRoute(session);
 
 session.post("/:id/rename", async (c) => {
   const id = c.req.param("id");
@@ -1060,10 +1143,7 @@ session.get("/:id/activity", async (c) => {
  * Registered as a two-segment path so the `/:id` route above cannot shadow it.
  */
 session.get("/:id/runtime-health", (c) => {
-  const sessionData = peekSession(c.req.param("id"));
-  if (!sessionData?.health) return c.json(emptyRuntimeHealth());
-  const { drift, notices } = sessionData.health.snapshot();
-  return c.json({ summary: drift ? { drift } : {}, notices });
+  return c.json(sessionRuntimeHealthBody(peekSession(c.req.param("id"))));
 });
 
 /**

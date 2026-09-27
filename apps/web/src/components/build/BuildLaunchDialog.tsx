@@ -36,6 +36,7 @@ import {
   firstModelFor,
   modelsForAgent,
   platformOwnsSpeed,
+  resolveCatalogModelId,
   toPickerModel,
   type AgentModelCatalog,
   type AgentModelOption,
@@ -251,9 +252,7 @@ function catalogHasModel(
   modelId: string | undefined,
 ): boolean {
   if (!modelId) return false;
-  return modelsForAgent(catalog, agent).some(
-    (option) => option.id === modelId || option.resolvedModel === modelId,
-  );
+  return Boolean(resolveCatalogModelId(agent, modelsForAgent(catalog, agent), modelId));
 }
 
 function initialStepState(
@@ -390,10 +389,8 @@ function matchCatalogModel(
   modelId: string,
 ): AgentModelOption | undefined {
   const options = modelsForAgent(catalog, agent);
-  return (
-    options.find((option) => option.id === modelId) ??
-    options.find((option) => option.resolvedModel === modelId)
-  );
+  const resolvedId = resolveCatalogModelId(agent, options, modelId);
+  return options.find((option) => option.id === resolvedId);
 }
 
 function cleanStep(state: StepState, catalog: AgentModelCatalog): BuildLaunchStepSelection {

@@ -391,6 +391,39 @@ describe("useProjects", () => {
     expect(result.current.projects[0]).toEqual(updatedProject);
   });
 
+  test("updateProject forwards a changed Git URL", async () => {
+    const existingProject = createMockProject({
+      id: "project-1",
+      name: "repo",
+      gitUrl: "https://github.com/old-owner/repo.git",
+      localPath: null,
+      order: 0,
+    });
+    const updatedProject = { ...existingProject, gitUrl: "git@github.com:new-owner/repo.git" };
+    useProjectStore.setState({ projects: [existingProject] });
+    mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
+    mockUpdateProject.mockImplementation(() => Promise.resolve(updatedProject));
+
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.updateProject({
+        id: "project-1",
+        name: "repo",
+        gitUrl: "git@github.com:new-owner/repo.git",
+        localPath: null,
+      });
+    });
+
+    expect(mockUpdateProject).toHaveBeenCalledWith("project-1", {
+      name: "repo",
+      gitUrl: "git@github.com:new-owner/repo.git",
+      localPath: null,
+    });
+    expect(result.current.projects[0]?.gitUrl).toBe("git@github.com:new-owner/repo.git");
+  });
+
   test("updateProject preserves the store entry and reports backend failures", async () => {
     const existingProject = createMockProject({ id: "project-1", name: "before", order: 0 });
     useProjectStore.setState({ projects: [existingProject] });

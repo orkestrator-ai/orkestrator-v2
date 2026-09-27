@@ -5,6 +5,7 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
 
 export const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
@@ -12,6 +13,22 @@ export const ensureProjectCoordinator = (projectId: string): Promise<Coordinator
 
 export const getProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot | null> =>
   invoke("get_project_coordinator", { projectId });
+
+export const COORDINATOR_VIEW_COMMAND = "get_project_coordinator_view";
+
+/**
+ * Conditional coordinator read. With `known` (the stamp of the body this
+ * client holds) the backend answers `unchanged` without a body while that body
+ * is still current. Older backends answer "Unknown backend command".
+ */
+export const getProjectCoordinatorView = (
+  projectId: string,
+  known: ViewRevisionStamp | null,
+): Promise<unknown> =>
+  invoke(COORDINATOR_VIEW_COMMAND, {
+    projectId,
+    ...(known ? { knownGeneration: known.generation, knownRevision: known.revision } : {}),
+  });
 
 export const createCoordinatorConversation = (
   projectId: string,

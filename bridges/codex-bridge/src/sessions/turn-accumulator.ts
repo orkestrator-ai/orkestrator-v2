@@ -129,6 +129,12 @@ export class TurnAccumulator {
   /** Mutable: `turn/start` may answer with the real id after events arrived. */
   turnId: string;
   phase: TurnPhase = "starting";
+  /**
+   * The user asked for this turn to stop. Kept apart from `phase` because the
+   * cancel path can settle the turn terminal before a crash recovery pass looks
+   * at it, and recovery must still know an interruption was requested.
+   */
+  cancelRequested = false;
   error?: EngineError;
   finalDiff?: string;
   completedAt?: string;
@@ -225,7 +231,9 @@ export class TurnAccumulator {
 
   markCancelling(): void {
     // Only a live turn can enter cancelling; a terminal turn stays terminal.
-    if (!this.isTerminal()) this.phase = "cancelling";
+    if (this.isTerminal()) return;
+    this.phase = "cancelling";
+    this.cancelRequested = true;
   }
 
   onItemStarted(item: EngineItem, startedAtMs?: number): void {

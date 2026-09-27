@@ -83,6 +83,7 @@ import {
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
+import { restorePersistedCommands } from "./acp-commands.js";
 import {
   boundTranscript,
   boundedString,
@@ -392,26 +393,22 @@ export async function loadPersistedState(): Promise<void> {
       // starts clean and re-observes whatever the agent still sends.
       health: new RuntimeHealthRecorder(),
       ...(usage ? { usage } : {}),
+      // Shown as stale until the live agent re-reports; `commandsLive` stays
+      // unset, so these rows never authorize running a command.
       ...(Array.isArray(candidate.availableCommands)
-        ? {
-            availableCommands: candidate.availableCommands.slice(0, 256).flatMap((entry) => {
-              if (!isObject(entry) || typeof entry.name !== "string") return [];
-              return [
-                {
-                  name: entry.name.slice(0, 256),
-                  description:
-                    typeof entry.description === "string"
-                      ? entry.description.slice(0, 2_048)
-                      : entry.name.slice(0, 256),
-                  source: "builtin" as const,
-                  scope: "session" as const,
-                  ...(typeof entry.argumentHint === "string"
-                    ? { argumentHint: entry.argumentHint.slice(0, 512) }
-                    : {}),
-                },
-              ];
-            }),
-          }
+        ? (() => {
+            const restored = restorePersistedCommands(candidate.availableCommands);
+            return {
+              availableCommands: restored.commands,
+              ...(restored.truncated || candidate.commandsTruncated === true
+                ? { commandsTruncated: true }
+                : {}),
+            };
+          })()
+        : {}),
+      ...(Number.isSafeInteger(candidate.commandsRevision) &&
+      Number(candidate.commandsRevision) >= 0
+        ? { commandsRevision: Number(candidate.commandsRevision) }
         : {}),
     };
     if (Array.isArray(candidate.promptJournal)) {

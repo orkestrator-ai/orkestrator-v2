@@ -1,6 +1,12 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import {
+  createOpenCodeMonitorBackoff,
+  OpenCodeObservationStream,
+  readOpenCodeActivityBatch,
+} from "./opencode-observation-stream.js";
 import { isKnownOpenCodeEvent } from "./opencode-events.js";
 import {
   boundedOpenCodeMessageHistory,
@@ -25,10 +31,6 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import {
-  parseLeadingSlashCommand,
-  type ParsedSlashCommand,
-} from "@orkestrator/protocol/agent-slash-commands";
-import {
   AmbiguousPromptDispatchError,
   type AgentInteractionProviderCapability,
   type BridgeConnection,
@@ -43,6 +45,8 @@ import {
   type ProviderInteractionObservationEvent,
   type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
+  type ProviderCommandCatalogue,
+  type ProviderCommandRefreshResult,
   type ProviderSessionRegistration,
   type ProviderStatus,
   ProviderUnavailableError,
@@ -70,7 +74,7 @@ import {
   collectNormalizedOpenCodeSubagentIds,
   collectRawOpenCodeSubagentIds,
   hydrateNormalizedOpenCodeSubagents,
-  normalizeOpenCodeInteractiveMessage,
+  normalizeOpenCodeTranscriptMessages,
   normalizeOpenCodeTerminalState,
   openCodeStructuredPrompt,
 } from "./opencode-messages.js";
@@ -88,16 +92,21 @@ import {
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
+import {
+  dispatchOpenCodeCommand,
+  OpenCodeCommandRegistry,
+  resolveOpenCodeCommandDispatch,
+} from "./opencode-commands.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 import {
-  DEFAULT_MONITOR_RETRY_MS,
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
   openCodeAgentFor,
   listOpenCodeResumableSessions,
   type OpenCodeProviderDependencies,
-  OPENCODE_COMMAND_NAME_TTL_MS,
+  openCodeCoordinatorAgent,
+  openCodeRequestTimeoutMs,
   OPENCODE_SUBAGENT_FETCH_CONCURRENCY,
   OPENCODE_SUBAGENT_MAX_SESSIONS,
   OPENCODE_SUBAGENT_MESSAGE_LIMIT,
@@ -118,6 +127,7 @@ import {
 import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
 import { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-broker.js";
 import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
+import { readOpenCodeTurnTerminalError } from "./opencode-turn-outcome.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
@@ -167,14 +177,16 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     providersKey: string;
     catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
   } | null = null;
-  private commandNames: { names: Set<string>; expiresAt: number } | null = null;
+  private readonly commands: OpenCodeCommandRegistry;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
   private readonly workflowResults: OpenCodeWorkflowResultBroker;
   private readonly reviewPermissions: OpenCodeReviewSessionPermissions;
   private readonly monitorController = new AbortController();
-  private readonly monitorRetryMs: number;
+  /** One owner, one sequential wait: the loop below never arms two retries. */
+  private readonly monitorBackoff: ReconnectBackoff;
+  private readonly waitForMonitorRetry: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private readonly answeringRequestIds = new Set<string>();
   private readonly requestTasks = new Set<Promise<void>>();
@@ -192,6 +204,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private streamReconciliation: Promise<void> | null = null;
   private monitorPromise: Promise<void>;
   private disposed = false;
+  /** Stream liveness and wakeup hints for the backend observer (step 07). */
+  private readonly observation: OpenCodeObservationStream;
   private readonly autoAnswerRequests: boolean;
   private readonly onInteractionObservation?: (
     event: ProviderInteractionObservationEvent,
@@ -240,8 +254,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       this.interactionTracker,
     );
-    this.monitorRetryMs = Math.max(1, dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS);
     this.now = dependencies.now ?? Date.now;
+    this.monitorBackoff = createOpenCodeMonitorBackoff(dependencies, this.now);
+    this.waitForMonitorRetry = dependencies.waitForMonitorRetry ?? waitForOpenCodeRetry;
+    this.commands = new OpenCodeCommandRegistry(
+      () => this.capabilitiesAdapter.readCommands(),
+      () => this.now(),
+    );
     this.lifecycle = new OpenCodeSessionLifecycle(
       this.client,
       connection.directory,
@@ -255,6 +274,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     );
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
+    this.observation = new OpenCodeObservationStream(dependencies.onObservationHint);
     this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
     this.monitorPromise = this.monitorRequests();
   }
@@ -392,11 +412,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           { directory: this.connection.directory },
           {
             signal: AbortSignal.any([this.monitorController.signal, streamController.signal]),
+            sseMaxRetryAttempts: 1,
           },
         );
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
+        let receivedFrame = false;
         let startupError: unknown;
         const startup = Promise.all([
           this.reconcileStreamState(),
@@ -407,6 +429,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         });
         for await (const raw of response.stream as AsyncIterable<unknown>) {
           if (this.disposed) return;
+          if (!receivedFrame) {
+            receivedFrame = true;
+            this.monitorBackoff.connected();
+            this.observation.connected();
+          }
           this.dispatchRequest(raw);
         }
         await startup;
@@ -422,10 +449,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         );
         this.activeStreamController?.abort();
       }
+      this.observation.lost();
       this.streamState.markGap();
       this.lifecycle.invalidateEvents();
       try {
-        await waitForOpenCodeRetry(this.monitorRetryMs, this.monitorController.signal);
+        await this.waitForMonitorRetry(
+          this.monitorBackoff.nextDelayMs(),
+          this.monitorController.signal,
+        );
       } catch {
         return;
       }
@@ -480,6 +511,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const effect = this.streamState.apply(event as OpenCodeEvent, this.now());
       if (effect.status && effect.sessionId) {
         this.lifecycle.observeStreamEvent(effect.sessionId, effect.status);
+        this.observation.changed(effect.sessionId);
       }
       if (effect.refreshMcp) {
         this.invalidateInteractiveMetadata();
@@ -490,6 +522,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           .catch(() => undefined);
       }
       if (effect.reconnect) {
+        this.observation.lost();
         this.workflowResults.invalidate();
         this.invalidateInteractiveMetadata();
         this.lifecycle.invalidateEvents();
@@ -500,6 +533,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const requestId = typeof properties.id === "string" ? properties.id : undefined;
     const sessionId = rawSessionId;
     if (!sessionId || !this.lifecycle.ownedSessions.has(sessionId)) return;
+    this.observation.ownedEvent(event.type, sessionId);
     if (requestId && requestId.length > AGENT_INTERACTION_LIMITS.maxIdLength) return;
 
     const observedKind: AgentInteractionKind | null =
@@ -713,13 +747,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const variant = openCodeReasoningVariant(options, this.connection.effort);
     openCodeRequestMarker(options.requestId);
     await this.assertSelectedModelAvailable(selectedModel);
-    // A submission that names one of OpenCode's commands runs as that command
-    // rather than as prompt text the model has to interpret. Only interactive
-    // dispatch opts in: a workflow prompt that happens to start with a slash
-    // must keep reaching the model verbatim.
-    const command = options.allowProviderCommands
-      ? await this.resolveProviderCommand(shapedPrompt)
-      : null;
+    // A selected or typed OpenCode command runs through `session.command`.
+    // Anything literal — workflow prompts included — keeps reaching the model.
+    const command = await resolveOpenCodeCommandDispatch(
+      this.commands,
+      prompt,
+      options,
+      openCodeCoordinatorAgent(this.sessionPolicies.get(sessionId)),
+    );
     const scope = openCodeMessageIdScope(this.connection, sessionId);
     await this.messageIds.runExclusive(scope, async () => {
       // The bounded newest transcript recovers an accepted ambiguous dispatch
@@ -747,47 +782,51 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
       try {
-        response = command
-          ? await this.client.session.command(
-              {
-                sessionID: sessionId,
-                directory: this.connection.directory,
-                messageID,
-                command: command.name.replace(/^\//, ""),
-                // `arguments` is a *required* field on the server's command request
-                // body, so a bare `/init` must still send an empty string. Passing
-                // `undefined` drops the key in `JSON.stringify` and the server
-                // answers 400, which the caller reads as a failed dispatch.
-                arguments: command.arguments ?? "",
-                model: options.model ?? this.connection.model,
-                agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options),
-                variant,
-                // Text became the command name and its arguments; only the files
-                // survive as parts.
-                parts: openCodeFileParts(parts),
-              },
-              this.requestOptions(),
-            )
-          : await this.client.session.promptAsync(
-              {
-                sessionID: sessionId,
-                directory: this.connection.directory,
-                messageID,
-                parts,
-                model,
-                agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
-                variant,
-                ...(options.readOnly && !reviewEnabled
-                  ? {
-                      tools: {
-                        ...OPENCODE_READ_ONLY_TURN_TOOLS,
-                        ...openCodeWorkflowResultTurnTools(workflowTool),
-                      },
-                    }
-                  : {}),
-              },
-              this.requestOptions(),
-            );
+        if (command) {
+          const outcome = await dispatchOpenCodeCommand({
+            client: this.client,
+            command,
+            request: {
+              sessionID: sessionId,
+              directory: this.connection.directory,
+              messageID,
+              model: selectedModel,
+              agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options),
+              variant,
+              parts: openCodeFileParts(parts),
+            },
+            signal: this.monitorController.signal,
+            timeoutMs: openCodeRequestTimeoutMs(this.connection),
+            dispatched: async () =>
+              (await this.dispatchStatus(sessionId, options.requestId)) === "dispatched",
+          });
+          if (outcome.materialized) {
+            this.messageIds.markAccepted(scope, options.requestId);
+            return;
+          }
+          response = outcome.response;
+        } else {
+          response = await this.client.session.promptAsync(
+            {
+              sessionID: sessionId,
+              directory: this.connection.directory,
+              messageID,
+              parts,
+              model,
+              agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
+              variant,
+              ...(options.readOnly && !reviewEnabled
+                ? {
+                    tools: {
+                      ...OPENCODE_READ_ONLY_TURN_TOOLS,
+                      ...openCodeWorkflowResultTurnTools(workflowTool),
+                    },
+                  }
+                : {}),
+            },
+            this.requestOptions(),
+          );
+        }
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
@@ -812,7 +851,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         await this.workflowResults.settle(sessionId, options.requestId, () =>
           this.reviewPermissions.restoreIfNeeded(sessionId),
         );
-        throw new PromptRejectedError("OpenCode rejected the prompt");
+        throw new PromptRejectedError(
+          command
+            ? `OpenCode could not run /${command.binding.name}`
+            : "OpenCode rejected the prompt",
+        );
       }
       this.messageIds.markAccepted(scope, options.requestId);
     });
@@ -860,6 +903,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  readonly turnTerminalError = (sessionId: string, requestId: string) =>
+    readOpenCodeTurnTerminalError(this.client, sessionId, requestId, this.requestOptions());
+
   async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
     return this.workflowResults.settleCompleted(
       sessionId,
@@ -882,82 +928,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async activityBatch(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>> {
-    try {
-      const activity = new Map<string, ProviderActivityState>();
-      const sessionIdsToRead = [...new Set(sessionIds)].filter((sessionId) => {
-        if (!this.blockedSessions.has(sessionId)) return true;
-        // A blocked session asked a question this provider will not answer, so
-        // it is parked on a human. `status()` calls that `error` because a
-        // pipeline must stop advancing on it; for the sidebar the honest
-        // answer is `waiting`. `idle` is the one answer that is certainly
-        // wrong — it retires the indicator on a turn nobody has resolved.
-        activity.set(sessionId, "waiting");
-        return false;
-      });
-      if (sessionIdsToRead.length === 0) return activity;
-
-      const lifecycle = await this.lifecycle.readSessionLifecycle(sessionIdsToRead, true);
-
-      const runningSessionIds = new Set<string>();
-      for (const sessionId of sessionIdsToRead) {
-        const state = lifecycle.get(sessionId);
-        if (state === "missing") {
-          activity.set(sessionId, "missing");
-        } else if (state === "running") {
-          runningSessionIds.add(sessionId);
-        } else if (state) {
-          activity.set(sessionId, "idle");
-        } else {
-          throw new ProviderUnavailableError(`OpenCode lifecycle snapshot omitted ${sessionId}`);
-        }
-      }
-      if (runningSessionIds.size === 0) return activity;
-
-      const [questions, permissions] = await Promise.all([
-        this.client.question.list({ directory: this.connection.directory }, this.requestOptions()),
-        this.client.permission.list(
-          { directory: this.connection.directory },
-          this.requestOptions(),
-        ),
-      ]);
-      assertSdkResponse(questions, "OpenCode pending question read");
-      assertSdkResponse(permissions, "OpenCode pending permission read");
-      const pendingQuestions = boundedOwnedOpenCodeCollection(
-        questions.data,
-        runningSessionIds,
-        "OpenCode pending question read",
-      );
-      const pendingPermissions = boundedOwnedOpenCodeCollection(
-        permissions.data,
-        runningSessionIds,
-        "OpenCode pending permission read",
-      );
-      if (
-        serializedByteLength([pendingQuestions, pendingPermissions]) >
-        AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
-      ) {
-        throw new ProviderUnavailableError("OpenCode interaction snapshot is oversized");
-      }
-      const waitingSessionIds = new Set<string>();
-      for (const request of [...pendingQuestions, ...pendingPermissions]) {
-        if (!request || typeof request !== "object" || Array.isArray(request)) {
-          continue;
-        }
-        const sessionId = (request as { sessionID?: unknown }).sessionID;
-        if (typeof sessionId === "string" && runningSessionIds.has(sessionId)) {
-          waitingSessionIds.add(sessionId);
-        }
-      }
-      for (const sessionId of runningSessionIds) {
-        activity.set(sessionId, waitingSessionIds.has(sessionId) ? "waiting" : "working");
-      }
-      return activity;
-    } catch (error) {
-      if (error instanceof ProviderUnavailableError) throw error;
-      throw new ProviderUnavailableError("OpenCode activity is unavailable", {
-        cause: error,
-      });
-    }
+    return readOpenCodeActivityBatch(sessionIds, {
+      blockedSessions: this.blockedSessions,
+      lifecycle: this.lifecycle,
+      client: this.client,
+      directory: this.connection.directory,
+      requestOptions: () => this.requestOptions(),
+    });
   }
 
   readonly usageMessageLimit = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
@@ -1084,12 +1061,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.readInteractiveMetadata(sessionId),
     ]);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
-    const normalizedMessages = rawMessages.flatMap((message, index) => {
-      const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
-        this.health.recordUnknown(`part:${type}`),
-      );
-      return normalized ? [normalized] : [];
-    });
+    const normalizedMessages = normalizeOpenCodeTranscriptMessages(rawMessages, (type) =>
+      this.health.recordUnknown(`part:${type}`),
+    );
     const messages = await this.hydrateSubagentTranscripts(
       normalizedMessages,
       collectRawOpenCodeSubagentIds(rawMessages),
@@ -1244,12 +1218,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           const raw = await this.messages(childSessionId, {
             limit: OPENCODE_SUBAGENT_MESSAGE_LIMIT,
           });
-          const messages = raw.flatMap((message, index) => {
-            const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
-              this.health.recordUnknown(`part:${type}`),
-            );
-            return normalized ? [normalized] : [];
-          });
+          const messages = normalizeOpenCodeTranscriptMessages(raw, (type) =>
+            this.health.recordUnknown(`part:${type}`),
+          );
           return { messages, nestedIds: collectRawOpenCodeSubagentIds(raw) };
         }),
       );
@@ -1285,41 +1256,21 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   refreshCatalog(): void {
     this.catalogMetadata = null;
-    this.commandNames = null;
+    this.commands.invalidate();
     this.invalidateInteractiveMetadata();
   }
 
-  /**
-   * Match a submission against the commands this runtime can execute.
-   *
-   * Discovery is only attempted for text that actually starts with a slash, and
-   * the result is cached, so an ordinary prompt never pays for a command list.
-   * A discovery failure resolves to "not a command": sending the text to the
-   * model is recoverable, refusing the user's prompt is not.
-   */
-  private async resolveProviderCommand(prompt: string): Promise<ParsedSlashCommand | null> {
-    const parsed = parseLeadingSlashCommand(prompt);
-    if (!parsed) return null;
-    let names =
-      this.commandNames && this.commandNames.expiresAt > this.now()
-        ? this.commandNames.names
-        : null;
-    if (!names) {
-      try {
-        names = new Set((await this.slashCommands()).map((command) => command.name.toLowerCase()));
-        this.commandNames = {
-          names,
-          expiresAt: this.now() + OPENCODE_COMMAND_NAME_TTL_MS,
-        };
-      } catch {
-        return null;
-      }
-    }
-    return names.has(parsed.name) ? parsed : null;
+  /** Directory-scoped: the same list serves every session of this runtime. */
+  commandCatalogue(): Promise<ProviderCommandCatalogue> {
+    return this.commands.catalogue();
   }
 
-  slashCommands() {
-    return this.capabilitiesAdapter.slashCommands();
+  refreshCommands(): Promise<ProviderCommandRefreshResult> {
+    return this.commands.refreshCommands();
+  }
+
+  async slashCommands() {
+    return (await this.commands.catalogue()).commands;
   }
 
   mcpServers() {
@@ -1456,7 +1407,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
-    return this.workflowResults.abort(
+    await this.workflowResults.abort(
       sessionId,
       () => this.streamState.endTurn(sessionId),
       () => this.reviewPermissions.restoreIfNeeded(sessionId),
@@ -1464,23 +1415,32 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    try {
-      const response = await this.client.session.delete(
-        { sessionID: sessionId },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode session delete");
-      this.streamState.endTurn(sessionId);
-    } catch (error) {
-      throw new ProviderUnavailableError("OpenCode session delete is unavailable", {
-        cause: error,
-      });
-    }
+    await this.workflowResults.closeRetaining(
+      sessionId,
+      () => this.streamState.endTurn(sessionId),
+      () => this.reviewPermissions.restoreIfNeeded(sessionId),
+    );
+    this.releaseSession(sessionId);
+  }
+
+  releaseSession(sessionId: string): void {
+    this.lifecycle.release(sessionId);
+    this.streamState.forget(sessionId);
+    this.interactiveMetadata.delete(sessionId);
+    this.sessionPolicies.delete(sessionId);
+    this.blockedSessions.delete(sessionId);
+    this.failedQuestionSessions.delete(sessionId);
+  }
+
+  /** See `AgentSessionProvider.observationStreamLive`. */
+  observationStreamLive(): boolean {
+    return this.observation.isLive;
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.observation.close();
     this.monitorController.abort();
     this.activeStreamController?.abort();
     await this.monitorPromise;

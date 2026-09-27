@@ -18,6 +18,7 @@ import { readTodos } from "./tool-rendering.js";
 import {
   clientSessionKeys,
   isObject,
+  isPendingRemoval,
   nonBlank,
   setSteerJournal,
   sessions,
@@ -26,10 +27,21 @@ import {
   type SessionState,
 } from "./state.js";
 import { newSessionState } from "./agent-session.js";
+import { restoreCommandCatalogue } from "./commands.js";
 
 let tail: Promise<void> = Promise.resolve();
 let scheduled = false;
 let shuttingDown = false;
+let writeGateForTests: (() => Promise<void>) | undefined;
+
+/**
+ * Hold every state-file publication at its write boundary in deterministic
+ * tests. Serialization, queueing and failure propagation stay real; only the
+ * moment the bytes are written is controlled. Pass nothing to remove it.
+ */
+export function setPersistWriteGateForTests(gate?: () => Promise<void>): void {
+  writeGateForTests = gate;
+}
 
 /**
  * Queue a write, coalescing bursts.
@@ -127,7 +139,9 @@ function shedToFit(payload: PersistedState, order: Map<string, number>): boolean
 async function persistNow(): Promise<void> {
   const stateFile = stateFilePath();
   if (!stateFile) return;
-  const live = Array.from(sessions.values());
+  // A session whose close is publishing its removal is still registered (so a
+  // retry reaches it) but must already be absent from what is written.
+  const live = Array.from(sessions.values()).filter((state) => !isPendingRemoval(state));
   const payload: PersistedState = {
     version: 1,
     provider: "pi",
@@ -144,6 +158,7 @@ async function persistNow(): Promise<void> {
     serialized = JSON.stringify(payload);
   }
   await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
+  if (writeGateForTests) await writeGateForTests();
   const temporary = `${stateFile}.tmp`;
   // Write-then-rename: a bridge killed mid-write must not leave a truncated
   // file that the next start reads as a session with no history.
@@ -186,6 +201,11 @@ function toPersisted(state: SessionState): PersistedSession {
     ),
     composer: state.composer,
     ...(state.usage ? { usage: state.usage } : {}),
+    // Public descriptors only — ids and fingerprints, never a path. They let a
+    // restarted bridge answer a catalogue read (as `stale`) and validate a
+    // selection before the session has re-attached.
+    ...(state.slashCommands.length > 0 ? { commands: state.slashCommands } : {}),
+    ...(state.commandCatalogue.truncated ? { commandsTruncated: true } : {}),
   };
 }
 
@@ -242,6 +262,14 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.composer = restoreComposer(entry.composer);
   const usage = restoreUsage(entry.usage);
   if (usage) state.usage = usage;
+  // Stale until this process reads the list from an attached session: the
+  // resources behind it may have changed while the bridge was down.
+  state.slashCommands = restoreCommandCatalogue(entry.commands);
+  state.commandCatalogue = {
+    status: "stale",
+    revision: 0,
+    ...(entry.commandsTruncated === true ? { truncated: true } : {}),
+  };
   // The whole transcript is unmeasured after a restore, so the first read
   // re-bounds it rather than trusting a budget this process never charged.
   state.uncheckedTranscriptBytes = Buffer.byteLength(JSON.stringify(state.messages));
@@ -397,7 +425,7 @@ function readCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }
 
-function readJournalState(value: unknown): "completed" | "failed" | "ambiguous" {
-  if (value === "completed" || value === "failed") return value;
+function readJournalState(value: unknown): "completed" | "failed" | "dropped" | "ambiguous" {
+  if (value === "completed" || value === "failed" || value === "dropped") return value;
   return "ambiguous";
 }

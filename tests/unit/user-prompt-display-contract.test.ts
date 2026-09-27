@@ -131,9 +131,12 @@ describe("backend prompt display contract", () => {
     );
     expect(presentation.displayText).not.toContain(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION);
     expect(presentation.evidencePayload).toMatchObject({
-      kind: "json",
-      value: {
+      kind: "review-findings",
+      findings: {
         issues: [expect.objectContaining({ title: "Producer-owned finding" })],
+        testCoverageGaps: [
+          expect.objectContaining({ untestedBehavior: "Producer-owned coverage gap" }),
+        ],
       },
     });
   });
@@ -149,9 +152,12 @@ describe("backend prompt display contract", () => {
       STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker,
     );
     expect(presentation.evidencePayload).toMatchObject({
-      kind: "json",
-      value: {
+      kind: "review-findings",
+      findings: {
         issues: [expect.objectContaining({ title: "Producer-owned finding" })],
+        testCoverageGaps: [
+          expect.objectContaining({ untestedBehavior: "Producer-owned coverage gap" }),
+        ],
       },
     });
   });
@@ -272,9 +278,12 @@ describe("backend prompt display contract", () => {
     expect(presentation.displayText).not.toContain("Review the range boundary.");
     expect(presentation.displayText).not.toContain("orkestrator-handoff");
     expect(presentation.evidencePayload).toMatchObject({
-      kind: "json",
-      value: {
+      kind: "review-findings",
+      findings: {
         issues: [expect.objectContaining({ title: "Producer-owned finding" })],
+        testCoverageGaps: [
+          expect.objectContaining({ untestedBehavior: "Producer-owned coverage gap" }),
+        ],
       },
     });
   });

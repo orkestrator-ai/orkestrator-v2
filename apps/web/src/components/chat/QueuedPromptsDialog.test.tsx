@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { QueuedPromptsDialog } from "./QueuedPromptsDialog";
-import { PromptQueueActionError } from "@/lib/prompt-queue-errors";
+import { QueuedPromptsDialog, WEB_ANNOTATION_QUEUE_REMOVE_WARNING } from "./QueuedPromptsDialog";
+import {
+  PromptQueueActionError,
+  WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE,
+} from "@/lib/prompt-queue-errors";
 
 afterEach(() => cleanup());
 
@@ -323,5 +326,124 @@ describe("QueuedPromptsDialog", () => {
 
     expect(screen.getByRole("alert").textContent).toContain("Queued prompt was not sent");
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+  });
+});
+
+describe("QueuedPromptsDialog web annotation requests", () => {
+  const annotationItem = {
+    id: "annotation-item",
+    text: "Fix the header spacing",
+    origin: { kind: "web-annotation", requestId: "req-1", bodyHash: "hash-1" },
+  };
+  const mixed = [messages[0]!, annotationItem, messages[1]!];
+
+  function renderDialog(overrides: Partial<Parameters<typeof QueuedPromptsDialog>[0]> = {}) {
+    const props = {
+      open: true,
+      onOpenChange: mock(() => {}),
+      messages: mixed,
+      onEdit: mock(() => {}),
+      onMove: mock(() => {}),
+      onRemove: mock(() => {}),
+      onOpenWebAnnotationRequest: mock(() => Promise.resolve({ ok: true as const })),
+      ...overrides,
+    };
+    render(<QueuedPromptsDialog {...(props as Parameters<typeof QueuedPromptsDialog>[0])} />);
+    return props;
+  }
+
+  test("renders the item distinctly and never offers it for editing", () => {
+    const props = renderDialog();
+
+    expect(screen.getByText("Web annotation request")).toBeTruthy();
+    // The text is static: no edit button carries it.
+    expect(screen.queryByRole("button", { name: "Fix the header spacing" }) === null).toBe(true);
+    fireEvent.click(screen.getByText("Fix the header spacing"));
+    expect(props.onEdit).not.toHaveBeenCalled();
+    // Ordinary prompts keep their edit affordance.
+    expect(screen.getByRole("button", { name: "First prompt" })).toBeTruthy();
+    const row = document.querySelector('[data-web-annotation-request="true"]');
+    expect(row?.textContent).toContain("Fix the header spacing");
+  });
+
+  test("links to the annotation thread and closes on success", async () => {
+    const props = renderDialog();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open note" }));
+
+    await waitFor(() => {
+      expect(props.onOpenWebAnnotationRequest).toHaveBeenCalledWith("req-1");
+      expect(props.onOpenChange).toHaveBeenCalledWith(false);
+    });
+  });
+
+  test("shows why the note could not be opened", async () => {
+    const props = renderDialog({
+      onOpenWebAnnotationRequest: mock(() =>
+        Promise.resolve({ ok: false as const, error: "This request has no annotations." }),
+      ),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open note" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toBe("This request has no annotations.");
+    });
+    expect(props.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  test("keeps reordering available", async () => {
+    const props = renderDialog();
+
+    const upButtons = screen.getAllByTitle("Move up");
+    fireEvent.click(upButtons[1]!);
+    await waitFor(() => expect(props.onMove).toHaveBeenCalledWith(1, 0));
+  });
+
+  test("removal says it cancels the request and asks first", async () => {
+    const props = renderDialog();
+
+    const remove = screen.getByRole("button", {
+      name: "Remove and cancel the web annotation request",
+    });
+    fireEvent.click(remove);
+    expect(props.onRemove).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("group", { name: "Confirm cancelling the web annotation request" })
+        .textContent,
+    ).toContain(WEB_ANNOTATION_QUEUE_REMOVE_WARNING);
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByText(WEB_ANNOTATION_QUEUE_REMOVE_WARNING) === null).toBe(true);
+    expect(props.onRemove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel request" }));
+    await waitFor(() => expect(props.onRemove).toHaveBeenCalledWith("annotation-item"));
+  });
+
+  test("ordinary prompts are still removed without a confirmation", async () => {
+    const props = renderDialog();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove queued prompt" })[0]!);
+    await waitFor(() => expect(props.onRemove).toHaveBeenCalledWith("one"));
+  });
+
+  test("translates the backend's frozen-item refusal into guidance", async () => {
+    renderDialog({
+      onMove: mock(() =>
+        Promise.reject(
+          new Error(
+            "Web annotation queue item is frozen: annotation-item is a frozen request snapshot; it cannot be edited or moved into a draft. Remove it to cancel the request.",
+          ),
+        ),
+      ),
+    });
+
+    fireEvent.click(screen.getAllByTitle("Move up")[1]!);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toBe(WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE);
+    });
   });
 });

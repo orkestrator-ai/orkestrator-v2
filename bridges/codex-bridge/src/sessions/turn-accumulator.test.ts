@@ -556,6 +556,7 @@ describe("turn lifecycle", () => {
     turn.markCancelling();
 
     expect(turn.phase).toBe("cancelling");
+    expect(turn.cancelRequested).toBe(true);
     expect(turn.isTerminal()).toBe(false);
   });
 
@@ -565,6 +566,7 @@ describe("turn lifecycle", () => {
     turn.markCancelling();
 
     expect(turn.phase).toBe("completed");
+    expect(turn.cancelRequested).toBe(false);
   });
 
   test("interrupted and failed are terminal", () => {

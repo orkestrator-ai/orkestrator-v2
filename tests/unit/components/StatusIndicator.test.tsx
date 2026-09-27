@@ -18,26 +18,6 @@ mock.module("@/components/ui/tooltip", () => ({
 import { StatusIndicator } from "../../../apps/web/src/components/environments/StatusIndicator";
 
 describe("StatusIndicator", () => {
-  test("renders without crashing for running status", () => {
-    const { container } = render(<StatusIndicator status="running" />);
-    expect(container).toBeTruthy();
-  });
-
-  test("renders without crashing for stopped status", () => {
-    const { container } = render(<StatusIndicator status="stopped" />);
-    expect(container).toBeTruthy();
-  });
-
-  test("renders without crashing for error status", () => {
-    const { container } = render(<StatusIndicator status="error" />);
-    expect(container).toBeTruthy();
-  });
-
-  test("renders without crashing for creating status", () => {
-    const { container } = render(<StatusIndicator status="creating" />);
-    expect(container).toBeTruthy();
-  });
-
   test("shows loader icon for creating status", () => {
     const { container } = render(<StatusIndicator status="creating" />);
     // Loader2 renders an SVG with animate-spin class

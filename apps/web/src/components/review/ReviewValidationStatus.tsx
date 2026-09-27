@@ -5,10 +5,12 @@ import {
   type ReviewValidationResult,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Loader2, RefreshCw, SquareTerminal } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { knownValidationOutput, mergeValidationOutput } from "./validation-output-merge";
+import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
-import { getReviewValidationOutput } from "@/lib/backend";
+import { getReviewValidationOutput, stopReviewValidationCommand } from "@/lib/backend";
 import { stripAnsi } from "@/lib/terminal-utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +20,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+/** Live output cadence while the modal is open on a queued or running command. */
+export const VALIDATION_OUTPUT_POLL_INTERVAL_MS = 2_000;
 
 function elapsedMs(startedAt: string, completedAt: string | undefined, now: number): number | null {
   const start = Date.parse(startedAt);
@@ -94,54 +99,103 @@ function ValidationOutputModal({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const requestIdRef = useRef(0);
-  const inFlightRequestRef = useRef<number | null>(null);
+  const inFlightRequestRef = useRef<Promise<void> | null>(null);
+  const rerunRef = useRef(false);
+  /** The merged output this modal shows; its stream positions are echoed back. */
+  const outputRef = useRef<ReviewValidationOutput | null>(null);
   const hasArtifacts = Boolean(result?.stdoutPath || result?.stderrPath);
   const resultId = result?.id;
+  const live = result?.status === "running" || result?.status === "queued";
 
-  const refresh = useCallback(async () => {
-    if (!open || !resultId || !hasArtifacts || inFlightRequestRef.current !== null) return;
-    const requestId = ++requestIdRef.current;
-    inFlightRequestRef.current = requestId;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await loadOutput(environmentId, run.id, resultId);
-      if (requestId !== requestIdRef.current) return;
-      setOutput(next);
-    } catch (reason) {
-      if (requestId !== requestIdRef.current) return;
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (inFlightRequestRef.current === requestId) inFlightRequestRef.current = null;
-      if (requestId === requestIdRef.current) setLoading(false);
-    }
-  }, [environmentId, hasArtifacts, loadOutput, open, resultId, run.id]);
+  /**
+   * One read in flight; a request made meanwhile (status change, manual
+   * refresh) runs once after it, so the final state is never skipped. Reads
+   * are conditional: only bytes appended since the held tail cross the wire,
+   * and an unchanged answer does not re-render.
+   */
+  const refresh = useCallback(
+    (options: { trailing?: boolean } = {}): Promise<void> => {
+      if (!open || !resultId || !hasArtifacts) return Promise.resolve();
+      if (inFlightRequestRef.current) {
+        // A periodic tick joins; an explicit or status-change request needs a
+        // read that starts after it, so it runs once more afterwards.
+        if (options.trailing !== false) rerunRef.current = true;
+        return inFlightRequestRef.current;
+      }
+      const requestId = requestIdRef.current;
+      const request = (async () => {
+        let resyncs = 0;
+        do {
+          rerunRef.current = false;
+          if (!outputRef.current) setLoading(true);
+          setError(null);
+          try {
+            const known = knownValidationOutput(outputRef.current);
+            const next = known
+              ? await loadOutput(environmentId, run.id, resultId, known)
+              : await loadOutput(environmentId, run.id, resultId);
+            if (requestId !== requestIdRef.current) return;
+            const merged = mergeValidationOutput(outputRef.current, next);
+            if (merged.resync) {
+              // The answer extends a tail this modal no longer holds: read an
+              // authoritative tail instead (bounded to one retry per request).
+              outputRef.current = null;
+              if (resyncs++ < 1) rerunRef.current = true;
+              continue;
+            }
+            if (merged.output !== outputRef.current) {
+              outputRef.current = merged.output;
+              setOutput(merged.output);
+            }
+          } catch (reason) {
+            if (requestId !== requestIdRef.current) return;
+            setError(reason instanceof Error ? reason.message : String(reason));
+          }
+        } while (rerunRef.current && requestId === requestIdRef.current);
+      })().finally(() => {
+        if (inFlightRequestRef.current === request) inFlightRequestRef.current = null;
+        if (requestId === requestIdRef.current) setLoading(false);
+      });
+      inFlightRequestRef.current = request;
+      return request;
+    },
+    [environmentId, hasArtifacts, loadOutput, open, resultId, run.id],
+  );
 
+  // Opening and every status change (including the final one) read once.
   useEffect(() => {
     if (!open) {
       requestIdRef.current += 1;
       inFlightRequestRef.current = null;
+      rerunRef.current = false;
+      outputRef.current = null;
       setOutput(null);
       setError(null);
       setLoading(false);
       return;
     }
-    let cancelled = false;
-    let timeout: number | undefined;
-    const poll = async () => {
-      await refresh();
-      if (!cancelled && (result?.status === "running" || result?.status === "queued")) {
-        timeout = window.setTimeout(() => void poll(), 2_000);
-      }
-    };
-    void poll();
+    void refresh();
     return () => {
-      cancelled = true;
       requestIdRef.current += 1;
       inFlightRequestRef.current = null;
-      if (timeout !== undefined) window.clearTimeout(timeout);
     };
   }, [open, refresh, result?.status]);
+
+  // Live output polls through the read coordinator: only while the modal is
+  // open on a queued/running command, never overlapping a slow read, paused
+  // while the document is hidden and reconciled once on return.
+  const pollInstance = useId();
+  useCoordinatedRead<void>({
+    key: {
+      resource: "review-validation-output",
+      target: `${environmentId}\u0000${run.id}\u0000${resultId ?? ""}`,
+      view: pollInstance,
+    },
+    enabled: open && hasArtifacts && Boolean(resultId),
+    readOnSubscribe: false,
+    demand: { active: live, intervalMs: VALIDATION_OUTPUT_POLL_INTERVAL_MS, priority: "standard" },
+    read: () => refresh({ trailing: false }),
+  });
 
   const stdout = useMemo(() => streamOutput("stdout", output?.stdout ?? null), [output]);
   const stderr = useMemo(() => streamOutput("stderr", output?.stderr ?? null), [output]);
@@ -242,23 +296,86 @@ function ValidationOutputModal({
   );
 }
 
+const UNSETTLED_RESULT_STATUSES: ReadonlySet<ReviewValidationResult["status"]> = new Set([
+  "pending",
+  "queued",
+  "running",
+]);
+
 /** Snapshot projection plus an on-demand bounded log reader; lifecycle remains backend-owned. */
 export function ReviewValidationStatus({
   environmentId,
   run,
   now = Date.now(),
   loadOutput = getReviewValidationOutput,
+  stopCommand = stopReviewValidationCommand,
+  onStop,
+  stopping = false,
 }: {
   environmentId: string;
   run: ReviewValidationRun;
   /** Parent-owned live clock, so every running row advances on the same tick. */
   now?: number;
   loadOutput?: typeof getReviewValidationOutput;
+  /**
+   * Stops one unsettled command; the rest of the run continues. Pass `null` to
+   * hide per-command stop controls.
+   */
+  stopCommand?: typeof stopReviewValidationCommand | null;
+  /** Optional owner action that stops active commands while retaining partial evidence. */
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
   const notes = run.plan.limitations;
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const selectedResult = run.results.find((result) => result.id === selectedResultId);
+  const runActive = run.status === "running";
+  // Requested stops stay visible until the authoritative snapshot settles them.
+  const [pendingStops, setPendingStops] = useState<{
+    runId: string;
+    resultIds: ReadonlySet<string>;
+  }>({ runId: run.id, resultIds: new Set() });
+  const currentRunId = useRef(run.id);
+  currentRunId.current = run.id;
+  const stoppingResultIds = pendingStops.runId === run.id ? pendingStops.resultIds : new Set();
+  useEffect(() => {
+    setPendingStops((current) => {
+      if (current.runId !== run.id) return { runId: run.id, resultIds: new Set() };
+      if (current.resultIds.size === 0) return current;
+      const next = new Set(
+        Array.from(current.resultIds).filter((id) => {
+          const status = run.results.find((result) => result.id === id)?.status;
+          return runActive && status !== undefined && UNSETTLED_RESULT_STATUSES.has(status);
+        }),
+      );
+      return next.size === current.resultIds.size ? current : { ...current, resultIds: next };
+    });
+  }, [run.id, run.results, runActive]);
+  const requestStopCommand = useCallback(
+    async (result: ReviewValidationResult) => {
+      if (!stopCommand) return;
+      setPendingStops((current) => ({
+        runId: run.id,
+        resultIds: new Set(current.runId === run.id ? current.resultIds : []).add(result.id),
+      }));
+      try {
+        await stopCommand(environmentId, run, result.id);
+      } catch (reason) {
+        setPendingStops((current) => {
+          if (current.runId !== run.id) return current;
+          const resultIds = new Set(current.resultIds);
+          resultIds.delete(result.id);
+          return { ...current, resultIds };
+        });
+        if (currentRunId.current === run.id)
+          toast.error(
+            `Failed to stop ${result.command}: ${reason instanceof Error ? reason.message : String(reason)}`,
+          );
+      }
+    },
+    [environmentId, run, stopCommand],
+  );
 
   return (
     <section
@@ -267,15 +384,32 @@ export function ReviewValidationStatus({
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="font-semibold">Validation</h3>
-        <span className="text-muted-foreground">
-          {run.status === "planned" ||
-          (run.status === "running" &&
-            (run.queueReason ||
-              (run.results.some((result) => result.status === "queued") &&
-                !run.results.some((result) => result.status === "running"))))
-            ? "Queued"
-            : run.status}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground">
+            {stopping
+              ? "Stopping"
+              : run.status === "planned" ||
+                  (run.status === "running" &&
+                    (run.queueReason ||
+                      (run.results.some((result) => result.status === "queued") &&
+                        !run.results.some((result) => result.status === "running"))))
+                ? "Queued"
+                : run.status}
+          </span>
+          {onStop && (run.status === "planned" || run.status === "running") && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              disabled={stopping}
+              onClick={onStop}
+            >
+              {stopping ? <Loader2 className="animate-spin" /> : <Square />}
+              {stopping ? "Stopping tests…" : "Stop tests and continue"}
+            </Button>
+          )}
+        </div>
       </div>
       <p className="mb-2 text-muted-foreground">
         {run.discoveryDurationMs !== undefined &&
@@ -290,66 +424,139 @@ export function ReviewValidationStatus({
           {run.queueReason}
         </p>
       )}
-      <ul
-        aria-label="Validation commands"
-        className="grid grid-cols-[minmax(0,1fr)_max-content_max-content_max-content_max-content_auto] gap-x-3 gap-y-2"
-      >
-        {run.results.map((result) => {
-          const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
-          const queuedMs = result.queuedMs ?? 0;
-          return (
-            <li key={result.id} className="col-span-full grid grid-cols-subgrid">
-              <button
-                type="button"
-                className="col-span-full grid grid-cols-subgrid items-center rounded-md px-1.5 py-1 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                aria-label={`View terminal output for ${result.command}`}
-                onClick={() => setSelectedResultId(result.id)}
-              >
-                <code className="min-w-0 break-all">{result.command}</code>
-                <span
-                  data-slot="validation-status"
-                  className="whitespace-nowrap text-muted-foreground"
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table
+          aria-label="Validation commands"
+          className="w-full min-w-[36rem] table-fixed border-collapse text-left"
+        >
+          <thead className="bg-muted/50 text-muted-foreground">
+            <tr className="divide-x divide-border border-b border-border">
+              <th scope="col" className="px-2 py-2 font-medium">
+                Command
+              </th>
+              <th scope="col" className="w-36 px-2 py-2 font-medium">
+                Status
+              </th>
+              <th scope="col" className="w-20 px-2 py-2 text-right font-medium">
+                Duration
+              </th>
+              <th scope="col" className="w-20 px-2 py-2 text-right font-medium">
+                Queued
+              </th>
+              <th scope="col" className="w-16 px-1 py-2 text-center font-medium">
+                Output
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {run.results.map((result) => {
+              const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
+              const queuedMs = result.queuedMs ?? 0;
+              const stoppingResult = stoppingResultIds.has(result.id);
+              const canStopResult =
+                stopCommand !== null &&
+                runActive &&
+                !stopping &&
+                UNSETTLED_RESULT_STATUSES.has(result.status);
+              return (
+                <tr
+                  key={result.id}
+                  className="divide-x divide-border transition-colors hover:bg-accent/50"
+                  onClick={() => setSelectedResultId(result.id)}
                 >
-                  {result.status === "queued" ? "waiting for capacity" : result.status}
-                </span>
-                <span
-                  data-slot="validation-elapsed"
-                  className="whitespace-nowrap text-right tabular-nums text-muted-foreground"
-                >
-                  {resultElapsedMs !== null ? formatSeconds(resultElapsedMs) : ""}
-                </span>
-                <span className="whitespace-nowrap text-muted-foreground">
-                  {queuedMs > 0 ? "queued" : ""}
-                </span>
-                <span
-                  data-slot="validation-queued"
-                  className="whitespace-nowrap text-right tabular-nums text-muted-foreground"
-                >
-                  {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
-                </span>
-                <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
-                {result.queueReason && ["queued", "running"].includes(result.status) && (
-                  <span
-                    data-slot="validation-queue-reason"
-                    className="col-span-full mt-1 break-words text-muted-foreground"
+                  <td className="cursor-pointer px-2 py-2 align-top">
+                    <code className="break-all">{result.command}</code>
+                    {result.queueReason && ["queued", "running"].includes(result.status) && (
+                      <div
+                        data-slot="validation-queue-reason"
+                        className="mt-1 break-words text-muted-foreground"
+                      >
+                        {result.queueReason}
+                      </div>
+                    )}
+                    {result.limitation && (
+                      <div
+                        data-slot="validation-limitation"
+                        className="mt-1 break-words text-muted-foreground"
+                      >
+                        <span className="sr-only">{result.command}: </span>
+                        {result.limitation}
+                      </div>
+                    )}
+                  </td>
+                  <td
+                    data-slot="validation-status"
+                    className="whitespace-nowrap px-2 py-2 align-top text-muted-foreground"
                   >
-                    {result.queueReason}
-                  </span>
-                )}
-                {result.limitation && (
-                  <span
-                    data-slot="validation-limitation"
-                    className="col-span-full mt-1 text-muted-foreground"
+                    <div className="flex items-start justify-between gap-1">
+                      <span data-slot="validation-status-label">
+                        {stoppingResult && canStopResult
+                          ? "stopping"
+                          : result.status === "queued"
+                            ? "waiting for capacity"
+                            : result.status}
+                      </span>
+                      {canStopResult && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="-my-1 size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          aria-label={`Stop ${result.command}`}
+                          title={
+                            result.status === "running"
+                              ? "Stop this command; the remaining commands continue"
+                              : "Skip this command; the remaining commands continue"
+                          }
+                          disabled={stoppingResult}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void requestStopCommand(result);
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {stoppingResult ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Square className="size-3" />
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  </td>
+                  <td
+                    data-slot="validation-elapsed"
+                    className="px-2 py-2 text-right align-top tabular-nums text-muted-foreground"
                   >
-                    <span className="sr-only">{result.command}: </span>
-                    {result.limitation}
-                  </span>
-                )}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+                    {resultElapsedMs !== null ? formatSeconds(resultElapsedMs) : ""}
+                  </td>
+                  <td
+                    data-slot="validation-queued"
+                    className="px-2 py-2 text-right align-top tabular-nums text-muted-foreground"
+                  >
+                    {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
+                  </td>
+                  <td className="px-1 py-1 text-center align-top">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-6 text-muted-foreground"
+                      aria-label={`View terminal output for ${result.command}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedResultId(result.id);
+                      }}
+                    >
+                      <SquareTerminal className="size-3.5" aria-hidden="true" />
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       {((run.environmentChanges && run.environmentChanges.length > 0) ||
         (run.environmentChangesOmitted ?? 0) > 0) && (
         <details className="mt-3 text-xs text-muted-foreground">

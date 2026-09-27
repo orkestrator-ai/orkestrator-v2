@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import type { CpuInfo } from "node:os";
 import { runCommand } from "./shell.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
 export interface SystemUsageSnapshot {
   cpuPercent: number;
@@ -31,6 +32,7 @@ interface SystemUsageDependencies {
     args: string[],
     options: { timeoutMs: number },
   ) => Promise<{ stdout: string }>;
+  metrics: RecurringWorkMetrics;
 }
 
 interface DarwinRamDependencies {
@@ -346,6 +348,7 @@ export function createSystemUsageReader(
   const platform = dependencies.platform ?? process.platform;
   const execute = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
+  const metrics = dependencies.metrics ?? recurringWorkMetrics;
   const delay =
     dependencies.delay ??
     ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
@@ -462,10 +465,14 @@ export function createSystemUsageReader(
   };
 
   return (diskPath) => {
+    metrics.requested("system-usage-sample");
     const pending = pendingReads.get(diskPath);
-    if (pending) return pending;
+    if (pending) {
+      metrics.coalesced("system-usage-sample");
+      return pending;
+    }
 
-    const read = (async () => {
+    const read = metrics.observe("system-usage-sample", async () => {
       const cpuUsage = await sampleCpu();
       const sampledAt = now();
       const [ramUsage, diskUsage, gpuUsage] = await Promise.all([
@@ -481,7 +488,7 @@ export function createSystemUsageReader(
         diskPercent: diskUsage,
         sampledAt: new Date(sampledAt).toISOString(),
       };
-    })();
+    });
     pendingReads.set(diskPath, read);
     const clearPending = () => {
       if (pendingReads.get(diskPath) === read) pendingReads.delete(diskPath);

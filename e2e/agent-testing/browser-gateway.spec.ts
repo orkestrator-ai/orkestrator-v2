@@ -4,8 +4,11 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { environmentCleanupLedger } from "../../apps/backend/src/core/environment-cleanup-ledger";
+import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
 import type {
   MultiReviewActionResult,
   MultiReviewWorkflow,
@@ -183,6 +186,66 @@ test("real browser gateway exercises an authoritative local environment", async 
   }
 });
 
+test("deletion during local setup clears worktree, bridge state, branch and ledger", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  );
+  expect(fixture).toBeTruthy();
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: fixture!.id,
+    name: `delete-during-setup-${Date.now()}`,
+    networkAccessMode: "restricted",
+    environmentType: "local",
+  });
+  try {
+    await invoke("start_environment", { environmentId: environment.id });
+    const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
+    expect(active.worktreePath).toBeTruthy();
+    const branchRef = `refs/heads/${active.branch}`;
+    const branchBefore = spawnSync(
+      "git",
+      ["-C", fixture!.localPath!, "show-ref", "--verify", branchRef],
+      { encoding: "utf8" },
+    );
+    expect(branchBefore.status, branchBefore.stderr).toBe(0);
+    for (const directory of environmentStateDirectories(runtime.dataDir, environment.id)) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "state.json"), "{}\n");
+    }
+    await invoke("delete_environment", { environmentId: environment.id });
+    expect(
+      await invoke<Environment | null>("get_environment", { environmentId: environment.id }),
+    ).toBeNull();
+    await expect(fs.stat(active.worktreePath!)).rejects.toThrow();
+    for (const directory of environmentStateDirectories(runtime.dataDir, environment.id)) {
+      await expect(fs.stat(directory)).rejects.toThrow();
+    }
+    const branch = spawnSync(
+      "git",
+      ["-C", fixture!.localPath!, "show-ref", "--verify", branchRef],
+      { encoding: "utf8" },
+    );
+    expect(branch.status).not.toBe(0);
+    expect(
+      (await environmentCleanupLedger(runtime.dataDir).list()).some(
+        (entry) => entry.environmentId === environment.id,
+      ),
+    ).toBe(false);
+  } finally {
+    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+  }
+});
+
 test("agent mail rehydrates after an inactive recipient is opened and the page reloads", async ({
   page,
 }) => {
@@ -276,7 +339,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       timeout: 15_000,
     });
     await expect(
-      page.getByRole("button", { name: "1 unseen agent messages; open inbox", exact: true }),
+      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
     ).toBeVisible();
 
     await page.reload();
@@ -290,7 +353,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       timeout: 15_000,
     });
     await expect(
-      page.getByRole("button", { name: "1 unseen agent messages; open inbox", exact: true }),
+      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
     ).toBeVisible();
   } finally {
     await invoke("update_agent_messaging_settings", { settings: previousSettings }).catch(
@@ -693,7 +756,15 @@ test("review validation queues across worktrees and runs while its environment i
         return run.results[0]!.status;
       })
       .toBe("queued");
-    expect(run.results[0]!.queueReason).toContain("slots");
+    await expect
+      .poll(async () => {
+        run = await invoke<ReviewValidationRun>("status_review_validation", {
+          environmentId: target!.id,
+          run,
+        });
+        return run.results[0]!.queueReason;
+      })
+      .toContain("slots");
     await page.mouse.move(1100, 20);
     await page.getByText(other!.name, { exact: true }).first().click();
     await expect

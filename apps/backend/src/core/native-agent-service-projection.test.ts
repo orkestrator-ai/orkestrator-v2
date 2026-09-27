@@ -19,6 +19,7 @@ import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import { UNAPPLIED_NETWORK_RESTRICTION_NOTE } from "./native-agent-execution-policy.js";
@@ -277,6 +278,34 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 describe("NativeAgentService", () => {
+  test("full projection carries turn activity only while Claude is running", async () => {
+    let status: "running" | "idle" = "running";
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status,
+        messages: [],
+        turnActivity: { compacting: true, thinkingTokens: 1_200 },
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-full-turn-activity-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:turn-activity",
+        };
+        await service.ensureSession(identity);
+        expect((await service.getProjection(identity))?.turn.activity).toEqual({
+          compacting: true,
+          thinkingTokens: 1_200,
+        });
+        status = "idle";
+        expect((await service.getProjection(identity))?.turn.activity).toBeUndefined();
+      },
+    );
+  });
+
   test("joins equivalent progressive transcript reads at the provider boundary", async () => {
     let releaseTranscript!: () => void;
     const transcriptHeld = new Promise<void>((resolve) => {
@@ -740,6 +769,84 @@ describe("NativeAgentService", () => {
           "provider-session",
           "Implement durable session titles",
         );
+      },
+    );
+  });
+
+  test("titles a session from the user's words, not framed system instructions", async () => {
+    const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server.")}\n\nMock up the sidebar`;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Session a1b2c3",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: prompt,
+            parts: [{ type: "text", content: prompt }],
+            createdAt: "2026-09-07T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-claude-framed-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-framed-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe("Mock up the sidebar");
+        await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+        expect(stub.setSessionTitle).toHaveBeenCalledWith(
+          "provider-session",
+          "Mock up the sidebar",
+        );
+      },
+    );
+  });
+
+  test("keeps a Codex brief title when the transcript includes framed guidance", async () => {
+    const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server.")}\n\nMock up the sidebar`;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Mock up the sidebar",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: prompt,
+            parts: [{ type: "text", content: prompt }],
+            createdAt: "2026-09-07T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-codex-framed-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-codex-framed-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe("Mock up the sidebar");
+        expect(stub.setSessionTitle).not.toHaveBeenCalled();
       },
     );
   });
@@ -2399,6 +2506,82 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("does not repeat a failure the transcript already renders inline", async () => {
+    const inlineError = {
+      id: "error-opencode-assistant-failed",
+      role: "assistant" as const,
+      content: "Model request failed (HTTP 400): Bad Request",
+      parts: [{ type: "text" as const, content: "Model request failed (HTTP 400): Bad Request" }],
+      createdAt: "2026-09-26T11:32:24.987Z",
+    };
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "error",
+        phase: "error",
+        error: "Bad Request",
+        messages: [inlineError],
+        notices: [{ kind: "error", message: "Bad Request" }],
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-inline-error-row-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-inline-error",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.messages).toEqual([expect.objectContaining({ id: inlineError.id })]);
+      },
+    );
+  });
+
+  test("keeps a distinct stream error and stop notice beside an inline failure", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "error",
+        messages: [
+          {
+            id: "error-opencode-assistant-failed",
+            role: "assistant",
+            content: "Model request failed (HTTP 400): Bad Request",
+            parts: [{ type: "text", content: "Model request failed (HTTP 400): Bad Request" }],
+            createdAt: "2026-09-26T11:32:24.987Z",
+          },
+        ],
+        notices: [
+          { kind: "error", message: "Bad Request" },
+          { kind: "error", message: "Connection lost while receiving events" },
+          { kind: "stopped", message: "Query stopped by user." },
+        ],
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-native-distinct-inline-error-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-distinct-inline-error",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(
+          projection?.messages.map((message) => (message as { content?: unknown }).content),
+        ).toEqual([
+          "Model request failed (HTTP 400): Bad Request",
+          "Connection lost while receiving events",
+          "Query stopped by user.",
+        ]);
+      },
+    );
+  });
+
   test("does not poll tab-facing projection routes without a foreground reader", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
@@ -2861,20 +3044,38 @@ describe("NativeAgentService", () => {
         };
         await service.ensureSession(identity);
         const first = await service.getProjection(identity);
+        // A legacy provider list gets a synthetic, clearly-legacy identity; the
+        // runtime actions are merged beside it with their own descriptors.
         expect(first?.slashCommands).toEqual([
           {
             name: "/review",
             description: "Review the current changes",
             argumentHint: "[focus]",
             source: "builtin",
+            id: "legacy:/review",
+            executionKind: "provider-prompt",
+            bindingRevision: "legacy",
           },
-          {
+          expect.objectContaining({
+            name: "/compact",
+            source: "orkestrator",
+            id: "orkestrator:compact",
+            executionKind: "session-action",
+          }),
+          expect.objectContaining({
             name: "/steer",
             description: "Send instructions to the turn that is already running",
             argumentHint: "<instructions>",
             source: "orkestrator",
-          },
+            id: "orkestrator:steer",
+            executionKind: "session-action",
+          }),
         ]);
+        expect(first?.slashCommandCatalogue).toMatchObject({
+          status: "ready",
+          enhanced: false,
+          revision: 1,
+        });
         await service.getProjection(identity);
         expect(stub.slashCommands).toHaveBeenCalledTimes(1);
 
@@ -2970,6 +3171,7 @@ describe("NativeAgentService", () => {
         expect(projection?.composer?.models).toEqual([expect.objectContaining({ id: "gpt-old" })]);
         expect(projection?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
+          "/compact",
           "/steer",
         ]);
 
@@ -2978,7 +3180,11 @@ describe("NativeAgentService", () => {
         await waitForCondition(() => catalogRefreshFinished && commandRefreshFinished);
         const updated = await service.getProjection(identity);
         expect(updated?.composer?.models).toEqual([expect.objectContaining({ id: "gpt-new" })]);
-        expect(updated?.slashCommands?.map((command) => command.name)).toEqual(["/new", "/steer"]);
+        expect(updated?.slashCommands?.map((command) => command.name)).toEqual([
+          "/new",
+          "/compact",
+          "/steer",
+        ]);
       },
     );
   });
@@ -3045,6 +3251,7 @@ describe("NativeAgentService", () => {
           expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
           expect(initial?.slashCommands?.map((command) => command.name)).toEqual([
             "/old",
+            "/compact",
             "/steer",
           ]);
 
@@ -3069,6 +3276,7 @@ describe("NativeAgentService", () => {
           expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
           expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
             "/new",
+            "/compact",
             "/steer",
           ]);
 
@@ -3083,6 +3291,7 @@ describe("NativeAgentService", () => {
           expect(settled?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
           expect(settled?.slashCommands?.map((command) => command.name)).toEqual([
             "/new",
+            "/compact",
             "/steer",
           ]);
         } finally {
@@ -3141,7 +3350,11 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const initial = await service.getProjection(identity);
         expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
-        expect(initial?.slashCommands?.map((command) => command.name)).toEqual(["/old", "/steer"]);
+        expect(initial?.slashCommands?.map((command) => command.name)).toEqual([
+          "/old",
+          "/compact",
+          "/steer",
+        ]);
 
         const refreshed = await service.refreshProjectionModels(identity);
 
@@ -3151,6 +3364,7 @@ describe("NativeAgentService", () => {
         expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
         expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
           "/new",
+          "/compact",
           "/steer",
         ]);
       },
@@ -3198,22 +3412,33 @@ describe("NativeAgentService", () => {
         now += 30_001;
         const stale = await service.getProjection(identity);
         expect(stale?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
-        expect(stale?.slashCommands?.map((command) => command.name)).toEqual(["/old", "/steer"]);
+        expect(stale?.slashCommands?.map((command) => command.name)).toEqual([
+          "/old",
+          "/compact",
+          "/steer",
+        ]);
 
         // A failed optional endpoint must not be re-probed on every 500ms
         // projection poll, so the retained entry carries an explicit back-off.
         const caches = service as unknown as {
           modelCatalogCache: Map<string, { expiresAt: number }>;
-          slashCommandCache: Map<string, { expiresAt: number }>;
+          commandCatalogues: { expiresAt(key: string): number | undefined };
         };
         await waitForCondition(
           () =>
             caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000 &&
-            caches.slashCommandCache.get("env-1\0codex\0provider-session")?.expiresAt ===
-              now + 5_000,
+            caches.commandCatalogues.expiresAt("env-1\0codex\0provider-session") === now + 5_000,
         );
         expect(catalogReads).toBe(2);
         expect(commandReads).toBe(2);
+
+        // A failed refresh retains the old list for display, marked stale with
+        // a bounded reason, rather than an authoritative empty catalogue.
+        const failed = await service.getProjection(identity);
+        expect(failed?.slashCommandCatalogue).toMatchObject({
+          status: "stale",
+          error: { code: "provider-error" },
+        });
 
         now += 4_999;
         const withinBackoff = await service.getProjection(identity);
@@ -3222,6 +3447,7 @@ describe("NativeAgentService", () => {
         expect(withinBackoff?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
         expect(withinBackoff?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
+          "/compact",
           "/steer",
         ]);
 
@@ -3256,6 +3482,7 @@ describe("NativeAgentService", () => {
         // to be advertised by whoever knows the capability — not by a tab.
         expect(projection?.slashCommands?.map((command) => command.name)).toEqual([
           "/review",
+          "/compact",
           "/steer",
         ]);
         expect(projection?.capabilities.attachments).toEqual({

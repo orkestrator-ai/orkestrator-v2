@@ -28,6 +28,7 @@ import {
   effortLabel,
   modelsForAgent,
   platformOwnsSpeed,
+  resolveCatalogModelId,
   toPickerModel,
   type AgentModelCatalog,
 } from "@/lib/agent-launch";
@@ -45,6 +46,7 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
+import { McpServersSettingsLink } from "../mcp-servers/McpServersSettingsLink";
 import { INHERIT, OptionCards } from "./InheritedValue";
 
 export interface AgentPlatformPaneProps {
@@ -65,6 +67,8 @@ export interface AgentPlatformPaneProps {
   refreshingModels?: boolean;
   refreshModelsDisabled?: boolean;
   modelCatalogScopeDescription?: string;
+  /** Show the entry point into this platform's saved MCP servers. */
+  showMcpServersLink?: boolean;
   /** Tier-specific extras, e.g. API keys and provider lists at the app tier. */
   children?: React.ReactNode;
 }
@@ -121,6 +125,7 @@ export function AgentPlatformPane({
   refreshingModels = false,
   refreshModelsDisabled = false,
   modelCatalogScopeDescription,
+  showMcpServersLink = false,
   children,
 }: AgentPlatformPaneProps) {
   const favorites = useAgentModelFavorites();
@@ -160,17 +165,15 @@ export function AgentPlatformPane({
         .map((option) => toPickerModel(platform, option)),
     [models, platform],
   );
-  const selectedModel = stored?.model
-    ? models.find((model) => model.id === stored.model || model.resolvedModel === stored.model)
-    : undefined;
+  const selectedModelId = resolveCatalogModelId(platform, models, stored?.model);
+  const selectedModel = models.find((model) => model.id === selectedModelId);
   const modelMissingFromCatalog = Boolean(stored?.model && !selectedModel);
   const effectiveModel = stored?.model ?? inherited.model;
-  const reasoningModel = effectiveModel
-    ? models.find((model) => model.id === effectiveModel || model.resolvedModel === effectiveModel)
-    : models[0];
+  const reasoningModelId = resolveCatalogModelId(platform, models, effectiveModel);
+  const reasoningModel = models.find((model) => model.id === reasoningModelId) ?? models[0];
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
-    const efforts = reasoningModel?.reasoningEfforts ?? [];
+    const efforts: readonly string[] = reasoningModel?.reasoningEfforts ?? [];
     // A stored level the catalog no longer lists stays selectable, so opening
     // this pane cannot quietly rewrite a saved choice to "inherit".
     const current = stored?.reasoningEffort;
@@ -483,6 +486,8 @@ export function AgentPlatformPane({
           </div>
         </div>
       )}
+
+      {showMcpServersLink ? <McpServersSettingsLink platform={platform} /> : null}
 
       {children}
     </div>

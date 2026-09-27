@@ -55,20 +55,29 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();
     await page.getByRole("button", { name: "New design workspace" }).click();
-    await page.getByLabel("Open a saved canvas").selectOption(canvas.id);
+    await page.getByRole("tab", { name: "Open", exact: true }).click();
+    await page
+      .getByRole("list", { name: "Designs" })
+      .getByRole("button", { name: /Gateway design/ })
+      .click();
+    await page.getByRole("button", { name: /^Open (beside|\(current pane\))$/ }).click();
 
     const embedded = page.frameLocator('iframe[title="Screen"]');
     await expect(embedded.getByRole("heading")).toHaveText("Shared design");
-    await page.getByRole("button", { name: "Save design to repository" }).click();
-    await expect(
-      page.getByRole("status").filter({ hasText: "Saved Gateway-design.orkdes" }),
-    ).toBeVisible();
+    // Export (Save As) proposes a collision-safe name: sanitized name + canvas id prefix.
+    const exportPath = `Gateway-design-${canvas.id.replaceAll("-", "").slice(0, 8)}.orkdes`;
+    await page.getByRole("button", { name: "Export design to repository" }).click();
+    const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
+    await expect(exportDialog.getByText(`New file: ${exportPath} will be created.`)).toBeVisible();
+    await exportDialog.getByRole("button", { name: "Export revision 2" }).click();
+    await expect(exportDialog.getByText(`Exported revision 2 to ${exportPath}`)).toBeVisible();
+    await exportDialog.getByRole("button", { name: "Done" }).click();
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,
     });
     const saved = await invoke<{ content: string }>("read_local_file", {
       worktreePath: environment.worktreePath,
-      filePath: "Gateway-design.orkdes",
+      filePath: exportPath,
     });
     expect(JSON.parse(saved.content)).toMatchObject({
       id: canvas.id,
@@ -82,6 +91,10 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       html: "<h1 id='title'>Updated by another client</h1>",
     });
     await expect(embedded.getByRole("heading")).toHaveText("Updated by another client");
+    await page.getByRole("button", { name: "Undo design change" }).click();
+    await expect(embedded.getByRole("heading")).toHaveText("Shared design");
+    await page.getByRole("button", { name: "Redo design change" }).click();
+    await expect(embedded.getByRole("heading")).toHaveText("Updated by another client");
     await page.reload();
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();
@@ -92,12 +105,25 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     expect(serialized).not.toContain("<h1");
     await page.getByRole("button", { name: "New design workspace" }).click();
     await page.getByRole("textbox", { name: "Name", exact: true }).fill("Guided design");
-    await page.getByRole("combobox", { name: "Design agent", exact: true }).selectOption("codex");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Codex", exact: true }).click();
+    await page.getByRole("textbox", { name: "Design brief" }).fill("Mock up the sidebar");
     await page.getByRole("button", { name: "Create design workspace", exact: true }).click();
     await expect(page.getByText("Guided design", { exact: true })).toBeVisible();
     await expect(
       page.getByText("A blank canvas for your next idea", { exact: true }),
     ).toBeVisible();
+    await expect(page.getByText("Mock up the sidebar", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Use the orkestrator-design MCP server", { exact: false }),
+    ).toHaveCount(0);
+    await page.reload();
+    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await page.getByText(env.name, { exact: true }).first().click();
+    await expect(page.getByText("Mock up the sidebar", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Use the orkestrator-design MCP server", { exact: false }),
+    ).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("design-workspace.png") });
   } finally {
     await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);

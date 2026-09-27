@@ -8,3 +8,5 @@ export * from "./backend/workflows";
 export * from "./backend/kanban";
 export * from "./backend/agent-mail";
 export * from "./backend/coordinator";
+export * from "./backend/previews";
+export * from "./backend/mcp-management";

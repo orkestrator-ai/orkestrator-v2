@@ -37,6 +37,14 @@ const ACTIVATION_SCROLL_READY_MAX_ATTEMPTS = 30;
  */
 const POST_SCROLL_WATCH_MS = 400;
 
+/**
+ * Re-issues of a jump to one row. Virtuoso positions an unmeasured row from
+ * estimated heights, so the first jump to a distant message can land short;
+ * each correction runs after the rows around it have measured.
+ */
+const SCROLL_TO_INDEX_CORRECTIONS = 3;
+const SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS = 120;
+
 interface PersistedEntry {
   snapshot: StateSnapshot;
   wantsStick: boolean;
@@ -128,6 +136,12 @@ interface UseVirtuosoScrollStateReturn {
   isAtBottomRef: React.RefObject<boolean>;
   /** Scroll to bottom and re-enable stick mode */
   scrollToBottom: () => void;
+  /**
+   * Bring one row into the middle of the view and release stick intent, so
+   * neither a pending activation jump nor streaming follow snaps the reader
+   * back to the bottom. False when the list has not mounted yet.
+   */
+  scrollToIndex: (index: number) => boolean;
   /** Ref to attach to the Virtuoso component */
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
   /** Props to spread onto the Virtuoso component */
@@ -206,6 +220,7 @@ export function useVirtuosoScrollState(
   const lastObservedScrollTopRef = useRef(0);
   const mountedRef = useRef(true);
   const scrollInFlightRef = useRef(false);
+  const scrollOperationRef = useRef(0);
   const hasBeenActiveRef = useRef(false);
   const envChangedWhileInactiveRef = useRef(false);
   const pendingActivationScrollRef = useRef(false);
@@ -311,20 +326,27 @@ export function useVirtuosoScrollState(
     // retry loop is still mid-flight would fire a duplicate footer scroll.
     if (scrollInFlightRef.current) return false;
     scrollInFlightRef.current = true;
+    const operation = ++scrollOperationRef.current;
 
     let attempts = 0;
+    const operationIsCurrent = () => mountedRef.current && scrollOperationRef.current === operation;
+    const finishOperation = () => {
+      if (scrollOperationRef.current === operation) {
+        scrollInFlightRef.current = false;
+      }
+    };
 
     const watchScrollHeight = () => {
       const el = scrollerElRef.current;
-      if (!el || !mountedRef.current) {
-        scrollInFlightRef.current = false;
+      if (!el || !operationIsCurrent()) {
+        finishOperation();
         return;
       }
       const start = performance.now();
       let lastScrollHeight = el.scrollHeight;
       const tick = () => {
-        if (!mountedRef.current) {
-          scrollInFlightRef.current = false;
+        if (!operationIsCurrent()) {
+          finishOperation();
           return;
         }
         const currentHeight = el.scrollHeight;
@@ -340,13 +362,17 @@ export function useVirtuosoScrollState(
         if (performance.now() - start < POST_SCROLL_WATCH_MS) {
           requestAnimationFrame(tick);
         } else {
-          scrollInFlightRef.current = false;
+          finishOperation();
         }
       };
       requestAnimationFrame(tick);
     };
 
     const finish = () => {
+      if (!operationIsCurrent()) {
+        finishOperation();
+        return;
+      }
       // Scroll past the last data item to reveal footer content.
       // The browser clamps to scrollHeight - clientHeight.
       handle.scrollTo({
@@ -357,8 +383,8 @@ export function useVirtuosoScrollState(
     };
 
     const attempt = () => {
-      if (!mountedRef.current) {
-        scrollInFlightRef.current = false;
+      if (!operationIsCurrent()) {
+        finishOperation();
         return;
       }
       attempts += 1;
@@ -374,8 +400,8 @@ export function useVirtuosoScrollState(
       // setTimeout (rather than rAF) gives Virtuoso time to fire
       // atBottomStateChange after rendering/measuring the tail items.
       setTimeout(() => {
-        if (!mountedRef.current) {
-          scrollInFlightRef.current = false;
+        if (!operationIsCurrent()) {
+          finishOperation();
           return;
         }
         if (!isAtBottomRef.current && attempts < SCROLL_TO_BOTTOM_MAX_ATTEMPTS) {
@@ -389,7 +415,8 @@ export function useVirtuosoScrollState(
     attempt();
     return true;
     // Deps intentionally empty: reads only refs (virtuosoRef, scrollerElRef,
-    // mountedRef, scrollInFlightRef, isAtBottomRef, wantsStickRef). Adding
+    // mountedRef, scrollInFlightRef, scrollOperationRef, isAtBottomRef,
+    // wantsStickRef). Adding
     // scrollerEl here would recreate the callback whenever the scroller
     // mounts, which in turn would retrigger the ResizeObserver effect and
     // reobserve from scratch on each mount.
@@ -524,6 +551,14 @@ export function useVirtuosoScrollState(
     let userScrollUpPending = false;
     let userScrollUpTimeout: ReturnType<typeof setTimeout> | null = null;
 
+    const releaseStickIntent = () => {
+      wantsStickRef.current = false;
+      // A retry or post-scroll watcher started before this gesture must not
+      // yank the reader back to the bottom after their intent is known.
+      scrollOperationRef.current += 1;
+      scrollInFlightRef.current = false;
+    };
+
     const armUserScrollUp = () => {
       userScrollUpPending = true;
       if (userScrollUpTimeout !== null) clearTimeout(userScrollUpTimeout);
@@ -558,7 +593,7 @@ export function useVirtuosoScrollState(
       // away from the bottom is intent to stop following.
       const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
       if (distanceFromBottom > AT_BOTTOM_THRESHOLD) {
-        wantsStickRef.current = false;
+        releaseStickIntent();
       }
     };
     const handleTouchStart = () => {
@@ -571,7 +606,7 @@ export function useVirtuosoScrollState(
         st < lastScrollTopRef.current - USER_SCROLL_UP_TOLERANCE_PX &&
         distanceFromBottom > AT_BOTTOM_THRESHOLD
       ) {
-        wantsStickRef.current = false;
+        releaseStickIntent();
       }
       lastScrollTopRef.current = st;
     };
@@ -740,6 +775,7 @@ export function useVirtuosoScrollState(
       wantsStickRef.current = true;
     }
     if (isFirstActivation && !stickToBottomOnActivation) return;
+    scrollOperationRef.current += 1;
     scrollInFlightRef.current = false;
     if (!stickToBottomOnActivation && !envChanged && !wantsStickRef.current) {
       return;
@@ -769,10 +805,42 @@ export function useVirtuosoScrollState(
     }
   }, [isActive, scrollerEl, schedulePendingActivationScroll, cancelActivationScrollFrame]);
 
+  const scrollToIndex = useCallback(
+    (index: number): boolean => {
+      const handle = virtuosoRef.current;
+      if (!handle || typeof handle.scrollToIndex !== "function") return false;
+      if (!Number.isInteger(index) || index < 0) return false;
+      // An explicit jump to one row is a statement that the reader wants to be
+      // there, not at the tail: drop stick intent and any activation jump
+      // still queued, and retire an in-flight bottom scroll.
+      wantsStickRef.current = false;
+      pendingActivationScrollRef.current = false;
+      activationScrollReadyAttemptsRef.current = 0;
+      cancelActivationScrollFrame();
+      const operation = ++scrollOperationRef.current;
+      scrollInFlightRef.current = false;
+      handle.scrollToIndex({ index, align: "center", behavior: "auto" });
+      let corrections = 0;
+      const correct = () => {
+        // A user scroll bumps the operation, so a correction never fights them.
+        if (!mountedRef.current || scrollOperationRef.current !== operation) return;
+        virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "auto" });
+        corrections += 1;
+        if (corrections < SCROLL_TO_INDEX_CORRECTIONS) {
+          setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
+        }
+      };
+      setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
+      return true;
+    },
+    [cancelActivationScrollFrame],
+  );
+
   return {
     isAtBottom,
     isAtBottomRef,
     scrollToBottom,
+    scrollToIndex,
     virtuosoRef,
     scrollProps: {
       followOutput,

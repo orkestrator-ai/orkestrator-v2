@@ -146,8 +146,28 @@ export const MAX_MODEL_ID_BYTES = 1_024;
 /** Tool names retained from a run's `system` message, for the runtime panel. */
 export const MAX_RUN_TOOL_NAMES = 128;
 export const MAX_PROMPT_JOURNAL = 256;
+/**
+ * Steer records retained per session, by count and by encoded bytes. Records
+ * that could still be retried against the running turn are never evicted to
+ * make room; a new request is refused instead (see `steer-journal.ts`).
+ */
+export const MAX_STEER_JOURNAL = 256;
+export const MAX_STEER_JOURNAL_BYTES = 512 * 1024;
+/** The request and run ids the steer route accepts, and that a restore keeps. */
+export const MAX_STEER_ID_BYTES = 512;
+/** Runs remembered as having had steer history evicted. */
+export const MAX_STEER_FENCE_RUNS = 32;
+/** Closes whose removal was not yet published, kept as tombstones on disk. */
+export const MAX_CLOSING_TOMBSTONES = 256;
 export const MAX_STRUCTURED_RESULTS = 64;
 export const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
+/**
+ * Encoded bytes of structured results one session retains, oldest evicted
+ * first. The count bound alone let one session hold 64 MiB of recovery state —
+ * twice the whole state file — and block publication for every Cursor tab.
+ * Kept well under the file cap so several busy sessions still fit together.
+ */
+export const MAX_STRUCTURED_RESULTS_BYTES = 4 * 1024 * 1024;
 export const MAX_STATE_FILE_BYTES = 32 * 1024 * 1024;
 export const MAX_RESUME_ENTRIES = 200;
 /**
@@ -177,6 +197,13 @@ export const CANCEL_ACK_TIMEOUT_MS = parseBoundedInteger(
   1_000,
   5 * 60 * 1000,
 );
+/**
+ * How long a close request waits for the session's work to stop before
+ * answering that the close is still in progress. Kept under the backend's
+ * teardown request timeout so the answer is an explicit "pending" rather than
+ * a dropped request; the close itself carries on and a retry joins it.
+ */
+export const CLOSE_ACK_TIMEOUT_MS = 4_000;
 /** Bounded budget for catalogue and account reads, which are never on a turn. */
 export const CATALOG_TIMEOUT_MS = 30_000;
 /** Interactive browser login is a human-paced flow; give it room but bound it. */

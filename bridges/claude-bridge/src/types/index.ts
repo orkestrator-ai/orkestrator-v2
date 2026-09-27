@@ -63,6 +63,77 @@ export function isHandledSdkMessageType(type: unknown): boolean {
   return typeof type === "string" && type in HANDLED_SDK_MESSAGE_TYPES;
 }
 
+/** Every `subtype` the SDK can put on a `type: "system"` message. */
+export type SdkSystemSubtype = Extract<SDKMessage, { type: "system" }>["subtype"];
+
+/**
+ * What the prompt loop does with a `system` subtype once it has run its branch.
+ *
+ * - `handled`: a branch turns it into transcript rows or session state. No
+ *   health notice: the handling is the record, and a notice would only repeat
+ *   it (the task lifecycle subtypes used to be counted twice this way).
+ * - `handled+notice`: a branch handles it and a provider notice is kept too,
+ *   because the count itself is diagnostic (retries, refusals).
+ * - `notice`: nothing consumes it yet. Recorded as a provider notice so the gap
+ *   is visible in the health panel rather than silent.
+ * - `ignored`: high-frequency inventory with nothing to show. Recorded, it
+ *   drowned every real notice (thousands of hook frames a day).
+ */
+export type SystemSubtypeDisposition = "handled" | "handled+notice" | "notice" | "ignored";
+
+/**
+ * The `system` counterpart of {@link HANDLED_SDK_MESSAGE_TYPES}.
+ *
+ * Keyed on the SDK's own union for the same reason: an SDK release that adds a
+ * subtype fails this typecheck, so someone decides what it means instead of it
+ * landing in the health panel by default. A subtype that arrives at runtime
+ * without an entry (an SDK newer than these types) is counted as drift.
+ */
+export const SYSTEM_SUBTYPE_DISPOSITIONS: Record<SdkSystemSubtype, SystemSubtypeDisposition> = {
+  init: "handled",
+  commands_changed: "handled",
+  local_command_output: "handled",
+  task_started: "handled",
+  task_progress: "handled",
+  task_updated: "handled",
+  task_notification: "handled",
+  background_tasks_changed: "handled",
+  // Drives the live thinking-token estimate on the session snapshot.
+  thinking_tokens: "handled",
+  // Drives the session activity (compacting), a failed-compaction row, and
+  // plan-mode reconciliation.
+  status: "handled",
+  // Graded by outcome in its own branch: only a failure is worth a notice.
+  hook_response: "handled",
+  informational: "handled",
+  permission_denied: "handled",
+  memory_recall: "handled",
+  api_retry: "handled+notice",
+  hook_started: "ignored",
+  hook_progress: "ignored",
+  // The compaction row comes from the PostCompact hook, which also carries the
+  // trigger; the boundary itself stays countable.
+  compact_boundary: "notice",
+  control_request_progress: "notice",
+  model_refusal_fallback: "notice",
+  model_refusal_no_fallback: "notice",
+  mirror_error: "notice",
+  plugin_install: "notice",
+  session_state_changed: "notice",
+  worker_shutting_down: "notice",
+  notification: "notice",
+  files_persisted: "notice",
+  elicitation_complete: "notice",
+};
+
+/** The disposition for a runtime subtype, or `undefined` when the SDK is newer than this table. */
+export function systemSubtypeDisposition(subtype: unknown): SystemSubtypeDisposition | undefined {
+  if (typeof subtype !== "string" || !Object.hasOwn(SYSTEM_SUBTYPE_DISPOSITIONS, subtype)) {
+    return undefined;
+  }
+  return SYSTEM_SUBTYPE_DISPOSITIONS[subtype as SdkSystemSubtype];
+}
+
 /** Base SDK message with common fields */
 export interface SdkMessageBase {
   type: string;
@@ -127,6 +198,14 @@ export interface SdkResultMessage extends SdkMessageBase {
    * the client and the record a fork or file rewind must address.
    */
   user_message_uuid?: string;
+  /**
+   * Client uuids of every user message this turn consumed, including sends
+   * folded into it. Absent on a turn the CLI started itself, such as the
+   * answer to a replayed background-task notification.
+   */
+  user_message_uuids?: string[];
+  /** How many results this process wrote before this one; absent from older producers. */
+  result_index?: number;
 }
 
 /** Type guard for compact boundary message */
@@ -190,6 +269,12 @@ export interface NormalizedPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /**
+   * The permission layer refused this call (a deny rule, auto mode's
+   * classifier, `dontAsk`), as opposed to the tool running and failing.
+   * `source` is the SDK's decision-reason discriminator, e.g. `rule`.
+   */
+  toolDenied?: { reason?: string; source?: string };
   /** Tool use ID for tracking tool invocations across messages */
   toolUseId?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */
@@ -294,6 +379,32 @@ export interface ClaudeQueryControl {
   close?: () => void | Promise<void>;
 }
 
+/**
+ * Provenance of a session's command inventory.
+ *
+ * - `live`: `supportedCommands()` on the session's own turn query.
+ * - `replacement`: a `system/commands_changed` push, a full replacement.
+ * - `probe`: a zero-turn discovery CLI configured like the session's turns.
+ *   Provisional: it cannot see MCP-prompt commands or per-turn options.
+ * - `init`: names from the turn's `init` frame only (no descriptions, hints
+ *   or aliases). A cold fallback that any later read supersedes.
+ */
+export interface ClaudeCommandInventoryState {
+  authority: "live" | "replacement" | "probe" | "init";
+  /** Bounded SDK rows the catalogue was derived from; absent for init names. */
+  sdkCommands?: import("@anthropic-ai/claude-agent-sdk").SlashCommand[];
+  /** Advances whenever the inventory is replaced with different content. */
+  revision: number;
+  truncated: boolean;
+  /** The last attempt to refresh this inventory failed; it is retained only. */
+  refreshFailed?: boolean;
+  /** Discovery configuration a probe answer was computed for. */
+  probeFingerprint?: string;
+}
+
+/** A provider-reported activity within a running turn. */
+export type SessionTurnActivity = "compacting";
+
 /** Session state */
 export interface SessionState {
   id: string;
@@ -325,6 +436,28 @@ export interface SessionState {
    * question whose answer almost never changes.
    */
   commandInventory?: import("@orkestrator/protocol/native-agent").NativeAgentSlashCommand[];
+  /**
+   * Where {@link commandInventory} came from and how fresh it is. Owned by
+   * `session-manager-commands.ts`; updated by live reads, `commands_changed`
+   * pushes and init frames whether or not anybody is subscribed.
+   */
+  commandInventoryState?: ClaudeCommandInventoryState;
+  /**
+   * The per-turn inputs of the last real query that change which commands the
+   * CLI can see, so a cold discovery probe reproduces them rather than a
+   * default configuration.
+   */
+  commandDiscoveryInputs?: { readOnly: boolean; includeLocalSettings: boolean };
+  /**
+   * Which saved MCP configuration the most recent query started with, and
+   * when. Runtime-only: after a restart no query has started yet, and the
+   * next one records its own. Served by `/session/:id/runtime-health`.
+   */
+  mcpConfigRevision?: import("../services/mcp-config.js").McpConfigRevision & {
+    queryStartedAt: string;
+  };
+  /** Skill names the last explicit `reloadSkills()` reported. */
+  commandSkillNames?: string[];
   /** Last completed schema-constrained turn, authoritative across UI remounts. */
   structuredOutput?: StructuredOutputResult;
   /** Request id of the structured turn currently running or last completed. */
@@ -376,12 +509,34 @@ export interface SessionState {
   lastStreamedRevisionAt?: number;
   /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
   usage?: SessionUsageSnapshot;
+  /**
+   * The provider's running totals as of the last result message.
+   *
+   * A result's `total_cost_usd` and `modelUsage` are cumulative, not per turn:
+   * across the results of one `query()`, and since Claude Code 2.1.277 across a
+   * resume too. Each result is turned into a per-turn delta against this. When
+   * a bridge attaches without the in-memory baseline, the first turn is
+   * bootstrapped from completed stream calls instead of charging the saved
+   * transcript as new work.
+   */
+  claudeUsageBaseline?: ClaudeCumulativeUsage;
   /** Monotonic lower bound from completed model calls in the query still running. */
   inProgressUsage?: SessionUsageSnapshot;
   /** Prevents an older released query from overwriting a newer turn's live meter. */
   inProgressUsageGeneration?: number;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
   promptSuggestion?: string;
+  /**
+   * What the CLI reports doing inside the running turn when the transcript
+   * shows nothing (a `system/status` frame). Cleared when the turn ends.
+   */
+  activity?: SessionTurnActivity;
+  /**
+   * Live estimate of the current thinking block's tokens (`system/thinking_tokens`).
+   * Approximate progress for the running indicator, never billed usage.
+   * Cleared when the model's answer arrives and when the turn ends.
+   */
+  thinkingTokens?: number;
   /**
    * Whether the UI plan-mode toggle is on for this session.
    *
@@ -498,6 +653,8 @@ export interface SessionState {
    * teardown can no longer stop a live CLI writing to the rollout.
    */
   retainedQueryControls?: Set<ClaudeQueryControl>;
+  /** Dispatches whose released query is awaiting a background-task continuation. */
+  retainedContinuationRequestIds?: Set<string>;
   /**
    * Tasks the level signal dropped before their terminal edge explained why.
    *
@@ -562,6 +719,15 @@ export type StopBackgroundTaskResult =
       reason: "session_not_found" | "task_not_found" | "no_control_channel";
       message: string;
     };
+
+/** Running provider totals carried by a Claude result message. */
+export interface ClaudeCumulativeUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
 
 export interface SessionUsageSnapshot {
   usedTokens: number;
@@ -720,6 +886,11 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  /**
+   * Subset of `slashCommands` the SDK tags as bound to the local terminal
+   * (`SDKSystemMessage.terminal_slash_commands`). Absent on older CLIs.
+   */
+  terminalSlashCommands?: string[];
   skills?: string[];
   apiKeySource?: string;
   agents?: Array<{
@@ -806,6 +977,12 @@ export interface PromptOptions {
     dataUrl?: string;
     filename?: string;
   }>;
+  /**
+   * Text sent to the SDK in place of the display prompt. Set only for a
+   * selected command, whose canonical spelling may differ from what was typed
+   * (an alias, a different case); the transcript keeps the typed text.
+   */
+  providerPrompt?: string;
   /** Internal flag: set when sendPrompt is called as an automatic re-prompt
    *  (e.g. after plan rejection). Prevents infinite recursion and marks the
    *  message as system-generated so it doesn't appear as user-typed. */

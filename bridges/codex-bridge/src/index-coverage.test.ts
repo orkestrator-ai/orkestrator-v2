@@ -1000,7 +1000,7 @@ describe("codex bridge private boundary coverage", () => {
     try {
       await expect(
         __testing.hydrateMessagesFromPersistedSessionForTesting("missing-thread"),
-      ).resolves.toEqual({ messages: [], title: undefined });
+      ).resolves.toEqual({ messages: [], title: undefined, transcriptStatus: "unavailable" });
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;

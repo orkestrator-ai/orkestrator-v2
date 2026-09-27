@@ -11,6 +11,7 @@ import {
   invalidateTranscriptCatalogCache,
   resolvePersistedChildThreadIds,
 } from "./rollout.js";
+import { EMPTY_CHILD_TRANSCRIPT_SUMMARY } from "../subagent-transcript.js";
 
 let root: string | undefined;
 let previousCodexHome: string | undefined;
@@ -155,7 +156,7 @@ describe("persisted subagent identity index", () => {
       {
         resolveChildPaths: async () => new Map(),
         createTranscriptMetaLoader: () => async () => null,
-        readTranscript: async () => {
+        readChildSummary: async () => {
           throw new Error("an unresolved child must not be read");
         },
       },
@@ -198,13 +199,13 @@ describe("persisted subagent identity index", () => {
     const parts = await hydratePersistedSubagentParts("parent", records, {
       resolveChildPaths: async () => new Map(),
       createTranscriptMetaLoader: () => async (id) => ({ transcriptPath: id }),
-      readTranscript: async () => {
+      readChildSummary: async () => {
         activeReads += 1;
         totalReads += 1;
         maximumReads = Math.max(maximumReads, activeReads);
         await new Promise((resolve) => setTimeout(resolve, 0));
         activeReads -= 1;
-        return { records: [] };
+        return EMPTY_CHILD_TRANSCRIPT_SUMMARY;
       },
     });
 

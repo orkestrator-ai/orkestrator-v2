@@ -284,7 +284,13 @@ describe("rollout public helpers (continued)", () => {
     ]);
 
     expect(await getSessionMetaFromTranscriptPath(path)).toBeNull();
-    expect(getTranscriptCacheStats()).toEqual({ entries: 0, bytes: 0 });
+    // A catalogue head read never scans, indexes or caches the rollout.
+    expect(getTranscriptCacheStats()).toMatchObject({
+      entries: 0,
+      bytes: 0,
+      coldScans: 0,
+      sourceBytesRead: 0,
+    });
   });
 
   test("catalog aliases, malformed index lines, and generated title overrides are defensive", async () => {
@@ -1121,7 +1127,7 @@ describe("rollout public helpers (continued)", () => {
     ]);
   });
 
-  test("hydrates one rollout defensively while skipping malformed and synthetic records", async () => {
+  test("hydrates one rollout defensively, marking malformed records and skipping synthetic ones", async () => {
     const root = await mkdtemp(join(tmpdir(), "rollout-hydration-"));
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "2026", "07", "thread-hydrate.jsonl");
@@ -1187,8 +1193,24 @@ describe("rollout public helpers (continued)", () => {
     process.env.CWD = "/workspace";
     try {
       const hydrated = await hydrateMessagesFromPersistedSession("thread-hydrate");
+      // A line that is not JSON is not silently dropped: it stays visible, in
+      // place, with its byte range, and the result is flagged as degraded.
+      expect(hydrated.transcriptStatus).toBe("degraded");
+      expect(hydrated.messages[0]).toMatchObject({
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "status",
+            severity: "warning",
+            content: expect.stringMatching(
+              /^A rollout record could not be restored \(not valid JSON; rollout bytes \d+–\d+\)\.$/,
+            ),
+          },
+        ],
+      });
       expect(
-        hydrated.messages.map((message) => ({
+        hydrated.messages.slice(1).map((message) => ({
           role: message.role,
           content: message.content,
           createdAt: message.createdAt,

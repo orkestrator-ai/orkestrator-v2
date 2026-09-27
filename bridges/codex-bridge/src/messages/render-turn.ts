@@ -23,7 +23,11 @@ import {
 import { relative } from "node:path";
 import { deriveTranscriptSubagentPartsForTurn } from "../subagent-transcript-parts.js";
 import { indexAgentPaths } from "../subagent-spawn.js";
-import { readCachedTranscript } from "../transcript-cache.js";
+import {
+  cachedTranscriptQueries,
+  type TranscriptLike,
+  type TranscriptQueries,
+} from "../transcript-queries.js";
 import {
   createSharedTranscriptMetaLoader,
   resolvePersistedChildThreadIds,
@@ -318,7 +322,13 @@ function ownedSubagentIds(items: EngineItem[]): string[] | undefined {
 export interface SubagentPartsLoaderDependencies {
   createTranscriptMetaLoader: typeof createSharedTranscriptMetaLoader;
   deriveTranscriptParts: typeof deriveTranscriptSubagentPartsForTurn;
-  readTranscript: typeof readCachedTranscript;
+  /**
+   * Bounded rollout queries: the parent's current-turn records and each
+   * child's incremental summary. Defaults to the shared rollout cache.
+   */
+  transcriptQueries?: TranscriptQueries;
+  /** Whole in-memory transcripts instead of `transcriptQueries` (fixtures). */
+  readTranscript?: (path: string) => Promise<TranscriptLike>;
   resolveChildPaths?: typeof resolvePersistedChildThreadIds;
 }
 
@@ -335,7 +345,7 @@ export async function loadSubagentPartsFromTranscripts(
   dependencies: SubagentPartsLoaderDependencies = {
     createTranscriptMetaLoader: createSharedTranscriptMetaLoader,
     deriveTranscriptParts: deriveTranscriptSubagentPartsForTurn,
-    readTranscript: readCachedTranscript,
+    transcriptQueries: cachedTranscriptQueries,
     resolveChildPaths: resolvePersistedChildThreadIds,
   },
 ): Promise<NormalizedPart[]> {
@@ -393,7 +403,9 @@ export async function loadSubagentPartsFromTranscripts(
     activityAgentIdsByPath: indexAgentPaths(options.items),
     resolveChildPaths: resolveChildPathsCached,
     loadSessionMeta,
-    loadTranscript: (path) => dependencies.readTranscript(path),
+    ...(dependencies.readTranscript
+      ? { loadTranscript: dependencies.readTranscript }
+      : { transcriptQueries: dependencies.transcriptQueries ?? cachedTranscriptQueries }),
   });
   // Native collab items carry live agent status; fold it onto the transcript parts.
   const reconciled = applyCodexCollabStateToSubagentParts(transcriptParts, options.items);

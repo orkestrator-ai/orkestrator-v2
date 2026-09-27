@@ -22,7 +22,6 @@ import {
 } from "@orkestrator/protocol/transcript-window";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { streamSSE } from "hono/streaming";
-import { readCachedTranscript } from "./transcript-cache.js";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";
 import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";

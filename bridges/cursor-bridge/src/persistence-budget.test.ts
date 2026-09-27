@@ -202,6 +202,174 @@ describe("serializeWithinBudget (pure)", () => {
   });
 });
 
+describe("serializeWithinBudget keeps the newest bounded tail", () => {
+  type Record_ = EssentialRecord & { messages: BridgeMessage[] };
+  function onlyRecord(serialized: string): Record_ {
+    return (JSON.parse(serialized) as { sessions: Record_[] }).sessions[0]!;
+  }
+
+  /** Parts are counted too: give each message a second part. */
+  function twoPartMessage(id: string, text: string): BridgeMessage {
+    const message = textMessage(id, text);
+    message.parts.push({
+      type: "thinking",
+      content: text,
+      sourcePartId: `${id}:1`,
+      sourceMessageId: id,
+    });
+    return message;
+  }
+
+  test("a transcript that does not fit keeps exactly the newest whole messages that do", () => {
+    // Multibyte and escaped text, so a character count would misjudge every cut.
+    const text = (n: number) => `${'é漢\u{1F600}"\\\n'.repeat(40)}-${n}`;
+    const messages = [0, 1, 2, 3].map((n) => twoPartMessage(`m${n}`, text(n)));
+    const session = budgeted("s1", 1, messages, {
+      droppedMessages: 5,
+      droppedParts: 11,
+      revision: 7,
+    });
+    const full = serializeWithinBudget(ENVELOPE, [session], Number.MAX_SAFE_INTEGER);
+    expect(full.shed).toEqual([]);
+    const minimal = Buffer.byteLength(
+      JSON.stringify({
+        ...ENVELOPE,
+        sessions: [
+          {
+            ...session.essential,
+            droppedMessages: 9,
+            droppedParts: 19,
+            transcriptTruncated: true,
+            revision: 8,
+            messages: [],
+          },
+        ],
+      }),
+    );
+
+    // Every budget from "whole transcript" down to "nothing fits" yields a
+    // contiguous newest tail, byte-exact and within the budget.
+    let previousKept = messages.length;
+    for (let budget = full.bytes; budget >= minimal; budget -= 97) {
+      const result = serializeWithinBudget(ENVELOPE, [session], budget);
+      expect(Buffer.byteLength(result.serialized)).toBe(result.bytes);
+      expect(result.bytes).toBeLessThanOrEqual(budget);
+      const record = onlyRecord(result.serialized);
+      const kept = record.messages.length;
+      expect(kept).toBeLessThanOrEqual(previousKept);
+      previousKept = kept;
+      expect(record.messages).toEqual(messages.slice(messages.length - kept));
+      if (kept === messages.length) {
+        expect(result.shed).toEqual([]);
+        expect(record).toMatchObject({ droppedMessages: 5, droppedParts: 11, revision: 7 });
+        expect(record.transcriptTruncated).toBe(false);
+      } else {
+        expect(result.shed).toEqual(["s1"]);
+        const dropped = messages.length - kept;
+        expect(record.droppedMessages).toBe(5 + dropped);
+        expect(record.droppedParts).toBe(11 + 2 * dropped);
+        expect(record.transcriptTruncated).toBe(true);
+        expect(record.revision).toBe(8);
+      }
+    }
+    expect(previousKept).toBe(0);
+  });
+
+  test("the tail boundary is exact to the byte", () => {
+    const messages = [0, 1, 2].map((n) => textMessage(`m${n}`, `ü${"x".repeat(200)}${n}`));
+    const session = budgeted("s1", 1, messages);
+    // The smallest budget that keeps the newest two.
+    const twoKept = JSON.parse(
+      serializeWithinBudget(ENVELOPE, [session], Number.MAX_SAFE_INTEGER).serialized,
+    ) as { sessions: Array<Record<string, unknown>> };
+    twoKept.sessions[0] = {
+      ...twoKept.sessions[0],
+      droppedMessages: 1,
+      droppedParts: 1,
+      transcriptTruncated: true,
+      revision: 2,
+      messages: messages.slice(1),
+    };
+    const exactBudget = Buffer.byteLength(JSON.stringify(twoKept));
+    const exact = serializeWithinBudget(ENVELOPE, [session], exactBudget);
+    expect(exact.bytes).toBe(exactBudget);
+    expect(onlyRecord(exact.serialized).messages.map((message) => message.id)).toEqual([
+      "m1",
+      "m2",
+    ]);
+    const under = serializeWithinBudget(ENVELOPE, [session], exactBudget - 1);
+    expect(onlyRecord(under.serialized).messages.map((message) => message.id)).toEqual(["m2"]);
+    expect(onlyRecord(under.serialized).droppedMessages).toBe(2);
+  });
+
+  test("older sessions are offered what newer ones leave, newest messages first", () => {
+    const big = budgeted("newer", 9, [
+      textMessage("n0", "n".repeat(4_000)),
+      textMessage("n1", "n".repeat(4_000)),
+    ]);
+    const small = budgeted("older", 1, [
+      textMessage("o0", "o".repeat(100)),
+      textMessage("o1", "o".repeat(100)),
+    ]);
+    const full = serializeWithinBudget(ENVELOPE, [small, big], Number.MAX_SAFE_INTEGER);
+    // Too small for the newer session's older message, but room for the
+    // older session's whole transcript.
+    const result = serializeWithinBudget(ENVELOPE, [small, big], full.bytes - 4_000);
+    const records = (
+      JSON.parse(result.serialized) as {
+        sessions: Array<{ id: string; messages: BridgeMessage[] }>;
+      }
+    ).sessions;
+    expect(records.map((record) => record.id)).toEqual(["older", "newer"]);
+    expect(records[1]!.messages.map((message) => message.id)).toEqual(["n1"]);
+    expect(records[0]!.messages.map((message) => message.id)).toEqual(["o0", "o1"]);
+    expect(result.shed).toEqual(["newer"]);
+  });
+
+  test("encodes each message at most once and never re-reads an essential record", () => {
+    let encodings = 0;
+    const counted = (id: string): BridgeMessage => {
+      const message = textMessage(id, "c".repeat(300));
+      return {
+        ...message,
+        toJSON() {
+          encodings += 1;
+          const { toJSON: _toJSON, ...plain } = this as BridgeMessage & { toJSON?: unknown };
+          return plain;
+        },
+      } as BridgeMessage;
+    };
+    let reads = 0;
+    const record = essential("s1");
+    const session: BudgetedSession = {
+      id: "s1",
+      lastAccessed: 1,
+      messages: Array.from({ length: 20 }, (_, index) => counted(`m${index}`)),
+      get essential() {
+        reads += 1;
+        return record;
+      },
+    };
+    const full = serializeWithinBudget(ENVELOPE, [session], Number.MAX_SAFE_INTEGER);
+    expect(encodings).toBe(20);
+    expect(reads).toBe(1);
+
+    encodings = 0;
+    reads = 0;
+    // About half the transcript's room: the newest messages that fit are
+    // encoded once each, the next one once to learn it does not fit, and
+    // nothing older is touched.
+    const messageBytes = Buffer.byteLength(JSON.stringify(textMessage("m0", "c".repeat(300))));
+    const half = serializeWithinBudget(ENVELOPE, [session], full.bytes - 10 * (messageBytes + 1));
+    expect(half.shed).toEqual(["s1"]);
+    const kept = onlyRecord(half.serialized).messages.length;
+    expect(kept).toBeGreaterThan(5);
+    expect(kept).toBeLessThan(20);
+    expect(encodings).toBe(kept + 1);
+    expect(reads).toBe(1);
+  });
+});
+
 describe("the real state file at its default ceiling", () => {
   let harness: RouterHarness;
   let warn: Mock<typeof console.warn>;
@@ -268,7 +436,7 @@ describe("the real state file at its default ceiling", () => {
     return (published?.sessions ?? []) as Array<Record<string, unknown>>;
   }
 
-  test("three 12 MiB transcripts and a small session publish every identity; shed copies stay live", async () => {
+  test("three 12 MiB transcripts and a small session publish every identity; the oldest keeps its newest tail", async () => {
     const fixture = largeFixture();
     const liveOldestMessages = fixture.oldest.messages;
 
@@ -282,8 +450,11 @@ describe("the real state file at its default ceiling", () => {
         .sort(),
     );
     const byId = new Map(records.map((record) => [record.id as string, record]));
-    // Oldest-touched transcript is the one shed; the rest are kept whole.
-    expect(byId.get(fixture.oldest.id)!.messages).toEqual([]);
+    // Oldest-touched transcript is the one shortened, to the newest message
+    // that fits in what the others left; the rest are kept whole.
+    expect(
+      (byId.get(fixture.oldest.id)!.messages as BridgeMessage[]).map((message) => message.id),
+    ).toEqual(["oldest-1"]);
     expect(byId.get(fixture.oldest.id)!.transcriptTruncated).toBe(true);
     for (const kept of [fixture.middle, fixture.newest, fixture.small]) {
       expect((byId.get(kept.id)!.messages as unknown[]).length).toBe(kept.messages.length);
@@ -323,13 +494,15 @@ describe("the real state file at its default ceiling", () => {
       expect(restored!.composer.selectedModeId).toBe("plan");
     }
 
-    // A fresh process sees the shed transcript as explicitly truncated, with
-    // the absolute base carried forward rather than reset, and a new revision.
+    // A fresh process sees the shortened transcript as explicitly truncated,
+    // with the absolute base advanced by exactly what was dropped rather than
+    // reset, and a new revision.
     const shed = sessions.get(fixture.oldest.id)!;
-    expect(shed.messages).toEqual([]);
+    expect(shed.messages.map((message) => message.id)).toEqual(["oldest-1"]);
+    expect(shed.messages[0]!.content.length).toBe(3 * MiB);
     expect(shed.transcriptTruncated).toBe(true);
-    expect(shed.droppedMessages).toBe(42);
-    expect(shed.droppedParts).toBe(9);
+    expect(shed.droppedMessages).toBe(41);
+    expect(shed.droppedParts).toBe(8);
     expect(shed.revision).toBe(10);
     expect(shed.agentId).toBe("agent-oldest");
     expect(sessions.get(fixture.newest.id)!.messages).toHaveLength(2);
@@ -351,9 +524,11 @@ describe("the real state file at its default ceiling", () => {
     await persistBarrier();
     expect((await stat(harness.stateFile)).size).toBe(MAX_STATE_FILE_BYTES);
     let records = await publishedSessions();
-    expect(
-      records.filter((record) => (record.messages as unknown[]).length === 0).map((r) => r.id),
-    ).toEqual([fixture.oldest.id]);
+    const retainedCount = (id: string) =>
+      (records.find((record) => record.id === id)!.messages as unknown[]).length;
+    // The oldest still holds its one-message tail.
+    expect(retainedCount(fixture.oldest.id)).toBe(1);
+    expect(retainedCount(fixture.middle.id)).toBe(2);
 
     fixture.small.promptJournal.set("prepared-at-limit", {
       requestId: "prepared-at-limit",
@@ -369,13 +544,12 @@ describe("the real state file at its default ceiling", () => {
     expect(small.promptJournal).toEqual([
       { requestId: "prepared-at-limit", state: "ambiguous", acceptedAt: 1 },
     ]);
-    // Room was made by shedding the next-oldest transcript, not the record.
-    const emptied = records
-      .filter((record) => (record.messages as unknown[]).length === 0)
-      .map((record) => record.id)
-      .sort();
-    expect(emptied).toEqual([fixture.oldest.id, fixture.middle.id].sort());
-    expect(fixture.middle.messages).toHaveLength(2);
+    // Room was made by dropping the oldest session's remaining tail message,
+    // not the record, and nothing newer lost anything.
+    expect(retainedCount(fixture.oldest.id)).toBe(0);
+    expect(retainedCount(fixture.middle.id)).toBe(2);
+    expect(retainedCount(fixture.newest.id)).toBe(2);
+    expect(fixture.oldest.messages).toHaveLength(2);
   });
 
   test("essential state alone over budget rejects the barrier and keeps the old file; closing reclaims it", async () => {

@@ -808,10 +808,13 @@ When touching the SDK bridge:
   reached disk, and prompt/steer dispatch, create, resume and identity-changing
   attach all wait for it. `schedulePersist()` is best-effort. Both share one
   serialized queue, so never write the state file directly. When the
-  aggregate state outgrows `MAX_STATE_FILE_BYTES`, the oldest-touched persisted
-  transcript copies are shed (`src/persistence-budget.ts`). If the recovery
-  metadata alone does not fit, the publication fails with a typed error rather
-  than being skipped.
+  aggregate state outgrows `MAX_STATE_FILE_BYTES`, persisted transcript copies
+  are cut to their newest whole messages, oldest-touched sessions first
+  (`src/persistence-budget.ts`). If the recovery metadata alone does not fit,
+  the publication fails with a typed error rather than being skipped. Each
+  write uses a unique temporary file, flushed before the rename, and the
+  directory is flushed after it: process-crash durable everywhere, power-loss
+  durable on Linux.
 - The steer journal is bounded by count and bytes (`src/steer-journal.ts`).
   Records that could still be retried against the running turn are never
   evicted. A new steer that does not fit is refused with 429

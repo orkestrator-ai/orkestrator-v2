@@ -7,7 +7,7 @@
  * the routes are all production code; the fake agent only counts sends.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   loadPersistedState,
@@ -135,10 +135,11 @@ describe("mandatory publication barrier", () => {
       expect(hold.writes()).toBe(1);
       expect(hold.renameAttempts()).toBe(1);
       expect(hold.renames()).toBe(0);
-      const temporary = JSON.parse(await readFile(`${harness.stateFile}.tmp`, "utf8")) as {
-        sessions: Array<{ composer: { selectedModelId?: string } }>;
-      };
-      expect(temporary.sessions[0]!.composer.selectedModelId).toBe("never-published");
+      // The failed write's uniquely named temporary file is removed, not left
+      // for a later write to trip over.
+      expect((await readdir(harness.stateRoot)).filter((name) => name.endsWith(".tmp"))).toEqual(
+        [],
+      );
       expect(await harness.readPublished()).toEqual(before!);
     } finally {
       hold.restore();

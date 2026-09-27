@@ -9,6 +9,7 @@ import {
   terminateProcessTree,
 } from "./commands-dependencies.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
+import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type {
@@ -589,6 +590,12 @@ export function invalidateEnvironmentRemoteFreshness(
  * count is unchanged by design. With a 5 s panel poll, any bound of 5 s or
  * more would serve every other read from the previous poll and let a change
  * take up to ~10 s to show, over the 6 s Files-panel budget.
+ *
+ * Container *trees* are the exception (step 18): while a recent, complete
+ * file list covers them they use `CONTAINER_TREE_MAX_AGE_MS`, because a
+ * Git-visible membership change reaches the tree through that list within the
+ * budget anyway (see `DiffStatsService`). Ad hoc (untracked) tree reads have
+ * no such signal and keep this bound.
  */
 export const DIFF_CACHE_MAX_AGE_MS = 3_000;
 
@@ -606,6 +613,7 @@ export const diffStatsService = new DiffStatsService({
   emit: (event, payload) => diffStatsEmit?.(event, payload),
   admission: gitDockerScanPool,
   fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
+  containerTreeMaxAgeMs: CONTAINER_TREE_MAX_AGE_MS,
   remoteFreshness: (target) =>
     target.kind === "container" && target.containerId
       ? containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)

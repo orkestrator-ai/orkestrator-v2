@@ -19,7 +19,11 @@ import {
 } from "@orkestrator/protocol/worktree-snapshots";
 import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { responseDigest, semanticFileListDigest } from "./worktree-snapshot-digest.js";
+import {
+  responseDigest,
+  semanticFileListDigest,
+  treeMembershipDigest,
+} from "./worktree-snapshot-digest.js";
 import {
   WorktreeTreeSnapshots,
   type TreeSnapshotLimits,
@@ -28,6 +32,7 @@ import {
 import {
   AdhocWorktreeReads,
   worktreeTargetKey,
+  type AdhocTreeCacheLimits,
   type FileListScanRequest,
   type FileListScanResult,
   type TreeWalkRequest,
@@ -85,6 +90,18 @@ import type { WorkAdmissionPool } from "./work-admission.js";
  * keyed view (`WORKTREE_SNAPSHOT_CHANGED_EVENT`, see
  * `@orkestrator/protocol/worktree-snapshots`) with its own contiguous revision,
  * so a client can re-read exactly when something it shows changed.
+ *
+ * ## Container trees
+ *
+ * A container has no watcher, so its tree is age-bounded. While its file list
+ * is complete and was scanned within `containerTreeMaxAgeMs`, the tree is
+ * served for that longer bound, because the file-list scans the Files panel
+ * already pays for carry a membership signal: a Git-visible create, delete or
+ * rename changes the list's paths/statuses (`treeMembershipDigest`), which
+ * hints the tree at once. Otherwise (no recent list, a truncated list, a
+ * failing scan) the tree falls back to `fileListMaxAgeMs`. Ignored files and
+ * empty directories are invisible to Git; for those the longer bound is the
+ * whole guarantee.
  */
 
 export interface DiffStatsTarget {
@@ -121,7 +138,13 @@ export interface DiffStatsServiceOptions {
   safetyNetIntervalMs?: number;
   /** How long an unwatched target's file list may be served to a reader. */
   fileListMaxAgeMs?: number;
+  /**
+   * How long a container's tree may be served while its recent, complete file
+   * list stands in for a watcher (see "Container trees" above).
+   */
+  containerTreeMaxAgeMs?: number;
   treeLimits?: Partial<TreeSnapshotLimits>;
+  adhocTreeCache?: Partial<AdhocTreeCacheLimits>;
   failureRetry?: Partial<RetryPolicy>;
   watcherRetry?: Partial<RetryPolicy>;
   now?: () => string;
@@ -162,6 +185,19 @@ export const DIFF_POLL_INTERVAL_MS = 15_000;
 export const DIFF_SAFETY_NET_INTERVAL_MS = 120_000;
 /** Unwatched file lists: comfortably under the Files panel's 5 s cadence. */
 export const FILE_LIST_MAX_AGE_MS = 3_000;
+/**
+ * Container trees while a recent complete file list covers them.
+ *
+ * With the Files panel polling every 5 s, any bound under 5 s re-walks on
+ * every poll (12 container execs a minute for a quiet tree); 10 s serves up
+ * to two polls of every three from the cache (about 4 a minute). A Git-visible membership change
+ * still reaches the tree through the next file-list scan (the panel's own
+ * ≤ 6 s budget plus one walk); only Git-invisible ones (ignored files, empty
+ * directories) can take up to this bound plus one poll, about 15 s. Manual
+ * refreshes, application mutations and container restarts are not bounded by
+ * it at all.
+ */
+export const CONTAINER_TREE_MAX_AGE_MS = 10_000;
 export const DEFAULT_FAILURE_RETRY: RetryPolicy = { baseMs: 5_000, maxMs: 60_000, maxAttempts: 5 };
 export const DEFAULT_WATCHER_RETRY: RetryPolicy = {
   baseMs: 30_000,
@@ -215,6 +251,8 @@ type FileListBody = {
   changes: unknown[];
   truncated: boolean;
   semanticDigest: string;
+  /** Containers only: paths/statuses, the tree's membership signal. */
+  membershipDigest?: string;
   responseDigest?: string;
   epoch: number;
   qualified: boolean;
@@ -291,6 +329,7 @@ export class DiffStatsService {
   private readonly watcherRetry: RetryPolicy;
   private readonly tree: WorktreeTreeSnapshots;
   private readonly adhoc: AdhocWorktreeReads;
+  private readonly containerTreeMaxAgeMs: number;
 
   constructor(options: DiffStatsServiceOptions) {
     this.options = {
@@ -327,6 +366,7 @@ export class DiffStatsService {
     this.admission = options.admission ?? null;
     this.failureRetry = { ...DEFAULT_FAILURE_RETRY, ...options.failureRetry };
     this.watcherRetry = { ...DEFAULT_WATCHER_RETRY, ...options.watcherRetry };
+    this.containerTreeMaxAgeMs = options.containerTreeMaxAgeMs ?? CONTAINER_TREE_MAX_AGE_MS;
 
     const walkTree =
       options.walkTree ??
@@ -344,6 +384,7 @@ export class DiffStatsService {
         return {
           qualified: entry ? this.isQualified(entry) : false,
           watcherGeneration: entry?.watcherGeneration ?? -1,
+          maxAgeMs: entry ? this.treeMaxAge(entry) : undefined,
         };
       },
       onRevision: (key) => {
@@ -355,6 +396,9 @@ export class DiffStatsService {
     this.adhoc = new AdhocWorktreeReads({
       admission: this.admission,
       metrics: this.metrics,
+      monotonicNow: this.options.monotonicNow,
+      // No membership signal covers an ad hoc identity: the unwatched bound.
+      treeCache: { maxAgeMs: this.options.fileListMaxAgeMs, ...options.adhocTreeCache },
       walkTree,
       readFiles:
         options.readFiles ??
@@ -405,7 +449,9 @@ export class DiffStatsService {
         }
       }
       // A retarget or a resume from `pause` starts a new lineage: nothing
-      // observed before it may be served or published after it.
+      // observed before it may be served or published after it — including an
+      // ad hoc tree read while the environment was paused.
+      this.adhoc.invalidateTarget(target);
       this.beginLineage(existing);
       existing.active = true;
       this.detachWatcher(existing);
@@ -430,6 +476,7 @@ export class DiffStatsService {
       failures: 0,
     };
     this.entries.set(target.environmentId, entry);
+    this.adhoc.invalidateTarget(target);
     this.beginLineage(entry);
     this.attachWatcher(entry);
     this.restartTimer(entry);
@@ -465,6 +512,8 @@ export class DiffStatsService {
     this.stopWork(entry);
     this.entries.delete(environmentId);
     this.tree.release(environmentId);
+    // A retired root keeps no cached tree on either path.
+    this.adhoc.invalidateTarget(entry.target);
     return entry;
   }
 
@@ -496,6 +545,7 @@ export class DiffStatsService {
     entry.fileList = undefined;
     entry.failure = undefined;
     this.tree.release(environmentId);
+    this.adhoc.invalidateTarget(entry.target);
     this.publishSnapshot(entry);
   }
 
@@ -513,6 +563,7 @@ export class DiffStatsService {
       if (entry?.last) publishedCounts = true;
       if (entry?.published) publishedSnapshots = true;
     }
+    this.adhoc.clear();
     // No per-environment removals on shutdown, but the snapshot did change:
     // advance the revision so a conditional read cannot answer `unchanged`.
     if (publishedCounts) this.revision += 1;
@@ -670,6 +721,7 @@ export class DiffStatsService {
     retryTimers: number;
     tree: ReturnType<WorktreeTreeSnapshots["status"]>;
     adhocPending: number;
+    adhocTrees: ReturnType<AdhocWorktreeReads["treeCacheStatus"]>;
   } {
     let active = 0;
     let watched = 0;
@@ -690,6 +742,7 @@ export class DiffStatsService {
       retryTimers,
       tree: this.tree.status(),
       adhocPending: this.adhoc.pending,
+      adhocTrees: this.adhoc.treeCacheStatus(),
     };
   }
 
@@ -727,6 +780,28 @@ export class DiffStatsService {
       containerId: entry.target.containerId,
       admissionTarget: `${entry.targetKey}#tree`,
     };
+  }
+
+  /**
+   * The age bound for this entry's unqualified tree body right now (see
+   * "Container trees" above). The longer container bound needs a file-list
+   * scan recent enough to have reported any Git-visible membership change,
+   * complete (a truncated list hides what lies past its cap), and no failure
+   * since (a failing scan reports nothing).
+   */
+  private treeMaxAge(entry: DiffStatsEntry): number {
+    const list = entry.fileList;
+    if (
+      entry.target.kind !== "container" ||
+      !list ||
+      list.truncated ||
+      list.membershipDigest === undefined ||
+      entry.failure ||
+      this.options.monotonicNow() - list.completedAt > this.containerTreeMaxAgeMs
+    ) {
+      return this.options.fileListMaxAgeMs;
+    }
+    return Math.max(this.containerTreeMaxAgeMs, this.options.fileListMaxAgeMs);
   }
 
   private isQualified(entry: DiffStatsEntry): boolean {
@@ -841,7 +916,9 @@ export class DiffStatsService {
   private periodic(entry: DiffStatsEntry, intervalMs: number): void {
     if (!entry.active) return;
     // A watcher can miss a burst; the safety tick must reconcile both views.
-    this.tree.hint(entry.target.environmentId);
+    // An unwatched tree is age-bounded instead: every read past its bound
+    // re-walks, so a poll tick would only add a walk while a panel reads.
+    if (this.isQualified(entry)) this.tree.hint(entry.target.environmentId);
     const now = this.options.monotonicNow();
     const recentlyScanned =
       entry.lastScanStartedAt !== undefined && now - entry.lastScanStartedAt < intervalMs / 2;
@@ -959,10 +1036,17 @@ export class DiffStatsService {
     const truncated = result.stats?.truncated === true;
     const semanticDigest = semanticFileListDigest(changes, truncated);
     if (entry.fileList?.semanticDigest !== semanticDigest) entry.fileListRevision += 1;
+    // A container tree has no watcher; a Git-visible create, delete or rename
+    // shows up here first, so it dirties the tree now instead of waiting out
+    // the tree's age bound. Content-only edits leave paths and statuses alone.
+    const previousMembership = entry.fileList?.membershipDigest;
+    const membershipDigest =
+      target.kind === "container" ? treeMembershipDigest(changes, truncated) : undefined;
     entry.fileList = {
       changes,
       truncated,
       semanticDigest,
+      membershipDigest,
       epoch: attempt.epoch,
       qualified: attempt.qualified,
       watcherGeneration: attempt.watcherGeneration,
@@ -981,6 +1065,9 @@ export class DiffStatsService {
       };
       entry.last = change;
       this.announce(change);
+    }
+    if (membershipDigest !== undefined && membershipDigest !== previousMembership) {
+      this.tree.hint(target.environmentId);
     }
     this.publishSnapshot(entry);
   }

@@ -74,6 +74,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
   }
   if (message.method === "session/new" && typeof message.id === "number") {
     recordSessionRequest(message);
+    if (rejectInvalidMcpServers(message)) return true;
     write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
     // Straight after the answer, as agents do: this lands before the bridge
     // has attached a handler for the session it has only just learned about.
@@ -221,6 +222,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
   }
   if (message.method === "session/load" && typeof message.id === "number") {
     recordSessionRequest(message);
+    if (rejectInvalidMcpServers(message)) return true;
     if (process.env.FAKE_ACP_LIFECYCLE_FILE) {
       appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `load:${process.pid}\n`);
     }
@@ -678,6 +680,43 @@ export function handleSessionMessage(message: JsonObject): boolean {
   }
 
   return false;
+}
+
+/**
+ * Grok deserializes `mcpServers` strictly and fails the whole request on a
+ * malformed entry, so the fake does too: `mcpServers` must be an array and
+ * remote servers need `{ name, value }[]` headers.
+ */
+function invalidMcpServers(message: JsonObject): boolean {
+  const params = isObject(message.params) ? message.params : {};
+  if (params.mcpServers === undefined) return false;
+  if (!Array.isArray(params.mcpServers)) return true;
+  return params.mcpServers.some(
+    (server) =>
+      isObject(server) &&
+      (server.type === "http" || server.type === "sse") &&
+      !(
+        Array.isArray(server.headers) &&
+        server.headers.every(
+          (header) =>
+            isObject(header) && typeof header.name === "string" && typeof header.value === "string",
+        )
+      ),
+  );
+}
+
+function rejectInvalidMcpServers(message: JsonObject): boolean {
+  if (!invalidMcpServers(message)) return false;
+  write({
+    jsonrpc: "2.0",
+    id: message.id,
+    error: {
+      code: -32602,
+      message: "Invalid params",
+      data: "data did not match any variant of untagged enum McpServer",
+    },
+  });
+  return true;
 }
 
 function recordSessionRequest(message: JsonObject): void {

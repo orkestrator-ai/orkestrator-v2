@@ -9,6 +9,7 @@ import {
   PROTOCOL_VERSION,
   type InitializeRequest,
   type InitializeResponse,
+  type McpServer,
 } from "@agentclientprotocol/sdk";
 import type {
   NativeAgentComposerState,
@@ -643,8 +644,12 @@ export function mcpConnectionKey(connection?: AgentMcpConnection): string {
   return connection ? `${connection.url}\u0000${connection.token}` : "";
 }
 
-/** MCP launch configuration for one ACP session. */
-export function configuredAcpMcpServers(connection?: AgentMcpConnection): JsonObject[] {
+/**
+ * MCP launch configuration for one ACP session. Typed against the ACP schema
+ * because agents deserialize it strictly: Grok rejects the whole `session/new`
+ * with "Invalid params" when `headers` is a map instead of `{ name, value }[]`.
+ */
+export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpServer[] {
   const url = connection?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = connection?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (!url || !token) return [];
@@ -662,7 +667,7 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): JsonOb
       name: "orkestrator",
       type: "http",
       url,
-      headers: { Authorization: `Bearer ${token}` },
+      headers: [{ name: "Authorization", value: `Bearer ${token}` }],
     },
   ];
 }

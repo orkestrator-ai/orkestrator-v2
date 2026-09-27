@@ -2932,6 +2932,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             newMessages.length === 0 &&
             page.messages.length > 0 &&
             page.nextCursor &&
+            page.nextCursor !== before &&
             duplicatePageSkipsRef.current < MAX_DUPLICATE_PAGE_SKIPS
           ) {
             duplicatePageSkipsRef.current += 1;

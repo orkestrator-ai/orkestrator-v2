@@ -1497,6 +1497,82 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.turn.phase).toBe("idle");
   });
 
+  test("pages a direct cursor without bootstrapping through the joined snapshot", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          historyCursor: "direct-before-m3",
+          historyPaging: "direct",
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [
+      () => ({ ...historyPage([message("m1"), message("m2")]), historyEpoch: "epoch-1" }),
+    ];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+    expect(messagePageCalls).toEqual([{ before: "direct-before-m3" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+  });
+
+  test("steps past a direct page holding only rows already on screen", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m3"), message("m4")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+
+    // m3 ages out of the live tail but stays on screen; only then does the
+    // provider start offering a direct cursor, positioned at the tail's head.
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-2", [message("m4"), message("m5")], {
+          historyCursor: "direct-before-m4",
+          historyPaging: "direct",
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4", "m5"]);
+
+    messagePages = [
+      () => ({
+        ...historyPage([message("m3")], { nextCursor: "direct-before-m3" }),
+        historyEpoch: "epoch-1",
+      }),
+      () => ({ ...historyPage([message("m1"), message("m2")]), historyEpoch: "epoch-1" }),
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(messagePageCalls).toEqual([
+      { before: "direct-before-m4" },
+      { before: "direct-before-m3" },
+    ]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+      "m5",
+    ]);
+  });
+
   test("does not override an incomplete preview the server marks non-pageable", async () => {
     transcriptUpdates = [
       () =>

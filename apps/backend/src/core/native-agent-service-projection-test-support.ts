@@ -75,6 +75,8 @@ export function createProviderStub(
     messages?: (sessionId: string) => Promise<unknown[]>;
     interactiveSnapshot?: (sessionId: string) => Promise<ProviderInteractiveSnapshot>;
     transcriptSnapshot?: NativeAgentRuntimeProvider["transcriptSnapshot"];
+    transcriptDetail?: NativeAgentRuntimeProvider["transcriptDetail"];
+    transcriptPage?: NativeAgentRuntimeProvider["transcriptPage"];
     sessionStateSnapshot?: NativeAgentRuntimeProvider["sessionStateSnapshot"];
     modelCatalog?: NativeAgentRuntimeProvider["modelCatalog"];
     rawModelCatalog?: NativeAgentRuntimeProvider["rawModelCatalog"];
@@ -114,6 +116,10 @@ export function createProviderStub(
   const transcriptSnapshot = behaviour.transcriptSnapshot
     ? mock(behaviour.transcriptSnapshot)
     : undefined;
+  const transcriptDetail = behaviour.transcriptDetail
+    ? mock(behaviour.transcriptDetail)
+    : undefined;
+  const transcriptPage = behaviour.transcriptPage ? mock(behaviour.transcriptPage) : undefined;
   const sessionStateSnapshot = behaviour.sessionStateSnapshot
     ? mock(behaviour.sessionStateSnapshot)
     : undefined;
@@ -146,6 +152,8 @@ export function createProviderStub(
     messages: behaviour.messages ?? (async () => []),
     interactiveSnapshot,
     transcriptSnapshot,
+    transcriptDetail,
+    transcriptPage,
     sessionStateSnapshot,
     modelCatalog,
     rawModelCatalog,
@@ -182,6 +190,8 @@ export function createProviderStub(
     dismissSuggestedPrompt,
     interactiveSnapshot,
     transcriptSnapshot,
+    transcriptDetail,
+    transcriptPage,
     sessionStateSnapshot,
     modelCatalog,
     rawModelCatalog,

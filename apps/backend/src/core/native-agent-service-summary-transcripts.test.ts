@@ -1,0 +1,297 @@
+/**
+ * The native projection over a provider that serves lightweight summaries.
+ *
+ * The provider stub answers with the real protocol helpers a v2 bridge uses,
+ * so these tests pin what the backend does with summary windows, remote
+ * detail locators and direct history cursors — and, as importantly, which
+ * expensive paths it no longer takes: legacy full-transcript reads, joined
+ * projection refreshes and interactive snapshots.
+ */
+import { describe, expect, mock, test } from "bun:test";
+import {
+  bridgeTranscriptPage,
+  bridgeTranscriptSummaryUpdate,
+  readBridgeTranscriptDetail,
+} from "@orkestrator/protocol/bridge-transcript-summary";
+import type {
+  ProviderTranscriptDetail,
+  ProviderTranscriptPage,
+  ProviderTranscriptSnapshot,
+} from "./agent-provider-contract.js";
+import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+
+const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
+
+interface TestMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  parts: Array<Record<string, unknown>>;
+  createdAt: string;
+}
+
+function message(id: string, parts: Array<Record<string, unknown>> = []): TestMessage {
+  return {
+    id,
+    role: "assistant",
+    content: `message ${id}`,
+    parts,
+    createdAt: "2026-09-27T00:00:00.000Z",
+  };
+}
+
+/** A provider that behaves like a v2 bridge over an in-memory history. */
+function summaryProvider(history: { messages: TestMessage[]; epoch: number; revision: number }) {
+  const generation = "g1";
+  const transcriptSnapshot = async (
+    _sessionId: string,
+    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> => {
+    const update = bridgeTranscriptSummaryUpdate(history.messages, {
+      sessionIdentity: "provider-session",
+      generation,
+      contentEpoch: history.epoch,
+      revision: history.revision,
+      limit: options.limit,
+      targetBytes: options.targetBytes,
+      complete: true,
+      pages: true,
+      ...(options.knownSourceToken ? { knownToken: options.knownSourceToken } : {}),
+    });
+    if (update.status === "unchanged") return { unchanged: true, sourceToken: update.token };
+    return {
+      messages: update.value.messages,
+      historyStartIndex: update.value.startIndex,
+      sourceToken: update.token,
+      complete: update.value.complete,
+      generation,
+      historyEpoch: `${generation}:${history.epoch}`,
+      freshness: "current",
+      representation: "summary",
+      ...(update.value.historyCursor ? { historyCursor: update.value.historyCursor } : {}),
+    };
+  };
+  const transcriptDetail = async (
+    _sessionId: string,
+    locator: string,
+  ): Promise<ProviderTranscriptDetail | undefined> => {
+    const result = readBridgeTranscriptDetail(history.messages, locator);
+    if (result.status === "ok") return { status: "ok", detail: result.detail };
+    if (result.status === "invalid") throw new Error("invalid locator");
+    return { status: result.status };
+  };
+  const transcriptPage = async (
+    _sessionId: string,
+    options: { cursor: string; limit: number; targetBytes: number },
+  ): Promise<ProviderTranscriptPage | undefined> => {
+    const page = bridgeTranscriptPage(history.messages, {
+      generation,
+      contentEpoch: history.epoch,
+      complete: true,
+      ...options,
+    });
+    if (page.status !== "page") return { status: "expired" };
+    return {
+      status: "page",
+      messages: page.messages,
+      historyStartIndex: page.startIndex,
+      ...(page.nextCursor ? { historyCursor: page.nextCursor } : {}),
+      complete: page.complete,
+      truncated: page.truncated,
+      historyEpoch: `${generation}:${history.epoch}`,
+      representation: "summary",
+    };
+  };
+  const legacyMessages = mock(async () => history.messages);
+  const interactiveSnapshot = mock(async () => {
+    throw new Error("a summary read must not take the joined projection path");
+  });
+  const stub = createProviderStub("codex", {
+    transcriptSnapshot,
+    transcriptDetail,
+    transcriptPage,
+    messages: legacyMessages,
+    interactiveSnapshot,
+  });
+  return { stub, legacyMessages, interactiveSnapshot };
+}
+
+const identity = {
+  environmentId: "env-1",
+  agent: "codex" as const,
+  logicalSessionKey: "env-env-1:summaries",
+};
+
+describe("summary transcripts", () => {
+  test("a large tool body stays behind a remote reference until expanded", async () => {
+    const output = "o".repeat(300 * 1024);
+    const history = {
+      messages: [
+        { ...message("prompt"), role: "user" as const },
+        message("m1", [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            sourcePartId: "m1:0",
+            toolUseId: "call-1",
+            toolOutput: output,
+            toolState: "success",
+          },
+        ]),
+      ],
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-details-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const part = (update.value.messages[1] as TestMessage).parts[0]!;
+        expect(part.toolOutput).toBeUndefined();
+        expect(part.detail).toBeUndefined();
+        expect(typeof part.detailRef).toBe("string");
+        expect(stub.transcriptDetail).not.toHaveBeenCalled();
+
+        const details = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: part.detailRef as string,
+        });
+        expect(details.toolOutput).toBe(output);
+        expect(stub.transcriptDetail).toHaveBeenCalledTimes(1);
+        // A second expansion is served from the backend's bounded cache.
+        await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: part.detailRef as string,
+        });
+        expect(stub.transcriptDetail).toHaveBeenCalledTimes(1);
+
+        expect(legacyMessages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("a reference whose body changed reports it gone rather than serving the new body", async () => {
+    const history = {
+      messages: [
+        message("m1", [
+          {
+            type: "tool-invocation",
+            content: "Run",
+            sourcePartId: "m1:0",
+            toolUseId: "call-1",
+            toolOutput: "a".repeat(10_000),
+          },
+        ]),
+      ],
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-expired-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const detailRef = (update.value.messages[0] as TestMessage).parts[0]!.detailRef as string;
+        history.messages[0]!.parts[0]!.toolOutput = "b".repeat(10_000);
+        await expect(service.getProjectionToolDetails({ ...identity, detailRef })).rejects.toThrow(
+          "no longer available",
+        );
+      },
+    );
+  });
+
+  test("an incomplete summary window pages directly instead of hydrating the legacy transcript", async () => {
+    const history = {
+      messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-pages-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+        let cursor = update.value.historyCursor;
+        const seen: string[] = [];
+        let pages = 0;
+        while (cursor) {
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: cursor,
+            limit: 60,
+          });
+          expect(page.historyEpoch).toBe(update.value.historyEpoch);
+          seen.unshift(...page.messages.map((entry) => (entry as TestMessage).id));
+          cursor = page.nextCursor;
+          pages += 1;
+          if (!cursor) expect(page.complete).toBe(true);
+        }
+        expect(pages).toBe(3);
+        expect(seen).toEqual(history.messages.slice(0, 150).map((entry) => entry.id));
+        // Give any stray background hydration a chance to have run.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(legacyMessages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("a direct cursor is refused for another session and after its epoch rotates", async () => {
+    const history = {
+      messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-cursor-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const other = { ...identity, logicalSessionKey: "env-env-1:other" };
+        await service.ensureSession(other);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const before = update.value.historyCursor!;
+        await expect(service.getMessagePage({ ...other, syncVersion: 1, before })).rejects.toThrow(
+          "expired",
+        );
+        history.epoch = 2;
+        history.revision += 1;
+        await expect(
+          service.getMessagePage({ ...identity, syncVersion: 1, before }),
+        ).rejects.toThrow("expired");
+      },
+    );
+  });
+});

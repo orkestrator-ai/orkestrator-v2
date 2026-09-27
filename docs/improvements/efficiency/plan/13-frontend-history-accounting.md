@@ -139,7 +139,7 @@ Tests and isolated profiles:
     ./src/lib/native-history-accounting.test.ts (pass); native-agent, chat,
     AgentInfoButton, RequestCard, CoordinatorPanel component suites (pass);
     web typecheck (pass); mise run format/format:check/lint (pass, pre-existing
-    warnings only); mise run test:browser: 98 passed, 2 failed (DesignCanvas,
+    warnings only); `mise run test:browser` reported 98 passed, 2 failed (DesignCanvas,
     both viewports) under concurrent machine load; DesignCanvas passes when
     rerun alone and imports none of the touched modules.
 Before/after measurements: not captured. Serialization-count tests are the

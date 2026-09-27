@@ -4,7 +4,9 @@ const longValidationCommand =
   "mise run test:logged -- --name review-validation-output -- bun test ./apps/web/src/components/review/ReviewValidationStatus.test.tsx --parallel=1 --only-failures";
 
 function validationRow(page: Page, command: string) {
-  return page.getByRole("button", { name: `View terminal output for ${command}` });
+  return page
+    .getByRole("button", { name: `View terminal output for ${command}` })
+    .locator("xpath=ancestor::tr");
 }
 
 test("terminal output title and long command stay inside the dialog and are centered", async ({
@@ -202,19 +204,20 @@ test("the mobile validation table scrolls within its container and keeps command
   const queuedStatus = queuedRow.locator("[data-slot='validation-status']");
   await expect(queuedStatus).toHaveText("waiting for capacity");
 
-  const statusLayout = await queuedStatus.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    const textRects = Array.from(range.getClientRects());
-    const style = getComputedStyle(element);
-    const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-    return {
-      contentWidth: element.getBoundingClientRect().width - horizontalPadding,
-      lineCount: textRects.length,
-      textWidth: Math.max(...textRects.map((rect) => rect.width)),
-      whiteSpace: style.whiteSpace,
-    };
-  });
+  const statusLayout = await queuedStatus
+    .locator("[data-slot='validation-status-label']")
+    .evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const textRects = Array.from(range.getClientRects());
+      const style = getComputedStyle(element);
+      return {
+        contentWidth: element.getBoundingClientRect().width,
+        lineCount: textRects.length,
+        textWidth: Math.max(...textRects.map((rect) => rect.width)),
+        whiteSpace: style.whiteSpace,
+      };
+    });
 
   const containment = await list.evaluate((element) => {
     const listRect = element.getBoundingClientRect();
@@ -250,6 +253,33 @@ test("the mobile validation table scrolls within its container and keeps command
   expect(statusLayout.whiteSpace).toBe("nowrap");
   expect(statusLayout.lineCount).toBe(1);
   expect(statusLayout.contentWidth).toBeGreaterThanOrEqual(statusLayout.textWidth);
+});
+
+test("one command can be stopped without opening output or hiding the other rows", async ({
+  page,
+}) => {
+  await page.goto("/review-validation-output");
+  await page.getByRole("button", { name: "Show running validation" }).click();
+  const row = validationRow(page, "mise run typecheck");
+  const stop = row.getByRole("button", { name: "Stop mise run typecheck" });
+  await expect(stop).toBeVisible();
+  if (page.viewportSize()!.width < 600) {
+    const withinCell = await row.locator("[data-slot='validation-status']").evaluate((cell) => {
+      const control = cell.querySelector("button")!;
+      const cellRect = cell.getBoundingClientRect();
+      const controlRect = control.getBoundingClientRect();
+      return controlRect.left >= cellRect.left && controlRect.right <= cellRect.right;
+    });
+    expect(withinCell).toBe(true);
+  }
+  await stop.click();
+  await expect(stop).toBeDisabled();
+  await expect(row.locator("[data-slot='validation-status-label']")).toHaveText("stopping");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(validationRow(page, "mise run lintfix")).toBeVisible();
+  await page.getByRole("button", { name: "Settle stopped command" }).click();
+  await expect(row.locator("[data-slot='validation-status-label']")).toHaveText("incomplete");
+  await expect(stop).toHaveCount(0);
 });
 
 test("queue diagnostics rehydrate after an inactive view and clear on completion", async ({

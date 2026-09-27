@@ -610,7 +610,7 @@ describe("BuildChatTab backend projection", () => {
       run,
       "test",
     );
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
   });
 
   test("shows a failure icon when a completed validation run has failed commands", () => {

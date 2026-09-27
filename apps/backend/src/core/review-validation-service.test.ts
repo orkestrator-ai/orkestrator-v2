@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -341,6 +341,87 @@ test("stop-command stops one command through the backend runner and rejects fore
     await controlReviewValidation("env", initial, "cancel", context).catch(() => {});
     if (previousScheduler === undefined) delete process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
     else process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = previousScheduler;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stop-command uses Docker exec and accepts the matching container snapshot", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "validation-docker-stop-"));
+  const bin = path.join(root, "bin");
+  await mkdir(bin);
+  const argsPath = path.join(root, "docker-args");
+  const snapshotPath = path.join(root, "snapshot.json");
+  const initial = newReviewValidationRun("review-validation-docker-stop", {
+    headRef: "a".repeat(40),
+    commands: [
+      {
+        id: "check",
+        command: "bun run check",
+        cwd: ".",
+        dependsOn: [],
+        resources: [],
+        weight: 1,
+        timeoutMs: 30_000,
+      },
+    ],
+    limitations: [],
+  });
+  const stopped = {
+    ...initial,
+    status: "running" as const,
+    results: initial.results.map((result) => ({
+      ...result,
+      status: "incomplete" as const,
+      limitation: "Stopped by the user before it started; validation is incomplete",
+    })),
+  };
+  await writeFile(snapshotPath, JSON.stringify(stopped));
+  await writeFile(
+    path.join(bin, "docker"),
+    `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argsPath)}\ncat ${JSON.stringify(snapshotPath)}\n`,
+    { mode: 0o755 },
+  );
+  const context = {
+    storage: {
+      getEnvironment: async () => ({
+        id: "env",
+        status: "running",
+        environmentType: "docker",
+        containerId: "validation-container",
+      }),
+    },
+  } as unknown as CommandContext;
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath}`;
+  try {
+    const next = await controlReviewValidation("env", initial, "stop-command", context, "check");
+    expect(next.results[0]).toMatchObject({ status: "incomplete" });
+    const dockerArgs = await readFile(argsPath, "utf8");
+    const args = dockerArgs.trim().split("\n");
+    expect(args.slice(0, 6)).toEqual([
+      "exec",
+      "--workdir",
+      "/",
+      "validation-container",
+      "bash",
+      "-lc",
+    ]);
+    const payload = Array.from(dockerArgs.matchAll(/'([A-Za-z0-9+/=]{100,})'/g))
+      .map((match) => {
+        try {
+          return JSON.parse(Buffer.from(match[1]!, "base64").toString("utf8"));
+        } catch {
+          return null;
+        }
+      })
+      .find((value) => value?.action === "stop-command");
+    expect(payload).toMatchObject({
+      action: "stop-command",
+      resultId: "check",
+      root: "/workspace",
+    });
+  } finally {
+    process.env.PATH = previousPath;
     await rm(root, { recursive: true, force: true });
   }
 });

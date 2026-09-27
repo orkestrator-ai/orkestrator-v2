@@ -533,6 +533,60 @@ test("stopping one command keeps its partial output and lets the rest of the run
   );
 });
 
+test("stopping a running cooperative command preserves incomplete evidence", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("cooperative", "bun cooperative.ts", { timeoutMs: 30_000 }),
+      command("dependent", "touch .orkestrator/dependent-ran", { dependsOn: ["cooperative"] }),
+      command("independent", "printf independent"),
+    ],
+    {
+      "cooperative.ts": `const fs = require("node:fs");
+const publish = () => fs.writeFileSync(process.env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE, JSON.stringify({ version: 1, state: "running", heartbeat: Date.now(), executionMs: 0, queuedMs: 0 }));
+publish(); const heartbeat = setInterval(publish, 100);
+console.log("partial cooperative output");
+await Bun.sleep(20_000);
+clearInterval(heartbeat);`,
+    },
+  );
+  await control(root, run);
+  await observeUntil(root, run, (next) => next.results[0]?.status === "running", 5_000);
+  const stopped = await control(root, run, "stop-command", {}, "cooperative");
+  expect(stopped.results[0]).toMatchObject({ status: "incomplete" });
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["incomplete", "skipped", "passed"]);
+  expect(done.results[0]!.limitation).toContain("Stopped by the user");
+  expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toContain(
+    "partial cooperative output",
+  );
+  expect(existsSync(path.join(root, ".orkestrator/dependent-ran"))).toBe(false);
+});
+
+test("a covered command can be stopped while its covering command runs", async () => {
+  const { root, run } = await fixture([
+    command("covered", "touch .orkestrator/covered-ran"),
+    command("covering", "sleep 3"),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { "sleep 3": { covers: ["touch .orkestrator/covered-ran"] } },
+    }),
+  );
+  await control(root, run);
+  await observeUntil(root, run, (next) => next.results[1]?.status === "running", 3_000);
+  const stopped = await control(root, run, "stop-command", {}, "covered");
+  expect(stopped.results[0]).toMatchObject({
+    status: "incomplete",
+    limitation: "Stopped by the user before it started; validation is incomplete",
+  });
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["incomplete", "passed"]);
+  expect(existsSync(path.join(root, ".orkestrator/covered-ran"))).toBe(false);
+});
+
 test("timeout and output overflow become incomplete evidence, never assertion failures", async () => {
   const { root, run } = await fixture([
     command("timeout", "sleep 20", { timeoutMs: 1000 }),

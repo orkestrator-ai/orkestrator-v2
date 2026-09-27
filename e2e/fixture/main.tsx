@@ -1155,6 +1155,37 @@ function ReviewValidationOutputFixture() {
       <button
         type="button"
         onClick={() =>
+          setRun({
+            ...reviewValidationOutputRun,
+            id: "validation-stop-demo",
+            status: "running",
+            completedAt: undefined,
+            results: reviewValidationOutputRun.results.map((result) =>
+              result.id === "typecheck" ? { ...result, status: "queued" } : { ...result },
+            ),
+          })
+        }
+      >
+        Show running validation
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          setRun((value) => ({
+            ...value,
+            results: value.results.map((result) =>
+              result.id === "typecheck"
+                ? { ...result, status: "incomplete", limitation: "Stopped by the user" }
+                : result,
+            ),
+          }))
+        }
+      >
+        Settle stopped command
+      </button>
+      <button
+        type="button"
+        onClick={() =>
           setRun((value) => ({
             ...value,
             results: value.results.map((result) =>
@@ -1171,6 +1202,7 @@ function ReviewValidationOutputFixture() {
         <ReviewValidationStatus
           environmentId="env-1"
           run={run}
+          stopCommand={async () => run}
           loadOutput={async () => ({
             resultId: "test",
             status: "passed",

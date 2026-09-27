@@ -330,36 +330,48 @@ export function ReviewValidationStatus({
   const notes = run.plan.limitations;
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const selectedResult = run.results.find((result) => result.id === selectedResultId);
-  const runActive = run.status === "planned" || run.status === "running";
+  const runActive = run.status === "running";
   // Requested stops stay visible until the authoritative snapshot settles them.
-  const [stoppingResultIds, setStoppingResultIds] = useState<ReadonlySet<string>>(new Set());
+  const [pendingStops, setPendingStops] = useState<{
+    runId: string;
+    resultIds: ReadonlySet<string>;
+  }>({ runId: run.id, resultIds: new Set() });
+  const currentRunId = useRef(run.id);
+  currentRunId.current = run.id;
+  const stoppingResultIds = pendingStops.runId === run.id ? pendingStops.resultIds : new Set();
   useEffect(() => {
-    setStoppingResultIds((current) => {
-      if (current.size === 0) return current;
+    setPendingStops((current) => {
+      if (current.runId !== run.id) return { runId: run.id, resultIds: new Set() };
+      if (current.resultIds.size === 0) return current;
       const next = new Set(
-        Array.from(current).filter((id) => {
+        Array.from(current.resultIds).filter((id) => {
           const status = run.results.find((result) => result.id === id)?.status;
           return runActive && status !== undefined && UNSETTLED_RESULT_STATUSES.has(status);
         }),
       );
-      return next.size === current.size ? current : next;
+      return next.size === current.resultIds.size ? current : { ...current, resultIds: next };
     });
-  }, [run.results, runActive]);
+  }, [run.id, run.results, runActive]);
   const requestStopCommand = useCallback(
     async (result: ReviewValidationResult) => {
       if (!stopCommand) return;
-      setStoppingResultIds((current) => new Set(current).add(result.id));
+      setPendingStops((current) => ({
+        runId: run.id,
+        resultIds: new Set(current.runId === run.id ? current.resultIds : []).add(result.id),
+      }));
       try {
         await stopCommand(environmentId, run, result.id);
       } catch (reason) {
-        setStoppingResultIds((current) => {
-          const next = new Set(current);
-          next.delete(result.id);
-          return next;
+        setPendingStops((current) => {
+          if (current.runId !== run.id) return current;
+          const resultIds = new Set(current.resultIds);
+          resultIds.delete(result.id);
+          return { ...current, resultIds };
         });
-        toast.error(
-          `Failed to stop ${result.command}: ${reason instanceof Error ? reason.message : String(reason)}`,
-        );
+        if (currentRunId.current === run.id)
+          toast.error(
+            `Failed to stop ${result.command}: ${reason instanceof Error ? reason.message : String(reason)}`,
+          );
       }
     },
     [environmentId, run, stopCommand],
@@ -449,18 +461,10 @@ export function ReviewValidationStatus({
               return (
                 <tr
                   key={result.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`View terminal output for ${result.command}`}
-                  className="cursor-pointer divide-x divide-border transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+                  className="divide-x divide-border transition-colors hover:bg-accent/50"
                   onClick={() => setSelectedResultId(result.id)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    if (event.key === " ") event.preventDefault();
-                    setSelectedResultId(result.id);
-                  }}
                 >
-                  <td className="px-2 py-2 align-top">
+                  <td className="cursor-pointer px-2 py-2 align-top">
                     <code className="break-all">{result.command}</code>
                     {result.queueReason && ["queued", "running"].includes(result.status) && (
                       <div
@@ -485,7 +489,7 @@ export function ReviewValidationStatus({
                     className="whitespace-nowrap px-2 py-2 align-top text-muted-foreground"
                   >
                     <div className="flex items-start justify-between gap-1">
-                      <span>
+                      <span data-slot="validation-status-label">
                         {stoppingResult && canStopResult
                           ? "stopping"
                           : result.status === "queued"
@@ -533,12 +537,19 @@ export function ReviewValidationStatus({
                     {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
                   </td>
                   <td className="px-1 py-1 text-center align-top">
-                    <span
-                      className="inline-flex size-6 items-center justify-center text-muted-foreground"
-                      aria-hidden="true"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-6 text-muted-foreground"
+                      aria-label={`View terminal output for ${result.command}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedResultId(result.id);
+                      }}
                     >
                       <SquareTerminal className="size-3.5" aria-hidden="true" />
-                    </span>
+                    </Button>
                   </td>
                 </tr>
               );

@@ -99,6 +99,10 @@ describe("design workspace launch transaction", () => {
       "link-session",
       "done",
     ]);
+    const initialPrompt = (options.createAgentTab as ReturnType<typeof mock>).mock.calls[0]?.[2];
+    expect(initialPrompt).toStartWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
+    expect(initialPrompt).toContain(`Canvas ID: ${canvas.id}`);
+    expect(userPromptDisplayText(initialPrompt)).toBe("Build it");
   });
 
   test("a blank canvas creates no agent tab and no session link", async () => {

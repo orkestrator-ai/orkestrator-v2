@@ -805,6 +805,48 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         expect(projection?.title).toBe("Mock up the sidebar");
+        await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+        expect(stub.setSessionTitle).toHaveBeenCalledWith(
+          "provider-session",
+          "Mock up the sidebar",
+        );
+      },
+    );
+  });
+
+  test("keeps a Codex brief title when the transcript includes framed guidance", async () => {
+    const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server.")}\n\nMock up the sidebar`;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Mock up the sidebar",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: prompt,
+            parts: [{ type: "text", content: prompt }],
+            createdAt: "2026-09-07T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-codex-framed-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-codex-framed-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe("Mock up the sidebar");
+        expect(stub.setSessionTitle).not.toHaveBeenCalled();
       },
     );
   });

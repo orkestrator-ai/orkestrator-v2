@@ -19,6 +19,7 @@ import { ERROR_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { buildDesignAgentPrompt } from "@/components/design/design-launch";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import {
   mockToastError as toastErrorMock,
@@ -33,6 +34,28 @@ import {
 } from "./MessageShell";
 import { NativeMessage } from "./NativeMessage";
 import { BackgroundTaskCard } from "./NativeMessage.agent-parts";
+
+test("renders only the design brief in optimistic and rehydrated user rows", () => {
+  const prompt = buildDesignAgentPrompt("canvas-1", "  Mock up the sidebar  ");
+  const optimistic = makeMessage([{ type: "text", content: prompt }], {
+    role: "user",
+    id: "optimistic-design-prompt",
+    content: prompt,
+  });
+  const first = render(<NativeMessage message={optimistic} />);
+  expect(screen.getByText("Mock up the sidebar")).toBeTruthy();
+  expect(first.container.textContent).not.toContain("orkestrator-design MCP server");
+
+  first.unmount();
+  const echoed = makeMessage([{ type: "text", content: prompt }], {
+    role: "user",
+    id: "persisted-design-prompt",
+    content: prompt,
+  });
+  const second = render(<NativeMessage message={echoed} />);
+  expect(screen.getByText("Mock up the sidebar")).toBeTruthy();
+  expect(second.container.textContent).not.toContain("orkestrator-design MCP server");
+});
 
 function makeMessage(
   parts: Array<NativeMessagePart>,

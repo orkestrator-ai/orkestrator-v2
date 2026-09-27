@@ -4,6 +4,7 @@ import { hashCwd } from "./sessions/persistence.js";
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 
 import {
   NO_RESPONSE,
@@ -1538,6 +1539,41 @@ describe("slash commands", () => {
     expect(seen[0]).not.toContain("project-id");
     expect(seen[0]).not.toContain("coordinator-id");
     expect(seen[0]).not.toContain("abc123");
+  });
+
+  test("a design turn titles itself from the brief while preserving guidance for Codex", async () => {
+    const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server. Canvas ID: canvas-1")}\n\nMock up the sidebar`;
+    const seen: string[] = [];
+    const h = await harness(
+      {},
+      {
+        generateTitle: async (source) => {
+          seen.push(source);
+          return "Sidebar mockup";
+        },
+      },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    await h.runtime.prompt(sessionId, {
+      prompt,
+      requestId: "req-design-title",
+      attachments: [],
+    });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.title-updated" && event.data?.title === "Mock up the sidebar",
+      ),
+    ).toBe(true);
+    expect(
+      JSON.stringify(
+        h.child().requests.find((request) => request.method === "turn/start")?.params.input,
+      ),
+    ).toContain("Canvas ID: canvas-1");
+    await h.drain();
+    expect(seen).toEqual(["Mock up the sidebar"]);
+    expect(h.runtime.getRegistry().getSession(sessionId)?.title).toBe("Sidebar mockup");
   });
 
   test("an attachment-only coordinator turn renders no empty text part", async () => {

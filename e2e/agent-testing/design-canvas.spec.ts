@@ -107,11 +107,23 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await page.getByRole("textbox", { name: "Name", exact: true }).fill("Guided design");
     await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
     await page.getByRole("option", { name: "Codex", exact: true }).click();
+    await page.getByRole("textbox", { name: "Design brief" }).fill("Mock up the sidebar");
     await page.getByRole("button", { name: "Create design workspace", exact: true }).click();
     await expect(page.getByText("Guided design", { exact: true })).toBeVisible();
     await expect(
       page.getByText("A blank canvas for your next idea", { exact: true }),
     ).toBeVisible();
+    await expect(page.getByText("Mock up the sidebar", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Use the orkestrator-design MCP server", { exact: false }),
+    ).toHaveCount(0);
+    await page.reload();
+    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await page.getByText(env.name, { exact: true }).first().click();
+    await expect(page.getByText("Mock up the sidebar", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Use the orkestrator-design MCP server", { exact: false }),
+    ).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("design-workspace.png") });
   } finally {
     await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);

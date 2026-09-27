@@ -55,6 +55,13 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | --- | --- | --- |
 | [2026-09-17-platform-version-audit.md](reviews/2026-09-17-platform-version-audit.md) | Historical | Compatibility and feature audit for the 2026-09-17 platform version refresh. |
 
+## Improvements
+
+| Document | Status | Notes |
+| --- | --- | --- |
+| [containers.md](improvements/containers.md) | Historical | 2026-09-21 investigation: container lifecycle, data retention, isolation, resources and image delivery; prioritized proposals, not implemented changes. |
+| [Container implementation plan](improvements/containers/plan/00-index.md) | Active | Index and 14 numbered steps covering data protection, durable lifecycle, storage migration, isolation, resources, images and rollout. Implementation not started. |
+
 ## Plans
 
 | Document | Status | Notes |

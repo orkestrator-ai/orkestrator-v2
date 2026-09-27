@@ -380,6 +380,22 @@ command; the UI rehydrates from that state. Cancellation removes pending tickets
 and terminates owned processes. A stale worker remains uncertain until explicitly
 cancelled, never automatically retried.
 
+A single command can also be stopped from its row in the validation table
+(`stop_review_validation_command`). The control writes a per-command tombstone
+beside the run's state, so the request survives backend restarts. The worker
+terminates that command's process group, keeps its partial output, and records
+it as `incomplete` with a user-stop limitation; a command that has not started
+yet is recorded as `incomplete` without running. Commands that depend on it are
+skipped, and every other command continues, so the run still completes and its
+partial evidence is packaged for review.
+
+Discovery scopes the plan to the change. It reads `AGENTS.md` (and
+`CLAUDE.md` or equivalents) at the root and in changed directories and follows
+their guidance on which suites a given kind of change needs, omitting suites for
+areas the change cannot affect and naming the omission in one limitation. When
+the instructions require a suite for every change, or the change's reach is
+uncertain, the full relevant coverage runs.
+
 Ordinary discovered commands reserve half the per-suite budget (`weight: 1`) or
 its whole budget (`weight: 2`), capped at eight slots even when the host ceiling
 is higher. Exact repository `commandProfiles` can declare smaller `workers` and

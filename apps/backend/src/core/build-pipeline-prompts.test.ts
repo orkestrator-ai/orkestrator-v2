@@ -570,6 +570,9 @@ describe("build pipeline prompts", () => {
 
     expect(prompt).toContain("The inactive-tab case still fails.");
     expect(prompt).toContain("Run the relevant full tests, typechecking, and build validation");
+    expect(prompt).toContain(
+      "Choose those commands from the repository's agent instructions (AGENTS.md",
+    );
     expect(prompt).toContain("Commit every relevant implementation and test change");
   });
 

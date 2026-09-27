@@ -160,6 +160,30 @@ the source of truth for suite scope, changed-only testing, concurrency, caching,
 watchdogs, leases, failure artifacts, and escalation to browser, agent, Docker,
 or iOS validation.
 
+### Choosing validation for a change
+
+Review preparation (the Build pipeline's package preparation and Multi Review)
+reads this file to decide which checks a change needs. Scale the plan to what
+the changed paths can affect instead of always running every suite:
+
+- Documentation-only changes (`*.md`, `docs/**`, `plans/**`) need no test
+  suite: `mise run format:check` is enough.
+- Every change to code or configuration runs `mise run format:check`,
+  `mise run lint`, and `mise run typecheck`.
+- Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
+  run `mise run test` (the complete non-iOS suite).
+- Treat dependency, lockfile, `mise.toml`, Turbo, test-runner, or
+  `packages/protocol` changes as wide-reaching even when the diff is small;
+  they always need `mise run test`.
+- Add a scenario suite from the testing guide's **Verification by change type**
+  table only when the change touches that area: browser-visible renderer flows
+  (`mise run test:browser`, or `mise run test:agent:browser:isolated` for
+  real-stack flows), the design canvas (`mise run test:agent:design:isolated`),
+  Electron main/preload/IPC (`mise run test:agent:electron`), Docker lifecycle
+  (`mise run test:agent:docker`), the published CLI
+  (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
+  Omit them otherwise and say so in one limitation.
+
 ### Updating Bun and lockfiles
 
 When bumping the Bun runtime, changing a dependency, or changing package

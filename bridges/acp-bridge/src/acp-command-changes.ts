@@ -131,12 +131,11 @@ function commandChangeProbe(): CommandChangeProbe | null {
 }
 
 /**
- * Take the turn's baseline snapshot. Called as a turn is dispatched; never
- * awaited, because the prompt must not wait on `git`.
+ * Take the turn's baseline before allowing the agent to execute a command.
  */
-export function primeCommandChanges(): void {
+export async function primeCommandChanges(): Promise<void> {
   const active = commandChangeProbe();
-  if (active) void active.prime(workingDirectory).catch(() => undefined);
+  if (active) await active.prime(workingDirectory).catch(() => undefined);
 }
 
 function probeCallId(state: SessionState, toolUseId: string): string {

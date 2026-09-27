@@ -7,6 +7,8 @@ export interface ToolLineChangeStats {
 /** One file in a {@link MeasuredWorkspaceChange}. */
 export interface MeasuredFileChange {
   path: string;
+  /** How the file changed between the two measured trees. */
+  status?: "A" | "D" | "M" | "R";
   additions: number;
   deletions: number;
   /** Git could not count lines; both counts are zero. */

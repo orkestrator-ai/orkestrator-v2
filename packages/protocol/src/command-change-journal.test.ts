@@ -56,7 +56,20 @@ describe("CommandChangeJournal", () => {
     expect((await journal.read()).size).toBe(0);
     await journal.append("t1", change(1));
     await journal.remove();
+    await journal.append("late", change(2));
     expect((await journal.read()).size).toBe(0);
+  });
+
+  test("round-trips file statuses needed by deleted-file links", async () => {
+    const journal = new CommandChangeJournal(path);
+    await journal.append("deleted", {
+      additions: 0,
+      deletions: 1,
+      files: [{ path: "gone.ts", status: "D", additions: 0, deletions: 1 }],
+    });
+    expect((await new CommandChangeJournal(path).read()).get("deleted")?.files[0]?.status).toBe(
+      "D",
+    );
   });
 });
 

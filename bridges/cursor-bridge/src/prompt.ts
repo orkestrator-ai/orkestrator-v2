@@ -94,6 +94,7 @@ export async function dispatchPrompt(
   const diagnostics = createRunDiagnostics(state);
   // Primes the worktree baseline now, before the run can execute anything.
   const commandChanges = trackCommandChanges(state);
+  await commandChanges.ready;
   const send = () =>
     agent.send(
       { text, ...(images.length > 0 ? { images } : {}) },

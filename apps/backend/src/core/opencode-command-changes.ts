@@ -35,6 +35,7 @@ import {
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
 import { asRecord, nonEmptyString, setBoundedMapEntry } from "./agent-provider-runtime.js";
+import { collectRawOpenCodeSubagentIds } from "./opencode-messages.js";
 
 /** Under the backend data directory; one subdirectory per environment. */
 export const OPENCODE_COMMAND_CHANGES_DIRECTORY = "opencode-command-changes";
@@ -75,8 +76,10 @@ function sharedWorkspaceChangeProbe(): WorkspaceChangeProbe {
 
 /** One journal instance per file, since appends serialize per instance. */
 const journals = new Map<string, CommandChangeJournal>();
+const removedJournalDirectories = new Set<string>();
 
-function journalAt(file: string): CommandChangeJournal {
+function journalAt(file: string): CommandChangeJournal | undefined {
+  if (removedJournalDirectories.has(path.dirname(file))) return undefined;
   const existing = journals.get(file);
   if (existing) return existing;
   const created = new CommandChangeJournal(file);
@@ -104,9 +107,15 @@ export async function removeOpenCodeCommandChangeJournals(
   environmentId: string,
 ): Promise<void> {
   const directory = openCodeCommandChangeJournalDirectory(dataDir, environmentId);
-  for (const file of journals.keys()) {
-    if (path.dirname(file) === directory) journals.delete(file);
+  removedJournalDirectories.add(directory);
+  const removing: Promise<void>[] = [];
+  for (const [file, journal] of journals) {
+    if (path.dirname(file) === directory) {
+      journals.delete(file);
+      removing.push(journal.remove());
+    }
   }
+  await Promise.all(removing);
   await rm(directory, { recursive: true, force: true }).catch(() => undefined);
 }
 
@@ -124,6 +133,16 @@ export class OpenCodeCommandChanges {
   private readonly sessions = new Map<string, SessionChanges>();
   /** Sessions whose current turn already has a baseline. */
   private readonly primed = new Set<string>();
+  private readonly childSessions = new Set<string>();
+
+  private rememberChild(sessionId: string): void {
+    this.childSessions.delete(sessionId);
+    if (this.childSessions.size >= MAX_SESSIONS) {
+      const oldest = this.childSessions.values().next().value;
+      if (oldest) this.childSessions.delete(oldest);
+    }
+    this.childSessions.add(sessionId);
+  }
 
   constructor(
     private readonly cwd: string,
@@ -139,16 +158,40 @@ export class OpenCodeCommandChanges {
    * dispatch. A busy status primes too, so a turn started by another client
    * gets one, but only when this turn has none yet.
    */
-  beginTurn(sessionId: string): void {
+  async beginTurn(sessionId: string): Promise<void> {
     this.primed.delete(sessionId);
-    this.primeOnce(sessionId);
+    await this.primeOnce(sessionId);
   }
 
-  private primeOnce(sessionId: string): void {
-    if (this.primed.has(sessionId)) return;
+  private primeOnce(sessionId: string): Promise<void> {
+    if (this.primed.has(sessionId)) return Promise.resolve();
     if (this.primed.size >= MAX_SESSIONS) this.primed.clear();
     this.primed.add(sessionId);
-    void this.probe.prime(this.cwd).catch(() => undefined);
+    return this.probe.prime(this.cwd).catch(() => undefined);
+  }
+
+  /** Track only owned sessions and their descendants on the shared SSE feed. */
+  observeScoped(
+    event: { type?: unknown; properties?: unknown },
+    ownedSessions: ReadonlySet<string>,
+  ): void {
+    const properties = asRecord(event.properties);
+    if (event.type === "session.updated") {
+      const info = asRecord(properties?.info);
+      const parent = nonEmptyString(info?.parentID);
+      const child = nonEmptyString(info?.id);
+      if (parent && child && (ownedSessions.has(parent) || this.childSessions.has(parent))) {
+        this.rememberChild(child);
+      }
+    }
+    const sessionId = nonEmptyString(properties?.sessionID);
+    if (!sessionId || (!ownedSessions.has(sessionId) && !this.childSessions.has(sessionId))) return;
+    if (properties?.part) {
+      for (const id of collectRawOpenCodeSubagentIds([{ parts: [properties.part] }])) {
+        this.rememberChild(id);
+      }
+    }
+    this.observe(event);
   }
 
   /**
@@ -167,7 +210,7 @@ export class OpenCodeCommandChanges {
     if (!sessionId) return;
     if (event.type === "session.status") {
       const status = asRecord(properties?.status)?.type;
-      if (status === "busy") this.primeOnce(sessionId);
+      if (status === "busy") void this.primeOnce(sessionId);
       else if (status === "idle") this.primed.delete(sessionId);
       return;
     }
@@ -186,7 +229,7 @@ export class OpenCodeCommandChanges {
     const tool = nonEmptyString(part.tool)?.toLowerCase();
     if (!callId || !tool) return;
     const measure = OPENCODE_SHELL_TOOL_NAMES.has(tool);
-    if (!measure && !isFileEditToolName(tool)) return;
+    if (!measure && !isFileEditToolName(tool) && tool !== "task" && tool !== "agent") return;
     const key = probeKey(sessionId, callId);
     const status = asRecord(part.state)?.status;
     if (status === "pending" || status === "running") {
@@ -277,7 +320,12 @@ export class OpenCodeCommandChanges {
   /** The OpenCode session itself was deleted: drop its journal too. */
   async remove(sessionId: string): Promise<void> {
     this.forget(sessionId);
-    await this.journal(sessionId)?.remove();
+    const journal = this.journal(sessionId);
+    await journal?.remove();
+    if (journal && this.options.journalDirectory) {
+      const file = path.join(this.options.journalDirectory, `${safePathSegment(sessionId)}.jsonl`);
+      if (journals.get(file) === journal) journals.delete(file);
+    }
   }
 
   dispose(): void {
@@ -285,6 +333,7 @@ export class OpenCodeCommandChanges {
     this.open.clear();
     this.sessions.clear();
     this.primed.clear();
+    this.childSessions.clear();
   }
 
   private session(sessionId: string): SessionChanges {

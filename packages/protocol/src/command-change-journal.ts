@@ -38,6 +38,9 @@ function parseFile(value: unknown): MeasuredFileChange | undefined {
   if (!isCount(file.additions) || !isCount(file.deletions)) return undefined;
   return {
     path: file.path.slice(0, MAX_JOURNAL_PATH_LENGTH),
+    ...(["A", "D", "M", "R"].includes(String(file.status))
+      ? { status: file.status as MeasuredFileChange["status"] }
+      : {}),
     additions: file.additions,
     deletions: file.deletions,
     ...(file.binary === true ? { binary: true as const } : {}),
@@ -86,6 +89,7 @@ export function hasMeasuredChanges(change: MeasuredWorkspaceChange | undefined):
  * the instance for the session's life rather than constructing one per write.
  */
 export class CommandChangeJournal {
+  private removed = false;
   private appendsSinceCompaction = 0;
   /** Earlier processes may have left more than `maxEntries` behind. */
   private sizeChecked = false;
@@ -98,6 +102,7 @@ export class CommandChangeJournal {
 
   /** Append one record. Writes are serialized; the returned promise never rejects. */
   append(id: string, change: MeasuredWorkspaceChange): Promise<void> {
+    if (this.removed) return this.writes;
     const bounded = parseMeasuredWorkspaceChange(change);
     if (!id || !bounded) return this.writes;
     const line = `${JSON.stringify({ id, change: bounded })}\n`;
@@ -124,6 +129,7 @@ export class CommandChangeJournal {
   }
 
   async remove(): Promise<void> {
+    this.removed = true;
     await this.writes;
     await rm(this.path, { force: true }).catch(() => {});
   }

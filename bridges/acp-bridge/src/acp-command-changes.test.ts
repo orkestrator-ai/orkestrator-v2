@@ -404,8 +404,8 @@ describe("measured shell command changes through the bridge", () => {
       additions: 4,
       deletions: 1,
       files: [
-        { path: "added.txt", additions: 2, deletions: 0 },
-        { path: "notes.txt", additions: 2, deletions: 1 },
+        { path: "added.txt", status: "A", additions: 2, deletions: 0 },
+        { path: "notes.txt", status: "M", additions: 2, deletions: 1 },
       ],
     };
     type Session = { status: string; messages: Array<{ parts: Array<Record<string, unknown>> }> };

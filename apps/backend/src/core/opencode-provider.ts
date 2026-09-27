@@ -520,11 +520,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       event.type === "server.connected" ||
       event.type === "server.instance.disposed" ||
       event.type === "global.disposed";
-    if (globalEvent || (rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId))) {
+    const owned = Boolean(rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId));
+    // Tool starts and ends reach the probe in stream order, before any await.
+    this.commandChanges?.observeScoped(event, this.lifecycle.ownedSessions);
+    if (globalEvent || owned) {
       const effect = this.streamState.apply(event as OpenCodeEvent, this.now());
-      // Before the first await, like `apply`, so tool starts and ends reach the
-      // probe in stream order. It only fires probe work and never waits on it.
-      if (!globalEvent) this.commandChanges?.observe(event);
       if (effect.status && effect.sessionId) {
         this.lifecycle.observeStreamEvent(effect.sessionId, effect.status);
         this.observation.changed(effect.sessionId);
@@ -796,7 +796,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
-      this.commandChanges?.beginTurn(sessionId);
+      await this.commandChanges?.beginTurn(sessionId);
       let response;
       try {
         if (command) {
@@ -1241,8 +1241,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           const raw = await this.messages(childSessionId, {
             limit: OPENCODE_SUBAGENT_MESSAGE_LIMIT,
           });
-          const messages = normalizeOpenCodeTranscriptMessages(raw, (type) =>
-            this.health.recordUnknown(`part:${type}`),
+          const commandChanges = await this.commandChanges?.changes(childSessionId);
+          const messages = normalizeOpenCodeTranscriptMessages(
+            raw,
+            (type) => this.health.recordUnknown(`part:${type}`),
+            commandChanges,
           );
           return { messages, nestedIds: collectRawOpenCodeSubagentIds(raw) };
         }),

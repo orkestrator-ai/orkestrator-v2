@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  parseNameStatusZ,
   parseNumstatZ,
   runGit,
   WorkspaceChangeProbe,
@@ -62,9 +64,9 @@ describe("WorkspaceChangeProbe", () => {
       additions: 6,
       deletions: 4,
       files: expect.arrayContaining([
-        { path: "tracked.txt", additions: 2, deletions: 1 },
-        { path: "new.txt", additions: 4, deletions: 0 },
-        { path: "doomed.txt", additions: 0, deletions: 3 },
+        { path: "tracked.txt", status: "M", additions: 2, deletions: 1 },
+        { path: "new.txt", status: "A", additions: 4, deletions: 0 },
+        { path: "doomed.txt", status: "D", additions: 0, deletions: 3 },
       ]),
     });
     expect(change?.approximate).toBeUndefined();
@@ -96,6 +98,22 @@ describe("WorkspaceChangeProbe", () => {
     expect(readdirSync(probeTemp)).toEqual([]);
   });
 
+  test("never writes dirty file contents to the repository object database", async () => {
+    const secret = `private-${crypto.randomUUID()}\n`;
+    const oid = createHash("sha1")
+      .update(`blob ${Buffer.byteLength(secret)}\0${secret}`)
+      .digest("hex");
+    const subject = probe();
+    await subject.begin(repo, "secret-write");
+    write("private.txt", secret);
+    expect((await subject.end("secret-write"))?.files[0]?.status).toBe("A");
+    rmSync(join(repo, "private.txt"));
+    await subject.begin(repo, "secret-delete");
+    await subject.end("secret-delete");
+    expect(() => git("cat-file", "-e", oid)).toThrow();
+    expect(readdirSync(probeTemp)).toEqual([]);
+  });
+
   test("reports a git mv as a rename rather than a rewrite", async () => {
     const subject = probe();
     await subject.begin(repo, "call-1");
@@ -103,7 +121,9 @@ describe("WorkspaceChangeProbe", () => {
     expect(await subject.end("call-1")).toEqual({
       additions: 0,
       deletions: 0,
-      files: [{ path: "moved.txt", previousPath: "tracked.txt", additions: 0, deletions: 0 }],
+      files: [
+        { path: "moved.txt", previousPath: "tracked.txt", status: "R", additions: 0, deletions: 0 },
+      ],
     });
   });
 
@@ -203,6 +223,16 @@ describe("WorkspaceChangeProbe", () => {
     expect(await subject.end("never-ends")).toBeUndefined();
   });
 
+  test("discarded fresh windows release their private snapshot", async () => {
+    const subject = probe();
+    await subject.begin(repo, "denied");
+    subject.discard("denied");
+    for (let attempt = 0; attempt < 50 && readdirSync(probeTemp).length > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(readdirSync(probeTemp)).toEqual([]);
+  });
+
   test("caps the reported file list but not the totals", async () => {
     const subject = probe({ maxReportedFiles: 2 });
     await subject.begin(repo, "call-1");
@@ -230,7 +260,80 @@ describe("parseNumstatZ", () => {
   });
 });
 
+test("parseNameStatusZ keeps rename targets and deleted paths", () => {
+  expect([...parseNameStatusZ("A\0new\0D\0gone\0R100\0old\0moved\0")]).toEqual([
+    ["new", "A"],
+    ["gone", "D"],
+    ["moved", "R"],
+  ]);
+});
+
 describe("WorkspaceChangeProbe baseline mode", () => {
+  test("retains only the latest private baseline and removes it on close", async () => {
+    const subject = probe();
+    await subject.prime(repo);
+    expect(readdirSync(probeTemp)).toHaveLength(1);
+    for (const index of [6, 7, 8]) {
+      await subject.begin(repo, `call-${index}`, { baseline: true });
+      write("tracked.txt", lines(index));
+      await subject.end(`call-${index}`);
+      expect(readdirSync(probeTemp)).toHaveLength(1);
+    }
+    await subject.close();
+    expect(readdirSync(probeTemp)).toEqual([]);
+  });
+  test("suppresses a command whose first prime has not read the worktree", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const atAdd = new Promise<void>((resolve) => (entered = resolve));
+    let held = false;
+    const runner: GitRunner = async (args, options) => {
+      if (args[0] === "add" && !held) {
+        held = true;
+        entered();
+        await blocked;
+      }
+      return runGit(args, options);
+    };
+    const subject = probe({ git: runner });
+    const prime = subject.prime(repo);
+    await atAdd;
+    write("tracked.txt", lines(6));
+    void subject.begin(repo, "racing-call", { baseline: true });
+    const ending = subject.end("racing-call");
+    release();
+    await prime;
+    expect(await ending).toBeUndefined();
+  });
+
+  test("keeps an ending call in the overlap window through its after snapshot", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const atAdd = new Promise<void>((resolve) => (entered = resolve));
+    let additions = 0;
+    const runner: GitRunner = async (args, options) => {
+      if (args[0] === "add" && ++additions === 2) {
+        entered();
+        await blocked;
+      }
+      return runGit(args, options);
+    };
+    const subject = probe({ git: runner });
+    await subject.prime(repo);
+    await subject.begin(repo, "a", { baseline: true });
+    write("a.txt", "a\n");
+    const endA = subject.end("a");
+    await atAdd;
+    void subject.begin(repo, "b", { baseline: true });
+    write("b.txt", "b\n");
+    const endB = subject.end("b");
+    release();
+    expect((await endA)?.approximate).toBe(true);
+    expect((await endB)?.approximate).toBe(true);
+    await subject.close();
+  });
   test("measures a command that finished before its start was observed", async () => {
     const subject = probe();
     await subject.prime(repo);
@@ -241,7 +344,7 @@ describe("WorkspaceChangeProbe baseline mode", () => {
     expect(change).toEqual({
       additions: 2,
       deletions: 0,
-      files: [{ path: "tracked.txt", additions: 2, deletions: 0 }],
+      files: [{ path: "tracked.txt", status: "M", additions: 2, deletions: 0 }],
     });
   });
 

@@ -582,7 +582,9 @@ function CommandChangedFiles({ change }: { change: MeasuredWorkspaceChange }) {
                 type="button"
                 className="truncate text-left text-foreground/80 hover:text-foreground hover:underline"
                 title={file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}
-                onClick={() => createFileTab(file.path, { isDiff: true, gitStatus: "M" })}
+                onClick={() =>
+                  createFileTab(file.path, { isDiff: true, gitStatus: file.status ?? "M" })
+                }
               >
                 {file.path}
               </button>

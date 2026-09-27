@@ -658,7 +658,7 @@ export async function route(
     }
     // Grok reports a command only once it is running, so each shell call is
     // measured from the latest snapshot; this is the turn's first one.
-    primeCommandChanges();
+    await primeCommandChanges();
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     const promptCompletion = dispatchAcpPrompt(
       state,

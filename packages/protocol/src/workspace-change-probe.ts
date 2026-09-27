@@ -8,8 +8,8 @@
  * snapshots the worktree into a throwaway index (`GIT_INDEX_FILE` pointing at
  * a copy of the real one, `git add`, `git write-tree`) and diffs the two trees
  * with `git diff --numstat`. The real index, the working tree and every ref
- * are left alone; the only lasting effect is loose blobs for dirty content,
- * which `git gc` prunes like any other unreachable object.
+ * are left alone. Snapshot objects live in a private temporary object store,
+ * with the repository's objects available only as read-only alternates.
  *
  * Node-only: bridges and the backend import this subpath, never a renderer.
  *
@@ -41,9 +41,10 @@
 
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFile, lstat, rm } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { copyFile, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import type { MeasuredFileChange, MeasuredWorkspaceChange } from "./tool-diff.js";
 
 export const DEFAULT_MAX_UNTRACKED_FILE_BYTES = 2 * 1024 * 1024;
@@ -62,6 +63,16 @@ export const DEFAULT_MAX_OPEN_CALLS = 256;
 export const DEFAULT_MAX_WINDOW_MS = 15 * 60_000;
 const GIT_TIMEOUT_MS = 20_000;
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
+const temporaryObjectDirectories = new Set<string>();
+process.once("exit", () => {
+  for (const directory of temporaryObjectDirectories) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch {
+      // Process teardown is best effort; no objects were written to the repo.
+    }
+  }
+});
 
 export interface GitResult {
   stdout: string;
@@ -118,6 +129,7 @@ export interface WorkspaceChangeProbeOptions {
 interface RepoLocation {
   root: string;
   indexPath: string;
+  objectsPath: string;
 }
 
 /** Large untracked files left out of a snapshot, by path → size:mtime. */
@@ -126,6 +138,7 @@ type SkippedFiles = Map<string, string>;
 interface Snapshot {
   tree: string;
   skipped: SkippedFiles;
+  objectDirectory: string;
 }
 
 interface RepoState {
@@ -145,6 +158,8 @@ interface RepoState {
    * otherwise the next baseline command is charged with that edit.
    */
   keepsBaseline: boolean;
+  snapshots: Set<Snapshot>;
+  priming: boolean;
 }
 
 type OpenMode = "fresh" | "baseline" | "note";
@@ -157,6 +172,7 @@ interface OpenCall {
   overlapped: boolean;
   /** The "before" snapshot was taken after the command may already have run. */
   late: boolean;
+  unavailable: boolean;
   before?: Promise<Snapshot | undefined>;
 }
 
@@ -198,6 +214,46 @@ export class WorkspaceChangeProbe {
     this.now = options.now ?? (() => performance.now());
   }
 
+  /** Release retained baseline objects when the owning service shuts down. */
+  async close(): Promise<void> {
+    for (const repo of this.repos.values()) {
+      await repo.running;
+      await repo.queued;
+      repo.keepsBaseline = false;
+      repo.latest = undefined;
+      await this.releaseUnusedObjects(repo);
+    }
+  }
+
+  private async releaseUnusedObjects(repo: RepoState): Promise<void> {
+    if (repo.open.size > 0 || repo.running || repo.queued) return;
+    if (repo.disabled) repo.keepsBaseline = false;
+    for (const snapshot of repo.snapshots) {
+      if (repo.keepsBaseline && repo.latest === snapshot) continue;
+      repo.snapshots.delete(snapshot);
+      await this.removeObjectDirectory(snapshot.objectDirectory);
+    }
+    if (!repo.keepsBaseline) repo.latest = undefined;
+  }
+
+  private async removeObjectDirectory(directory: string): Promise<void> {
+    await rm(directory, { recursive: true, force: true }).catch(() => {});
+    temporaryObjectDirectories.delete(directory);
+  }
+
+  private objectEnv(
+    repo: RepoState,
+    directory: string,
+    beforeDirectory?: string,
+  ): Record<string, string> {
+    return {
+      GIT_OBJECT_DIRECTORY: directory,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: beforeDirectory
+        ? `${beforeDirectory}${delimiter}${repo.location.objectsPath}`
+        : repo.location.objectsPath,
+    };
+  }
+
   /**
    * Open a measured window for a shell call and take its "before" snapshot.
    *
@@ -219,7 +275,12 @@ export class WorkspaceChangeProbe {
     const repo = await this.repoFor(cwd);
     if (!repo) return;
     repo.keepsBaseline = true;
-    await this.snapshotShared(repo, "fresh");
+    repo.priming = true;
+    try {
+      await this.snapshotShared(repo, "fresh");
+    } finally {
+      repo.priming = false;
+    }
   }
 
   /**
@@ -242,25 +303,29 @@ export class WorkspaceChangeProbe {
     const call = this.calls.get(callId);
     if (!call) return undefined;
     this.calls.delete(callId);
-    call.repo.open.delete(call);
-    if (!call.measure || !call.before) {
-      if (call.repo.keepsBaseline && !call.repo.disabled) {
-        await this.snapshotShared(call.repo, "fresh");
+    try {
+      if (!call.measure || !call.before) {
+        if (call.repo.keepsBaseline && !call.repo.disabled) {
+          await this.snapshotShared(call.repo, "fresh");
+        }
+        return undefined;
       }
-      return undefined;
-    }
 
-    const before = await call.before;
-    if (!before || call.repo.disabled) return undefined;
-    const after = await this.snapshotShared(call.repo, "fresh");
-    if (!after) return undefined;
+      const before = await call.before;
+      if (!before || call.repo.disabled) return undefined;
+      const after = await this.snapshotShared(call.repo, "fresh");
+      if (!after || call.unavailable) return undefined;
 
-    const change = await this.diff(call.repo, before, after).catch(() => undefined);
-    if (!change) return undefined;
-    if (call.overlapped || call.late || skippedFilesChanged(before.skipped, after.skipped)) {
-      change.approximate = true;
+      const change = await this.diff(call.repo, before, after).catch(() => undefined);
+      if (!change) return undefined;
+      if (call.overlapped || call.late || skippedFilesChanged(before.skipped, after.skipped)) {
+        change.approximate = true;
+      }
+      return change;
+    } finally {
+      call.repo.open.delete(call);
+      await this.releaseUnusedObjects(call.repo);
     }
-    return change;
   }
 
   /** Drop a window without measuring, e.g. a call that was denied. */
@@ -275,6 +340,7 @@ export class WorkspaceChangeProbe {
     if (!call) return;
     this.calls.delete(callId);
     call.repo.open.delete(call);
+    void this.releaseUnusedObjects(call.repo);
   }
 
   private open(cwd: string, callId: string, mode: OpenMode): Promise<OpenCall | undefined> {
@@ -306,6 +372,7 @@ export class WorkspaceChangeProbe {
       openedAt: this.now(),
       overlapped: false,
       late: false,
+      unavailable: false,
     };
     if (repo.open.size > 0) {
       call.overlapped = true;
@@ -322,6 +389,7 @@ export class WorkspaceChangeProbe {
       repo.keepsBaseline = true;
       if (repo.running) {
         call.before = repo.running;
+        call.unavailable = repo.priming;
       } else if (repo.latest) {
         call.before = Promise.resolve(repo.latest);
       } else {
@@ -339,7 +407,15 @@ export class WorkspaceChangeProbe {
     if (!location) return undefined;
     let repo = this.repos.get(location.root);
     if (!repo) {
-      repo = { location, disabled: false, slowStrikes: 0, open: new Set(), keepsBaseline: false };
+      repo = {
+        location,
+        disabled: false,
+        slowStrikes: 0,
+        open: new Set(),
+        keepsBaseline: false,
+        snapshots: new Set(),
+        priming: false,
+      };
       this.repos.set(location.root, repo);
     }
     return repo;
@@ -357,11 +433,18 @@ export class WorkspaceChangeProbe {
   private locate(cwd: string): Promise<RepoLocation | undefined> {
     let location = this.locations.get(cwd);
     if (!location) {
-      location = this.git(["rev-parse", "--show-toplevel", "--git-path", "index"], { cwd })
+      location = this.git(
+        ["rev-parse", "--show-toplevel", "--git-path", "index", "--git-path", "objects"],
+        { cwd },
+      )
         .then(({ stdout }) => {
-          const [root, index] = stdout.split("\n");
-          if (!root || !index) return undefined;
-          return { root, indexPath: isAbsolute(index) ? index : resolve(cwd, index) };
+          const [root, index, objects] = stdout.split("\n");
+          if (!root || !index || !objects) return undefined;
+          return {
+            root,
+            indexPath: isAbsolute(index) ? index : resolve(cwd, index),
+            objectsPath: isAbsolute(objects) ? objects : resolve(cwd, objects),
+          };
         })
         .catch(() => undefined);
       this.locations.set(cwd, location);
@@ -396,6 +479,7 @@ export class WorkspaceChangeProbe {
       .catch(() => undefined)
       .finally(() => {
         if (repo.running === running) repo.running = undefined;
+        void this.releaseUnusedObjects(repo);
       });
     repo.running = running;
     return running;
@@ -406,13 +490,16 @@ export class WorkspaceChangeProbe {
     const { root, indexPath } = repo.location;
     const started = this.now();
     const tempIndex = join(this.tempDir, `orkestrator-probe-${randomUUID()}.index`);
+    const objectDirectory = await mkdtemp(join(this.tempDir, "orkestrator-probe-objects-"));
+    temporaryObjectDirectories.add(objectDirectory);
+    let retained = false;
     try {
       // Starting from the real index keeps its stat cache, so unchanged tracked
       // files are not re-read. A repository with no index yet starts empty.
       await copyFile(indexPath, tempIndex).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
       });
-      const env = { GIT_INDEX_FILE: tempIndex };
+      const env = { GIT_INDEX_FILE: tempIndex, ...this.objectEnv(repo, objectDirectory) };
 
       const untracked = splitNul(
         (await this.git(["ls-files", "-z", "--others", "--exclude-standard"], { cwd: root }))
@@ -444,10 +531,14 @@ export class WorkspaceChangeProbe {
       }
       const tree = (await this.git(["write-tree"], { cwd: root, env })).stdout.trim();
       if (!tree) return undefined;
-      return { tree, skipped };
+      const snapshot = { tree, skipped, objectDirectory };
+      repo.snapshots.add(snapshot);
+      retained = true;
+      return snapshot;
     } finally {
       await rm(tempIndex, { force: true }).catch(() => {});
       await rm(`${tempIndex}.lock`, { force: true }).catch(() => {});
+      if (!retained) await this.removeObjectDirectory(objectDirectory);
       this.recordDuration(repo, this.now() - started);
     }
   }
@@ -469,9 +560,30 @@ export class WorkspaceChangeProbe {
     if (before.tree === after.tree) return { additions: 0, deletions: 0, files: [] };
     const { stdout } = await this.git(
       ["diff", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", before.tree, after.tree],
-      { cwd: repo.location.root },
+      {
+        cwd: repo.location.root,
+        env: this.objectEnv(repo, after.objectDirectory, before.objectDirectory),
+      },
     );
     const files = parseNumstatZ(stdout);
+    const statuses = await this.git(
+      [
+        "diff",
+        "--name-status",
+        "-z",
+        "-M",
+        "--no-ext-diff",
+        "--no-textconv",
+        before.tree,
+        after.tree,
+      ],
+      {
+        cwd: repo.location.root,
+        env: this.objectEnv(repo, after.objectDirectory, before.objectDirectory),
+      },
+    );
+    const fileStatuses = parseNameStatusZ(statuses.stdout);
+    for (const file of files) file.status = fileStatuses.get(file.path) ?? "M";
     let additions = 0;
     let deletions = 0;
     for (const file of files) {
@@ -486,6 +598,24 @@ export class WorkspaceChangeProbe {
     if (files.length > this.maxReportedFiles) change.filesTruncated = true;
     return change;
   }
+}
+
+/** `-z` puts status, path, and optional rename source in separate fields. */
+export function parseNameStatusZ(output: string): Map<string, MeasuredFileChange["status"]> {
+  const tokens = output.split("\0");
+  const statuses = new Map<string, MeasuredFileChange["status"]>();
+  for (let index = 0; index < tokens.length - 1;) {
+    const status = tokens[index++]?.[0];
+    if (status === "R" || status === "C") {
+      index += 1;
+      const path = tokens[index++];
+      if (path) statuses.set(path, "R");
+    } else {
+      const path = tokens[index++];
+      if (path && (status === "A" || status === "D" || status === "M")) statuses.set(path, status);
+    }
+  }
+  return statuses;
 }
 
 function splitNul(value: string): string[] {

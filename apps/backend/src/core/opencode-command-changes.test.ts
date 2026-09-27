@@ -157,6 +157,23 @@ describe("OpenCodeCommandChanges", () => {
     expect(calls.filter(([method]) => method === "prime")).toHaveLength(3);
   });
 
+  test("waits for the first baseline before a dispatch can continue", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { probe } = fakeProbe();
+    probe.prime = async () => gate;
+    const tracker = new OpenCodeCommandChanges("/repo", { probe }, () => undefined);
+    let ready = false;
+    const priming = tracker.beginTurn("session-1").then(() => {
+      ready = true;
+    });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    release();
+    await priming;
+    expect(ready).toBe(true);
+  });
+
   test("journals measurements so a new backend process overlays them", async () => {
     const journalDirectory = openCodeCommandChangeJournalDirectory(dataDir, "env-1");
     const { probe } = fakeProbe();
@@ -205,6 +222,25 @@ describe("OpenCodeCommandChanges", () => {
     expect(existsSync(join(kept, "session-1.jsonl"))).toBe(true);
   });
 
+  test("environment deletion drains an append already queued for that journal", async () => {
+    const doomed = openCodeCommandChangeJournalDirectory(dataDir, "env-pending");
+    const measured: string[] = [];
+    const tracker = new OpenCodeCommandChanges(
+      "/repo",
+      { probe: fakeProbe().probe, journalDirectory: doomed },
+      (id) => measured.push(id),
+    );
+    tracker.observe(toolEvent("bash", "running"));
+    tracker.observe(toolEvent("bash", "completed"));
+    await waitUntil(() => measured.length === 1);
+    await removeOpenCodeCommandChangeJournals(dataDir, "env-pending");
+    expect(existsSync(doomed)).toBe(false);
+    tracker.observe(toolEvent("bash", "running", "late"));
+    tracker.observe(toolEvent("bash", "completed", "late"));
+    await waitUntil(() => measured.length === 2);
+    expect(existsSync(doomed)).toBe(false);
+  });
+
   test("keeps an environment id with path syntax inside the journal root", () => {
     const directory = openCodeCommandChangeJournalDirectory(dataDir, "../../escape");
     expect(directory.startsWith(join(dataDir, "opencode-command-changes"))).toBe(true);
@@ -236,9 +272,43 @@ describe("OpenCodeCommandChanges", () => {
       expect((await tracker.changes("session-1")).get("call-1")).toEqual({
         additions: 2,
         deletions: 1,
-        files: [{ path: "a.txt", additions: 2, deletions: 1 }],
+        files: [{ path: "a.txt", status: "M", additions: 2, deletions: 1 }],
       });
     } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("does not silently charge child edits to a later parent shell", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "opencode-child-repo-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+    const probe = new WorkspaceChangeProbe({ tempDir: dataDir });
+    try {
+      git("init", "-q");
+      git("config", "user.email", "probe@example.com");
+      git("config", "user.name", "Probe");
+      writeFileSync(join(repo, "tracked.txt"), "start\n");
+      git("add", "-A");
+      git("commit", "-qm", "init");
+      await probe.prime(repo);
+      const measured: string[] = [];
+      const tracker = new OpenCodeCommandChanges(repo, { probe }, (id) => measured.push(id));
+      tracker.observe(toolEvent("task", "running", "parent-task", "parent"));
+      tracker.observe(toolEvent("edit", "running", "child-edit", "child"));
+      writeFileSync(join(repo, "child.txt"), "child\n");
+      tracker.observe(toolEvent("edit", "completed", "child-edit", "child"));
+      tracker.observe(toolEvent("task", "completed", "parent-task", "parent"));
+      tracker.observe(toolEvent("bash", "running", "parent-shell", "parent"));
+      writeFileSync(join(repo, "parent.txt"), "parent\n");
+      tracker.observe(toolEvent("bash", "completed", "parent-shell", "parent"));
+      await waitUntil(() => measured.includes("parent"), 10_000);
+      const change = (await tracker.changes("parent")).get("parent-shell");
+      expect(change).toBeDefined();
+      expect(
+        change?.approximate === true || !change?.files.some((file) => file.path === "child.txt"),
+      ).toBe(true);
+    } finally {
+      await probe.close();
       rmSync(repo, { recursive: true, force: true });
     }
   });
@@ -377,6 +447,94 @@ describe("OpenCode provider shell badges", () => {
       });
       if ("unchanged" in snapshot) throw new Error("expected a transcript");
       expect(bashPart(snapshot)?.commandChanges).toEqual(CHANGE);
+    } finally {
+      await subject.dispose?.();
+    }
+  });
+
+  test("hydrates child shell badges and observes its live tool events", async () => {
+    const journalDirectory = openCodeCommandChangeJournalDirectory(dataDir, "env-child");
+    const seed = new OpenCodeCommandChanges(
+      "/worktree",
+      { probe: fakeProbe().probe, journalDirectory },
+      () => undefined,
+    );
+    seed.observe(toolEvent("bash", "running", "child-bash", "child-session"));
+    seed.observe(toolEvent("bash", "completed", "child-bash", "child-session"));
+    await seed.changes("child-session");
+
+    const fake = openCodeFake();
+    const task = {
+      id: "task-part",
+      sessionID: "owned-session",
+      type: "tool",
+      tool: "task",
+      callID: "parent-task",
+      state: {
+        status: "completed",
+        input: { description: "Inspect" },
+        metadata: { sessionId: "child-session" },
+      },
+    };
+    fake.setMessagesHandler(async (parameters) => ({
+      data:
+        parameters?.sessionID === "child-session"
+          ? [
+              {
+                info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                parts: [
+                  {
+                    ...bashMessage("completed").parts[0],
+                    sessionID: "child-session",
+                    callID: "child-bash",
+                  },
+                ],
+              },
+            ]
+          : [
+              {
+                info: { id: "root-message", role: "assistant", time: { created: 1 } },
+                parts: [task],
+              },
+            ],
+    }));
+    const { probe, calls } = fakeProbe();
+    const subject = provider(fake, probe, "/worktree", journalDirectory);
+    subject.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1);
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.updated",
+        properties: { info: { id: "child-session", parentID: "owned-session" } },
+      });
+      stream.push({
+        type: "message.part.updated",
+        properties: {
+          sessionID: "child-session",
+          part: {
+            ...task,
+            sessionID: "child-session",
+            tool: "bash",
+            callID: "live-child",
+            state: { status: "running", input: { command: "true" } },
+          },
+        },
+      });
+      await waitUntil(() =>
+        calls.some(
+          ([method, , id]) => method === "begin" && id === "opencode:child-session:live-child",
+        ),
+      );
+      stream.push({
+        type: "message.part.updated",
+        properties: { sessionID: "owned-session", part: task },
+      });
+      const snapshot = await subject.interactiveSnapshot!("owned-session");
+      const root = snapshot.messages[0] as {
+        parts: Array<{ subagentActions?: Array<{ commandChanges?: MeasuredWorkspaceChange }> }>;
+      };
+      expect(root.parts[0]?.subagentActions?.[0]?.commandChanges).toEqual(CHANGE);
     } finally {
       await subject.dispose?.();
     }

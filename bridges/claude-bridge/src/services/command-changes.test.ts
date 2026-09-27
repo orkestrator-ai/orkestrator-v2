@@ -19,6 +19,7 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 import { commandChangeJournal, overlayCommandChanges } from "./command-changes.js";
+import { coordinatorProcessPolicy } from "./read-only-policy.js";
 
 type Hook = (
   input: Record<string, unknown>,
@@ -75,8 +76,9 @@ function toolPart(sessionId: string, toolUseId: string): NormalizedPart | undefi
     .find((part) => part.toolUseId === toolUseId);
 }
 
-async function startTurn(name: string) {
+async function startTurn(name: string, readOnly = false) {
   const session = createSession(name);
+  if (readOnly) session.executionPolicy = coordinatorProcessPolicy();
   track(session.id);
   const prompt = sendPrompt(session.id, "go");
   const call = await nextQueryCall();
@@ -95,6 +97,25 @@ async function startTurn(name: string) {
 }
 
 describe("Bash command change measurement", () => {
+  test("read-only coordinator denial runs before the measuring hook", async () => {
+    const turn = await startTurn("command-changes-read-only", true);
+    const hooks = turn.call.options.hooks as Hooks;
+    expect(hooks.PreToolUse).toHaveLength(2);
+    const denied = await hooks.PreToolUse![0]!.hooks[0]!(
+      {
+        hook_event_name: "PreToolUse",
+        cwd: repo,
+        tool_name: "Bash",
+        tool_input: { command: "echo changed > notes.txt" },
+        tool_use_id: "denied-read-only",
+      },
+      "denied-read-only",
+      { signal: new AbortController().signal },
+    );
+    expect(denied).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+    expect((await commandChangeJournal("denied-read-only")?.read())?.size ?? 0).toBe(0);
+    await turn.finish();
+  });
   test("measures a Bash call and keeps the counts through its result", async () => {
     const turn = await startTurn("command-changes-live");
     turn.call.push(bashCall("bash-live"));
@@ -108,7 +129,7 @@ describe("Bash command change measurement", () => {
     const expected = {
       additions: 2,
       deletions: 0,
-      files: [{ path: "notes.txt", additions: 2, deletions: 0 }],
+      files: [{ path: "notes.txt", status: "M", additions: 2, deletions: 0 }],
     };
     expect(toolPart(turn.sessionId, "bash-live")?.commandChanges).toEqual(expected);
     turn.call.push(toolResult("bash-live"));

@@ -147,6 +147,24 @@ import {
 
 export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
 
+/** Apply a late measurement at any depth in a rendered subagent row. */
+export function patchCommandChangePart(
+  part: NormalizedPart,
+  itemId: string,
+  change: MeasuredWorkspaceChange,
+): NormalizedPart {
+  if (part.type === "tool-invocation" && part.toolUseId === itemId) {
+    return part.commandChanges === change ? part : { ...part, commandChanges: change };
+  }
+  if (!part.subagentActions) return part;
+  const actions = part.subagentActions.map((action) =>
+    patchCommandChangePart(action, itemId, change),
+  );
+  return actions.some((action, index) => action !== part.subagentActions?.[index])
+    ? { ...part, subagentActions: actions }
+    : part;
+}
+
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   /** Close admission fence shared with lazy thread reattachment. */
   protected readonly closingSessionIds = new Set<string>();
@@ -1092,13 +1110,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * on the repository's latest snapshot rather than one of its own; priming
    * here, before the turn is dispatched, keeps edits made between turns (by
    * the user, or another tool) from being charged to the turn's first command.
-   * Fire-and-forget: the probe never rejects, and a dispatch must not wait on
-   * git.
+   * Dispatch waits for this baseline so a fast first command cannot race it.
    */
-  protected primeCommandChanges(context: ThreadContext): void {
+  protected async primeCommandChanges(context: ThreadContext): Promise<void> {
     const probe = this.options.commandChangeProbe;
     if (!probe) return;
-    void probe.prime(context.cwd ?? this.options.cwd).catch(() => undefined);
+    await probe.prime(context.cwd ?? this.options.cwd).catch(() => undefined);
   }
 
   /**
@@ -1229,9 +1246,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       const candidate = context.messages[index]!;
       if (candidate.role !== "assistant") continue;
       for (const [partIndex, part] of candidate.parts.entries()) {
-        if (part.type !== "tool-invocation" || part.toolUseId !== itemId) continue;
-        if (part.commandChanges === change) continue;
-        changedParts.push({ index: partIndex, part: { ...part, commandChanges: change } });
+        const updated = patchCommandChangePart(part, itemId, change);
+        if (updated !== part) changedParts.push({ index: partIndex, part: updated });
       }
       if (changedParts.length > 0) message = candidate;
     }

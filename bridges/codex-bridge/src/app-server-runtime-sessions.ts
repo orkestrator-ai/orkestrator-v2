@@ -871,7 +871,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     const errorBeforeReview = context.error;
     context.dispatchInFlight = true;
     this.registry.setPhase(context, "starting");
-    this.primeCommandChanges(context);
+    await this.primeCommandChanges(context);
 
     const modelForReview = context.modelId ?? session.config.model;
     const assistantMessage: NormalizedMessage = {

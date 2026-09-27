@@ -68,6 +68,8 @@ export function useCommandChangeProbeForTests(next: CommandChangeProbe | null): 
 }
 
 export interface CommandChangeTracker {
+  /** Baseline must finish before the SDK can execute this turn. */
+  ready: Promise<void>;
   /** Feed one interaction update. Synchronous; the measuring runs detached. */
   observe(update: unknown): void;
   /**
@@ -79,6 +81,7 @@ export interface CommandChangeTracker {
 }
 
 const inertTracker: CommandChangeTracker = {
+  ready: Promise.resolve(),
   observe: () => {},
   close: () => {},
 };
@@ -99,7 +102,7 @@ export function trackCommandChanges(state: SessionState): CommandChangeTracker {
   /** A settled call re-reported must not open a second window of nothing. */
   const settled = new Set<string>();
   const safely = (work: Promise<unknown>) => void work.catch(() => undefined);
-  safely(probe.prime(workingDirectory));
+  const ready = probe.prime(workingDirectory).catch(() => undefined);
 
   const attach = (callId: string) =>
     safely(
@@ -142,6 +145,7 @@ export function trackCommandChanges(state: SessionState): CommandChangeTracker {
   };
 
   return {
+    ready,
     observe,
     close: () => {
       for (const callId of open) probe.discard(callId);

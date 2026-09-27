@@ -41,6 +41,7 @@ import {
   PromptAcceptedResult,
   AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
+import { inheritCommandChanges } from "./sessions/command-changes.js";
 import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
@@ -356,6 +357,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id, {
         structuredOutputTurns: this.structuredOutputTurnsForThread(fork.id),
       });
+      await inheritCommandChanges(
+        this.options.codexHome,
+        parent.threadId,
+        fork.id,
+        hydrated.messages,
+      );
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
@@ -864,6 +871,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     const errorBeforeReview = context.error;
     context.dispatchInFlight = true;
     this.registry.setPhase(context, "starting");
+    await this.primeCommandChanges(context);
 
     const modelForReview = context.modelId ?? session.config.model;
     const assistantMessage: NormalizedMessage = {

@@ -19,6 +19,7 @@ import type {
   EngineItem,
   EngineTurnStatus,
 } from "../engine/types.js";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import {
   resolveTranscriptToolOutputState,
   stringifyTranscriptToolOutput,
@@ -61,6 +62,11 @@ export interface ItemAccumulator {
    */
   progress?: string;
   completed: boolean;
+  /**
+   * What a command changed in its worktree. Measured after the item completes,
+   * so it arrives separately from — and usually after — the item itself.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /** Raw apply_patch recovery candidate, hidden while a structured item may arrive. */
   rawFallback: boolean;
   /**
@@ -373,6 +379,21 @@ export class TurnAccumulator {
     accumulator.progress = undefined;
     accumulator.completedAt ??= completedAtMs;
     return state === "failure";
+  }
+
+  /**
+   * Attach a command's measured worktree change. Returns false for an item this
+   * turn never saw, so the caller can patch the settled transcript instead.
+   *
+   * Not through `ensureItem`: a measurement must not conjure a row, but it
+   * does bump `version` so a frozen segment knows it has to re-render.
+   */
+  onCommandChanges(itemId: string, change: MeasuredWorkspaceChange): boolean {
+    const accumulator = this.items.get(itemId);
+    if (!accumulator) return false;
+    accumulator.commandChanges = change;
+    accumulator.version += 1;
+    return true;
   }
 
   onTurnDiff(diff: string): void {

@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import { CodexCommandCatalogue } from "./commands/codex-command-catalogue.js";
+import type { CommandChangeProbe } from "./sessions/command-changes.js";
 import type {
   ApprovalDecision,
   ApprovalResolvedDecision,
@@ -163,6 +164,12 @@ export interface AppServerRuntimeOptions {
   skillInventoryTtlMs?: number;
   /** Test/embedding override for the coalesced `skills/changed` re-read delay. */
   skillRefreshDebounceMs?: number;
+  /**
+   * Measures what each shell command changed in its worktree, for the +N −M
+   * badge on its row. One per process, supplied by the composition root;
+   * omitted, commands are simply not measured.
+   */
+  commandChangeProbe?: CommandChangeProbe;
 }
 
 export interface OrderedRuntimeEvent {
@@ -611,6 +618,12 @@ export abstract class AppServerRuntimeBase {
    * rendering, persistence, and terminal SSE publication to finish.
    */
   protected readonly pendingFinalizations = new Set<Promise<void>>();
+  /**
+   * Worktree measurements and journal writes for shell commands. Off the read
+   * loop like finalization, and tracked the same way so shutdown can let a
+   * measurement reach its journal and tests can wait for one to land.
+   */
+  protected readonly pendingCommandChanges = new Set<Promise<void>>();
   /** Serializes and exposes generation recovery to request paths. */
   protected generationRecovery: Promise<void> = Promise.resolve();
   /**

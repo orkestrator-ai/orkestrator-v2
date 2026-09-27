@@ -9,6 +9,7 @@
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 
 export interface NativeToolDiffMetadata {
   filePath?: string;
@@ -102,6 +103,12 @@ export interface NativeBasePart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: NativeToolDiffMetadata;
+  /**
+   * What a shell call changed in its worktree, measured by the bridge around
+   * the command because its input cannot say. Kept apart from `toolDiff`,
+   * which marks a row as an edit and would route it to the edit card.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /**
    * The provider's permission layer refused this call before it ran, as
    * opposed to the tool running and failing. `source` names what decided

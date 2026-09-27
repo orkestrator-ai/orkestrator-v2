@@ -12,6 +12,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
 import {
   WORKFLOW_RESULT_KINDS,
   workflowResultToolName,
@@ -782,6 +783,9 @@ const appServerRuntime = new AppServerRuntime({
       : generateSessionTitleWithCodexExec(codexPathOverride, prompt),
   // This module owns the sweep timer so shutdown can clear it alongside the rest.
   sweepIntervalMs: 0,
+  // One probe per process: it serializes snapshots per repository across every
+  // thread working in it.
+  commandChangeProbe: new WorkspaceChangeProbe(),
 });
 
 /**

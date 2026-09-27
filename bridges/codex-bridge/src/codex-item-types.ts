@@ -17,6 +17,20 @@ export type ModelReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhig
 
 export type CommandExecutionStatus = "in_progress" | "completed" | "failed";
 
+/**
+ * Who started a command. `agent` is a classic shell tool call and
+ * `unifiedExecStartup` the start of a unified-exec (`exec_command`) process —
+ * both are the agent's own commands. `unifiedExecInteraction` is a later write
+ * to such a process and `userShell` a command the user ran themselves.
+ * Open-ended: app-server is experimental and may add sources.
+ */
+export type CommandExecutionSource =
+  | "agent"
+  | "userShell"
+  | "unifiedExecStartup"
+  | "unifiedExecInteraction"
+  | (string & {});
+
 export interface CommandExecutionItem {
   id: string;
   type: "command_execution";
@@ -27,6 +41,9 @@ export interface CommandExecutionItem {
   /** Set when the command exits; omitted while still running. */
   exit_code?: number;
   status: CommandExecutionStatus;
+  /** Directory the command ran in, when app-server reported one. */
+  cwd?: string;
+  source?: CommandExecutionSource;
 }
 
 export type PatchChangeKind = "add" | "delete" | "update";

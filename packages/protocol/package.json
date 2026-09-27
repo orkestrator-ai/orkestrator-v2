@@ -89,6 +89,8 @@
     "./transcript-window": "./src/transcript-window.ts",
     "./view-sync": "./src/view-sync.ts",
     "./worktree-snapshots": "./src/worktree-snapshots.ts",
+    "./workspace-change-probe": "./src/workspace-change-probe.ts",
+    "./command-change-journal": "./src/command-change-journal.ts",
     "./web-client": "./src/web-client.ts",
     "./design-canvas": "./src/design-canvas.ts",
     "./design-operations": "./src/design-operations.ts",

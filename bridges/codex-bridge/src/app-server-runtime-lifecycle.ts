@@ -59,6 +59,7 @@ import {
 import type {
   EngineEvent,
   EngineGeneration,
+  EngineItem,
   EngineRateLimitWindow,
   EngineRateLimitWindowUpdate,
   EngineThread,
@@ -108,6 +109,14 @@ import {
   type NormalizedPart,
 } from "./messages/types.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
+import {
+  commandChangeCwd,
+  commandChangeRole,
+  commandDidNotRun,
+  recordCommandChanges,
+} from "./sessions/command-changes.js";
+import { hasMeasuredChanges } from "@orkestrator/protocol/command-change-journal";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
   getWorkingDirectory,
@@ -137,6 +146,24 @@ import {
 } from "@orkestrator/protocol/native-agent";
 
 export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
+
+/** Apply a late measurement at any depth in a rendered subagent row. */
+export function patchCommandChangePart(
+  part: NormalizedPart,
+  itemId: string,
+  change: MeasuredWorkspaceChange,
+): NormalizedPart {
+  if (part.type === "tool-invocation" && part.toolUseId === itemId) {
+    return part.commandChanges === change ? part : { ...part, commandChanges: change };
+  }
+  if (!part.subagentActions) return part;
+  const actions = part.subagentActions.map((action) =>
+    patchCommandChangePart(action, itemId, change),
+  );
+  return actions.some((action, index) => action !== part.subagentActions?.[index])
+    ? { ...part, subagentActions: actions }
+    : part;
+}
 
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   /** Close admission fence shared with lazy thread reattachment. */
@@ -261,6 +288,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       }
       const pending = [
         ...this.pendingFinalizations,
+        ...this.pendingCommandChanges,
         ...this.pendingSessionWrites,
         ...[...this.threadState.values()]
           .filter((state) => state.orderedEventDraining)
@@ -964,9 +992,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "item.completed": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
-        if (event.kind === "item.completed") turn.onItemCompleted(event.item);
-        else if (event.kind === "item.started") {
+        if (event.kind === "item.completed") {
+          turn.onItemCompleted(event.item);
+          this.trackCommandChangeWindow(context, "completed", event.item);
+        } else if (event.kind === "item.started") {
           turn.onItemStarted(event.item, event.startedAtMs);
+          this.trackCommandChangeWindow(context, "started", event.item);
         } else turn.onItemUpdated(event.item);
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
@@ -1057,6 +1088,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "turn.completed": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
+        this.discardOutlivingCommandWindows(turn);
         turn.complete(event.status, event.error);
         void this.runFinalization(context, turn).catch((error) => {
           console.error(
@@ -1069,6 +1101,198 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       default:
         return;
     }
+  }
+
+  /**
+   * Take the "before" snapshot for a turn's commands.
+   *
+   * app-server reports a command only once it is running, so its window opens
+   * on the repository's latest snapshot rather than one of its own; priming
+   * here, before the turn is dispatched, keeps edits made between turns (by
+   * the user, or another tool) from being charged to the turn's first command.
+   * Dispatch waits for this baseline so a fast first command cannot race it.
+   */
+  protected async primeCommandChanges(context: ThreadContext): Promise<void> {
+    const probe = this.options.commandChangeProbe;
+    if (!probe) return;
+    await probe.prime(context.cwd ?? this.options.cwd).catch(() => undefined);
+  }
+
+  /**
+   * Open or close a measurement window as a command (or an edit it must know
+   * about) starts and completes.
+   *
+   * Runs on the notification path, so it only *starts* the probe's work: the
+   * "after" snapshot and everything that follows run detached and are tracked
+   * in `pendingCommandChanges`, never awaited here.
+   */
+  protected trackCommandChangeWindow(
+    context: ThreadContext,
+    phase: "started" | "completed",
+    item: EngineItem,
+  ): void {
+    const probe = this.options.commandChangeProbe;
+    if (!probe) return;
+    const role = commandChangeRole(item);
+    if (!role) return;
+
+    if (phase === "started") {
+      // A duplicate `item/started` after the call settled would open a window
+      // nothing is left to close.
+      if (context.activeTurn?.items.get(item.id)?.completed) return;
+      const cwd = commandChangeCwd(item, context.cwd ?? this.options.cwd);
+      const opening =
+        role === "measure"
+          ? probe.begin(cwd, item.id, { baseline: true })
+          : probe.note(cwd, item.id);
+      void opening.catch(() => undefined);
+      return;
+    }
+
+    if (role === "measure" && commandDidNotRun(item)) {
+      probe.discard(item.id);
+      return;
+    }
+    const threadId = context.threadId;
+    this.trackCommandChangeWork(
+      probe.end(item.id).then((change) => {
+        if (role === "measure" && change) this.applyCommandChanges(threadId, item.id, change);
+      }),
+    );
+  }
+
+  /**
+   * A command still running when its turn completes is a background process —
+   * a server or watcher unified exec left behind. Its window would span
+   * everything after it, so it is dropped rather than measured.
+   */
+  protected discardOutlivingCommandWindows(turn: TurnAccumulator): void {
+    const probe = this.options.commandChangeProbe;
+    if (!probe) return;
+    for (const accumulator of turn.items.values()) {
+      if (!accumulator.completed && accumulator.item?.type === "command_execution") {
+        probe.discard(accumulator.id);
+      }
+    }
+  }
+
+  protected trackCommandChangeWork(work: Promise<void>): void {
+    const tracked = work.catch((error) => {
+      console.error(
+        "[codex-bridge] Failed to record a command's line changes:",
+        error instanceof Error ? error.message : error,
+      );
+    });
+    this.pendingCommandChanges.add(tracked);
+    void tracked.finally(() => this.pendingCommandChanges.delete(tracked));
+  }
+
+  /**
+   * Put a command's measured change on its row and journal it.
+   *
+   * While the command's turn is still streaming, the measurement goes onto the
+   * item's accumulator and the next coalesced render carries it (the render
+   * cache is keyed on it). Once the turn has settled nothing renders it again,
+   * so the stored row is patched in place and published directly.
+   *
+   * A turn that has completed but not finished finalizing is between the two:
+   * its final render may or may not still be to come. Patching the row then
+   * would race that render for the message's next revision, and a client that
+   * sees them out of order has to refetch the transcript. So the change goes
+   * onto the accumulator for a render still to come, and the stored row is
+   * only patched once finalization is over — a no-op if that render took it.
+   */
+  protected applyCommandChanges(
+    threadId: string,
+    itemId: string,
+    change: MeasuredWorkspaceChange,
+  ): void {
+    if (!hasMeasuredChanges(change)) return;
+    this.trackCommandChangeWork(
+      recordCommandChanges(this.options.codexHome, threadId, itemId, change),
+    );
+    // A detached thread has no live transcript; its next hydrate reads the
+    // journal written above.
+    const context = this.registry.getThread(threadId);
+    if (!context) return;
+    const turn = context.activeTurn;
+    const accumulated = turn?.onCommandChanges(itemId, change) ?? false;
+    if (accumulated && !turn!.isTerminal()) {
+      this.stateFor(threadId).coalescer.schedule(this.now());
+      return;
+    }
+    if (accumulated) {
+      this.trackCommandChangeWork(
+        Promise.allSettled(this.pendingFinalizations).then(() => {
+          const current = this.registry.getThread(threadId);
+          if (current) this.patchSettledCommandChanges(current, itemId, change);
+        }),
+      );
+      return;
+    }
+    this.patchSettledCommandChanges(context, itemId, change);
+  }
+
+  protected patchSettledCommandChanges(
+    context: ThreadContext,
+    itemId: string,
+    change: MeasuredWorkspaceChange,
+  ): void {
+    // A call's rows live in one message, and a late measurement is almost
+    // always for one of the newest.
+    let message: NormalizedMessage | undefined;
+    const changedParts: { index: number; part: NormalizedPart }[] = [];
+    for (let index = context.messages.length - 1; index >= 0 && !message; index -= 1) {
+      const candidate = context.messages[index]!;
+      if (candidate.role !== "assistant") continue;
+      for (const [partIndex, part] of candidate.parts.entries()) {
+        const updated = patchCommandChangePart(part, itemId, change);
+        if (updated !== part) changedParts.push({ index: partIndex, part: updated });
+      }
+      if (changedParts.length > 0) message = candidate;
+    }
+    if (!message) return;
+
+    const parts = message.parts.slice();
+    for (const { index, part } of changedParts) parts[index] = part;
+    message.parts = parts;
+    // A message whose revision the client never received (one hydrated from
+    // the rollout) cannot take a sparse patch; it is replaced whole instead.
+    const patchable = Number.isInteger(message.revision);
+    message.revision = (message.revision ?? 0) + 1;
+    const state = this.threadState.get(context.threadId);
+    if (state?.publishedMessageId === message.id) state.publishedParts = message.parts.slice();
+    const historical = state?.historicalAssistantSegments.get(message.id);
+    if (historical) historical.publishedParts = message.parts.slice();
+    this.bumpMessageRevision(context);
+
+    const target = message;
+    const patch = {
+      messageId: target.id,
+      partCount: target.parts.length,
+      changedParts,
+      content: target.content,
+      createdAt: target.createdAt,
+      turnId: target.turnId,
+      revision: target.revision!,
+    } satisfies MessagePatchEventData;
+    this.enqueueAfterMessageFlush(
+      context.threadId,
+      () => {
+        for (const sessionId of context.bridgeSessionIds) {
+          this.options.emit(
+            patchable
+              ? { type: "message.patched", sessionId, data: patch }
+              : { type: "message.updated", sessionId, data: { message: target } },
+          );
+        }
+      },
+      {
+        bytes: patchable
+          ? estimateOrderedEventBytes(changedParts)
+          : normalizedMessageSnapshotChars(target) * 2,
+      },
+    );
   }
 
   /**

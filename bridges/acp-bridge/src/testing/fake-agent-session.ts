@@ -274,6 +274,23 @@ export function handleSessionMessage(message: JsonObject): boolean {
         status: "completed",
       });
     }
+    // The `SHELLCHANGE` turn as the vendor replays it: the command, with none
+    // of the measurement the bridge took around it.
+    if (process.env.FAKE_ACP_REPLAY_SHELL_CHANGE === "1") {
+      replay({
+        sessionUpdate: "user_message_chunk",
+        messageId: "shell-change-user",
+        content: { type: "text", text: "SHELLCHANGE" },
+      });
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "shell-change-1",
+        title: "Rewrite the notes",
+        kind: "execute",
+        status: "completed",
+        rawInput: { command: "./rewrite-notes.sh" },
+      });
+    }
     // An agent replaying its conversation can re-describe terminal state too,
     // so the load carries usage for a turn that already ended. The numbers
     // differ from every live scenario below so a test can tell which report the

@@ -292,3 +292,20 @@ describe("OpenCodeStreamState usage ledger", () => {
     });
   });
 });
+
+describe("OpenCodeStreamState touch", () => {
+  test("moves a tracked session's revision without an event, and ignores unknown ones", () => {
+    const state = new OpenCodeStreamState();
+    state.register("session");
+    const revision = state.revision("session");
+    const eventVersion = state.eventVersion("session");
+
+    state.touch("session");
+    state.touch("unknown");
+
+    expect(state.revision("session")).toBe(revision + 1);
+    // Not an event: dispatch reconciliation keyed on event versions is unaffected.
+    expect(state.eventVersion("session")).toBe(eventVersion);
+    expect(state.revision("unknown")).toBe(0);
+  });
+});

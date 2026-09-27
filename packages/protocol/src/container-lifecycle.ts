@@ -39,6 +39,8 @@ export const CONTAINER_LIFECYCLE_ERROR_CODES = [
   "unsupported-topology",
   /** A request field was malformed or out of bounds. */
   "invalid-request",
+  /** The request could harm running work; repeat it with explicit confirmation. */
+  "confirmation-required",
   /** A bounded resource (retained copies, followers, admission) is full. */
   "resource-exhausted",
   /** The requested operation id is unknown or its record has expired. */

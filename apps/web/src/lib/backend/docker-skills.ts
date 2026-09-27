@@ -56,25 +56,26 @@ export async function checkBaseImage(): Promise<boolean> {
 }
 
 /** Docker system statistics */
+/** Every figure Docker would not report is `null`, never zero. */
 export interface DockerSystemStats {
-  /** Memory currently used by containers (bytes) */
-  memoryUsed: number;
-  /** Total memory allocated to Docker (bytes) */
-  memoryTotal: number;
-  /** Number of CPUs available to Docker */
-  cpus: number;
-  /** Total CPU usage percentage across all running containers */
-  cpuUsagePercent: number;
-  /** Total disk space used by Docker (bytes) */
-  diskUsed: number;
-  /** Total disk space allocated to Docker (bytes) */
-  diskTotal: number;
+  /** Memory used by this installation's running containers (bytes). */
+  memoryUsed: number | null;
+  /** Memory available to Docker (bytes; on Docker Desktop, its VM). */
+  memoryTotal: number | null;
+  /** CPUs available to Docker. */
+  cpus: number | null;
+  /** This installation's CPU use as a share of Docker's CPUs (0–100). */
+  cpuUsagePercent: number | null;
+  /** Disk used by all of Docker (bytes). */
+  diskUsed: number | null;
+  /** Docker does not report a disk limit; always null. */
+  diskTotal: number | null;
   /** Number of running containers */
   containersRunning: number;
   /** Total number of containers */
   containersTotal: number;
   /** Total number of images */
-  imagesTotal: number;
+  imagesTotal: number | null;
   /** When the usage figures were sampled; absent from older backends. */
   sampledAt?: string | null;
   stale?: boolean;
@@ -96,8 +97,8 @@ export interface ContainerInfo {
   state: string;
   /** Image name */
   image: string;
-  /** Creation timestamp (Unix seconds) */
-  created: number;
+  /** Creation timestamp (Unix seconds), when Docker reported it. */
+  created: number | null;
   /** Environment ID label (if set) */
   environmentId: string | null;
   /** Project ID label (if set) */
@@ -114,6 +115,8 @@ export interface ContainerInfo {
   memoryBytes?: number | null;
   /** The last exit was an out-of-memory kill, when known. */
   oomKilled?: boolean | null;
+  /** Out-of-memory kills of any process in it since the backend started following. */
+  oomEvents?: number | null;
   /** CPU usage percentage (per core, may exceed 100), null if not measured */
   cpuPercent: number | null;
 }

@@ -96,4 +96,48 @@ describe("environment resources section", () => {
       applyNow: true,
     });
   });
+
+  test("a limit below current use needs an explicit second confirmation", async () => {
+    let calls = 0;
+    const update = install(
+      mock((args: Record<string, unknown>) => {
+        calls += 1;
+        if (!args.allowBelowUsage) {
+          throw new Error(
+            "ContainerLifecycleError:confirmation-required: The container is using nearly that much memory now.",
+          );
+        }
+        return policy;
+      }),
+    );
+    render(<EnvironmentResourcesSection environmentId="env-r" containerId="c1" dockerAvailable />);
+    await screen.findByText(/2 CPU · 4 GB/);
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Use limits specific to this environment" }),
+    );
+    fireEvent.change(screen.getByLabelText("CPU cores"), { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save resource limits" }));
+    await screen.findByRole("button", { name: "Apply anyway" });
+    expect(screen.getByRole("alert").textContent).toContain("nearly that much memory");
+    fireEvent.click(screen.getByRole("button", { name: "Apply anyway" }));
+    await waitFor(() => expect(calls).toBe(2));
+    // The draft the user typed is what is confirmed, not a reloaded value.
+    expect(update.mock.calls[1]?.[0]).toEqual({
+      environmentId: "env-r",
+      limits: { cpus: 1.5, memoryMiB: null, pids: null },
+      applyNow: true,
+      allowBelowUsage: true,
+    });
+  });
+
+  test("a rootless daemon is named next to the applied values", async () => {
+    install();
+    const rootlessPolicy = { ...policy, daemonRootless: true };
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === "get_environment_resources" ? rootlessPolicy : base(command, args),
+    );
+    render(<EnvironmentResourcesSection environmentId="env-r" containerId="c1" dockerAvailable />);
+    await screen.findByText(/Docker runs rootless/);
+  });
 });

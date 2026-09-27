@@ -63,6 +63,11 @@ export interface EnvironmentResourcePolicy {
   applied: ContainerResourceLimits | null;
   /** The daemon cannot enforce a requested axis (rootless, cgroup support). */
   unsupported: Array<keyof ContainerResourceLimits>;
+  /**
+   * A rootless daemon enforces limits only through the cgroup controllers
+   * delegated to its user; the applied values are what it reports.
+   */
+  daemonRootless?: boolean;
 }
 
 export interface DockerCapacity {
@@ -96,6 +101,11 @@ export interface ContainerUsageSample {
   memoryLimitBytes: number | null;
   pids: number | null;
   oomKilled: boolean | null;
+  /**
+   * Out-of-memory kills in the container (any process, not only PID 1) since
+   * the backend began following Docker's events; null while it is not.
+   */
+  oomEvents: number | null;
   exitCode: number | null;
 }
 

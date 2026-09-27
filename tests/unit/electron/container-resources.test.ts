@@ -11,6 +11,7 @@ import {
   resolveResourceLimits,
   resourceArguments,
   sampleContainerUsage,
+  sharedMemoryMiB,
 } from "../../../apps/backend/src/core/container-resources";
 import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
 import {
@@ -83,6 +84,14 @@ describe("resource limits", () => {
     });
     expect(parseAppliedLimits("0\t0\t<nil>")).toEqual({ cpus: null, memoryMiB: null, pids: null });
     expect(parseAppliedLimits("garbage")).toBeNull();
+  });
+});
+
+describe("shared memory under a budget", () => {
+  test("is 1 GiB without a memory limit and at most half of one", () => {
+    expect(sharedMemoryMiB({ cpus: null, memoryMiB: null, pids: null })).toBe(1024);
+    expect(sharedMemoryMiB({ cpus: null, memoryMiB: 8192, pids: null })).toBe(1024);
+    expect(sharedMemoryMiB({ cpus: null, memoryMiB: 512, pids: null })).toBe(256);
   });
 });
 
@@ -191,6 +200,7 @@ esac
             memoryLimitBytes: 2 * 1024 ** 3,
             pids: 7,
             oomKilled: false,
+            oomEvents: null,
             exitCode: null,
           },
           {
@@ -202,6 +212,7 @@ esac
             memoryLimitBytes: null,
             pids: null,
             oomKilled: true,
+            oomEvents: null,
             exitCode: 137,
           },
         ]);

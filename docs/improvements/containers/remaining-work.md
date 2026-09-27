@@ -32,10 +32,10 @@ credentials this host does not have — named explicitly).
 | 15 | 14 | No switch that refuses new rebuild/migration admissions while recovery continues | Done — `ORKESTRATOR_CONTAINER_REPLACEMENT=paused`; preview reports `admission-paused` |
 | 16 | 10 | No admission limit for concurrent expensive starts/migrations | Done — `container-admission.ts`: 4 starts, 2 copies, bounded FIFO waits |
 | 17 | 11 | No renderer log viewer on the subscription API (ended/gap/disconnected states, release when hidden) | Done — `ContainerLogViewer` in the Container section: cursor reads, gap and ended states, "Follow again", released when hidden |
-| 18 | 10 | Placeholder zeros (unknown memory/CPU/disk, `created: 0`) still reach the UI | Open |
-| 19 | 10 | No automatic refresh of usage; staleness only means "daemon unavailable" | Open |
-| 20 | 10 | Rootless flag computed but unused; memory vs `--shm-size` not validated; below-usage update cannot be confirmed from the UI | Open |
-| 21 | 10 | Child-process OOM (PID 1 survives) invisible | Open |
+| 18 | 10 | Placeholder zeros (unknown memory/CPU/disk, `created: 0`) still reach the UI | Done — unknown figures are `null` end to end and render as "unknown" |
+| 19 | 10 | No automatic refresh of usage; staleness only means "daemon unavailable" | Done — the dialog refreshes every 5 s while open; samples older than 15 s read as stale |
+| 20 | 10 | Rootless flag computed but unused; memory vs `--shm-size` not validated; below-usage update cannot be confirmed from the UI | Done — `--shm-size` capped at half the memory limit; rootless named in the policy; "Apply anyway" sends `allowBelowUsage` after a `confirmation-required` refusal |
+| 21 | 10 | Child-process OOM (PID 1 survives) invisible | Done — `container-oom-events.ts` follows Docker `oom` events (replaying gaps) and the dialog shows kills of running containers |
 | 22 | 07 | Success toasts ignore the final snapshot; failures have no actions | Open |
 | 23 | 07 | Recovery copies on volumes report no size | Open |
 | 24 | 06 | Port conflict on the candidate rolls back instead of a recoverable result | Open |
@@ -57,7 +57,7 @@ credentials this host does not have — named explicitly).
 | 35 | 06 | Corrupt archive / malformed link / occupied name / failed setup injection; kill around commit | Open |
 | 36 | 07/C29 | Real-browser cycle for rebuild, recovery copies and cleanup review, including switch-away during a rebuild | Open |
 | 37 | 08/C21 | Interrupted revoke and restart during staging (fixture credentials) | Open |
-| 38 | 10 | `DockerStatsDialog` tests; parser edge cases | Open |
+| 38 | 10 | `DockerStatsDialog` tests; parser edge cases | Done — `DockerStatsDialog.test.tsx`; watcher and shared-memory tests |
 | 39 | 09 | Sibling access through the environment gateway IP and a sibling's published port | Open |
 
 ## Environment-limited

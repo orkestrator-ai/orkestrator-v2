@@ -62,6 +62,8 @@ export function EnvironmentResourcesSection({
   const [draft, setDraft] = useState(limitsToDraft(null));
   const [applyNow, setApplyNow] = useState(true);
   const [saving, setSaving] = useState(false);
+  /** The backend asked for confirmation: the limit is below current use. */
+  const [confirmBelowUsage, setConfirmBelowUsage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -89,12 +91,16 @@ export function EnvironmentResourcesSection({
 
   if (!policy) return null;
 
-  const save = async () => {
+  const save = async (allowBelowUsage = false) => {
     setSaving(true);
+    setConfirmBelowUsage(null);
+    // Kept as typed while the user decides; nothing was changed.
+    let awaitingConfirmation = false;
     try {
       const next = await backend.updateEnvironmentResources(environmentId, {
         limits: custom ? draftToLimits(draft) : null,
         applyNow: applyNow && Boolean(containerId),
+        ...(allowBelowUsage ? { allowBelowUsage: true } : {}),
       });
       setPolicy(next);
       toast.success(applyNow && containerId ? "Resource limits applied" : "Resource limits saved", {
@@ -105,12 +111,17 @@ export function EnvironmentResourcesSection({
       });
     } catch (err) {
       const lifecycle = parseContainerLifecycleError(err);
+      if (lifecycle?.code === "confirmation-required") {
+        awaitingConfirmation = true;
+        setConfirmBelowUsage(lifecycle.message);
+        return;
+      }
       toast.error("Could not change resource limits", {
         description: lifecycle?.message ?? (err instanceof Error ? err.message : String(err)),
       });
     } finally {
       setSaving(false);
-      void load();
+      if (!awaitingConfirmation) void load();
     }
   };
 
@@ -156,6 +167,12 @@ export function EnvironmentResourcesSection({
           This Docker engine cannot enforce: {policy.unsupported.join(", ")}.
         </p>
       ) : null}
+      {policy.daemonRootless ? (
+        <p className="text-xs text-muted-foreground">
+          Docker runs rootless: limits are enforced only through the cgroup controllers delegated to
+          its user. &ldquo;Applied by Docker&rdquo; is what it reports.
+        </p>
+      ) : null}
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -191,6 +208,33 @@ export function EnvironmentResourcesSection({
           Save resource limits
         </Button>
       </div>
+      {confirmBelowUsage ? (
+        <div
+          className="flex flex-col gap-2 rounded-md border border-destructive/40 p-2"
+          role="alert"
+        >
+          <p className="text-xs">{confirmBelowUsage}</p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              onClick={() => void save(true)}
+              disabled={saving}
+            >
+              Apply anyway
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirmBelowUsage(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

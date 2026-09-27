@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,6 +48,11 @@ interface DockerStatsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** Refresh interval while the dialog is open. */
+const STATS_REFRESH_MS = 5_000;
+/** A sample older than this is shown as stale. */
+const STATS_STALE_MS = 15_000;
+
 /** A container nothing claims; older backends omit `cleanupExclusion`. */
 function isUnclaimedContainer(container: ContainerInfo): boolean {
   if (container.isAssigned) return false;
@@ -81,9 +86,15 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   // Count orphaned containers
   const orphanedCount = containers.filter(isUnclaimedContainer).length;
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const loading = useRef(false);
+  const loadData = useCallback(async (background = false) => {
+    // A background refresh never overlaps another load or shows a spinner.
+    if (loading.current) return;
+    loading.current = true;
+    if (!background) {
+      setIsLoading(true);
+      setError(null);
+    }
     try {
       const [statsData, containersData] = await Promise.all([
         backend.getDockerSystemStats(),
@@ -91,18 +102,24 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       ]);
       setStats(statsData);
       setContainers(containersData);
+      if (background) setError(null);
     } catch (err) {
       console.error("[DockerStatsDialog] Failed to load data:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsLoading(false);
+      loading.current = false;
+      if (!background) setIsLoading(false);
     }
   }, []);
 
-  // Load data when dialog opens
+  // Load data when dialog opens, then refresh while it stays open. The
+  // backend shares one sample between callers, so this costs no extra
+  // Docker calls within its interval.
   useEffect(() => {
     if (open) {
-      loadData();
+      void loadData();
+      const timer = setInterval(() => void loadData(true), STATS_REFRESH_MS);
+      return () => clearInterval(timer);
     } else {
       // Reset state when closing
       setStats(null);
@@ -215,7 +232,12 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                   <Trash2 className="h-4 w-4 mr-1" />
                   Review cleanup…
                 </Button>
-                <Button variant="ghost" size="sm" onClick={loadData} disabled={isLoading}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void loadData()}
+                  disabled={isLoading}
+                >
                   <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
                   Refresh
                 </Button>
@@ -225,49 +247,47 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">CPU</div>
                 <div className="text-lg font-semibold mt-1">
-                  {stats.cpuCoresUsed != null
-                    ? `${stats.cpuCoresUsed} cores`
-                    : `${stats.cpuUsagePercent}%`}{" "}
+                  {stats.cpuCoresUsed != null ? `${stats.cpuCoresUsed} cores` : "unknown"}{" "}
                   <span className="text-xs font-normal text-muted-foreground">
-                    of {stats.cpus || "?"} Docker CPUs
+                    of {stats.cpus ?? "unknown"} Docker CPUs
                   </span>
                 </div>
-                <Progress value={Math.min(stats.cpuUsagePercent, 100)} className="mt-2 h-1" />
+                {stats.cpuUsagePercent != null ? (
+                  <Progress value={Math.min(stats.cpuUsagePercent, 100)} className="mt-2 h-1" />
+                ) : null}
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">MEMORY</div>
                 <div className="text-lg font-semibold mt-1">
-                  {formatBytes(stats.memoryUsed)} /{" "}
-                  {stats.memoryTotalKnown === false ? "unknown" : formatBytes(stats.memoryTotal)}
+                  {stats.memoryUsed != null ? formatBytes(stats.memoryUsed) : "unknown"} /{" "}
+                  {stats.memoryTotal != null ? formatBytes(stats.memoryTotal) : "unknown"}
                 </div>
-                <Progress
-                  value={stats.memoryTotal > 0 ? (stats.memoryUsed / stats.memoryTotal) * 100 : 0}
-                  className="mt-2 h-1"
-                />
+                {stats.memoryUsed != null && stats.memoryTotal ? (
+                  <Progress
+                    value={(stats.memoryUsed / stats.memoryTotal) * 100}
+                    className="mt-2 h-1"
+                  />
+                ) : null}
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">
                   DISK (ALL OF DOCKER)
                 </div>
                 <div className="text-lg font-semibold mt-1">
-                  {stats.diskKnown === false
-                    ? "unknown"
-                    : stats.diskTotal > 0
-                      ? `${formatBytes(stats.diskUsed)} / ${formatBytes(stats.diskTotal)}`
-                      : formatBytes(stats.diskUsed)}
+                  {stats.diskUsed != null ? formatBytes(stats.diskUsed) : "unknown"}
                 </div>
-                <Progress
-                  value={stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : 0}
-                  className="mt-2 h-1"
-                />
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
               CPU and memory in use are this installation&apos;s containers; totals are what Docker
               reports (on Docker Desktop, its virtual machine).
               {stats.sampledAt
-                ? ` Measured ${new Date(stats.sampledAt).toLocaleTimeString()}${stats.stale ? " (stale)" : ""}.`
-                : ""}
+                ? ` Measured ${new Date(stats.sampledAt).toLocaleTimeString()}${
+                    stats.stale || Date.now() - Date.parse(stats.sampledAt) > STATS_STALE_MS
+                      ? " (stale — Docker has not answered since)"
+                      : ""
+                  }.`
+                : " Not measured: Docker did not answer."}
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
@@ -279,7 +299,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 <div className="text-xs text-muted-foreground">Containers</div>
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
-                <div className="text-lg font-semibold">{stats.imagesTotal}</div>
+                <div className="text-lg font-semibold">{stats.imagesTotal ?? "unknown"}</div>
                 <div className="text-xs text-muted-foreground">Images</div>
               </div>
             </div>
@@ -343,13 +363,16 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {container.id.substring(0, 12)} · {formatRelativeTime(container.created)}
+                        {container.id.substring(0, 12)} ·{" "}
+                        {container.created != null
+                          ? formatRelativeTime(container.created)
+                          : "created time unknown"}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {isRunning && container.cpuPercent !== null && (
                         <span className="text-xs text-muted-foreground">
-                          CPU: {container.cpuPercent}%
+                          CPU: {(container.cpuPercent / 100).toFixed(2)} cores
                           {container.memoryBytes != null
                             ? ` · ${formatBytes(container.memoryBytes)}`
                             : ""}
@@ -357,6 +380,11 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                       )}
                       {!isRunning && container.oomKilled ? (
                         <span className="text-xs text-destructive">Out of memory</span>
+                      ) : container.oomEvents ? (
+                        <span className="text-xs text-destructive">
+                          {container.oomEvents} out-of-memory{" "}
+                          {container.oomEvents === 1 ? "kill" : "kills"}
+                        </span>
                       ) : null}
                       <div className="flex items-center gap-1">
                         {isRunning ? (

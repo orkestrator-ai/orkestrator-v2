@@ -251,7 +251,8 @@ describe("direct backend command registry coverage", () => {
         status: "Up 2 minutes",
         state: "running",
         image: "orkestrator-v2:latest",
-        created: 0,
+        // The fake daemon reports no creation time: unknown, not the epoch.
+        created: null,
         environmentId: "environment-1",
         projectId: "project-1",
         isAssigned: true,
@@ -259,6 +260,7 @@ describe("direct backend command registry coverage", () => {
         cpuPercent: null,
         memoryBytes: null,
         oomKilled: null,
+        oomEvents: null,
       },
       {
         id: "orphan-container",
@@ -266,7 +268,8 @@ describe("direct backend command registry coverage", () => {
         status: "Exited (0)",
         state: "exited",
         image: "orkestrator-v2:latest",
-        created: 0,
+        // The fake daemon reports no creation time: unknown, not the epoch.
+        created: null,
         environmentId: null,
         projectId: null,
         isAssigned: false,
@@ -274,6 +277,7 @@ describe("direct backend command registry coverage", () => {
         cpuPercent: null,
         memoryBytes: null,
         oomKilled: null,
+        oomEvents: null,
       },
       {
         id: "legacy-container",
@@ -281,7 +285,8 @@ describe("direct backend command registry coverage", () => {
         status: "Exited (0)",
         state: "exited",
         image: "orkestrator-v2:latest",
-        created: 0,
+        // The fake daemon reports no creation time: unknown, not the epoch.
+        created: null,
         environmentId: null,
         projectId: null,
         isAssigned: false,
@@ -290,6 +295,7 @@ describe("direct backend command registry coverage", () => {
         cpuPercent: null,
         memoryBytes: null,
         oomKilled: null,
+        oomEvents: null,
       },
     ]);
     await expect(invoke("cleanup_orphaned_containers", {}, context)).rejects.toThrow(

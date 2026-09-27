@@ -97,6 +97,7 @@ import {
   logDriverArguments,
   resolveResourceLimits,
   resourceArguments,
+  sharedMemoryMiB,
 } from "./container-resources.js";
 import {
   defaultInputSourceRoots,
@@ -243,8 +244,10 @@ export async function createDockerContainer(
     // it does not show up until an agent loads something non-trivial. Raise the
     // mount instead of `--ipc=host`, which would also work but shares the host
     // IPC namespace and weakens the container boundary.
+    // Shared memory is charged to the memory limit, so under a budget it is
+    // at most half of it.
     "--shm-size",
-    "1g",
+    `${sharedMemoryMiB(resolveResourceLimits(environment, config.global).limits)}m`,
     // Opt-in budget (environment override, else global default); none means
     // unrestricted, as before. Read back from inspect, never assumed.
     ...resourceArguments(resolveResourceLimits(environment, config.global).limits),

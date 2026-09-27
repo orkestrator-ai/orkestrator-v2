@@ -1067,13 +1067,14 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // fails as a mid-run renderer crash rather than a launch error — invisible
     // until an agent loads a real page. `--ipc=host` is the other documented fix
     // but shares the host IPC namespace, so the mount size is what is asserted.
+    // Without a memory budget the mount is the default below; under a budget
+    // it is capped at half the limit, because shared memory is charged to it.
     const containers = read("apps/backend/src/core/commands-containers.ts");
-    const shmIndex = containers.indexOf('"--shm-size"');
-    expect(shmIndex).toBeGreaterThan(-1);
-    const size = containers.slice(shmIndex).match(/"--shm-size",\s*"(\d+)([mg])"/i);
+    expect(containers).toMatch(/"--shm-size",\s*`\$\{sharedMemoryMiB\(/);
+    const resources = read("apps/backend/src/core/container-resources.ts");
+    const size = resources.match(/DEFAULT_SHARED_MEMORY_MIB = (\d+);/);
     expect(size).not.toBeNull();
-    const megabytes = size![2].toLowerCase() === "g" ? Number(size![1]) * 1024 : Number(size![1]);
-    expect(megabytes).toBeGreaterThanOrEqual(512);
+    expect(Number(size![1])).toBeGreaterThanOrEqual(512);
   });
 
   test("allowlists: every host required by the image is in all three default lists", () => {

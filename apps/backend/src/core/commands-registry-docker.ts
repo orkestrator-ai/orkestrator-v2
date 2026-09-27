@@ -380,14 +380,22 @@ export function registerDockerCommands(
     const running = usage.containers.filter((sample) => sample.state === "running");
     const measured = running.filter((sample) => sample.cpuCores !== null);
     const cpuCoresUsed = measured.reduce((sum, sample) => sum + (sample.cpuCores ?? 0), 0);
-    const memoryUsed = running.reduce((sum, sample) => sum + (sample.memoryBytes ?? 0), 0);
+    const memoryMeasured = running.filter((sample) => sample.memoryBytes !== null);
+    // Unknown is null, never zero: nothing running measures as 0, nothing
+    // measured does not.
+    const memoryUsed =
+      running.length === 0
+        ? 0
+        : memoryMeasured.length > 0
+          ? memoryMeasured.reduce((sum, sample) => sum + (sample.memoryBytes ?? 0), 0)
+          : null;
     const images = await runCommand(
       "docker",
       ["images", "-q", ...(context.strictDockerOwner ? [context.dockerImage ?? DOCKER_IMAGE] : [])],
       { timeoutMs: 10_000 },
     ).then(
       (r) => new Set(r.stdout.split("\n").filter(Boolean)).size,
-      () => 0,
+      () => null,
     );
     const diskParts = [
       capacity.disk.imagesBytes,
@@ -397,18 +405,21 @@ export function registerDockerCommands(
     ];
     return {
       memoryUsed,
-      memoryTotal: capacity.memoryBytes ?? 0,
-      cpus: capacity.cpus ?? 0,
-      // Normalized to the daemon's CPUs so the existing 0–100 gauge is right;
-      // `cpuCoresUsed` carries the unnormalized figure.
+      memoryTotal: capacity.memoryBytes,
+      cpus: capacity.cpus,
+      // Normalized to the daemon's CPUs for the 0–100 gauge; `cpuCoresUsed`
+      // carries the unnormalized figure.
       cpuUsagePercent:
-        capacity.cpus && measured.length > 0
-          ? Math.round((cpuCoresUsed / capacity.cpus) * 1000) / 10
-          : 0,
+        running.length === 0
+          ? 0
+          : capacity.cpus && measured.length > 0
+            ? Math.round((cpuCoresUsed / capacity.cpus) * 1000) / 10
+            : null,
       diskUsed: diskParts.some((part) => part === null)
-        ? 0
+        ? null
         : diskParts.reduce<number>((sum, part) => sum + (part ?? 0), 0),
-      diskTotal: 0,
+      // Docker reports what it uses, not how much it may use.
+      diskTotal: null,
       containersRunning: running.length,
       containersTotal: usage.containers.length,
       imagesTotal: images,
@@ -416,7 +427,12 @@ export function registerDockerCommands(
       scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
       sampledAt: usage.sampledAt,
       stale: usage.stale,
-      cpuCoresUsed: measured.length > 0 ? Math.round(cpuCoresUsed * 100) / 100 : null,
+      cpuCoresUsed:
+        running.length === 0
+          ? 0
+          : measured.length > 0
+            ? Math.round(cpuCoresUsed * 100) / 100
+            : null,
       memoryTotalKnown: capacity.memoryBytes !== null,
       diskKnown: !diskParts.some((part) => part === null),
       diskBreakdown: capacity.disk,
@@ -494,7 +510,7 @@ export function registerDockerCommands(
           status: typeof row.Status === "string" ? row.Status : "",
           state: typeof row.State === "string" ? row.State : "",
           image: typeof row.Image === "string" ? row.Image : "",
-          created: createdById.get(id) ?? 0,
+          created: createdById.get(id) ?? null,
           environmentId: env?.id ?? null,
           projectId: env?.projectId ?? null,
           isAssigned: !!env,
@@ -517,6 +533,7 @@ export function registerDockerCommands(
               : null,
           memoryBytes: usageById.get(id)?.memoryBytes ?? null,
           oomKilled: usageById.get(id)?.oomKilled ?? null,
+          oomEvents: usageById.get(id)?.oomEvents ?? null,
         },
       ];
     });

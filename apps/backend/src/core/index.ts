@@ -1,6 +1,8 @@
 import { cleanupStaleManifestProbes } from "./docker-image.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
+import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
@@ -757,6 +759,9 @@ export class OrkestratorBackend {
       // manifest read is removed in the background.
       void cleanupStaleManifestProbes(this.context).catch(() => undefined);
     }
+    // Counts out-of-memory kills of this installation's containers for the
+    // usage view; a read-only observer, stopped at shutdown.
+    startOomEventWatcher(dockerOwnerNamespace(this.context.storage.getDataDir()));
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -1336,6 +1341,7 @@ export class OrkestratorBackend {
     this.hostSuspendDetector = null;
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
+    shutdownOomEventWatcher();
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;

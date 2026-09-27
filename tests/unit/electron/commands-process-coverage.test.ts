@@ -584,7 +584,7 @@ describe("process and platform command behavior", () => {
     expect(log).toContain(
       `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
     );
-    expect(log).toContain("--shm-size 1g");
+    expect(log).toContain("--shm-size 1024m");
     expect(log).toContain("--label environment-name=feature-environment");
     expect(log).toContain(`--label orkestrator-owner=${owner}`);
     expect(log).toContain("ALLOWED_DOMAINS=");
@@ -720,11 +720,15 @@ describe("process and platform command behavior", () => {
     // fake daemon does not answer is reported unknown, not as host values.
     expect(await invoke("get_docker_system_stats")).toMatchObject({
       imagesTotal: 2,
+      // Nothing is running, so nothing is in use; what Docker did not say is null.
       memoryUsed: 0,
-      diskUsed: 0,
+      cpuCoresUsed: 0,
+      memoryTotal: null,
+      cpus: null,
+      diskUsed: null,
+      diskTotal: null,
       diskKnown: false,
       memoryTotalKnown: false,
-      cpuCoresUsed: null,
       scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
     });
     const pruneLog = await readCommandLog();

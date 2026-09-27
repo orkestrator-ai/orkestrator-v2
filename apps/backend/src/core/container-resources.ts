@@ -1,3 +1,4 @@
+import { containerOomEvents } from "./container-oom-events.js";
 import {
   UNRESTRICTED_LIMITS,
   type ContainerResourceLimits,
@@ -57,6 +58,15 @@ export function resolveResourceLimits(
 }
 
 /** Docker create/update arguments. Swap is disabled by pinning it to memory. */
+/** `/dev/shm` for Chromium: 1 GiB, or half the memory limit when that is smaller. */
+export const DEFAULT_SHARED_MEMORY_MIB = 1024;
+
+export function sharedMemoryMiB(limits: ContainerResourceLimits): number {
+  return limits.memoryMiB === null
+    ? DEFAULT_SHARED_MEMORY_MIB
+    : Math.min(DEFAULT_SHARED_MEMORY_MIB, Math.floor(limits.memoryMiB / 2));
+}
+
 export function resourceArguments(limits: ContainerResourceLimits): string[] {
   const args: string[] = [];
   if (limits.cpus !== null) args.push("--cpus", String(limits.cpus));
@@ -374,6 +384,7 @@ async function sampleNow(
       memoryLimitBytes: null,
       pids: null,
       oomKilled: null,
+      oomEvents: containerOomEvents(id),
       exitCode: null,
     });
   }
@@ -490,6 +501,7 @@ export async function environmentResourcePolicy(
         ? await inspectAppliedLimits(environment.containerId)
         : null,
     unsupported: unsupportedAxes(limits, capacity),
+    daemonRootless: capacity.rootless,
   };
 }
 
@@ -548,7 +560,7 @@ export async function updateEnvironmentResources(
     );
     if (usage?.memoryBytes && usage.memoryBytes > next.memoryMiB * MIB * 0.9) {
       throw new ContainerLifecycleError(
-        "invalid-request",
+        "confirmation-required",
         "The container is using nearly that much memory now. Lowering the limit could stop its processes; stop it first or confirm.",
       );
     }

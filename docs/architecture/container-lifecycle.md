@@ -543,6 +543,19 @@ unknown when Docker will not say. `get_docker_system_stats` keeps its numeric
 shape for older renderers and adds scoped fields (`cpuCoresUsed`, `sampledAt`,
 `stale`, `diskKnown`).
 
+### Unknown figures and out-of-memory kills
+
+Usage figures Docker did not report are `null` end to end (memory, CPUs,
+disk, image count, creation time) and the Docker dialog shows them as
+unknown; it refreshes every five seconds while open and marks a sample older
+than fifteen seconds stale. `/dev/shm` is 1 GiB, or half the memory limit
+when that is smaller, because shared memory is charged to the limit.
+`container-oom-events.ts` follows Docker's `oom` events for this owner — a
+killed child process leaves `State.OOMKilled` false — replaying from its last
+event after a restart without double-counting; samples carry `oomEvents`
+(null while not following). A memory update below current use is refused
+`confirmation-required` until the user confirms it.
+
 ## Bounded logs (`bounded-logs=1`)
 
 | Resource | Bound | Where |

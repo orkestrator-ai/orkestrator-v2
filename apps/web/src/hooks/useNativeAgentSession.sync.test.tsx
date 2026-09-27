@@ -21,6 +21,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 interface TestMessage {
   id: string;
   text: string;
+  parts?: Array<{ type: string; content: string; sourcePartId: string }>;
 }
 
 const realBackendSnapshot = { ...realBackend };
@@ -482,6 +483,81 @@ describe("useNativeAgentSession sync-v1 staleness fences", () => {
 
 describe("useNativeAgentSession sync-v1 history paging", () => {
   const liveTail = [message("m3"), message("m4")];
+
+  test("keeps the displayed head through consecutive trims and a history page", async () => {
+    const allParts = Array.from({ length: 8 }, (_, index) => ({
+      type: "text",
+      content: `part-${index}`,
+      sourcePartId: `part-${index}`,
+    }));
+    const head = (indices: number[]) => ({
+      ...message("asst"),
+      parts: indices.map((index) => allParts[index]!),
+    });
+    const byteWindow = (omittedParts: number) => ({
+      limit: 2,
+      truncated: true,
+      truncationReason: "bytes" as const,
+      omittedParts,
+      canLoadEarlier: false,
+    });
+    projectionUpdates = [
+      () =>
+        snapshot("token-1", [message("user"), head([0, 1, 2, 3, 4, 5])], {
+          historyCursor: "cursor-before-user",
+        }),
+    ];
+    const { result } = await renderConnectedSession();
+    messagePages = [
+      () => ({
+        syncVersion: 1,
+        messages: [message("old")],
+        historyEpoch: "epoch-1",
+        complete: true,
+        truncated: false,
+      }),
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    for (const [token, indices, omittedParts] of [
+      ["token-2", [3, 4, 5, 6], 3],
+      ["token-3", [4, 5, 6, 7], 4],
+    ] as const) {
+      projectionUpdates = [
+        () =>
+          snapshot(token, [head([...indices])], {
+            projection: { revision: Number(token.at(-1)), messageWindow: byteWindow(omittedParts) },
+          }),
+      ];
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "old",
+        "user",
+        "asst",
+      ]);
+      expect(result.current.projection?.messages[2]?.parts).toEqual(
+        allParts.slice(0, indices.at(-1)! + 1),
+      );
+    }
+
+    projectionUpdates = [
+      () => snapshot("token-4", [message("next")], { projection: { revision: 4 } }),
+    ];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "old",
+      "user",
+      "asst",
+      "next",
+    ]);
+    expect(result.current.projection?.messages[2]?.parts).toEqual(allParts);
+  });
 
   async function sessionWithHistory() {
     projectionUpdates = [

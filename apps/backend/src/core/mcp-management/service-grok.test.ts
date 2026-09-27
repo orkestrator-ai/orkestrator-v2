@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -234,9 +234,11 @@ describe("Grok adapter", () => {
     let snapshot = await grokSnapshot();
     expect(source(snapshot, "grok:project").trust).toBe("unknown");
 
+    const linkedWorktree = path.join(fixture.root, "linked-worktree");
+    symlinkSync(fixture.worktree, linkedWorktree);
     fixture.write(
       "home/.grok/trusted_folders.toml",
-      `[folders."${fixture.worktree}"]\ntrusted = true\ndecided_at = "2026-09-01T00:00:00Z"\n`,
+      `[folders."${linkedWorktree}"]\ntrusted = true\ndecided_at = "2026-09-01T00:00:00Z"\n`,
     );
     snapshot = await grokSnapshot();
     expect(source(snapshot, "grok:project").trust).toBe("allowed");

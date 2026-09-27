@@ -189,10 +189,7 @@ describe("Codex project trust comes from Codex's own settings", () => {
     const link = path.join(fixture.root, "link");
     symlinkSync(fixture.worktree, link);
     fixture.environment.worktreePath = link;
-    fixture.write(
-      "home/.codex/config.toml",
-      `[projects."${fixture.worktree}"]\ntrust_level = "trusted"\n`,
-    );
+    fixture.write("home/.codex/config.toml", `[projects."${link}"]\ntrust_level = "trusted"\n`);
     const { project } = await codexProject();
     expect(project.trust).toBe("allowed");
   });

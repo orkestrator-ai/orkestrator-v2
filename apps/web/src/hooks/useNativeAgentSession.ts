@@ -106,22 +106,108 @@ function messagePartCount(message: unknown): number {
 }
 
 /**
+ * A provider identity for one part that survives its content changing: a
+ * tool row keeps its `toolUseId` as it settles, and a streamed text or
+ * thinking part keeps its source id and arrival time as it grows.
+ */
+function durablePartIdentity(part: unknown): string | undefined {
+  if (!part || typeof part !== "object") return undefined;
+  const { type, toolUseId, sourcePartId, createdAt } = part as {
+    type?: unknown;
+    toolUseId?: unknown;
+    sourcePartId?: unknown;
+    createdAt?: unknown;
+  };
+  if (typeof toolUseId === "string" && toolUseId) return `${String(type)}\0tool\0${toolUseId}`;
+  const source = typeof sourcePartId === "string" && sourcePartId ? sourcePartId : undefined;
+  const arrived = typeof createdAt === "string" && createdAt ? createdAt : undefined;
+  if (!source && !arrived) return undefined;
+  return `${String(type)}\0${source ?? ""}\0${arrived ?? ""}`;
+}
+
+/**
+ * Where `incoming` (a contiguous run of one message's parts) starts inside the
+ * `local` copy of that message, or -1 when the two cannot be proven to overlap.
+ *
+ * Parts with a durable identity match on it. Parts without one must be equal,
+ * except the last local part, which may still have been streaming when this
+ * client read it; that loose match never counts on its own.
+ */
+function locateIncomingParts(
+  local: readonly unknown[],
+  incoming: readonly unknown[],
+  hint: number | undefined,
+): number {
+  if (local.length === 0 || incoming.length === 0) return -1;
+  const serialized: Array<string | undefined> = [];
+  const serialize = (index: number) => (serialized[index] ??= JSON.stringify(local[index]));
+  const incomingSerialized: Array<string | undefined> = [];
+  const serializeIncoming = (index: number) =>
+    (incomingSerialized[index] ??= JSON.stringify(incoming[index]));
+  const match = (localIndex: number, incomingIndex: number): "strict" | "loose" | false => {
+    const held = durablePartIdentity(local[localIndex]);
+    const next = durablePartIdentity(incoming[incomingIndex]);
+    if (held !== undefined || next !== undefined) return held === next ? "strict" : false;
+    if (serialize(localIndex) === serializeIncoming(incomingIndex)) return "strict";
+    const sameType =
+      (local[localIndex] as { type?: unknown } | null)?.type ===
+      (incoming[incomingIndex] as { type?: unknown } | null)?.type;
+    return localIndex === local.length - 1 && sameType ? "loose" : false;
+  };
+  const alignsAt = (offset: number) => {
+    const overlap = Math.min(local.length - offset, incoming.length);
+    let strict = 0;
+    for (let index = 0; index < overlap; index += 1) {
+      const result = match(offset + index, index);
+      if (!result) return false;
+      if (result === "strict") strict += 1;
+    }
+    return strict > 0;
+  };
+  if (hint !== undefined && hint > 0 && hint < local.length && alignsAt(hint)) return hint;
+  for (let offset = 0; offset < local.length; offset += 1) {
+    if (offset !== hint && match(offset, 0) && alignsAt(offset)) return offset;
+  }
+  return -1;
+}
+
+/**
  * The live tail may omit leading parts of its first message to fit the byte
- * window. If this client already holds a more complete copy of that same row,
- * keep the local parts so the cut cannot open a hole in the middle of a turn
- * the tab has already rendered.
+ * window. If this client already holds a copy of that same row, lay the
+ * incoming parts over it at the offset where they overlap: the local copy
+ * supplies the leading parts the window cut, so the cut cannot open a hole in
+ * the middle of a turn the tab has already rendered, and the incoming parts
+ * stay authoritative for everything they cover, including parts appended
+ * since the tab last read the row.
+ *
+ * Choosing whole copies by part count alone froze the row: a trimmed head that
+ * gained a final part still had fewer parts than the fuller copy on screen, so
+ * the new part was never shown and later polls reported the view unchanged.
+ * When the copies cannot be proven to overlap, the incoming head wins.
  */
 function preferCompleteLiveHead<TMessage>(
   held: readonly TMessage[] | undefined,
   incoming: readonly TMessage[],
+  omittedParts?: number,
 ): TMessage[] {
   if (!held?.length || incoming.length === 0) return [...incoming];
   const head = incoming[0]!;
   const headId = (head as { id?: unknown })?.id;
   if (typeof headId !== "string") return [...incoming];
   const local = held.find((message) => (message as { id?: unknown })?.id === headId);
-  if (!local || messagePartCount(local) <= messagePartCount(head)) return [...incoming];
-  return [local, ...incoming.slice(1)];
+  const localParts = (local as { parts?: unknown } | undefined)?.parts;
+  const headParts = (head as { parts?: unknown }).parts;
+  if (!Array.isArray(localParts) || !Array.isArray(headParts)) return [...incoming];
+  const offset = locateIncomingParts(localParts, headParts, omittedParts);
+  if (offset < 0 || (offset === 0 && headParts.length >= localParts.length)) {
+    return [...incoming];
+  }
+  const parts = [
+    ...localParts.slice(0, offset),
+    ...headParts,
+    ...localParts.slice(offset + headParts.length),
+  ];
+  return [{ ...head, parts } as TMessage, ...incoming.slice(1)];
 }
 
 /**
@@ -984,6 +1070,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       const displayLive = preferCompleteLiveHead(
         previousLive?.messages ?? projectionRef.current?.messages,
         live.messages,
+        live.messageWindow?.omittedParts,
       );
       const keptLocalHead =
         displayLive.length > 0 && live.messages.length > 0 && displayLive[0] !== live.messages[0];
@@ -1230,7 +1317,11 @@ export function useNativeAgentSession<TMessage = unknown>({
               (message) => (message as { id?: unknown })?.id === firstLiveId.id,
             )
           : -1;
-      const displayLive = preferCompleteLiveHead(current?.messages, value.messages);
+      const displayLive = preferCompleteLiveHead(
+        current?.messages,
+        value.messages,
+        value.messageWindow?.omittedParts,
+      );
       const keptLocalHead =
         displayLive.length > 0 && value.messages.length > 0 && displayLive[0] !== value.messages[0];
       const omittedParts = value.messageWindow?.omittedParts ?? 0;

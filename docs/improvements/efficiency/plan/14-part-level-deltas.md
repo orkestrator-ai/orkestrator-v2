@@ -1,6 +1,6 @@
 # 14 — Add part-level deltas only if residual amplification warrants them
 
-Status: Not started; benchmark-gated. Prerequisites: 08, 09, 12, 13. Finding: E05.
+Status: Not started; gate evaluated — Prototype warranted (step 01 measurements). Prerequisites: 08, 09, 12, 13. Finding: E05.
 
 ## Decision gate
 
@@ -81,3 +81,46 @@ Use capability-controlled rollout by provider/client. Rollback disables part
 operations and reconciles affected bases to whole-message snapshots. No durable
 format depends on the patch journal. Keep a measured result and explicit adopt/
 defer decision in this step's execution record before declaring it finished.
+
+## Execution record
+
+```text
+Status: Not started (no part-delta code). Gate evaluated: Prototype warranted.
+Implementation commit / PR: none for this step. Measurement from step 01's
+  harness, workload j (scripts/efficiency/workloads-projection.ts), on branch
+  implement-efficiency-improvements-7f0993836777-r1; results in
+  docs/improvements/efficiency/baseline/ (README.md, step-01-summary.json).
+Protocol or storage decisions: none; bridge v1 and whole-message deltas unchanged.
+Tests and isolated profiles: function-level only — the real
+  NativeAgentService.getTranscriptUpdate over an in-memory provider answering
+  with the v2 summary helpers (v1 raw at e8fbf1d0), 20-message prefix, 40
+  observations of one changing assistant message, a client applying every
+  delta. No remote client, proxy or browser run.
+Before/after measurements (decoded messageUpserts bytes over 40 deltas;
+  "identical" = top-level parts byte-identical to the client's previous copy of
+  the same part, the gate metric; "any" adds grown-text prefixes, the
+  message-level content mirror and identical nested children):
+    growing prose (one text part +256 B/obs)     446,320 B  identical 0.000  any 0.941
+    30 completed tools + one growing text part   704,320 B  identical 0.365  any 0.961
+    tool-heavy turn (20 tools, +1 completed/obs) 352,760 B  identical 0.960  any 0.960
+    sub-agent gaining one action per obs         237,645 B  identical 0.107  any 0.886
+  Identical at e8fbf1d0 and d8796c28: steps 08-13 did not change what a
+  whole-message delta carries (the backend now serializes each projected row
+  once, 400 -> 100 per changed read, but still sends every part of a changed
+  message).
+Decision: Prototype warranted. Repeated unchanged part content is 96% of
+  decoded changed-transcript traffic on the tool-heavy long-turn workload,
+  above the 50% gate. Growing prose repeats 94% as an unchanged prefix plus the
+  content mirror, and nested agents 89% as identical children: part replace
+  alone would not capture those; append-text, a derived content field and
+  nested part operations would.
+Compatibility/migration result: n/a.
+Remaining limitations: absolute sizes are small because the backend already
+  defers tool bodies behind detail references (~8.8 KB per tool-turn delta), so
+  the prototype must show a total-cost win (CPU, bytes, recovery frequency,
+  visibility latency) and not just a ratio. Not measured: encoded (compressed)
+  bytes on the wire, multiple remote clients, CPU and p95 visibility latency,
+  and the bridge-to-backend hop (bridges still send full summaries). Per this
+  step, adopt only if the prototype reduces total cost without worsening
+  recovery or interaction responsiveness.
+```

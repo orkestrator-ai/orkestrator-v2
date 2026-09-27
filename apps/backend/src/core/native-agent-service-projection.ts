@@ -84,8 +84,11 @@ import {
 import { NativeAgentDisplayTailScheduler } from "./native-agent-display-tail-scheduler.js";
 import {
   ProgressiveReadMetrics,
+  ProgressiveReadPhaseTimer,
+  monotonicMs,
   type ProgressiveCacheTier,
   type ProgressiveReadOutcome,
+  type ProgressiveReadPhases,
 } from "./native-agent-progressive-metrics.js";
 import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
@@ -1524,13 +1527,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     startedAt: number,
     cacheTier: ProgressiveCacheTier,
     outcome: ProgressiveReadOutcome,
-    extras: { joined?: boolean; degraded?: boolean } = {},
+    extras: ProgressiveReadPhases & { degraded?: boolean } = {},
   ): void {
     this.progressiveMetrics.record({
       domain,
       cacheTier,
       outcome,
-      durationMs: this.now() - startedAt,
+      durationMs: monotonicMs() - startedAt,
       ...extras,
     });
   }
@@ -2082,10 +2085,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   private async readProgressiveTranscript(
     input: NativeAgentTranscriptUpdateInput,
     key: string,
+    phases?: ProgressiveReadPhaseTimer,
   ): Promise<ProjectedProgressiveTranscript | null> {
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
     const previous = this.progressiveTranscriptCache.get(key);
+    phases?.sourceStarted();
     const providerResult = resolved.provider.transcriptSnapshot
       ? await resolved.provider.transcriptSnapshot(resolved.session.providerSessionId, {
           limit: input.liveWindow.messages,
@@ -2118,6 +2123,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             }),
             freshness: "current" as const,
           } satisfies ProviderTranscriptSnapshot);
+    phases?.sourceEnded();
     if ("unchanged" in providerResult) {
       if (!previous) {
         throw new ProviderUnavailableError("Provider returned unchanged without a transcript base");
@@ -2198,18 +2204,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.logicalSessionKey,
     );
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
-    const startedAt = this.now();
+    const startedAt = monotonicMs();
     const cached = this.progressiveTranscriptCache.get(key);
-    const publish = async (): Promise<NativeAgentTranscriptView | null> => {
-      const projection = await this.progressiveReadCovering(
-        key,
-        sessionKey,
-        epoch,
-        input.forceSnapshot === true,
-        () => this.readProgressiveTranscript(input, key),
-      );
+    // Phase timings for the read this caller waits on; background refreshes
+    // behind a cached answer are not attributed to this response.
+    const phases = new ProgressiveReadPhaseTimer();
+    const publish = async (
+      timer?: ProgressiveReadPhaseTimer,
+    ): Promise<NativeAgentTranscriptView | null> => {
+      const read = () => this.readProgressiveTranscript(input, key, timer);
+      const cover = () =>
+        this.progressiveReadCovering(
+          key,
+          sessionKey,
+          epoch,
+          input.forceSnapshot === true,
+          timer ? timer.own(read) : read,
+        );
+      const projection = await (timer ? timer.covering(cover) : cover());
       if (!projection) return null;
-      this.commitProgressiveTranscript(key, input, projection);
+      const commit = () => this.commitProgressiveTranscript(key, input, projection);
+      if (timer) timer.normalize(commit);
+      else commit();
       return projection.value;
     };
     if (!cached && !input.forceSnapshot) {
@@ -2254,14 +2270,26 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     try {
       const previous = cached;
-      const value = await publish();
+      const value = await publish(phases);
       if (!value) {
-        this.recordProgressiveMetric("transcript", startedAt, "provider", "missing");
+        this.recordProgressiveMetric(
+          "transcript",
+          startedAt,
+          "provider",
+          "missing",
+          phases.phases(),
+        );
         return { viewVersion: 1, status: "missing" };
       }
       const entry = this.progressiveTranscriptCache.get(key)!;
       if (!input.forceSnapshot && input.knownToken === entry.token) {
-        this.recordProgressiveMetric("transcript", startedAt, "provider", "unchanged");
+        this.recordProgressiveMetric(
+          "transcript",
+          startedAt,
+          "provider",
+          "unchanged",
+          phases.phases(),
+        );
         return {
           viewVersion: 1,
           status: "unchanged",
@@ -2288,7 +2316,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         });
         const snapshotBytes = entry.bytes;
         if (operationCount <= 1024 && deltaBytes < snapshotBytes) {
-          this.recordProgressiveMetric("transcript", startedAt, "provider", "delta");
+          this.recordProgressiveMetric(
+            "transcript",
+            startedAt,
+            "provider",
+            "delta",
+            phases.phases(),
+          );
           return {
             viewVersion: 1,
             status: "delta",
@@ -2299,7 +2333,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           };
         }
       }
-      this.recordProgressiveMetric("transcript", startedAt, "provider", "snapshot");
+      this.recordProgressiveMetric(
+        "transcript",
+        startedAt,
+        "provider",
+        "snapshot",
+        phases.phases(),
+      );
       return {
         viewVersion: 1,
         status: "snapshot",
@@ -2312,7 +2352,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             : "initial",
       };
     } catch (error) {
-      this.recordProgressiveMetric("transcript", startedAt, "provider", "unavailable");
+      this.recordProgressiveMetric(
+        "transcript",
+        startedAt,
+        "provider",
+        "unavailable",
+        phases.phases(),
+      );
       return {
         viewVersion: 1,
         status: "unavailable",
@@ -2593,7 +2639,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.logicalSessionKey,
     );
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
-    const startedAt = this.now();
+    const startedAt = monotonicMs();
     try {
       const value = await this.progressiveReadCovering(
         key,
@@ -3049,7 +3095,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return undefined;
     }
     if ((peek as { v?: unknown } | null)?.v !== 2) return undefined;
-    const startedAt = this.now();
+    const startedAt = monotonicMs();
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) throw new Error("Native agent history is unavailable");
     const cursor = decodeHistoryCursor(input.before, {
@@ -3068,18 +3114,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.targetBytes ?? NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
       NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
     );
+    const sourceStartedAt = monotonicMs();
     const page = await resolved.provider.transcriptPage(resolved.session.providerSessionId, {
       cursor: cursor.providerCursor,
       limit,
       targetBytes,
     });
+    const sourceMs = monotonicMs() - sourceStartedAt;
     // An epoch the provider no longer holds is a rewritten history. The
     // renderer resets and re-reads rather than stitching pages from two
     // histories together.
     if (!page || page.status !== "page" || page.historyEpoch !== cursor.epoch) {
-      this.recordProgressiveMetric("transcript", startedAt, "provider", "missing");
+      this.recordProgressiveMetric("transcript", startedAt, "provider", "missing", { sourceMs });
       throw new Error("Native agent history cursor expired");
     }
+    const normalizeStartedAt = monotonicMs();
     const projected = this.projectionMessages(
       resolved.key,
       page.messages,
@@ -3089,6 +3138,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
       { providerSessionId: resolved.session.providerSessionId },
     );
+    const normalizeMs = monotonicMs() - normalizeStartedAt;
     // The provider already bounded the page; a projection that still dropped
     // a row would lose it between two cursors, so refuse rather than skip it.
     if (projected.messages.length !== page.messages.length) {
@@ -3103,7 +3153,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         })
       : undefined;
     if (page.historyCursor && !nextCursor) throw new Error("Native agent history cursor expired");
-    this.recordProgressiveMetric("transcript", startedAt, "provider", "snapshot");
+    this.recordProgressiveMetric("transcript", startedAt, "provider", "snapshot", {
+      sourceMs,
+      normalizeMs,
+    });
     return {
       syncVersion: 1,
       messages: projected.messages,

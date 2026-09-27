@@ -1,6 +1,6 @@
 # 01 — Establish baselines, counters, and synthetic fixtures
 
-Status: Not started. Prerequisites: none. Findings: all.
+Status: Implemented, validation pending (function-level baseline recorded; real-stack and remote baselines pending). Prerequisites: none. Findings: all.
 
 ## Outcome
 
@@ -80,3 +80,92 @@ One initial instrumentation/fixture PR is sufficient; avoid a broad observabilit
 rewrite. Hooks are internal and disabled or low-cost by default. Removing an
 optional metric must never change admission or budget enforcement. Subsequent
 steps append their before/after results using the same fixture definitions.
+
+## Execution record
+
+```text
+Status: Implemented, validation pending
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
+  commit "perf(efficiency): baseline harness, phase metrics and step-14 gate".
+  Harness: scripts/efficiency/ (run.ts CLI; harness.ts runner/compare/summary;
+  counters.ts; fixtures.ts; delta-analysis.ts; workloads-*.ts), mise task
+  `efficiency:baseline`, reports under output/efficiency/<run-id>/ (ignored).
+  Results: docs/improvements/efficiency/baseline/ (README.md table,
+  step-01-summary.json, 34 KB).
+Protocol or storage decisions: none. Instrumentation is metric-only:
+  - native-agent-progressive-metrics.ts: monotonicMs() now uses
+    performance.now(); new ProgressiveReadPhaseTimer splits a read into
+    sourceMs (awaiting the provider read), normalizeMs (projection after the
+    provider answered + commit) and schedulerWaitMs (time in the shared-read
+    scheduler that was not this caller's own read), and marks `joined` when
+    the caller's own read never ran. Phases sum to at most durationMs; only
+    durations are kept.
+  - native-agent-service-projection.ts: getTranscriptUpdate's awaited read and
+    the direct history page record those phases; read durations use the
+    monotonic clock (transcript, state and direct-page reads). Wall-clock
+    timestamps stay on the injected `now`. Background refreshes behind a cached
+    answer are not attributed to the response.
+Design: the harness imports repository modules from `--root`, so one set of
+  workloads measures a baseline worktree and the current tree; a case whose API
+  is absent at a root measures the path that root served (named) or reports
+  itself unsupported. Primary metrics are deterministic counts (serialization
+  visits via non-enumerable toJSON as in validation.md, JSON.stringify calls on
+  projected rows, provider calls/messages returned, record-store payload I/O,
+  full rollout parses, decoded/gzip bytes, retained parts/bytes); every count
+  was stable across repetitions. Syscall bytes come from /proc/self/io,
+  rounded to KiB (one baseline KiB value varied at a rounding boundary and is
+  flagged in the summary). Wall-clock p50/p95 are secondary, labelled
+  machine-specific and never compared. Fixtures are seeded and sized (ASCII/
+  multibyte prose, many parts, large tool result, large diff, data-URL image,
+  nested agent, rewritten history, interrupted JSONL, immutable prefix +
+  changing tail); nothing is read from a profile.
+Tests and isolated profiles:
+  - apps/backend/src/core/native-agent-progressive-metrics.test.ts (new):
+    sample bound/rounding, monotonic clock, phase split on a manual clock,
+    joined caller, failed provider read, and a service-level read where the
+    reading and the joined caller both record bounded phases and no payload,
+    id, session key or token appears in the samples.
+  - tests/unit/efficiency/harness.test.ts (new; root runner picks up ./tests,
+    not scripts/): fixture sizes/determinism, content-free id digests,
+    counting encodes byte-identically, stringify interception always restored,
+    step-14 delta accounting, percentile/runCase/compare/summary.
+  - Ran: backend suite `bun test --cwd apps/backend ... src tests
+    --parallel=2`: 4,969 pass, 9 fail — all nine in tests/standalone.test.ts,
+    which needs the built apps/backend/dist/main.js (not built in this
+    worktree; unrelated). New metrics test file: 6 pass. Root:
+    tests/unit/efficiency (18 pass), mise-tasks/gitignore/monorepo/docs guards:
+    2 pre-existing failures in files this step does not touch
+    (validation.md's `bun run -` probe commands and plan 13's
+    `mise run test:browser:` wording). Backend typecheck, ad hoc strict tsc
+    over scripts/efficiency, mise run format / format:check / lint: pass
+    (pre-existing warnings only). Harness run end to end against both roots.
+  No real-stack, browser, Docker or remote run.
+Before/after measurements: e8fbf1d0 (review baseline) vs d8796c28 on AMD Ryzen 5
+  PRO 5650U, 12 logical CPUs, 30.7 GiB, Bun 1.4.2 — full table in
+  baseline/README.md. The three original probes reproduce exactly at the
+  baseline: 1,000 vs 0 visits (unchanged read without/with revision); Cursor
+  trim 4,585 visits / 31 kept vs shared helper 100 / 31 kept; Cursor stream 600
+  parts / 712,206 B, 220 / 261,256 B after the read bound. Headlines at the
+  candidate: Claude unchanged read 1,000 -> 0 visits; trimming 4,585 -> 100
+  (parts 51,197 -> 800) with identical retained ids; unobserved Cursor stream
+  600 -> 378 parts; one display-tail update at 128 records 16,734 -> 8 KiB read
+  and 11,155 -> 86 KiB written; v1 -> v2 window 517,504 -> 219,127 B with 27 ->
+  100 messages; history paging 4 -> 0 interactive snapshots (v2 providers;
+  1,100 -> 250 provider messages); rollout above the
+  hard cap 20 -> 1 full parses; frontend tail update at 8 MiB history 4,196 ->
+  1 visits; backend changed read 400 -> 100 row serializations. Step 14 input
+  recorded there (Prototype warranted).
+Compatibility/migration result: none; no protocol, storage or behaviour change.
+Remaining limitations:
+  - Function-level only. Not measured: remote proxy/bandwidth/reconnect/slow
+    clients, real providers and bridges over HTTP, browser long tasks and input
+    latency, peak heap/RSS, event-loop lag, review/pipeline workloads (E11-E14
+    rows are explicit "not measured").
+  - Bytes-written counters come from /proc/self/io (Linux; -1 elsewhere).
+  - Serialization counting cannot see work on copies the code makes, so visit
+    counts are lower bounds; baseline display-tail payload counts are derived
+    from the shared-file design.
+  - The frontend workload reproduces the hook's per-install calls, not React.
+  - Phase metrics cover the transcript read path only; state and discovery
+    reads report duration without phases.
+```

@@ -303,6 +303,8 @@ export const DESIGN_SHORTCUTS: Array<[string, string]> = [
   ["Ctrl/⌘ + 0", "Zoom to 100%"],
   ["+ / −", "Zoom in / out"],
   ["P", "Toggle preview mode"],
+  ["Click a frame title", "Select the frame"],
+  ["Delete / Backspace", "Delete the selected frame"],
   ["Escape", "Cancel a gesture, exit preview, clear selection, close panels"],
   ["Ctrl/⌘ + scroll, pinch", "Zoom at the pointer"],
   ["Scroll, Shift + scroll, middle-drag", "Pan the canvas"],

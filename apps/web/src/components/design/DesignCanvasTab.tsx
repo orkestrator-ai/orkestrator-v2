@@ -105,6 +105,12 @@ export function DesignCanvasTab({
   const narrowRef = useRef(narrow);
   narrowRef.current = narrow;
   const [selection, setSelection] = useState<DesignSelection | null>(null);
+  /** A whole frame (board) selected from its title; exclusive with an element selection. */
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+  const selectionGeneration = useRef(0);
+  const [pendingDeletes, setPendingDeletes] = useState<
+    Array<{ intentId: string; frameId: string; name: string }>
+  >([]);
   const [focusedFrame, setFocusedFrame] = useState<string | null>(prefs.frameId ?? null);
   const [mode, setMode] = useState<"inspect" | "preview">("inspect");
   const [layersOpen, setLayersOpen] = useState(prefs.layers ?? true);
@@ -130,6 +136,8 @@ export function DesignCanvasTab({
   const panStart = useRef<{ x: number; y: number; origin: DesignViewport } | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const selectedFrameRef = useRef(selectedFrameId);
+  selectedFrameRef.current = selectedFrameId;
   const projectionRef = useRef(projection);
   projectionRef.current = projection;
 
@@ -142,6 +150,8 @@ export function DesignCanvasTab({
     [canvas],
   );
   const editable = projection?.snapshot === "current" || projection?.snapshot === "stale";
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
   const legacy = projection?.legacy ?? false;
 
   // Persist small view preferences only.
@@ -280,6 +290,29 @@ export function DesignCanvasTab({
         preview: { frameId: base.id, patch },
         gestureKey: `${gestureId}:update_frame`,
       });
+    },
+    [controller],
+  );
+
+  const submitDeleteFrame = useCallback(
+    (target: DesignFrame) => {
+      const current = projectionRef.current;
+      if (!current) return;
+      const intentId = controller.submit({
+        descriptor: {
+          input: { kind: "delete_frame", frameId: target.id },
+          preconditions: {
+            frameRevision: target.revision,
+            canvasRevision: current.revision,
+          },
+        },
+        label: `Delete ${target.name}`,
+        lane: "canvas",
+      });
+      setPendingDeletes((pending) => [
+        ...pending,
+        { intentId, frameId: target.id, name: target.name },
+      ]);
     },
     [controller],
   );
@@ -466,14 +499,20 @@ export function DesignCanvasTab({
       controller,
       environmentId,
       canvasId,
-      select: (next) => {
+      beginSelection: () => ++selectionGeneration.current,
+      select: (next, generation) => {
+        if (generation !== undefined && generation !== selectionGeneration.current) return false;
+        selectionGeneration.current++;
         setSelection(next);
+        selectedFrameRef.current = null;
+        setSelectedFrameId(null);
         if (next) {
           setFocusedFrame(next.frameId);
           setPropertiesFrame(null);
           // In a narrow pane the inspector is a drawer: selecting opens it.
           if (narrowRef.current) setInspectorOpen(true);
         }
+        return true;
       },
       submitGeometry,
       submitElementResize: (target, width, height, gestureId) => {
@@ -507,7 +546,21 @@ export function DesignCanvasTab({
       exitPreview: () => setMode("inspect"),
       // Through a ref so viewport/frame changes don't give every frame new props.
       frameAction: (frameId, action) => frameActionRef.current(frameId, action),
-      focusFrame: setFocusedFrame,
+      focusFrame: (frameId) => {
+        selectionGeneration.current++;
+        setFocusedFrame(frameId);
+        if (selectedFrameRef.current && selectedFrameRef.current !== frameId) {
+          selectedFrameRef.current = null;
+          setSelectedFrameId(null);
+        }
+      },
+      selectFrame: (frameId) => {
+        selectionGeneration.current++;
+        selectedFrameRef.current = frameId;
+        setSelectedFrameId(frameId);
+        setFocusedFrame(frameId);
+        setSelection(null);
+      },
     }),
     [
       applyStyles,
@@ -636,6 +689,32 @@ export function DesignCanvasTab({
     if (projection?.notice) setAnnouncement(projection.notice.text);
   }, [projection?.notice]);
 
+  useEffect(() => {
+    if (!projection || pendingDeletes.length === 0) return;
+    const resolved = pendingDeletes.filter(({ intentId, frameId }) => {
+      const intent = projection.intents.find((candidate) => candidate.id === intentId);
+      return (
+        intent?.phase === "settled" ||
+        (!intent &&
+          projection.snapshot === "current" &&
+          !projection.canvas?.frames.some((frame) => frame.id === frameId))
+      );
+    });
+    if (resolved.length === 0) return;
+    for (const { intentId, frameId, name } of resolved) {
+      const intent = projection.intents.find((candidate) => candidate.id === intentId);
+      if (intent?.outcome !== "committed" && intent !== undefined) continue;
+      if (selectedFrameRef.current === frameId) {
+        selectedFrameRef.current = null;
+        setSelectedFrameId(null);
+      }
+      if (selectionRef.current?.frameId === frameId) setSelection(null);
+      setAnnouncement(`Deleted ${name}. Undo with Ctrl/⌘ + Z`);
+    }
+    const resolvedIds = new Set(resolved.map((entry) => entry.intentId));
+    setPendingDeletes((pending) => pending.filter((entry) => !resolvedIds.has(entry.intentId)));
+  }, [pendingDeletes, projection]);
+
   // Escape priority: gesture (frame-level) → preview → selection → drawers/panels.
   useEffect(() => {
     if (!isActive) return;
@@ -664,7 +743,7 @@ export function DesignCanvasTab({
       if (!inside || editing || modifier) return;
       if (event.key === "Escape") {
         if (mode === "preview") setMode("inspect");
-        else if (selectionRef.current) setSelection(null);
+        else if (selectionRef.current || selectedFrameRef.current) actions.select(null);
         else if (propertiesFrame) setPropertiesFrame(null);
         else if (narrow && (layersOpen || inspectorOpen)) {
           setLayersOpen(false);
@@ -673,6 +752,23 @@ export function DesignCanvasTab({
         } else if (historyOpen) setHistoryOpen(false);
         else return;
         event.preventDefault();
+      } else if (event.key === "Delete" || event.key === "Backspace") {
+        const current = projectionRef.current;
+        const target = selectedFrameRef.current
+          ? current?.canvas?.frames.find((frame) => frame.id === selectedFrameRef.current)
+          : undefined;
+        if (
+          !target ||
+          selectionRef.current ||
+          !editableRef.current ||
+          !(document.activeElement instanceof Element) ||
+          document.activeElement.getAttribute("data-frame-title-id") !== target.id
+        )
+          return;
+        event.preventDefault();
+        // Legacy canvases may not support undo: confirm there, delete directly otherwise.
+        if (current?.legacy) setDeleteFrame(target);
+        else submitDeleteFrame(target);
       } else if (event.key === "!" || (event.shiftKey && event.code === "Digit1")) {
         event.preventDefault();
         fitAll();
@@ -696,6 +792,7 @@ export function DesignCanvasTab({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
+    actions,
     fitAll,
     fitSelection,
     historyOpen,
@@ -707,6 +804,7 @@ export function DesignCanvasTab({
     ownsGlobalShortcuts,
     propertiesFrame,
     restoreHistory,
+    submitDeleteFrame,
     zoom100,
     zoomBy,
   ]);
@@ -857,34 +955,39 @@ export function DesignCanvasTab({
                   selection={selection}
                   focusedFrameId={focusedFrame}
                   onFocusFrame={(frameId) => {
-                    setFocusedFrame(frameId);
+                    actions.focusFrame(frameId);
                     fitFrame(frameId);
                   }}
+                  onFocusRow={(frameId) => actions.focusFrame(frameId)}
                   onSelectElement={(frameId, selector) => {
                     const bridge = bridges.current.get(frameId);
                     const frame = committedById.get(frameId);
                     const meta = metas[frameId];
                     const key = meta?.contentId ?? `revision:${frame?.revision}`;
                     if (!frame) return;
+                    actions.focusFrame(frameId);
                     if (!bridge || bridge.renderedContentId !== key) {
                       // Bring the frame into view first; hit testing needs a live, current render.
-                      setFocusedFrame(frameId);
                       fitFrame(frameId);
                       return;
                     }
+                    const generation = actions.beginSelection();
                     void bridge
                       .ask<DesignElement>({ op: "inspectElement", selector })
                       .then((element) => {
                         if (bridge.renderedContentId !== key) return;
-                        actions.select({
-                          frameId,
-                          revision: frame.revision,
-                          element,
-                          ...(meta
-                            ? { structureId: meta.structureId, contentId: meta.contentId }
-                            : {}),
-                        });
-                        if (narrow) setInspectorOpen(true);
+                        const selected = actions.select(
+                          {
+                            frameId,
+                            revision: frame.revision,
+                            element,
+                            ...(meta
+                              ? { structureId: meta.structureId, contentId: meta.contentId }
+                              : {}),
+                          },
+                          generation,
+                        );
+                        if (selected && narrow) setInspectorOpen(true);
                       })
                       .catch(reportError);
                   }}
@@ -967,7 +1070,9 @@ export function DesignCanvasTab({
                   y: event.clientY,
                   origin: viewportRef.current,
                 };
-                if (event.button === 0) setSelection(null);
+                if (event.button === 0) {
+                  actions.select(null);
+                }
               }}
               onPointerMove={(event) => {
                 const start = panStart.current;
@@ -1036,6 +1141,7 @@ export function DesignCanvasTab({
                       failure={failureForLane(projection?.intents ?? [], frame.id)}
                       canRestorePrevious={!legacy}
                       focused={focusedFrame === frame.id}
+                      frameSelected={selectedFrameId === frame.id}
                     />
                   );
                 })}
@@ -1195,21 +1301,7 @@ export function DesignCanvasTab({
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => {
-                  const target = deleteFrame;
-                  const current = projectionRef.current;
-                  if (!target || !current) return;
-                  controller.submit({
-                    descriptor: {
-                      input: { kind: "delete_frame", frameId: target.id },
-                      preconditions: {
-                        frameRevision: target.revision,
-                        canvasRevision: current.revision,
-                      },
-                    },
-                    label: `Delete ${target.name}`,
-                    lane: "canvas",
-                  });
-                  if (selectionRef.current?.frameId === target.id) setSelection(null);
+                  if (deleteFrame) submitDeleteFrame(deleteFrame);
                   setDeleteFrame(null);
                 }}
               >

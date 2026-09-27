@@ -257,6 +257,10 @@ export class FakeBackend {
       descriptor.preconditions.structureId !== entry.structureId
     )
       return reject("The frame structure changed; reselect the element");
+    if (descriptor.input.kind === "delete_frame") {
+      this.removeFrame(entry.frame.id);
+      return { ...base, state: "committed", result: { canvasRevision: this.revision, frames: [] } };
+    }
     if (descriptor.input.kind === "update_frame") {
       entry.frame = { ...entry.frame, ...input.patch, revision: entry.frame.revision + 1 };
     } else if (descriptor.input.kind === "set_element_styles") {

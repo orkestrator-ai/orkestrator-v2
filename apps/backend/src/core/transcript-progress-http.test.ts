@@ -10,6 +10,7 @@ import { codexConnection, httpProvider } from "./agent-provider-test-support.js"
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import {
   PROGRESS_SNAPSHOT_TARGET_BYTES,
+  PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,
   readTranscriptProgressSample,
 } from "./transcript-progress.js";
 
@@ -42,9 +43,35 @@ function transcript(output: string) {
   ];
 }
 
+/** An assistant message whose tool call has, or has not yet, produced output. */
+function toolCall(id: string, output?: string) {
+  return {
+    id,
+    role: "assistant",
+    content: "",
+    parts: [
+      {
+        type: "tool-invocation",
+        content: "Bash",
+        sourcePartId: `${id}:0`,
+        toolUseId: `${id}-tool`,
+        ...(output === undefined ? {} : { toolOutput: output }),
+      },
+    ],
+    createdAt: "2026-09-27T00:00:00Z",
+  };
+}
+
+function text(id: string, content: string) {
+  return { id, role: "assistant", content, parts: [], createdAt: "2026-09-27T00:00:00Z" };
+}
+
 /** A bridge whose revision advances for any change, content or not. */
 function bridge(mode: "v2" | "v1" | "legacy", output = "x".repeat(700 * 1024)) {
-  const state = { messages: transcript(output), revision: 1 };
+  const state: { messages: unknown[]; revision: number } = {
+    messages: transcript(output),
+    revision: 1,
+  };
   const legacyReads: string[] = [];
   const bodies: number[] = [];
   const { provider, requests } = httpProvider((url) => {
@@ -93,7 +120,7 @@ for (const mode of ["v2", "v1"] as const) {
     await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: false });
     expect(fake.bodies[1]).toBeLessThan(512);
     const lastUrl = new URL(fake.requests.at(-1)!.url);
-    expect(lastUrl.searchParams.get("limit")).toBe("1");
+    expect(lastUrl.searchParams.get("limit")).toBe(String(PROGRESS_TRANSCRIPT_WINDOW_MESSAGES));
     expect(lastUrl.searchParams.get("knownToken")).toBeTruthy();
 
     // Revision churn (usage, access time) with identical content.
@@ -141,6 +168,68 @@ test("v1: a raw tail cut by the byte target is completed only when the source mo
   fake.state.messages = transcript(`${"x".repeat(700 * 1024)} and one more line`);
   fake.state.revision += 1;
   await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: true });
+});
+
+for (const mode of ["v2", "v1"] as const) {
+  test(`${mode}: a late tool result on an earlier message is progress`, async () => {
+    const fake = bridge(mode);
+    const history = (output?: string) => [
+      transcript("")[0]!,
+      toolCall("m1", output),
+      text("m2", "meanwhile, reading the diff"),
+      text("m3", "still reviewing"),
+    ];
+    fake.state.messages = history();
+    await expect(fake.observe()).resolves.toMatchObject({ baselineEstablished: true });
+    fake.state.revision += 1;
+    await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: false });
+
+    // Message N-2 completes; the newest message and the length are unchanged.
+    fake.state.messages = history("tests passed");
+    fake.state.revision += 1;
+    await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: true });
+    fake.state.revision += 1;
+    await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: false });
+    expect(Math.max(...fake.bodies)).toBeLessThan(16 * 1024);
+    expect(fake.legacyReads).toEqual([]);
+  });
+}
+
+test("v1: a head-trimmed window stays comparable and sees its retained earlier rows", async () => {
+  const fake = bridge("v1");
+  const history = (output?: string) => [
+    transcript("")[0]!,
+    text("big-0", "a".repeat(50 * 1024)),
+    text("big-1", "b".repeat(40 * 1024)),
+    toolCall("m2", output),
+    text("m3", "still reviewing"),
+  ];
+  fake.state.messages = history();
+  await expect(fake.observe()).resolves.toMatchObject({ baselineEstablished: true });
+  fake.state.revision += 1;
+  await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: false });
+  // The byte target dropped the window's head, never cut its tail.
+  expect(Math.max(...fake.bodies)).toBeLessThan(PROGRESS_SNAPSHOT_TARGET_BYTES);
+
+  fake.state.messages = history("finished");
+  fake.state.revision += 1;
+  await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: true });
+  expect(fake.legacyReads).toEqual([]);
+});
+
+test("v1: an oversized tail still exposes a late update to an earlier message", async () => {
+  const fake = bridge("v1");
+  const [prompt, big] = transcript("x".repeat(700 * 1024));
+  fake.state.messages = [prompt, toolCall("m0"), big];
+  await expect(fake.observe()).resolves.toMatchObject({ baselineEstablished: true });
+  fake.state.revision += 1;
+  await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: false });
+
+  fake.state.messages = [prompt, toolCall("m0", "done"), big];
+  fake.state.revision += 1;
+  await expect(fake.observe()).resolves.toMatchObject({ probed: true, changed: true });
+  // Each moved source completed its cut tail from one exact read.
+  expect(fake.legacyReads).toHaveLength(3);
 });
 
 test("a bridge without the conditional route keeps the measured legacy fallback", async () => {

@@ -22,6 +22,7 @@ import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { StorageService } from "./storage.js";
+import { PROGRESS_TRANSCRIPT_WINDOW_MESSAGES } from "./transcript-progress.js";
 
 jest.setTimeout(30_000);
 
@@ -317,7 +318,9 @@ test("reviewer progress probes are conditional and never read the legacy transcr
     const service = env.createService({ progressProbeIntervalMs: 0 });
     for (let pass = 0; pass < 4; pass++) await service.advanceNow(env.workflowId);
 
-    const probes = env.provider.snapshotCalls.filter((call) => call.limit === 1);
+    const probes = env.provider.snapshotCalls.filter(
+      (call) => call.limit === PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,
+    );
     expect(probes.length).toBeGreaterThanOrEqual(4);
     expect(probes.every((call) => call.representation === "summary")).toBe(true);
     expect(probes.some((call) => call.knownSourceToken !== undefined)).toBe(true);

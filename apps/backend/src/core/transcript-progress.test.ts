@@ -7,6 +7,7 @@ import {
   applyProgressSample,
   compareProgressDigests,
   PROGRESS_SNAPSHOT_TARGET_BYTES,
+  PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,
   readTranscriptProgressSample,
   snapshotProgressDigest,
 } from "./transcript-progress.js";
@@ -25,13 +26,16 @@ function clock(start = 0): { now: () => number; advance: (ms: number) => void } 
 }
 
 /**
- * A bridge-like provider: a conditional one-message window whose token moves
- * with a revision that also advances for usage/title churn, like the real
- * bridge envelope, and a legacy whole-history read that must stay untouched.
+ * A bridge-like provider: a conditional tail window whose token moves with a
+ * revision that also advances for usage/title churn, like the real bridge
+ * envelope, and a legacy whole-history read that must stay untouched.
  */
 class SnapshotProvider {
   readonly agent = "claude" as const;
+  /** Messages before the tail; the window serves the newest of them too. */
+  earlier: unknown[] = [];
   tail: unknown = { id: "m-1", role: "assistant", content: "working", parts: [] };
+  /** Absolute history position of the tail message. */
   startIndex = 0;
   generation: string | number = "gen-1";
   historyEpoch = "gen-1:epoch-1";
@@ -71,9 +75,10 @@ class SnapshotProvider {
     if (this.answerUnchanged || options.knownSourceToken === this.token()) {
       return { unchanged: true, sourceToken: this.token() };
     }
+    const window = [...this.earlier, this.tail].slice(-options.limit);
     return {
-      messages: [this.tail],
-      historyStartIndex: this.startIndex,
+      messages: window,
+      historyStartIndex: this.startIndex + 1 - window.length,
       sourceToken: this.token(),
       complete: this.startIndex === 0,
       revision: this.revision,
@@ -86,7 +91,7 @@ class SnapshotProvider {
 
   async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
     this.messageCalls.push(options);
-    return [this.tail];
+    return [...this.earlier, this.tail].slice(-(options?.limit ?? Infinity));
   }
 }
 
@@ -138,11 +143,15 @@ test("an unchanged probe is answered conditionally without any legacy transcript
     digest: first.digest,
   });
 
-  // One bounded summary tail per due probe; the second carried the first's token.
+  // One bounded summary window per due probe; the second carried the first's token.
   expect(provider.snapshotCalls).toEqual([
-    { limit: 1, targetBytes: PROGRESS_SNAPSHOT_TARGET_BYTES, representation: "summary" },
     {
-      limit: 1,
+      limit: PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,
+      targetBytes: PROGRESS_SNAPSHOT_TARGET_BYTES,
+      representation: "summary",
+    },
+    {
+      limit: PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,
       targetBytes: PROGRESS_SNAPSHOT_TARGET_BYTES,
       knownSourceToken: "bt1.rev-1",
       representation: "summary",
@@ -298,7 +307,7 @@ test("an unchanged answer with nothing to compare it to is not a baseline", asyn
   });
 });
 
-test("a cut tail row is hashed from the exact newest message, comparably with an uncut one", async () => {
+test("a cut tail row is hashed from the exact newest window, comparably with an uncut one", async () => {
   const exact = { id: "m-1", role: "assistant", content: "", parts: [{ id: "a" }, { id: "b" }] };
   const cut: ProviderTranscriptSnapshot = {
     messages: [{ ...exact, parts: [{ id: "b" }] }],
@@ -308,6 +317,7 @@ test("a cut tail row is hashed from the exact newest message, comparably with an
     sourceToken: "t-1",
   };
   const reads: string[] = [];
+  const limits: number[] = [];
   const sample = await readTranscriptProgressSample({
     provider: {
       async transcriptSnapshot() {
@@ -318,18 +328,120 @@ test("a cut tail row is hashed from the exact newest message, comparably with an
       },
     },
     sessionId: "session-1",
-    fallbackRead: async () => [{ id: "older" }, exact],
+    fallbackRead: async (limit) => {
+      limits.push(limit);
+      return [{ id: "older" }, exact];
+    },
     onRead: (kind) => reads.push(kind),
   });
   expect(reads).toEqual(["snapshot", "fallback"]);
+  // The completion asks for the whole window, so earlier rows stay covered.
+  expect(limits).toEqual([PROGRESS_TRANSCRIPT_WINDOW_MESSAGES]);
+  // The same window once it fits the target produces the same digest.
   expect(sample).toEqual({
-    digest: snapshotProgressDigest({ ...cut, messages: [exact], omittedParts: undefined }),
+    digest: snapshotProgressDigest({
+      messages: [{ id: "older" }, exact],
+      historyStartIndex: 2,
+      historyEpoch: "g:e",
+    }),
     sourceToken: "t-1",
   });
-  // The same row once it fits the target produces the same digest.
-  expect(
-    snapshotProgressDigest({ messages: [exact], historyStartIndex: 3, historyEpoch: "g:e" }),
-  ).toBe(sample.digest);
+});
+
+test("a cut tail row still sees a late update to an earlier message", async () => {
+  const exactTail = { id: "m-2", role: "assistant", content: "", parts: [{ id: "big" }] };
+  let earlier: unknown = { id: "m-1", parts: [{ id: "tool", state: "running" }] };
+  const provider = {
+    async transcriptSnapshot() {
+      return {
+        messages: [{ ...exactTail, parts: [] }],
+        omittedParts: 1,
+        historyStartIndex: 2,
+        historyEpoch: "g:e",
+      } satisfies ProviderTranscriptSnapshot;
+    },
+    async messages(_sessionId: string, options?: { limit?: number }) {
+      return [{ id: "prompt" }, earlier, exactTail].slice(-(options?.limit ?? Infinity));
+    },
+  };
+  const before = await readTranscriptProgressSample({ provider, sessionId: "session-1" });
+  expect((await readTranscriptProgressSample({ provider, sessionId: "session-1" })).digest).toBe(
+    before.digest,
+  );
+  earlier = { id: "m-1", parts: [{ id: "tool", state: "completed", output: "done" }] };
+  const after = await readTranscriptProgressSample({ provider, sessionId: "session-1" });
+  expect(compareProgressDigests(before.digest, after.digest)).toBe("changed");
+});
+
+test("a late update to an earlier message is progress while newer messages exist", async () => {
+  const { time, provider, observe } = setup();
+  const runningTool = { id: "m-1", role: "assistant", content: "", parts: [{ id: "tool-1" }] };
+  provider.earlier = [{ id: "prompt", role: "user", content: "review", parts: [] }, runningTool];
+  provider.startIndex = 3;
+  const first = await observe();
+  expect(first).toMatchObject({ probed: true, baselineEstablished: true });
+
+  // Churn with identical content stays unchanged.
+  provider.revision += 1;
+  time.advance(1_000);
+  await expect(observe()).resolves.toMatchObject({ probed: true, changed: false });
+
+  // The tool result lands on message N-2; the tail and its position are unchanged.
+  provider.earlier = [
+    provider.earlier[0],
+    { ...runningTool, parts: [{ id: "tool-1", toolOutput: "finished" }] },
+  ];
+  provider.revision += 1;
+  time.advance(1_000);
+  await expect(observe()).resolves.toMatchObject({ probed: true, changed: true });
+
+  // A reasoning part appended to an earlier message is progress as well.
+  provider.earlier = [
+    provider.earlier[0],
+    {
+      ...runningTool,
+      parts: [
+        { id: "tool-1", toolOutput: "finished" },
+        { id: "r", type: "reasoning" },
+      ],
+    },
+  ];
+  provider.revision += 1;
+  time.advance(1_000);
+  await expect(observe()).resolves.toMatchObject({ probed: true, changed: true });
+  expect(provider.messageCalls).toEqual([]);
+});
+
+test("a version-2 tail-only baseline rebases once instead of counting as progress", async () => {
+  const { time, provider, observe } = setup();
+  // Shape of a digest persisted by the previous (tail-only) build.
+  const versionTwo = `70320d16${"ab".repeat(8)}${"cd".repeat(20)}`;
+  expect(versionTwo).toMatch(PERSISTED_DIGEST);
+  const target: { progressAt?: string; progressDigest?: string } = {
+    progressAt: "2026-01-01T00:00:00.000Z",
+    progressDigest: versionTwo,
+  };
+  const observation = await observe(versionTwo);
+  expect(observation).toMatchObject({
+    probed: true,
+    baselineEstablished: false,
+    changed: false,
+    rebased: true,
+  });
+  expect(commitProgressObservation(target, observation)).toBe("evaluate");
+  expect(target.progressAt).toBe("2026-01-01T00:00:00.000Z");
+  expect(target.progressDigest).toMatch(PERSISTED_DIGEST);
+  expect(target.progressDigest?.startsWith("70320d16")).toBe(false);
+
+  // The replaced baseline then compares normally.
+  provider.revision += 1;
+  time.advance(1_000);
+  await expect(observe(target.progressDigest)).resolves.toMatchObject({ changed: false });
+  const wait = { progressDigest: versionTwo, progressAt: "2026-01-01T00:00:00.000Z" };
+  expect(applyProgressSample(wait, target.progressDigest!, "2026-01-02T00:00:00.000Z")).toBe(
+    "rebased",
+  );
+  expect(wait.progressAt).toBe("2026-01-01T00:00:00.000Z");
 });
 
 test("providers without a snapshot surface keep the legacy tail digest", async () => {

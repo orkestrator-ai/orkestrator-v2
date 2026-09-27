@@ -1534,9 +1534,13 @@ export class ReviewFanoutRunner {
           provider,
           sessionId: providerSessionId,
           known,
-          fallbackRead: () =>
+          // Usage metering peeks this read later, so it keeps the usage shape
+          // whenever that still covers the window the sample asked for.
+          fallbackRead: (limit) =>
             transcript.read(
-              usageFromTranscript ? provider.usageMessageLimit : PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+              usageFromTranscript && (provider.usageMessageLimit ?? Infinity) >= limit
+                ? provider.usageMessageLimit
+                : limit,
             ),
           onRead: (kind) => this.record({ operation: PROGRESS_READ_OPERATIONS[kind] }),
         });

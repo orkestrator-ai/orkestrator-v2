@@ -12,10 +12,11 @@ How to reproduce:
 | Suite | Command |
 | --- | --- |
 | Unit and integration (complete) | `mise run test` |
+| Final image | `bash docker/tests/final-image-smoke.sh <image>` |
 | Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-live-qualification.test.ts tests/unit/electron/container-live-replacement.test.ts tests/unit/electron/container-live-network.test.ts tests/unit/electron/container-live-firewall.test.ts` |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-benchmarks.test.ts` |
 | Real stack, local | `mise run test:agent:browser:isolated` |
-| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` |
+| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` (includes the rebuild cycle) |
 
 Live suites label every resource with a private owner namespace and remove
 exactly those; the real-stack profile was stopped and reset afterwards
@@ -44,20 +45,20 @@ process of an isolated `dev:test` profile.
 | C13 | Partial — gated | Live C14 copies Claude and Codex transcripts, relocated Codex SQLite with WAL and the OpenCode DB. Resuming a preserved session in the real provider CLI/SDK was **not** run; the rebuild preview says session files are copied but resume is not yet verified (`resumeQualified: false`), and Codex/OpenCode/Grok are declared partial |
 | C14 | Pass | Live: legacy migration and volume rebuild (Git refs/status, bytes, modes, symlinks, relocations; config and snapshots not copied). Real stack: `orkestrator environment recreate` on the fixture container kept an untracked file on a new `-g2` runtime |
 | C15 | Pass | Live: cancellation during copy, changed-runtime refusal. Unit: restart reconciliation of `migrate`/`rebuild`/`restore` at every phase removes only the candidate; the commit is one write |
-| C16 | Pass (partial) | Live: a symlinked session root fails verification and rolls back. Unit: capacity verdicts refuse measured shortfall and unknown capacity unless accepted. Disk/inode exhaustion was not injected on a real daemon |
+| C16 | Pass | Live: candidate volumes that run out of inodes and out of bytes mid-copy (tmpfs-backed), a symlinked session root, and a candidate name held by another container all roll back with the original intact and startable. Unit: capacity verdicts on bytes and inodes, unknown capacity refused unless accepted, truncated archives, escaping hard links and device nodes refused, reconciliation at every pre-commit phase and just after the commit write |
 | C17 | Pass | Live: restore the legacy copy after newer work, restore the newer copy back (new work retained), discard. Post-commit reconciliation never reverts pointers (no unresolved operation) |
 | C18 | Pass | Unit: execution refuses a resource that became assigned and one outside the preview; tokens are consumed. Live: only the reviewed leftover volume removed |
 | C19 | Pass | Live: deletion stopped after the container step, the reconciler later removed volumes, the recovery copy and the network, and cleared the ledger |
 | C20 | Pass | Live: only enabled providers' allowlisted files mounted read-only; unique sentinels in histories, transcripts and a disabled provider's credentials unreachable anywhere in the container |
-| C21 | Partial | Unit: atomic revision publication, private modes, manifest without names; UI reports removal and pending rebuild. An interrupted revoke/refresh against a live provider was not exercised |
+| C21 | Pass (fixture) / live-provider partial | Unit: revocation recorded before anything else, so an interrupted revoke still gates staging and syncs; staged inputs emptied in place (bound files keep their inode); bridge stopped; "Allow again"; a staging interrupted by a restart is never read and is pruned after its grace; atomic revision publication and private modes. Rotation against a live provider process needs real provider credentials |
 | C22 | Pass | Live: own network, IPv6 disabled, service port leaves the container while other host ports and a sibling are rejected, example.com blocked, ingress via published port, durable atomic host-port update across restart |
 | C23 | Pass | Live: `container-live-firewall.test.ts` — a saved list is reported pending, then applied in place; an open keep-alive connection survives an edit that keeps its domain and is cut when the domain is removed (conntrack revocation); one root refresher that node can neither signal nor duplicate; malformed lists refused unchanged; the applied list survives a restart; a list saved while stopped stays pending until applied. Unit: atomic swap order, expiry-bounded carry-over, rotation keeps earlier addresses, fail-closed firewall, GitHub seed → live → cache order |
-| C24 | Pass | Live: limits applied and read back; PID exhaustion contained and recovered; OOM killed the allocating process, not PID 1; live update read back. Two-environment contention not measured |
+| C24 | Pass | Live: limits applied and read back; PID exhaustion contained and recovered; OOM killed the allocating process, not PID 1; live update read back; a CPU-saturated environment held to its one-core budget while a sibling answers `docker exec` promptly; shared memory 256 MiB under a 512 MiB budget |
 | C25 | Pass | Unit: unreachable daemon → unknown, not zero; stale marking; UI shows unknown disk/memory and stale samples |
 | C26 | Pass | Live: `local` driver 10 MiB × 3; 40 MB through the bridge launch path stays within 15 MiB; real followers shared and stopped. Unit: huge lines, split UTF-8, ring gaps, leases, caps |
-| C27 | Partial | Live, amd64: all five bridges answer `/global/health`; the full live set passes on the final image; real stack: Chromium launches for `node` and uid 0. arm64 not built here (CI builds both natively and refuses a one-architecture release) |
-| C28 | Pass | [benchmarks.md](benchmarks.md) (5 fresh, 10 warm, 5 + 3 rebuilds, sampler, churn), incomplete runs recorded |
-| C29 | Partial | Real stack: Container and Network sections show backend state at desktop and narrow widths and after a reload; a rebuild run by the CLI with no UI open appears as a recovery copy. Unit: an in-flight rebuild rehydrates from the lifecycle snapshot with a working cancel. Switching environments during a live rebuild was not driven in the browser |
+| C27 | Pass (amd64) / arm64 in CI | Live, amd64: `docker/tests/final-image-smoke.sh` — manifest versions equal the installed CLIs, all five bridges answer `/global/health`, Codex code-mode host present, Chromium launches; the full live set passes on the final image. CI runs the same smoke test on its native arm64 build; arm64 was not built on this host |
+| C28 | Pass | [benchmarks.md](benchmarks.md): 5 fresh, 3 concurrent, 10 warm, 5 + 3 rebuilds, sampler, Docker calls per minute, churn; regression targets recorded |
+| C29 | Pass | Real stack: `container-rebuild-cycle.spec.ts` starts a rebuild, switches to another environment while it runs, returns to backend-owned progress and exactly one new recovery copy, reloads, and opens reviewed cleanup; Container and Network sections rehydrate at desktop and narrow widths. The run exposed and fixed a recovery-copy list that did not refresh on commit |
 | C30 | Pass | Real stack: `mise run test:agent:browser:isolated` (local worktree create, terminal, reload rehydration, diff state) |
 
 ## Rollout stage status

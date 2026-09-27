@@ -461,6 +461,11 @@ describe("inode capacity", () => {
       inodes: null,
       inodesAvailable: null,
     });
+    // A filesystem with dynamic inodes (btrfs) reports none: unknown, not full.
+    expect(
+      parseMeasureOutput("ORKESTRATOR_MEASURE bytes=1 available=2 inodes=3 inodes_available=")
+        .inodesAvailable,
+    ).toBeNull();
     const roomy = { estimateBytes: 1_000, availableBytes: 10 * 1024 ** 3 };
     expect(
       capacityVerdict({ ...roomy, estimateInodes: 5_000, availableInodes: 200 }, false),

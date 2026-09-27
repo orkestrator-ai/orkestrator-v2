@@ -189,7 +189,13 @@ case "$command" in
         ;;
     measure)
         [ "$#" -eq 2 ] || { result status=usage; exit 2; }
-        echo "ORKESTRATOR_MEASURE bytes=$(du -sb "$2" 2>/dev/null | cut -f1) available=$(df -B1 --output=avail "$2" 2>/dev/null | tail -n 1 | tr -d ' ') inodes=$(du -s --inodes "$2" 2>/dev/null | cut -f1) inodes_available=$(df --output=iavail "$2" 2>/dev/null | tail -n 1 | tr -d ' ')"
+        # Filesystems with dynamic inodes (btrfs, some overlay setups) report
+        # a total of 0: that is "not limited", never "full", so it is omitted.
+        inode_line="$(df --output=itotal,iavail "$2" 2>/dev/null | tail -n 1)"
+        inode_total="$(echo "$inode_line" | awk '{ print $1 }')"
+        inodes_available=""
+        case "$inode_total" in ''|0|*[!0-9]*) ;; *) inodes_available="$(echo "$inode_line" | awk '{ print $2 }')" ;; esac
+        echo "ORKESTRATOR_MEASURE bytes=$(du -sb "$2" 2>/dev/null | cut -f1) available=$(df -B1 --output=avail "$2" 2>/dev/null | tail -n 1 | tr -d ' ') inodes=$(du -s --inodes "$2" 2>/dev/null | cut -f1) inodes_available=${inodes_available}"
         ;;
     *)
         result status=usage

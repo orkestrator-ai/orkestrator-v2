@@ -83,7 +83,12 @@ import {
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
-import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
+import {
+  detectDockerTopology,
+  imageCapabilities,
+  imageStateFormats,
+  imageWritesVolumeStorage,
+} from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
 import {
   allowedDomainsArgument,
@@ -201,6 +206,17 @@ export async function createDockerContainer(
     throw new ContainerLifecycleError(
       "unsupported-topology",
       topology.remediation ?? "The Docker daemon is not local to this backend.",
+    );
+  }
+  // Persistent storage is mounted read-write only into an image that declares
+  // it writes that format; an older image could corrupt newer state.
+  if (
+    identity.storage?.format === "volume-v1" &&
+    !imageWritesVolumeStorage(await imageStateFormats(identity.imageId, context))
+  ) {
+    throw new ContainerLifecycleError(
+      "unsupported-format",
+      "This image cannot write the environment's persistent storage format. Nothing was created; use the image the environment was built with or a newer one.",
     );
   }
   const runtimeGeneration = identity.runtimeGeneration ?? 1;

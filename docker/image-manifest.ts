@@ -17,6 +17,7 @@
  * Versions come from the Dockerfile's ARG pins (passed as environment), not
  * from a second hand-maintained list.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import {
@@ -92,6 +93,47 @@ function env(name: string): string {
   return value && value.length > 0 ? value : "unknown";
 }
 
+/** Bridges the image ships: a built entry point, not merely a directory. */
+export const IMAGE_BRIDGES = [
+  "claude-bridge",
+  "codex-bridge",
+  "cursor-bridge",
+  "pi-bridge",
+  "acp-bridge",
+] as const;
+
+/** The version an installed CLI reports (first `x.y.z`), or null. */
+export function reportedVersion(output: string): string | null {
+  return /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)/.exec(output)?.[1] ?? null;
+}
+
+/**
+ * The version a CLI in the image reports. When the build pinned one, the two
+ * must agree: the manifest names what is installed, never only what the
+ * Dockerfile asked for.
+ */
+export function verifiedAgentVersion(
+  name: string,
+  pinned: string,
+  run: (command: string) => string | null,
+): string {
+  const output = run(name);
+  const installed = output === null ? null : reportedVersion(output);
+  if (pinned !== "unknown") {
+    if (!installed || installed !== pinned.replace(/^v/, "")) {
+      throw new Error(`${name} reports ${installed ?? "no version"}; the image pins ${pinned}`);
+    }
+    return installed;
+  }
+  return installed ?? "unknown";
+}
+
+function runVersion(command: string): string | null {
+  const result = spawnSync(command, ["--version"], { encoding: "utf8", timeout: 60_000 });
+  if (result.status !== 0) return null;
+  return `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+}
+
 function generate(outFile: string): void {
   const capabilities = probeCapabilities((file) => readIfPresent(file.installed));
   const expected = process.env.ORKESTRATOR_IMAGE_CAPABILITIES?.trim();
@@ -110,18 +152,19 @@ function generate(outFile: string): void {
     appVersion: packageJson.version ?? "unknown",
     sourceRevision: revision && /^[0-9a-f]{7,40}$/.test(revision) ? revision : null,
     architecture: process.arch === "x64" ? "amd64" : process.arch,
-    runtimes: { bun: env("BUN_VERSION"), node: env("NODE_VERSION") },
-    agents: {
-      claude: env("CLAUDE_CLI_VERSION"),
-      codex: env("CODEX_CLI_VERSION"),
-      opencode: env("OPENCODE_CLI_VERSION"),
-      grok: env("GROK_BUILD_VERSION"),
-      pi: env("PI_CLI_VERSION"),
-      playwright: env("PLAYWRIGHT_VERSION"),
+    runtimes: {
+      bun: verifiedAgentVersion("bun", env("BUN_VERSION"), runVersion),
+      node: verifiedAgentVersion("node", env("NODE_VERSION"), runVersion),
     },
-    bridges: ["claude-bridge", "codex-bridge", "cursor-bridge", "pi-bridge", "acp-bridge"].filter(
-      (bridge) => existsSync(`/opt/${bridge}`),
-    ),
+    agents: {
+      claude: verifiedAgentVersion("claude", env("CLAUDE_CLI_VERSION"), runVersion),
+      codex: verifiedAgentVersion("codex", env("CODEX_CLI_VERSION"), runVersion),
+      opencode: verifiedAgentVersion("opencode", env("OPENCODE_CLI_VERSION"), runVersion),
+      grok: verifiedAgentVersion("grok", env("GROK_BUILD_VERSION"), runVersion),
+      pi: verifiedAgentVersion("pi", env("PI_CLI_VERSION"), runVersion),
+      playwright: verifiedAgentVersion("playwright", env("PLAYWRIGHT_VERSION"), runVersion),
+    },
+    bridges: IMAGE_BRIDGES.filter((bridge) => existsSync(`/opt/${bridge}/dist/index.js`)),
     capabilities,
     stateFormats: stateFormatsFor(capabilities),
   };

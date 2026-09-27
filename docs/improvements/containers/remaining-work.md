@@ -43,10 +43,10 @@ credentials this host does not have — named explicitly).
 | 26 | 11 | `get_container_logs` cuts by characters with no truncation marker | Done — byte-bounded with a truncation marker (`boundContainerLogTail`) |
 | 27 | 09 | Effective network report lacks gateway/subnet/DNS identity from Docker | Done — the policy report carries the network name, subnet and gateway from `docker network inspect` |
 | 28 | 09 | AGENTS.md: sudo grant count, root-terminal `NET_ADMIN` in restricted mode, GitHub range source; all-ports allowlist and shared-IP caveat | Done — AGENTS.md corrected |
-| 29 | 12 | Manifest agent versions come from build args, not the installed binaries; bridges listed by directory presence | Open |
-| 30 | 12 | CI never runs the built image (bridge `/global/health`, CLI versions, dynamic assets) | Open |
-| 31 | 14 | Manifest `stateFormats` never enforced against storage | Open |
-| 32 | 12 | `docker/build.sh` cannot build the image | Open |
+| 29 | 12 | Manifest agent versions come from build args, not the installed binaries; bridges listed by directory presence | Done — manifest versions verified against each installed CLI at build time; bridges listed by built entry point |
+| 30 | 12 | CI never runs the built image (bridge `/global/health`, CLI versions, dynamic assets) | Done — `docker/tests/final-image-smoke.sh`, run by CI on both native architectures after a contract-argument build |
+| 31 | 14 | Manifest `stateFormats` never enforced against storage | Done — `imageWritesVolumeStorage` gates volume storage at creation (`unsupported-format`) |
+| 32 | 12 | `docker/build.sh` cannot build the image | Done — builds from the repository root with the contract arguments |
 | 33 | 13 | No regression criteria/latency targets; missing benchmark scenarios (concurrency, idle calls/min) | Open |
 
 ## Tier 3 — verification depth

@@ -133,7 +133,12 @@ candidate runs. A missing image fails before anything is created.
 
 Each image carries a manifest at `/usr/local/share/orkestrator/image-manifest.json`
 (`packages/protocol/src/image-manifest.ts`), generated during the build by
-`docker/image-manifest.ts` from the Dockerfile's ARG pins:
+`docker/image-manifest.ts`:
+
+- **Versions are what is installed.** Each agent CLI and runtime is asked for
+  its version; the build fails when one disagrees with its ARG pin, so the
+  manifest names what the image runs, not only what the Dockerfile asked for.
+  A bridge is listed only when its built entry point (`dist/index.js`) exists.
 
 - **Capabilities are probed, not declared.** A contract script carries a
   `ORKESTRATOR_CAPABILITY <name>=<version>` marker; a capability is in the
@@ -147,6 +152,19 @@ Each image carries a manifest at `/usr/local/share/orkestrator/image-manifest.js
   an interrupted probe is reclaimed at startup. Results are cached by image id.
 - **Legacy means legacy.** An image without a manifest keeps its guarded
   operations and never gains a capability by default.
+
+- **State formats are enforced.** A runtime is given `volume-v1` storage
+  only when its image declares it writes the current version for both roles
+  (`imageWritesVolumeStorage`); otherwise creation fails `unsupported-format`
+  before anything exists, so an older image never gets newer state mounted
+  read-write.
+
+`docker/tests/final-image-smoke.sh <image>` runs a built image with no
+network and checks the manifest's versions against the installed CLIs, every
+listed bridge's `/global/health`, Codex's code-mode host and Chromium; CI runs
+it on the native amd64 and arm64 builds, which also pass the contract build
+arguments so the capability label is verified. `docker/build.sh [tag]` builds
+from the repository root with those arguments.
 
 `get_docker_image_status` reports `missing`, `compatible`, `legacy`,
 `incompatible` or `unavailable` with the missing capabilities and fixed

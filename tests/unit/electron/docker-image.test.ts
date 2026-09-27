@@ -21,7 +21,12 @@ import {
 } from "../../../apps/backend/src/core/docker-image";
 import { resolveOperationImage } from "../../../apps/backend/src/core/commands-environment";
 import { shouldAddDockerHostGatewayAlias } from "../../../apps/backend/src/core/commands-container-exec";
-import { probeCapabilities, CONTRACT_FILES } from "../../../docker/image-manifest";
+import {
+  probeCapabilities,
+  CONTRACT_FILES,
+  reportedVersion,
+  verifiedAgentVersion,
+} from "../../../docker/image-manifest";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -392,5 +397,37 @@ esac
         });
       },
     );
+  });
+});
+
+describe("manifest versions come from the installed binaries", () => {
+  test("a CLI's reported version must match the image's pin", () => {
+    expect(reportedVersion("2.1.280 (Claude Code)")).toBe("2.1.280");
+    expect(reportedVersion("codex-cli 0.155.1")).toBe("0.155.1");
+    expect(reportedVersion("grok 1.0.41 (4220f3b224a6)")).toBe("1.0.41");
+    expect(reportedVersion("Version 1.63.0")).toBe("1.63.0");
+    expect(verifiedAgentVersion("node", "24.21.0", () => "v24.21.0\n")).toBe("24.21.0");
+    expect(() => verifiedAgentVersion("claude", "2.1.280", () => "2.1.279 (Claude Code)")).toThrow(
+      "claude reports 2.1.279; the image pins 2.1.280",
+    );
+    expect(() => verifiedAgentVersion("pi", "0.87.0", () => null)).toThrow("no version");
+    // Unpinned: whatever is installed, or unknown.
+    expect(verifiedAgentVersion("x", "unknown", () => "x 3.2.1")).toBe("3.2.1");
+    expect(verifiedAgentVersion("x", "unknown", () => null)).toBe("unknown");
+  });
+});
+
+describe("storage formats an image may write", () => {
+  test("volume storage needs the image to declare it writes every role's current version", async () => {
+    const { imageWritesVolumeStorage } =
+      await import("../../../apps/backend/src/core/docker-image");
+    const both = { read: [1], write: [1] };
+    expect(imageWritesVolumeStorage({ workspace: both, "provider-state": both })).toBe(true);
+    expect(imageWritesVolumeStorage({ workspace: both })).toBe(false);
+    expect(
+      imageWritesVolumeStorage({ workspace: both, "provider-state": { read: [1], write: [] } }),
+    ).toBe(false);
+    expect(imageWritesVolumeStorage({})).toBe(false);
+    expect(imageWritesVolumeStorage(null)).toBe(false);
   });
 });

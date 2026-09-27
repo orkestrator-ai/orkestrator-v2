@@ -374,6 +374,34 @@ export async function imageCapabilities(
   return read.kind === "manifest" ? read.manifest.capabilities : null;
 }
 
+/** Persistent-state formats the image declares it reads and writes, or null. */
+export async function imageStateFormats(
+  imageId: string | undefined,
+  context: Pick<CommandContext, "storage">,
+): Promise<ImageManifest["stateFormats"] | null> {
+  if (!imageId) return null;
+  const read = await readImageManifest(imageId, context);
+  return read.kind === "manifest" ? read.manifest.stateFormats : null;
+}
+
+/** Storage roles of `volume-v1` and the format version the backend writes. */
+export const VOLUME_STORAGE_FORMAT = {
+  version: 1,
+  roles: ["workspace", "provider-state"],
+} as const;
+
+/**
+ * Whether an image may be given `volume-v1` storage read-write: it must
+ * declare that it writes the current version for every role. An older image
+ * never gets newer state mounted into it; the environment stays on the image
+ * that wrote it, or a newer one.
+ */
+export function imageWritesVolumeStorage(formats: ImageManifest["stateFormats"] | null): boolean {
+  return VOLUME_STORAGE_FORMAT.roles.every(
+    (role) => formats?.[role]?.write.includes(VOLUME_STORAGE_FORMAT.version) ?? false,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Daemon topology
 // ---------------------------------------------------------------------------

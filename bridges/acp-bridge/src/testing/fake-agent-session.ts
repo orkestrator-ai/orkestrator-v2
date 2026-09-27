@@ -667,12 +667,13 @@ export function handleSessionMessage(message: JsonObject): boolean {
 
 /**
  * Grok deserializes `mcpServers` strictly and fails the whole request on a
- * malformed entry, so the fake does too: remote servers need `{ name, value }[]`
- * headers.
+ * malformed entry, so the fake does too: `mcpServers` must be an array and
+ * remote servers need `{ name, value }[]` headers.
  */
 function invalidMcpServers(message: JsonObject): boolean {
   const params = isObject(message.params) ? message.params : {};
-  if (!Array.isArray(params.mcpServers)) return false;
+  if (params.mcpServers === undefined) return false;
+  if (!Array.isArray(params.mcpServers)) return true;
   return params.mcpServers.some(
     (server) =>
       isObject(server) &&

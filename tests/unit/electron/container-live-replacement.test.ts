@@ -394,3 +394,128 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
     LIVE_TIMEOUT_MS,
   );
 });
+
+describe("C17/C18 recovery copies and reviewed cleanup", () => {
+  live(
+    "restoring a copy keeps newer work as another copy and can be reversed",
+    async () => {
+      const { replaceRuntimePreservingState } =
+        await import("../../../apps/backend/src/core/container-replacement");
+      const { listRecoveryCopies, restoreRecoveryCopy, discardRecoveryCopy } =
+        await import("../../../apps/backend/src/core/recovery-copies");
+      const { fixture, environmentId, containerId } = await createLegacyEnvironment("c17");
+      const legacySnapshot = await exec(containerId, WORKSPACE_SNAPSHOT);
+      const migrated = await replaceRuntimePreservingState(
+        { environmentId, expectedContainerId: containerId },
+        fixture.context,
+      );
+      await docker(["start", migrated!.containerId]);
+      await waitForContainerBoot(migrated!.containerId);
+      await exec(migrated!.containerId, "printf 'newer\\n' > /workspace/newer.txt");
+      await docker(["stop", "-t", "5", migrated!.containerId]);
+
+      // Restore the legacy copy: the migrated runtime and its volumes become
+      // a restore-source copy in the same commit.
+      let list = await listRecoveryCopies(environmentId, fixture.context);
+      expect(list.copies.map((copy) => [copy.copyId, copy.kind, copy.restorable])).toEqual([
+        [containerId, "legacy-runtime", true],
+      ]);
+      await restoreRecoveryCopy(
+        {
+          environmentId,
+          copyId: containerId,
+          expectedContainerId: migrated!.containerId,
+          expectedRevision: list.revision,
+        },
+        fixture.context,
+      );
+      let environment = await fixture.context.storage.getEnvironment(environmentId);
+      expect(environment?.containerId).toBe(containerId);
+      expect(lifecycleOf(environment).storage.format).toBe("legacy-layer");
+      await docker(["start", containerId]);
+      await waitForContainerBoot(containerId);
+      expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(legacySnapshot);
+      expect(await exec(containerId, "test -e /workspace/newer.txt && echo yes || echo no")).toBe(
+        "no",
+      );
+      await docker(["stop", "-t", "5", containerId]);
+
+      // The newer work is a restorable copy; restoring it brings it back.
+      list = await listRecoveryCopies(environmentId, fixture.context);
+      const newer = list.copies.find((copy) => copy.reason === "restore-source");
+      expect(newer).toMatchObject({ kind: "storage-set", restorable: true, presence: "present" });
+      await restoreRecoveryCopy(
+        {
+          environmentId,
+          copyId: newer!.copyId,
+          expectedContainerId: containerId,
+          expectedRevision: list.revision,
+        },
+        fixture.context,
+      );
+      environment = await fixture.context.storage.getEnvironment(environmentId);
+      expect(environment?.containerId).toBe(migrated!.containerId);
+      await docker(["start", migrated!.containerId]);
+      await waitForContainerBoot(migrated!.containerId);
+      expect(await exec(migrated!.containerId, "cat /workspace/newer.txt")).toBe("newer");
+      await docker(["stop", "-t", "5", migrated!.containerId]);
+
+      // Discarding the legacy copy removes exactly its container.
+      list = await listRecoveryCopies(environmentId, fixture.context);
+      expect(list.copies.map((copy) => copy.copyId)).toEqual([containerId]);
+      const discarded = await discardRecoveryCopy(
+        { environmentId, copyId: containerId, expectedRevision: list.revision },
+        fixture.context,
+      );
+      expect(discarded?.discarded).toBe(true);
+      expect(await docker(["ps", "-aq", "--no-trunc", "--filter", `id=${containerId}`])).toBe("");
+      expect(
+        await docker(["inspect", "--format", "{{.State.Status}}", migrated!.containerId]),
+      ).toBe("exited");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "cleanup offers only unreferenced volumes and removes only the reviewed ones",
+    async () => {
+      const { previewDockerCleanup, executeDockerCleanup } =
+        await import("../../../apps/backend/src/core/docker-cleanup-preview");
+      const { fixture, environmentId, containerId } = await createLegacyEnvironment("c18");
+      const { replaceRuntimePreservingState } =
+        await import("../../../apps/backend/src/core/container-replacement");
+      await replaceRuntimePreservingState(
+        { environmentId, expectedContainerId: containerId },
+        fixture.context,
+      );
+      const leftover = `ork-${RUN}-leftover`;
+      await docker([
+        "volume",
+        "create",
+        "--label",
+        "app=orkestrator-v2",
+        "--label",
+        `orkestrator-owner=${owner}`,
+        "--label",
+        `environment-id=env-${RUN}-deleted`,
+        leftover,
+      ]);
+      const preview = await previewDockerCleanup(fixture.context);
+      const byId = new Map(preview.rows.map((row) => [row.id, row.classification]));
+      expect(byId.get(leftover)).toBe("eligible");
+      // The migrated environment's volumes and its legacy copy are kept.
+      const record = lifecycleOf(await fixture.context.storage.getEnvironment(environmentId));
+      for (const volume of record.storage.volumes ?? []) {
+        expect(byId.get(volume.name)).toBe("assigned");
+      }
+      expect(byId.get(containerId)).toBe("retained-recovery");
+      const result = await executeDockerCleanup(
+        { selectionToken: preview.selectionToken, containerIds: [], volumeNames: [leftover] },
+        fixture.context,
+      );
+      expect(result.outcomes).toEqual([{ kind: "volume", id: leftover, outcome: "removed" }]);
+      expect(await docker(["volume", "ls", "-q", "--filter", `name=${leftover}`])).toBe("");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});

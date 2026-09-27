@@ -64,6 +64,7 @@ import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
 import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
+import { EnvironmentRecoveryCopies } from "./EnvironmentRecoveryCopies";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
   LEGACY_CONTAINER_DISCARD_WARNING,
@@ -364,6 +365,9 @@ export function EnvironmentSettingsDialog({
   const [portError, setPortError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetAcknowledged, setResetAcknowledged] = useState(false);
+  // Resetting keeps the current container and files as a recovery copy
+  // unless the user explicitly chooses to delete them.
+  const [keepResetCopy, setKeepResetCopy] = useState(true);
   const [isResetting, setIsResetting] = useState(false);
   // The runtime the reset confirmation describes. Captured when the dialog
   // opens so a container replaced while it is open conflicts instead of being
@@ -618,13 +622,15 @@ export function EnvironmentSettingsDialog({
   const openResetConfirm = () => {
     setReviewedContainerId(environment.containerId);
     setResetAcknowledged(false);
+    setKeepResetCopy(true);
     setShowResetConfirm(true);
   };
 
   // Explicit, destructive reset: removes the container (and every file in it)
   // and creates a new one with the saved settings.
   const handleResetContainer = async () => {
-    if (!onRestart || !dockerAvailable || !resetAcknowledged || !reviewedContainerId) return;
+    if (!onRestart || !dockerAvailable || !reviewedContainerId) return;
+    if (!keepResetCopy && !resetAcknowledged) return;
 
     setIsResetting(true);
     try {
@@ -638,12 +644,15 @@ export function EnvironmentSettingsDialog({
       await onRestart(environment.id, {
         intent: "discard",
         expectedContainerId: reviewedContainerId,
+        ...(keepResetCopy ? { keepRecoveryCopy: true } : {}),
       });
 
       const synced = await backend.syncEnvironmentStatus(environment.id);
       onUpdate(synced);
       toast.success("Container reset", {
-        description: "A new container was created and setup is running again.",
+        description: keepResetCopy
+          ? "A new container was created. The previous one is kept as a recovery copy."
+          : "A new container was created and setup is running again.",
       });
     } catch (err) {
       console.error("[EnvironmentSettingsDialog] Failed to reset container:", err);
@@ -1140,12 +1149,20 @@ export function EnvironmentSettingsDialog({
                 onClose={() => onOpenChange(false)}
               />
             )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentRecoveryCopies
+                environment={environment}
+                dockerAvailable={dockerAvailable}
+                onUpdate={onUpdate}
+                onClose={() => onOpenChange(false)}
+              />
+            )}
             {environment.containerId && onRestart && (
               <div className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">
                 <p className="text-sm font-medium">Reset container</p>
                 <p className="text-sm text-muted-foreground">
-                  Creates a new container with these settings and deletes everything stored in the
-                  current one.
+                  Starts over with a fresh clone in a new container. The current container and files
+                  are kept as a recovery copy unless you choose to delete them.
                 </p>
                 <div>
                   <Button
@@ -1410,10 +1427,21 @@ export function EnvironmentSettingsDialog({
       >
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Reset container and delete its files?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {keepResetCopy
+                ? "Reset container and keep a recovery copy?"
+                : "Reset container and delete its files?"}
+            </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
-                <p>{LEGACY_CONTAINER_DISCARD_WARNING}</p>
+                {keepResetCopy ? (
+                  <p>
+                    The current container and its files are stopped and kept as a recovery copy you
+                    can restore or delete later from these settings.
+                  </p>
+                ) : (
+                  <p>{LEGACY_CONTAINER_DISCARD_WARNING}</p>
+                )}
                 <p className="text-sm">
                   All running processes stop. A new container is created with the saved settings,
                   the repository is cloned again and setup runs from the start.
@@ -1425,12 +1453,24 @@ export function EnvironmentSettingsDialog({
             <input
               type="checkbox"
               className="mt-0.5"
-              checked={resetAcknowledged}
-              onChange={(event) => setResetAcknowledged(event.target.checked)}
+              checked={keepResetCopy}
+              onChange={(event) => setKeepResetCopy(event.target.checked)}
               disabled={isResetting}
             />
-            <span>I understand this permanently deletes the container&apos;s local files.</span>
+            <span>Keep the current container and files as a recovery copy.</span>
           </label>
+          {!keepResetCopy ? (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={resetAcknowledged}
+                onChange={(event) => setResetAcknowledged(event.target.checked)}
+                disabled={isResetting}
+              />
+              <span>I understand this permanently deletes the container&apos;s local files.</span>
+            </label>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isResetting}>Cancel</AlertDialogCancel>
             <AlertDialogAction
@@ -1439,7 +1479,7 @@ export function EnvironmentSettingsDialog({
                 event.preventDefault();
                 void handleResetContainer();
               }}
-              disabled={isResetting || !dockerAvailable || !resetAcknowledged}
+              disabled={isResetting || !dockerAvailable || (!keepResetCopy && !resetAcknowledged)}
               title={!dockerAvailable ? "Start Docker to reset this container" : undefined}
             >
               {isResetting ? (
@@ -1447,6 +1487,8 @@ export function EnvironmentSettingsDialog({
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Resetting...
                 </>
+              ) : keepResetCopy ? (
+                "Reset and keep a copy"
               ) : (
                 "Delete files and reset"
               )}

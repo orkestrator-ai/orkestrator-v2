@@ -65,7 +65,8 @@ export function buildEnvironmentCleanupEntry(
     !!worktreePath &&
     !!environment.branch;
   const pending: EnvironmentCleanupStep[] = [];
-  if (environment.containerId) pending.push("container");
+  const retainedContainers = retainedContainerIds(environment);
+  if (environment.containerId || retainedContainers.length > 0) pending.push("container");
   const volumes = storageVolumeNames(environment);
   if (volumes.length > 0) pending.push("volumes");
   if (worktreePath) pending.push("worktree");
@@ -82,6 +83,7 @@ export function buildEnvironmentCleanupEntry(
     createdFromCommit: environment.createdFromCommit ?? null,
     baseBranches: environment.delegationBaseBranch ? [environment.delegationBaseBranch] : [],
     containerId: environment.containerId,
+    retainedContainers,
     volumes,
     stateDirectories: environmentStateDirectories(dataDir, environment.id),
     pending,
@@ -136,15 +138,32 @@ async function cleanupContainer(
   ownershipVerified: boolean,
 ): Promise<void> {
   const containerId = entry.containerId;
-  if (!containerId) return;
-  // Refuses a container another development profile owns, and an unreachable
-  // daemon; a container the daemon has forgotten passes.
-  if (!ownershipVerified) await assertDockerContainerOwned(containerId, context);
-  try {
-    await run("docker", ["rm", "-f", containerId], { timeoutMs: DOCKER_TIMEOUT_MS });
-  } catch (error) {
-    if (!isMissingDockerObjectError(error)) throw error;
+  if (containerId) {
+    // Refuses a container another development profile owns, and an
+    // unreachable daemon; a container the daemon has forgotten passes.
+    if (!ownershipVerified) await assertDockerContainerOwned(containerId, context);
+    try {
+      await run("docker", ["rm", "-f", containerId], { timeoutMs: DOCKER_TIMEOUT_MS });
+    } catch (error) {
+      if (!isMissingDockerObjectError(error)) throw error;
+    }
   }
+  // Recovery copies go with the environment, each verified on its own.
+  for (const retained of entry.retainedContainers ?? []) {
+    await assertDockerContainerOwned(retained, context);
+    try {
+      await run("docker", ["rm", "-f", retained], { timeoutMs: DOCKER_TIMEOUT_MS });
+    } catch (error) {
+      if (!isMissingDockerObjectError(error)) throw error;
+    }
+  }
+}
+
+/** Every earlier runtime the environment keeps as a recovery copy. */
+export function retainedContainerIds(environment: Environment): string[] {
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  if (!parsed.supported) return [];
+  return [...new Set((parsed.record.retainedRuntimes ?? []).map((runtime) => runtime.containerId))];
 }
 
 /** Every storage volume the environment's lifecycle record names. */

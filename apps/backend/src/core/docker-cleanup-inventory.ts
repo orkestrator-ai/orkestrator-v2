@@ -11,6 +11,7 @@ import { environmentLifecycleOperations, environmentStartTasks } from "./command
 import { containerIdMatches } from "./commands-review.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
+import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 
 /**
  * Why a container is not offered for routine cleanup. Absence of a reason is
@@ -20,6 +21,7 @@ import type { Environment } from "./models.js";
  */
 export type CleanupExclusionReason =
   | "assigned"
+  | "retained-recovery"
   | "live-environment-label"
   | "operation-in-flight"
   | "deletion-pending"
@@ -136,6 +138,16 @@ export interface ProtectionSnapshot {
   environmentIds: Set<string>;
   deletionContainerIds: string[];
   deletionEnvironmentIds: Set<string>;
+  /** Earlier runtimes kept as recovery copies by live environments. */
+  retainedContainerIds: string[];
+  /** Volumes a live environment mounts now. */
+  currentVolumes: Set<string>;
+  /** Volumes of recovery copies. */
+  retainedVolumes: Set<string>;
+  /** Candidate volumes of unresolved operations. */
+  operationVolumes: Set<string>;
+  /** Volumes a pending deletion still owes. */
+  deletionVolumes: Set<string>;
 }
 
 export async function loadProtection(context: CleanupContext): Promise<ProtectionSnapshot> {
@@ -149,13 +161,48 @@ export async function loadProtection(context: CleanupContext): Promise<Protectio
     throw new Error("Cleanup refused: the environment deletion ledger could not be read");
   }
   const owesContainer = ledger.filter((entry) => entry.pending.includes("container"));
+  const retainedContainerIds: string[] = [];
+  const currentVolumes = new Set<string>();
+  const retainedVolumes = new Set<string>();
+  const operationVolumes = new Set<string>();
+  for (const environment of environments) {
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    if (!parsed.supported) {
+      // A record this version cannot read may reference anything; protect
+      // every resource labelled for it through the live-environment rule.
+      continue;
+    }
+    const record = parsed.record;
+    for (const volume of record.storage.volumes ?? []) currentVolumes.add(volume.name);
+    for (const runtime of record.retainedRuntimes ?? []) {
+      retainedContainerIds.push(runtime.containerId);
+    }
+    for (const retained of record.retainedStorage ?? []) {
+      for (const volume of retained.volumes) retainedVolumes.add(volume.name);
+    }
+    for (const volume of record.operation?.candidateStorage?.volumes ?? []) {
+      operationVolumes.add(volume.name);
+    }
+  }
   return {
     environments,
     environmentIds: new Set(environments.map((environment) => environment.id)),
-    deletionContainerIds: owesContainer
-      .filter((entry) => entry.containerId)
-      .map((entry) => entry.containerId as string),
-    deletionEnvironmentIds: new Set(owesContainer.map((entry) => entry.environmentId)),
+    deletionContainerIds: owesContainer.flatMap((entry) => [
+      ...(entry.containerId ? [entry.containerId] : []),
+      ...(entry.retainedContainers ?? []),
+    ]),
+    deletionEnvironmentIds: new Set(
+      ledger
+        .filter((entry) => entry.pending.includes("container") || entry.pending.includes("volumes"))
+        .map((entry) => entry.environmentId),
+    ),
+    retainedContainerIds,
+    currentVolumes,
+    retainedVolumes,
+    operationVolumes,
+    deletionVolumes: new Set(
+      ledger.filter((entry) => entry.pending.includes("volumes")).flatMap((entry) => entry.volumes),
+    ),
   };
 }
 
@@ -186,6 +233,9 @@ export function classify(
     )
   ) {
     return "assigned";
+  }
+  if (protection.retainedContainerIds.some((id) => containerIdMatches(id, container.id))) {
+    return "retained-recovery";
   }
   if (
     protection.deletionContainerIds.some((id) => containerIdMatches(id, container.id)) ||

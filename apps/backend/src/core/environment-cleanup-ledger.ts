@@ -38,6 +38,12 @@ export interface EnvironmentCleanupEntry {
   baseBranches: string[];
   containerId: string | null;
   /**
+   * Recovery copies the environment kept (earlier runtimes). Removed with the
+   * current runtime in the container step; absent in entries written before
+   * recovery copies existed.
+   */
+  retainedContainers: string[];
+  /**
    * Owner-labelled storage volumes of the environment. Removed only after the
    * container is gone, and only while their labels still name this owner and
    * environment.
@@ -99,7 +105,8 @@ function parseEntry(value: unknown): EnvironmentCleanupEntry | null {
     createdFromCommit: stringOrNull(record.createdFromCommit),
     baseBranches: strings(record.baseBranches),
     containerId: stringOrNull(record.containerId),
-    volumes: strings(record.volumes).slice(0, 32),
+    retainedContainers: strings(record.retainedContainers).slice(0, 32),
+    volumes: strings(record.volumes).slice(0, 64),
     stateDirectories: strings(record.stateDirectories),
     pending: Array.isArray(record.pending) ? [...new Set(record.pending.filter(isStep))] : [],
     attempts:

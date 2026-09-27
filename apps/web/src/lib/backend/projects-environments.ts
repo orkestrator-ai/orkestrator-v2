@@ -4,6 +4,7 @@ import type {
   RebuildPreview,
   RecreateEnvironmentIntent,
 } from "@orkestrator/protocol/container-lifecycle";
+import type { RecoveryCopyList } from "@orkestrator/protocol/container-recovery";
 import type {
   Project,
   Environment,
@@ -210,6 +211,46 @@ export interface RecreateEnvironmentOptions {
   expectedContainerId: string | null;
   /** Preserve only: proceed when Docker host free space cannot be measured. */
   allowUnknownCapacity?: boolean;
+  /** Discard only: keep the current container and files as a recovery copy. */
+  keepRecoveryCopy?: boolean;
+}
+
+/** Earlier states this environment keeps (rebuild, reset and restore sources). */
+export async function listRecoveryCopies(
+  environmentId: string,
+  options: { measureSize?: boolean } = {},
+): Promise<RecoveryCopyList> {
+  return invoke<RecoveryCopyList>("list_recovery_copies", { environmentId, ...options });
+}
+
+/** Permanently deletes one recovery copy, bound to the reviewed list revision. */
+export async function discardRecoveryCopy(
+  environmentId: string,
+  copyId: string,
+  expectedRevision: number,
+): Promise<
+  | { copyId: string; discarded: boolean; kept: { containerId: string | null; volumes: string[] } }
+  | undefined
+> {
+  return invoke("discard_recovery_copy", { environmentId, copyId, expectedRevision });
+}
+
+/**
+ * Makes a recovery copy current again. The current container and files are
+ * kept as another recovery copy first; the environment then starts on the copy.
+ */
+export async function restoreRecoveryCopy(
+  environmentId: string,
+  copyId: string,
+  expectedContainerId: string | null,
+  expectedRevision: number,
+): Promise<void> {
+  return invoke("restore_recovery_copy", {
+    environmentId,
+    copyId,
+    expectedContainerId,
+    expectedRevision,
+  });
 }
 
 /** The authoritative container lifecycle state, for rehydrating progress. */

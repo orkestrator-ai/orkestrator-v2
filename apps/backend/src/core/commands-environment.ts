@@ -37,7 +37,16 @@ import {
   resolveContainerOwnership,
   runContainerOperation,
 } from "./container-lifecycle-service.js";
-import { replaceRuntimePreservingState } from "./container-replacement.js";
+import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
+import {
+  assertRecoveryCapacity,
+  discardRecoveryCopy,
+  restoreRecoveryCopy,
+  retainedEntriesFor,
+  type DiscardCopyResult,
+  type RecoveryCopyRequest,
+  type RestoreCopyRequest,
+} from "./recovery-copies.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
@@ -1870,9 +1879,14 @@ export async function recreateEnvironmentOnce(
   }
   const containerId = environment.containerId;
   await assertDockerContainerOwned(containerId, context);
+  const keepCopy = request.keepRecoveryCopy === true;
+  const parsedRecord = parseContainerLifecycle(environment.containerLifecycle);
+  if (keepCopy && parsedRecord.supported) assertRecoveryCapacity(parsedRecord.record);
+  const sourceRuntime = currentRuntimeIdentity(environment, context);
   const admission = await beginContainerOperation(context, environment.id, "discard", {
     ...request,
-    source: currentRuntimeIdentity(environment, context),
+    source: sourceRuntime,
+    ...(keepCopy ? { details: { keepRecoveryCopy: true } } : {}),
   });
   if (admission.kind === "replayed") return;
   const { operationId } = admission.operation;
@@ -1891,6 +1905,38 @@ export async function recreateEnvironmentOnce(
       failureCode: operationFailureCode(error),
     }).catch(() => undefined);
     throw error;
+  }
+  if (keepCopy && parsedRecord.supported) {
+    // Reset keeping a copy: the runtime is stopped, not removed, and it and
+    // its storage set become a recovery copy in the same commit that starts
+    // a new workspace generation. Nothing is deleted.
+    try {
+      await quiesceRuntime(environment.id, containerId, sourceRuntime?.imageId, context);
+    } catch (error) {
+      await completeContainerOperation(context, environment.id, operationId, "failed", {
+        failureCode: operationFailureCode(error),
+      }).catch(() => undefined);
+      throw error;
+    }
+    containerGitFetchPolicy.forgetContainer(containerId);
+    await context.storage.clearBackendTerminalSessionIds?.(environment.id);
+    cleanupEnvironmentSetupState(environment.id);
+    const storage = parsedRecord.record.storage;
+    await completeContainerOperation(context, environment.id, operationId, "succeeded", {
+      phase: "retained",
+      runtime: null,
+      storage: { format: "legacy-layer", workspaceGeneration: storage.workspaceGeneration + 1 },
+      ...retainedEntriesFor(sourceRuntime, storage, "workspace-reset", operationId),
+      boot: { phase: "stopped" },
+      environment: {
+        containerId: null,
+        status: "stopped",
+        lifecycleError: null,
+        ...discardedRuntimeSetupUpdates(),
+        ...clearPendingAgentLaunchUpdates(),
+      },
+    });
+    return startEnvironmentOnce(environment.id, context, schedulePendingRename);
   }
   try {
     await removeContainerConfirmingAbsence(containerId);
@@ -1931,6 +1977,50 @@ export async function recreateEnvironmentOnce(
     },
   });
   return startEnvironmentOnce(environment.id, context, schedulePendingRename);
+}
+
+/**
+ * Restores a recovery copy (keeping the current state as another copy) and
+ * starts the environment on it.
+ */
+export function restoreRecoveryCopyTask(
+  request: RestoreCopyRequest,
+  context: CommandContext,
+  schedulePendingRename: (environmentId: string, context: CommandContext) => void,
+  invalidateDiscovery: (environmentId: string) => void,
+): Promise<EnvironmentSetupStartResult | undefined> {
+  return enqueueEnvironmentLifecycleOperation(request.environmentId, context, async () => {
+    const environment = await context.storage.getEnvironment(request.environmentId);
+    if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
+    assertEnvironmentNotDeleting(environment.id);
+    assertEnvironmentDeletionNotRequested(environment, environment.id);
+    invalidateEnvironmentStartDedupe(environment.id);
+    const restored = await restoreRecoveryCopy(request, context);
+    if (!restored) return undefined;
+    invalidateDiscovery(environment.id);
+    if (environment.containerId) {
+      containerGitFetchPolicy.forgetContainer(environment.containerId);
+      cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+    }
+    cleanupEnvironmentSetupState(environment.id);
+    const { createdFromCommit: _kept, ...setupReset } = discardedRuntimeSetupUpdates();
+    await context.storage.updateEnvironment(environment.id, setupReset);
+    return startEnvironmentOnce(environment.id, context, schedulePendingRename);
+  });
+}
+
+/** Deletes one recovery copy under the lifecycle queue. */
+export function discardRecoveryCopyTask(
+  request: RecoveryCopyRequest,
+  context: CommandContext,
+): Promise<DiscardCopyResult | undefined> {
+  return enqueueEnvironmentLifecycleOperation(request.environmentId, context, async () => {
+    const environment = await context.storage.getEnvironment(request.environmentId);
+    if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
+    assertEnvironmentNotDeleting(environment.id);
+    assertEnvironmentDeletionNotRequested(environment, environment.id);
+    return discardRecoveryCopy(request, context);
+  });
 }
 
 export function recreateEnvironmentTask(

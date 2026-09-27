@@ -102,6 +102,12 @@ export interface RecreateEnvironmentRequest extends ContainerMutationIdentity {
    * cannot be measured. A measured shortfall is always refused.
    */
   allowUnknownCapacity?: boolean;
+  /**
+   * Discard only: keep the current runtime (and storage set) stopped as a
+   * recovery copy instead of deleting it. The environment still starts on a
+   * new workspace generation.
+   */
+  keepRecoveryCopy?: boolean;
 }
 
 const MAX_ID_LENGTH = 256;
@@ -150,11 +156,17 @@ export function parseRecreateEnvironmentRequest(
       formatContainerLifecycleError("invalid-request", "allowUnknownCapacity must be a boolean"),
     );
   }
+  if (args.keepRecoveryCopy !== undefined && typeof args.keepRecoveryCopy !== "boolean") {
+    throw new Error(
+      formatContainerLifecycleError("invalid-request", "keepRecoveryCopy must be a boolean"),
+    );
+  }
   return {
     environmentId,
     intent,
     expectedContainerId,
     ...(args.allowUnknownCapacity === true ? { allowUnknownCapacity: true } : {}),
+    ...(args.keepRecoveryCopy === true ? { keepRecoveryCopy: true } : {}),
     ...parseContainerMutationIdentity(args),
   };
 }

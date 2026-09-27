@@ -9,6 +9,7 @@ import {
   removeCleanupCandidates,
   removeUnclaimedContainer,
 } from "./docker-cleanup-inventory.js";
+import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
 import {
   createOperationId,
   emptyContainerLifecycle,
@@ -455,6 +456,25 @@ export function registerDockerCommands(
           },
         ];
       });
+  });
+  register("docker_cleanup_preview", (_args, context) => previewDockerCleanup(context));
+  register("docker_cleanup_execute", async (args, context) => {
+    const strings = (value: unknown, name: string): string[] => {
+      if (value === undefined) return [];
+      if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        throw new Error(`Expected ${name} to be a list of ids`);
+      }
+      if (value.length > 1_000) throw new Error(`Too many ${name}`);
+      return value as string[];
+    };
+    return executeDockerCleanup(
+      {
+        selectionToken: asString(args.selectionToken, "selectionToken"),
+        containerIds: strings(args.containerIds, "containerIds"),
+        volumeNames: strings(args.volumeNames, "volumeNames"),
+      },
+      context,
+    );
   });
   register("cleanup_orphaned_containers", async (_args, context) => {
     // Orphans are containers nothing claims, whatever their state. Assignment,

@@ -734,7 +734,11 @@ export async function reconcileContainerOperation(
     }
   }
 
-  if (operation.kind === "migrate" || operation.kind === "rebuild") {
+  if (
+    operation.kind === "migrate" ||
+    operation.kind === "rebuild" ||
+    operation.kind === "restore"
+  ) {
     // The commit is the write that completes the operation, so an unresolved
     // replacement never committed: the original runtime and storage are still
     // authoritative. Remove the incomplete candidate; the original stays

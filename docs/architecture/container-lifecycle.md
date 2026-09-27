@@ -310,3 +310,44 @@ possible and exactly which paths and provider formats survive.
 `cancel_container_operation` asks an uncommitted replacement to stop at its
 next phase boundary (it does not take the lifecycle queue the rebuild holds);
 the outcome is recorded as `cancelled` and rolled back like a failure.
+
+## Recovery copies
+
+An environment keeps earlier states as recovery copies (`recovery-copies.ts`,
+grouping in `recovery-copy-model.ts`): the runtime a migration or rebuild
+replaced, the storage set a rebuild copied from, the runtime and set a reset or
+restore set aside, and a candidate set that would not remove
+(`failed-candidate`, never restorable). A retained runtime and the set it
+mounts are one copy; a legacy runtime is a copy by itself because its writable
+layer is the data.
+
+| Action | Effect |
+| --- | --- |
+| Reset (discard) with `keepRecoveryCopy` | Runtime stopped, not removed; it and its set become a `workspace-reset` copy; new workspace generation. The settings dialog defaults to this. |
+| `restore_recovery_copy` | Current runtime quiesced and kept as a `restore-source` copy in the same commit; a retained runtime still present is swapped back in, otherwise a new runtime mounts the verified set. Then the normal start path runs. |
+| `discard_recovery_copy` | Removes the copy's container and volumes, label-verified, never forced; whatever does not remove stays referenced for a retry. |
+
+Copies are kept indefinitely — no age-based expiry — and capped at 16 per
+environment. Reaching the cap blocks another rebuild or keep-copy reset; it
+never evicts a copy. Deleting the environment removes its copies: the cleanup
+ledger's container step removes `retainedContainers` and its volume step every
+retained set. Mutations bind to the list's lifecycle revision (and, for a
+restore, the reviewed container), so a stale review conflicts.
+
+## Reviewed cleanup
+
+`docker_cleanup_preview` lists this registry's containers and volumes with a
+classification each (`assigned`, `retained-recovery`, `live-environment-label`,
+`operation-in-flight`, `deletion-pending`, `running`, `identity-uncertain`, or
+`eligible`) and returns a ten-minute selection token bound to exactly the
+eligible set. Another profile's resources are not listed. A volume is eligible
+only when it carries this owner, names an environment that no longer exists,
+and nothing references it — current storage, a recovery copy, an unresolved
+operation's candidate set or a pending deletion.
+
+`docker_cleanup_execute` consumes the token and removes only selected resources
+from that set, re-classifying each at removal time: one that became referenced
+is a `conflict`, one outside the preview is `not-in-preview`, a volume still
+mounted is `skipped` (`in-use`), never forced. Every resource gets its own
+outcome. The older `docker_system_prune` / `cleanup_orphaned_containers`
+commands stay for earlier renderers and remain container-only.

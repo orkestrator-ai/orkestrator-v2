@@ -228,6 +228,9 @@ describe("AlertDialog primitives", () => {
       "apps/web/src/components/settings/McpSettings.tsx",
       "apps/web/src/components/docker/DockerStatsDialog.tsx",
       "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",
+      "apps/web/src/components/environments/EnvironmentRebuildSection.tsx",
+      "apps/web/src/components/environments/EnvironmentRecoveryCopies.tsx",
+      "apps/web/src/components/docker/DockerCleanupReview.tsx",
     ];
     for (const source of sources) {
       const text = readFileSync(path.join(repositoryRoot, source), "utf8");

@@ -1004,6 +1004,12 @@ describe("EnvironmentSettingsDialog", () => {
 
     addHostPort("3001");
     fireEvent.click(screen.getByRole("button", { name: "Reset container…" }));
+    // Keeping a recovery copy is the default; opting out is the destructive path.
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: "Keep the current container and files as a recovery copy.",
+      }),
+    );
     const confirm = (await screen.findByRole("button", {
       name: "Delete files and reset",
     })) as HTMLButtonElement;
@@ -1028,6 +1034,34 @@ describe("EnvironmentSettingsDialog", () => {
     });
   });
 
+  test("a reset keeps a recovery copy by default without the destructive acknowledgement", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => undefined);
+    render(
+      <DockerAvailabilityProvider available={true}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={() => undefined}
+          environment={makeEnvironment({ status: "running", containerId: "container-reviewed" })}
+          onUpdate={() => undefined}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset container…" }));
+    const confirm = (await screen.findByRole("button", {
+      name: "Reset and keep a copy",
+    })) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onRestart).toHaveBeenCalledTimes(1));
+    expect(onRestart).toHaveBeenCalledWith("env-1", {
+      intent: "discard",
+      expectedContainerId: "container-reviewed",
+      keepRecoveryCopy: true,
+    });
+  });
+
   test("reports a container that changed before the reset", async () => {
     mockSection = "ports";
     const onRestart = mock(async () => {
@@ -1048,6 +1082,11 @@ describe("EnvironmentSettingsDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Reset container…" }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: "Keep the current container and files as a recovery copy.",
+      }),
+    );
     fireEvent.click(
       await screen.findByRole("checkbox", {
         name: "I understand this permanently deletes the container's local files.",

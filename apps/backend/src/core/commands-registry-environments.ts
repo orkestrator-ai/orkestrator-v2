@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/container-lifecycle";
 import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
 import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
+import { listRecoveryCopies } from "./recovery-copies.js";
 import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -56,6 +57,8 @@ import {
   admitEnvironmentStartTask,
   stopEnvironmentTask,
   recreateEnvironmentTask,
+  restoreRecoveryCopyTask,
+  discardRecoveryCopyTask,
   runEnvironmentSetupNow,
   deleteEnvironmentTask,
   scheduleMergeCleanupRecovery,
@@ -471,6 +474,50 @@ export function registerEnvironmentCommands(
   register("get_rebuild_preview", async (args, context) => {
     assertOnlyKeys(args, ["environmentId"], "arguments");
     return rebuildPreview(asString(args.environmentId, "environmentId"), context);
+  });
+  register("list_recovery_copies", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "measureSize"], "arguments");
+    return listRecoveryCopies(asString(args.environmentId, "environmentId"), context, {
+      measureSize: args.measureSize === true,
+    });
+  });
+  register("discard_recovery_copy", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "copyId", "expectedRevision", "operationId"],
+      "arguments",
+    );
+    return discardRecoveryCopyTask(
+      {
+        environmentId: asString(args.environmentId, "environmentId"),
+        copyId: asString(args.copyId, "copyId"),
+        ...parseContainerMutationIdentity(args),
+      },
+      context,
+    );
+  });
+  register("restore_recovery_copy", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "copyId", "expectedContainerId", "expectedRevision", "operationId"],
+      "arguments",
+    );
+    const expected = args.expectedContainerId;
+    if (expected !== null && typeof expected !== "string") {
+      throw new Error("Expected expectedContainerId to be the reviewed container id or null");
+    }
+    const result = await restoreRecoveryCopyTask(
+      {
+        environmentId: asString(args.environmentId, "environmentId"),
+        copyId: asString(args.copyId, "copyId"),
+        expectedContainerId: expected,
+        ...parseContainerMutationIdentity(args),
+      },
+      context,
+      schedulePendingEnvironmentRename,
+      (id) => extensionDiscoveryCache.invalidate(id),
+    );
+    return result ? toClientEnvironmentSetupStartResult(result) : undefined;
   });
   register("cancel_container_operation", async (args, { storage }) => {
     assertOnlyKeys(args, ["environmentId", "operationId"], "arguments");

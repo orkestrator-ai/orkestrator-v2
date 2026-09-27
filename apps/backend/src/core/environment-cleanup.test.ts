@@ -92,6 +92,7 @@ function entry(overrides: Partial<EnvironmentCleanupEntry>): EnvironmentCleanupE
     createdFromCommit: null,
     baseBranches: [],
     containerId: null,
+    retainedContainers: [],
     volumes: [],
     stateDirectories: [],
     pending: [],

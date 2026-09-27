@@ -2,6 +2,10 @@ import { invoke } from "@/lib/native/backend";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
 import type {
+  CleanupExecuteResult,
+  CleanupPreview,
+} from "@orkestrator/protocol/container-recovery";
+import type {
   Environment,
   EnvironmentStatus,
   DomainTestResult,
@@ -551,4 +555,21 @@ export async function getDockerImageStatus(): Promise<ImageStatus> {
 /** Effective Docker daemon topology (endpoint kind, rootless, versions). */
 export async function getDockerTopology(refresh = false): Promise<DockerTopology> {
   return invoke<DockerTopology>("get_docker_topology", { refresh });
+}
+
+/**
+ * Reviewed cleanup: lists this installation's containers and volumes with why
+ * each is kept, and binds the removable ones to a short-lived token.
+ */
+export async function previewDockerCleanup(): Promise<CleanupPreview> {
+  return invoke<CleanupPreview>("docker_cleanup_preview");
+}
+
+/** Removes only the selected resources of one preview; the token is consumed. */
+export async function executeDockerCleanup(selection: {
+  selectionToken: string;
+  containerIds: string[];
+  volumeNames: string[];
+}): Promise<CleanupExecuteResult> {
+  return invoke<CleanupExecuteResult>("docker_cleanup_execute", selection);
 }

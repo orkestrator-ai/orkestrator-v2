@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { useEffect } from "react";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
@@ -13,7 +14,7 @@ import {
   wrapSystemInstructions,
   type UserPromptPresentationKind,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { TerminalProvider } from "@/contexts";
+import { TerminalProvider, useTerminalContext } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { ERROR_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
@@ -193,13 +194,56 @@ describe("NativeMessage peer mail", () => {
       />,
     );
 
-    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelectorAll("img")).toHaveLength(0);
     expect(
       Array.from(
         container.querySelectorAll("[data-peer-mail-image]"),
         (image) => image.textContent,
       ),
     ).toEqual(["status pixel", "https://example.com/q.png"]);
+  });
+
+  test("keeps sender file paths non-interactive in the recipient environment", () => {
+    const openFile = mock((_path: string) => undefined);
+    function RegisterFileTab() {
+      const { setCreateFileTab } = useTerminalContext();
+      useEffect(() => {
+        setCreateFileTab(openFile);
+        return () => setCreateFileTab(null);
+      }, [setCreateFileTab]);
+      return null;
+    }
+
+    render(
+      <TerminalProvider>
+        <RegisterFileTab />
+        <NativeMessage message={peerMail("[Open source](src/peer.ts:12)")} />
+      </TerminalProvider>,
+    );
+
+    const label = screen.getByText("Open source");
+    const path = screen.getByText("src/peer.ts:12");
+    expect(path.tagName).toBe("CODE");
+    expect(path.parentElement?.getAttribute("title")).toContain("sender's workspace");
+    expect(screen.queryByRole("link", { name: "Open source" }) === null).toBe(true);
+    fireEvent.click(label);
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  test("only exposes safe web links from sender Markdown", () => {
+    render(
+      <NativeMessage
+        message={peerMail(
+          "[Docs](https://example.com/docs) [Unsafe](javascript:alert(1)) [Mail](mailto:someone@example.com)",
+        )}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Docs" }).getAttribute("href")).toBe(
+      "https://example.com/docs",
+    );
+    expect(screen.queryByRole("link", { name: "Unsafe" }) === null).toBe(true);
+    expect(screen.queryByRole("link", { name: "Mail" }) === null).toBe(true);
   });
 });
 

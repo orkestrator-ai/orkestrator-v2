@@ -29,9 +29,9 @@ import {
   NativeMessagePartRendererContext,
   ToolDetailLoaderContext,
   UserPromptEvidenceContext,
-  markdownComponents,
   type NativeMessageProps,
 } from "./NativeMessage.shared";
+import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
 import { MessagePart } from "./NativeMessage.renderer";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
@@ -307,13 +307,11 @@ export const NativeMessage = memo(function NativeMessage({
 });
 
 /**
- * Peer mail is untrusted input. It renders as Markdown like any other
- * transcript prose, but an image would make the renderer fetch a URL the
- * sender chose — a read receipt, or an exfiltration channel for whatever the
- * sender can get into the query string. Show the image's text instead.
+ * Use the inbox's link policy for untrusted peer mail: sender paths remain
+ * copyable text. Keep the inline card's image text aligned with search.
  */
 const peerMailMarkdownComponents: Components = {
-  ...markdownComponents,
+  ...mailMarkdownComponents,
   img: ({ alt, src }) => (
     <span data-peer-mail-image="true">{alt || (typeof src === "string" ? src : "")}</span>
   ),

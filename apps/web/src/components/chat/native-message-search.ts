@@ -1,4 +1,5 @@
 import { marked, Renderer, type Tokens } from "marked";
+import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -113,6 +114,11 @@ class SearchTextRenderer extends Renderer {
 
 /** Peer mail renders each image as its alt text (or URL) rather than loading it. */
 class PeerMailSearchTextRenderer extends SearchTextRenderer {
+  override link({ tokens, href }: Tokens.Link): string {
+    const label = this.parser.parseInline(tokens);
+    return parseLocalFileLinkTarget(href) ? `${label} ${href}` : label;
+  }
+
   override image({ text, href }: Tokens.Image): string {
     return text || href;
   }

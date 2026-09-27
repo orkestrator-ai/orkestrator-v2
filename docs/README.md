@@ -63,6 +63,13 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | [2026-09-22-platform-version-audit.md](reviews/2026-09-22-platform-version-audit.md) | Historical | Compatibility and feature audit for the 2026-09-22 platform version refresh. |
 | [2026-09-17-platform-version-audit.md](reviews/2026-09-17-platform-version-audit.md) | Historical | Compatibility and feature audit for the 2026-09-17 platform version refresh. |
 
+## Improvements
+
+| Document | Status | Notes |
+| --- | --- | --- |
+| [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. Includes synthetic probes; implementation not started. |
+| [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | Detailed 19-step implementation plan with dependencies, compatibility, migrations, tests, and rollout gates. All implementation steps not started. |
+
 ## Plans
 
 | Document | Status | Notes |

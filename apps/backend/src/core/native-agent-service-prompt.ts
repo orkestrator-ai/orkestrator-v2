@@ -830,7 +830,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     try {
       const environment = await this.storage.getEnvironment(input.environmentId);
       if (!environment || !isGeneratedEnvironmentName(environment.name)) return;
-      const messages = await provider.messages(session.providerSessionId);
+      // Emptiness is all this needs; one message answers it on any transport
+      // that can bound the read.
+      const messages = await provider.messages(session.providerSessionId, { limit: 1 });
       if (messages.length > 0) return;
       await this.invoke("prepare_environment_first_prompt", {
         environmentId: input.environmentId,

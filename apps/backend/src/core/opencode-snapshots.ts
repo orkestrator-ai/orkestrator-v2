@@ -1,4 +1,5 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 import {
   asRecord,
   MAX_TRACKED_INTERACTION_SESSIONS,
@@ -44,7 +45,12 @@ export async function openCodeTranscriptSnapshot(input: {
       return { unchanged: true, sourceToken };
     }
     const rawMessages = current ?? (await input.readMessages(input.options.limit));
-    if (!current) input.replaceMessages(rawMessages);
+    // Only a read covering the provider's whole retained history may seed the
+    // stream cache. A short tail (a one-message progress probe) would
+    // otherwise become the "current" transcript every display read serves.
+    if (!current && input.options.limit >= OPEN_CODE_MESSAGE_HISTORY_LIMIT) {
+      input.replaceMessages(rawMessages);
+    }
     const messages = normalizeOpenCodeTranscriptMessages(
       rawMessages.slice(-input.options.limit),
       input.recordUnknown,

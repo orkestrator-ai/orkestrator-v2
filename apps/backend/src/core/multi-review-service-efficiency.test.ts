@@ -36,7 +36,12 @@ class Provider {
   readonly sends: string[] = [];
   readonly prompts = new Map<string, string>();
   transcriptRevision = 1;
-  readonly snapshotCalls: Array<{ knownSourceToken?: string }> = [];
+  readonly snapshotCalls: Array<{
+    knownSourceToken?: string;
+    limit: number;
+    representation?: "summary";
+  }> = [];
+  messageCalls = 0;
 
   async createSession() {
     this.sessions += 1;
@@ -57,13 +62,23 @@ class Provider {
     return { status: await this.status(), contextUsage: { usedTokens: 1, sessionTokens: 1 } };
   }
   async messages() {
+    this.messageCalls += 1;
     return [{ role: "assistant", content: SECRET }];
   }
   async transcriptSnapshot(
     _sessionId: string,
-    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+    options: {
+      limit: number;
+      targetBytes: number;
+      knownSourceToken?: string;
+      representation?: "summary";
+    },
   ) {
-    this.snapshotCalls.push({ knownSourceToken: options.knownSourceToken });
+    this.snapshotCalls.push({
+      knownSourceToken: options.knownSourceToken,
+      limit: options.limit,
+      ...(options.representation ? { representation: options.representation } : {}),
+    });
     const token = `rev-${this.transcriptRevision}`;
     if (options.knownSourceToken === token) return { unchanged: true as const, sourceToken: token };
     return {
@@ -289,6 +304,40 @@ test("reviewer transcripts are conditional and scoped to the reviewer's session"
     expect(moved.transcript).toBe("snapshot");
     expect(moved.messages).toEqual([{ role: "assistant", content: "progress 2" }]);
     expect(env.efficiency.count("transcript.ui_unchanged")).toBe(1);
+    await service.shutdown();
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("reviewer progress probes are conditional and never read the legacy transcript", async () => {
+  const env = await setup(2);
+  try {
+    // Every pass is a due probe, so the conditional path is exercised each time.
+    const service = env.createService({ progressProbeIntervalMs: 0 });
+    for (let pass = 0; pass < 4; pass++) await service.advanceNow(env.workflowId);
+
+    const probes = env.provider.snapshotCalls.filter((call) => call.limit === 1);
+    expect(probes.length).toBeGreaterThanOrEqual(4);
+    expect(probes.every((call) => call.representation === "summary")).toBe(true);
+    expect(probes.some((call) => call.knownSourceToken !== undefined)).toBe(true);
+    expect(env.efficiency.count("transcript.progress_unchanged")).toBeGreaterThanOrEqual(2);
+    expect(env.efficiency.count("transcript.progress_fallback")).toBe(0);
+    // No legacy whole-history read backs any of it.
+    expect(env.provider.messageCalls).toBe(0);
+    const snapshot = await env.snapshot();
+    expect(snapshot.reviewers.every((reviewer) => reviewer.status === "running")).toBe(true);
+    expect(
+      snapshot.reviewers.every((reviewer) => /^[0-9a-f]{64}$/.test(reviewer.progressDigest ?? "")),
+    ).toBe(true);
+
+    // Movement is progress: the stall clock resets for the moved reviewers.
+    const before = snapshot.reviewers.map((reviewer) => reviewer.progressAt);
+    await Bun.sleep(5);
+    env.provider.transcriptRevision += 1;
+    await service.advanceNow(env.workflowId);
+    const moved = (await env.snapshot()).reviewers.map((reviewer) => reviewer.progressAt);
+    expect(moved.some((progressAt, index) => progressAt !== before[index])).toBe(true);
     await service.shutdown();
   } finally {
     await env.cleanup();

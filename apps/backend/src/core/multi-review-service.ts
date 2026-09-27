@@ -92,10 +92,10 @@ import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
   MultiReviewProgressTracker,
-  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
+import { readTranscriptProgressSample } from "./transcript-progress.js";
 
 import {
   recordEfficiency,
@@ -2364,6 +2364,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         provider: session.agent,
         fence: session.sessionKey,
       });
+      // One session per workflow, read under this workflow's fence, so there
+      // is nothing to batch here: `observeActivityBatch` would need a
+      // cross-workflow coalescer. The tab's own background sweep already
+      // batches this session with every other native-agent read.
       const activity = provider.observeActivity
         ? (await provider.observeActivity(session.providerSessionId)).state
         : provider.activity
@@ -2934,13 +2938,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     let messages: Promise<unknown[]> | undefined;
     const observation = await this.progress.observe(
       session.providerSessionId,
-      async () => {
-        messages = needsTranscriptUsage
-          ? this.readFixSessionMessages(provider, session)
-          : provider.messages(session.providerSessionId, {
-              limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
-            });
-        return (await messages).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES);
+      (known) => {
+        // Usage metering reads its bounded (`usageMessageLimit`) tail only when
+        // a probe is due. The progress sample prefers the provider's bounded
+        // conditional snapshot and shares the usage read only as a fallback.
+        if (needsTranscriptUsage) {
+          const usageRead = this.readFixSessionMessages(provider, session);
+          // Awaited (and its failure logged) by the usage refresh below; this
+          // keeps the rejection observed while the progress sample runs.
+          usageRead.catch(() => undefined);
+          messages = usageRead;
+        }
+        return readTranscriptProgressSample({
+          provider,
+          sessionId: session.providerSessionId,
+          known,
+          ...(messages ? { fallbackRead: () => messages! } : {}),
+        });
       },
       session.progressDigest,
     );
@@ -2984,6 +2998,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /**
    * Reads the transcript tail once for the providers that meter usage from it.
+   * Bounded by the provider's `usageMessageLimit` (OpenCode: its retained
+   * history window); a provider without one would need every message.
    *
    * The promise deliberately remains rejectable. The progress tracker treats a
    * failed read as "nothing learned", while usage metering catches and logs the

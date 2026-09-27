@@ -115,9 +115,11 @@ describe("conditional reviewer transcript reads", () => {
   });
 
   test("providers without a snapshot surface use the bounded compatibility path", async () => {
+    const calls: Array<{ limit?: number } | undefined> = [];
     const provider = {
       agent: "claude",
-      async messages() {
+      async messages(_sessionId: string, options?: { limit?: number }) {
+        calls.push(options);
         return Array.from({ length: 700 }, (_, index) => ({ index }));
       },
     } as unknown as BuildPipelineProvider;
@@ -125,5 +127,19 @@ describe("conditional reviewer transcript reads", () => {
     expect(read).toMatchObject({ kind: "snapshot", fallback: true, truncated: true });
     expect(read.kind === "snapshot" ? read.messages : []).toHaveLength(500);
     expect(read.kind === "snapshot" ? read.sourceToken : "token").toBeUndefined();
+    // The provider itself is asked for no more than the tab can show.
+    expect(calls).toEqual([{ limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES }]);
+  });
+
+  test("a compatibility read that honours the limit still reports possible older history", async () => {
+    const provider = {
+      agent: "claude",
+      async messages(_sessionId: string, options?: { limit?: number }) {
+        return Array.from({ length: options?.limit ?? 700 }, (_, index) => ({ index }));
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(provider, "session", undefined);
+    expect(read).toMatchObject({ kind: "snapshot", fallback: true, truncated: true });
+    expect(read.kind === "snapshot" ? read.messages : []).toHaveLength(500);
   });
 });

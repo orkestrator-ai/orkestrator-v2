@@ -10,9 +10,13 @@
  * Now the read goes to the provider's progressive snapshot surface with an
  * explicit message count and byte target, carrying the source token from the
  * previous response. When the provider says nothing changed, the response
- * carries no messages at all. Providers without that surface fall back to the
- * legacy read with a hard byte guard; the fallback is measured so it can be
- * retired, not mistaken for efficient.
+ * carries no messages at all. Providers without that surface fall back to a
+ * count-bounded legacy read with a hard byte guard; the fallback is measured so
+ * it can be retired, not mistaken for efficient.
+ *
+ * The display deliberately stays on the raw representation: the reviewer tab
+ * renders tool bodies inline and has no detail-resolution path, so it must not
+ * ask for bridge summaries.
  *
  * Source tokens are opaque to the renderer and scoped to the reviewer's
  * provider session: a replaced session never matches an old token, so the
@@ -149,12 +153,18 @@ export async function readReviewerTranscript(
     };
   }
   // Compatibility path for providers without a bounded snapshot surface. The
-  // read itself is unbounded at the provider; only the response is bounded.
-  const bounded = boundReviewerTranscript(await provider.messages(providerSessionId));
+  // provider is asked for no more messages than the tab can show, and the
+  // response is byte-bounded here; a transport that can only fetch the whole
+  // history still slices it before it reaches this module.
+  const messages = await provider.messages(providerSessionId, {
+    limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
+  });
+  const bounded = boundReviewerTranscript(messages);
   return {
     kind: "snapshot",
     messages: bounded.messages,
-    truncated: bounded.truncated,
+    // A full window may have had older history the limited read left behind.
+    truncated: bounded.truncated || messages.length >= MAX_REVIEWER_TRANSCRIPT_MESSAGES,
     fallback: true,
     bytes: bounded.bytes,
   };

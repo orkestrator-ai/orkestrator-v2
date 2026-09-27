@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
-  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
-  progressFingerprint,
 } from "./multi-review-progress.js";
+import {
+  applyProgressSample,
+  readTranscriptProgressSample,
+  type KnownProgressSource,
+  type ProgressSample,
+} from "./transcript-progress.js";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_JOURNAL_VERSION,
@@ -119,6 +123,8 @@ const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_MISSING_RESULT_POLLS = 5;
+/** Structured-wait progress sources retained at most (one per awaited dispatch). */
+const MAX_WAIT_PROGRESS_SOURCES = 256;
 const INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
 /** Hard bound on how long a stuck provider abort is retried before force-cancelling. */
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
@@ -404,6 +410,12 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
   /** How each running pass was triggered, for the missing-result grace. */
   private readonly passTriggers = new Map<string, PollTrigger>();
   private readonly missingResultGate: ElapsedPollGate;
+  /**
+   * Workflow + dispatch → provider source of the last structured-wait progress
+   * sample, so the next minute's probe can be answered `unchanged`. Bounded;
+   * losing an entry only costs one full bounded sample.
+   */
+  private readonly waitProgressSources = new Map<string, KnownProgressSource>();
 
   constructor(
     private readonly storage: StorageService,
@@ -1078,15 +1090,24 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
           Date.now() - lastProbe >= DEFAULT_PROGRESS_PROBE_INTERVAL_MS
         ) {
           wait.lastProbeAt = nowIso();
+          const sourceKey = `${workflow.id}\0${dispatch.id}`;
           try {
-            const messages = await provider.messages(session.providerSessionId, {
-              limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+            // A bounded, conditional tail sample: an unchanged session answers
+            // without any transcript body. The remembered source is only ever
+            // offered for the digest it produced.
+            const remembered = this.waitProgressSources.get(sourceKey);
+            const sample = await readTranscriptProgressSample({
+              provider,
+              sessionId: session.providerSessionId,
+              ...(remembered && remembered.digest === wait.progressDigest
+                ? { known: remembered }
+                : {}),
             });
-            const digest = progressFingerprint(messages.slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES));
-            if (wait.progressDigest !== digest) {
-              wait.progressDigest = digest;
-              wait.progressAt = nowIso();
-            }
+            this.rememberWaitProgressSource(sourceKey, sample);
+            // A new comparison base — a digest persisted in the older format,
+            // or another history epoch or bridge generation — is not evidence
+            // of progress; the durable clock keeps running.
+            applyProgressSample(wait, sample.digest, nowIso());
           } catch {
             // A failed transcript read does not pause the durable stall clock.
           }
@@ -1703,6 +1724,9 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
   private async releaseWorkflowResources(workflow: LoopedReviewWorkflow): Promise<void> {
     this.stopInteractionWatches(workflow);
     this.missingResultGate.clearPrefix(`${workflow.id}\0`);
+    for (const key of this.waitProgressSources.keys()) {
+      if (key.startsWith(`${workflow.id}\0`)) this.waitProgressSources.delete(key);
+    }
     const lease = this.leases.get(workflow.id);
     if (lease) {
       this.leases.delete(workflow.id);
@@ -1719,6 +1743,16 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
     const provider = this.providers.get(key);
     this.providers.delete(key);
     await Promise.resolve(provider?.dispose?.()).catch(() => undefined);
+  }
+
+  private rememberWaitProgressSource(key: string, sample: ProgressSample): void {
+    this.waitProgressSources.delete(key);
+    if (sample.sourceToken === undefined) return;
+    if (this.waitProgressSources.size >= MAX_WAIT_PROGRESS_SOURCES) {
+      const oldest = this.waitProgressSources.keys().next();
+      if (!oldest.done) this.waitProgressSources.delete(oldest.value);
+    }
+    this.waitProgressSources.set(key, { sourceToken: sample.sourceToken, digest: sample.digest });
   }
 
   private async bridgeConnection(

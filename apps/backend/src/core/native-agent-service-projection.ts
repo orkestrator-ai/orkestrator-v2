@@ -80,8 +80,8 @@ import {
 import {
   createNativeAgentDisplayTail,
   displayTailRecoveryWindow,
-  NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS,
 } from "./native-agent-display-tails.js";
+import { NativeAgentDisplayTailScheduler } from "./native-agent-display-tail-scheduler.js";
 import {
   ProgressiveReadMetrics,
   type ProgressiveCacheTier,
@@ -639,11 +639,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       degraded: true;
     }
   >();
-  private readonly displayTailWriteTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pendingDisplayTails = new Map<
-    string,
-    { input: NativeAgentProgressiveInput; value: NativeAgentTranscriptView }
-  >();
+  /** Bounded restart-preview checkpoints; see native-agent-display-tail-scheduler.ts. */
+  private readonly displayTailScheduler = new NativeAgentDisplayTailScheduler({
+    write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
+    // Optional because narrow test doubles of the storage omit them.
+    captureFence: () =>
+      typeof this.storage.captureNativeAgentDisplayTailFence === "function"
+        ? this.storage.captureNativeAgentDisplayTailFence()
+        : 0,
+    subscribeDeletions: (listener) =>
+      typeof this.storage.onNativeAgentDisplayTailDeleted === "function"
+        ? this.storage.onNativeAgentDisplayTailDeleted(listener)
+        : () => undefined,
+  });
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
@@ -679,9 +687,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   }
 
   protected async settleAndClearProgressiveReads(): Promise<void> {
-    for (const timer of this.displayTailWriteTimers.values()) clearTimeout(timer);
-    this.displayTailWriteTimers.clear();
-    this.pendingDisplayTails.clear();
+    // Stop accepting checkpoints and drain the newest pending previews within
+    // a bounded deadline, concurrently with settling the reads below. A
+    // skipped preview only costs restart latency; the provider stays
+    // authoritative, so shutdown never waits on it indefinitely.
+    const displayTailDrain = this.displayTailScheduler
+      .shutdown()
+      .catch(() => ({ attempted: 0, written: 0, skipped: 0 }));
     for (const timer of this.progressiveHydrationTimers.values()) clearTimeout(timer);
     this.progressiveHydrationTimers.clear();
     await Promise.allSettled(this.progressiveReads.values());
@@ -707,6 +719,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     this.progressiveTrailing.clear();
     this.interactiveSnapshotShares.clear();
     this.progressiveMetrics.clear();
+    const drained = await displayTailDrain;
+    if (drained.skipped > 0) {
+      // Aggregate count only: previews carry transcript content.
+      console.warn(
+        `[NativeAgentService] Shutdown skipped ${drained.skipped} pending display-tail checkpoint(s); provider history remains authoritative`,
+      );
+    }
   }
   protected async recordAsyncQuestionAttention(
     environmentId: string,
@@ -1567,37 +1586,31 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.agent,
       input.logicalSessionKey,
     );
-    const previous = this.displayTailWriteTimers.get(sessionKey);
-    if (previous) clearTimeout(previous);
-    this.pendingDisplayTails.set(sessionKey, { input, value });
-    const timer = setTimeout(() => {
-      void this.flushDisplayTailPersist(sessionKey);
-    }, NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS);
-    this.displayTailWriteTimers.set(sessionKey, timer);
+    // One pending latest value per key; stripping and serialization happen
+    // once, when the checkpoint is actually written.
+    this.displayTailScheduler.update(sessionKey, {
+      environmentId: input.environmentId,
+      build: () => {
+        const messageWindow = displayTailRecoveryWindow(value.messageWindow);
+        return createNativeAgentDisplayTail({
+          environmentId: input.environmentId,
+          agent: input.agent,
+          logicalSessionKey: input.logicalSessionKey,
+          providerSessionId: value.identity.providerSessionId,
+          historyEpoch: value.historyEpoch,
+          ...(value.title ? { title: value.title } : {}),
+          messages: value.messages,
+          historyComplete: value.historyComplete,
+          ...(messageWindow ? { messageWindow } : {}),
+          updatedAt: new Date(this.now()).toISOString(),
+        });
+      },
+    });
   }
 
-  private async flushDisplayTailPersist(sessionKey: string): Promise<void> {
-    const timer = this.displayTailWriteTimers.get(sessionKey);
-    if (timer) clearTimeout(timer);
-    this.displayTailWriteTimers.delete(sessionKey);
-    const pending = this.pendingDisplayTails.get(sessionKey);
-    this.pendingDisplayTails.delete(sessionKey);
-    if (!pending) return;
-    const messageWindow = displayTailRecoveryWindow(pending.value.messageWindow);
-    const tail = createNativeAgentDisplayTail({
-      environmentId: pending.input.environmentId,
-      agent: pending.input.agent,
-      logicalSessionKey: pending.input.logicalSessionKey,
-      providerSessionId: pending.value.identity.providerSessionId,
-      historyEpoch: pending.value.historyEpoch,
-      ...(pending.value.title ? { title: pending.value.title } : {}),
-      messages: pending.value.messages,
-      historyComplete: pending.value.historyComplete,
-      ...(messageWindow ? { messageWindow } : {}),
-      updatedAt: new Date(this.now()).toISOString(),
-    });
-    if (!tail) return;
-    await this.storage.putNativeAgentDisplayTail(sessionKey, tail).catch(() => undefined);
+  /** Immediate checkpoint of a pending tail (tests and explicit flushes). */
+  protected async flushDisplayTailPersist(sessionKey: string): Promise<void> {
+    await this.displayTailScheduler.flush(sessionKey);
   }
 
   private trimProgressiveTranscriptCache(): void {

@@ -345,8 +345,14 @@ export abstract class StorageBase {
     return this.file("native-agent-sessions.json");
   }
 
+  /** Legacy shared display-tail store; read only by the one-time import. */
   protected nativeAgentDisplayTailsFile(): string {
     return this.file("native-agent-display-tails.json");
+  }
+
+  /** Keyed display-tail records (one private file per session). */
+  protected nativeAgentDisplayTailRecordsDir(): string {
+    return this.file("native-agent-display-tail-records");
   }
 
   protected agentInteractionJournalFile(): string {

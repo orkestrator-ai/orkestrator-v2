@@ -561,6 +561,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       ),
       skillInput,
     );
+    // The baseline its shell commands are measured from, taken before the turn
+    // can run one.
+    this.primeCommandChanges(context);
     try {
       // 5. Journal *before* the write: everything from here to `markAccepted` is
       //    the ambiguous window.

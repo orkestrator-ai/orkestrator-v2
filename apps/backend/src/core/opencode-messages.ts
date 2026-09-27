@@ -3,7 +3,10 @@ import {
   tryParseStructuredOutputText,
   type JsonSchema,
 } from "@orkestrator/protocol/structured-output";
-import { toolDiffFromOpenCodeToolState } from "@orkestrator/protocol/tool-diff";
+import {
+  toolDiffFromOpenCodeToolState,
+  type MeasuredWorkspaceChange,
+} from "@orkestrator/protocol/tool-diff";
 import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
 
 /**
@@ -213,6 +216,12 @@ export function normalizeOpenCodeInteractiveMessage(
    * tests and from the renderer's copy without threading a recorder through.
    */
   onUnknownPart?: (type: string) => void,
+  /**
+   * Measured worktree changes of shell calls by `callID` (see
+   * `opencode-command-changes.ts`). OpenCode's own part carries none, so the
+   * backend overlays what it measured here, on every read.
+   */
+  commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
 ): Record<string, unknown> | null {
   const envelope = asRecord(value);
   const info = asRecord(envelope?.info);
@@ -385,6 +394,8 @@ export function normalizeOpenCodeInteractiveMessage(
           title: typeof state?.title === "string" ? state.title : undefined,
           output: toolOutput,
         });
+    const callId = nonEmptyString(part.callID);
+    const commandChange = !isSubagent && callId ? commandChanges?.get(callId) : undefined;
     parts.push({
       type: isSubagent ? "subagent" : "tool-invocation",
       content: typeof state?.title === "string" ? state.title : toolName,
@@ -395,6 +406,7 @@ export function normalizeOpenCodeInteractiveMessage(
       ...(toolOutput === undefined ? {} : { toolOutput }),
       ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
       ...(toolDiff ? { toolDiff } : {}),
+      ...(commandChange ? { commandChanges: commandChange } : {}),
       ...(isSubagent
         ? {
             // The fallback path: recognised from the tool call's shape rather
@@ -496,9 +508,15 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
 export function normalizeOpenCodeTranscriptMessages(
   messages: readonly unknown[],
   recordUnknown: (type: string) => void,
+  commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
 ): Record<string, unknown>[] {
   return messages.flatMap((message, index) => {
-    const normalized = normalizeOpenCodeInteractiveMessage(message, index, recordUnknown);
+    const normalized = normalizeOpenCodeInteractiveMessage(
+      message,
+      index,
+      recordUnknown,
+      commandChanges,
+    );
     if (!normalized) return [];
     const inlineError = normalizeOpenCodeInlineError(message);
     return inlineError ? [normalized, inlineError] : [normalized];

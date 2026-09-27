@@ -32,6 +32,8 @@ import { isWithheldMachineOutput } from "@orkestrator/protocol/structured-output
 import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
 import { agentMessageDisplayText, isAuthoritativeAgentMessage } from "./agent-message.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
+import { withCommandChanges } from "../sessions/command-changes.js";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
 import type { EngineItem } from "../engine/types.js";
 import type {
@@ -50,8 +52,18 @@ export interface TurnRenderState {
    * Completed items are immutable by the app-server contract. Retain their
    * normalized parts so a streaming update to the newest item does not rebuild
    * every older text/tool/diff object in the turn.
+   *
+   * `commandChanges` is part of the key: a command's measurement lands after
+   * the item completed, and must still reach its row.
    */
-  completedItemParts: Map<string, { source: EngineItem | null; parts: NormalizedPart[] }>;
+  completedItemParts: Map<
+    string,
+    {
+      source: EngineItem | null;
+      commandChanges?: MeasuredWorkspaceChange;
+      parts: NormalizedPart[];
+    }
+  >;
   /** Machine-output classification cached by the accumulator mutation version. */
   machineOutputByItem: Map<
     string,
@@ -576,7 +588,11 @@ export async function renderTurn(
           item,
           structuredOutputItemId,
         );
-        if (accumulator?.completed && cached?.source === accumulator.item) {
+        if (
+          accumulator?.completed &&
+          cached?.source === accumulator.item &&
+          cached.commandChanges === accumulator.commandChanges
+        ) {
           // `itemToParts` touches a file's baseline while rendering its diff.
           // A completed-item cache hit skips that function, so without the
           // equivalent touch here an actively re-rendered file looks cold to
@@ -584,7 +600,11 @@ export async function renderTurn(
           touchCachedPartBaselines(cached.parts, options.cwd, options.state.fileChange.baselines);
           if (!suppressDraft) parts.push(...cached.parts);
         } else {
-          const itemParts = await itemToParts(item, options.cwd, options.state.fileChange);
+          const itemParts = withCommandChanges(
+            await itemToParts(item, options.cwd, options.state.fileChange),
+            itemId,
+            accumulator?.commandChanges,
+          );
           const createdAt =
             typeof accumulator?.startedAt === "number" && Number.isFinite(accumulator.startedAt)
               ? new Date(accumulator.startedAt).toISOString()
@@ -595,6 +615,7 @@ export async function renderTurn(
           if (accumulator?.completed) {
             options.state.completedItemParts.set(itemId, {
               source: accumulator.item,
+              ...(accumulator.commandChanges ? { commandChanges: accumulator.commandChanges } : {}),
               parts: stampedParts,
             });
           } else {

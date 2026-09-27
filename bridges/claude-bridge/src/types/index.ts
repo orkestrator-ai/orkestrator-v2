@@ -3,6 +3,7 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 
 export type {
   JsonSchema,
@@ -269,6 +270,11 @@ export interface NormalizedPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /**
+   * What a Bash call changed in the worktree, measured around the command
+   * because its input cannot say (see `command-changes.ts`).
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /**
    * The permission layer refused this call (a deny rule, auto mode's
    * classifier, `dontAsk`), as opposed to the tool running and failing.

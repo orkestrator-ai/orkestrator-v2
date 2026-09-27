@@ -316,6 +316,7 @@ export function MessagePart({
           backgroundTask={part.backgroundTask}
           progress={part.progress}
           denied={part.toolDenied}
+          commandChanges={part.commandChanges}
           deferredDetails={deferredDetails}
         />
       );

@@ -29,6 +29,7 @@ import {
   type ToolState,
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
+import { overlayCommandChanges, readCommandChanges } from "../sessions/command-changes.js";
 import {
   isAuthoritativeAgentMessagePhase,
   visibleCommentaryText,
@@ -934,7 +935,16 @@ function persistedToolState(value: unknown): ToolState {
   return value === "failed" ? "failure" : value === "completed" ? "success" : "pending";
 }
 
-function createPersistedToolParts(payload: Record<string, unknown>, cwd: string): NormalizedPart[] {
+/**
+ * `callId` becomes the rows' `toolUseId`, as it is on a live row: app-server's
+ * item id *is* the rollout's `call_id`, and that shared key is what lets a
+ * reload find the measured line changes journalled against the live row.
+ */
+function createPersistedToolParts(
+  payload: Record<string, unknown>,
+  cwd: string,
+  callId: string | undefined,
+): NormalizedPart[] {
   const toolName = asNonEmptyString(payload.name) ?? "tool";
   const rawArgs = payload.type === "custom_tool_call" ? payload.input : payload.arguments;
   const toolState = persistedToolState(payload.status);
@@ -942,7 +952,7 @@ function createPersistedToolParts(payload: Record<string, unknown>, cwd: string)
     toolName.trim().toLowerCase() === "apply_patch"
       ? rawApplyPatchParts(rawArgs, cwd, toolState)
       : [];
-  const parts: NormalizedPart[] =
+  const builtParts: NormalizedPart[] =
     parsedPatchParts.length > 0
       ? parsedPatchParts
       : [
@@ -955,6 +965,7 @@ function createPersistedToolParts(payload: Record<string, unknown>, cwd: string)
             toolTitle: toolName,
           },
         ];
+  const parts = callId ? builtParts.map((part) => ({ ...part, toolUseId: callId })) : builtParts;
 
   // Only a `custom_tool_call` can carry both a terminal outcome and an inline
   // result on the call record itself; a `function_call` never does.
@@ -1179,7 +1190,7 @@ export async function hydrateMessagesFromPersistedSession(
         assistantMessage.parts.push(subagentPart);
         continue;
       }
-      const parts = createPersistedToolParts(payload, transcriptCwd);
+      const parts = createPersistedToolParts(payload, transcriptCwd, callId);
       const firstPartIndex = assistantMessage.parts.length;
       assistantMessage.parts.push(...parts);
 
@@ -1253,6 +1264,10 @@ export async function hydrateMessagesFromPersistedSession(
       ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });
   }
+
+  // Shell rows' measured line changes are the bridge's own record; the rollout
+  // never had them.
+  overlayCommandChanges(messages, await readCommandChanges(getCodexHomeDir(), threadId));
 
   return {
     messages,

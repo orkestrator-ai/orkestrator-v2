@@ -32,6 +32,7 @@ import {
   normalizeOpenCodeComposerCatalog,
   openCodeModelDispatchability,
 } from "./opencode-model-catalog.js";
+import type { OpenCodeCommandChangeOptions } from "./opencode-command-changes.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
   mimeTypeForFilename,
@@ -78,6 +79,12 @@ export interface OpenCodeProviderDependencies {
     | readonly string[]
     | undefined
     | Promise<readonly string[] | undefined>;
+  /**
+   * Measure what each shell call changed in the worktree (the row's +N −M
+   * badge). Opt-in, and effective only when the connection names a
+   * `directory` this backend can read: see `opencode-command-changes.ts`.
+   */
+  commandChanges?: OpenCodeCommandChangeOptions;
 }
 
 export async function optionalOpenCodeSdkCall(

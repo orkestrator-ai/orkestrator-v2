@@ -6322,3 +6322,99 @@ describe("NativeMessage permission-denied tool rows", () => {
     },
   );
 });
+
+describe("NativeMessage shell command changes", () => {
+  afterEach(cleanup);
+
+  const command = (commandChanges?: NativeMessagePart["commandChanges"]): NativeMessagePart => ({
+    type: "tool-invocation",
+    content: "",
+    toolName: "Bash",
+    toolState: "success",
+    toolUseId: "measured-command",
+    toolArgs: { command: "python3 rewrite.py" },
+    toolOutput: "done",
+    ...(commandChanges ? { commandChanges } : {}),
+  });
+
+  test("shows the measured line counts on the collapsed row and lists files when expanded", () => {
+    const openFile = mock((_path: string, _options?: unknown) => undefined);
+    function RegisterFileTab() {
+      const { setCreateFileTab } = useTerminalContext();
+      useEffect(() => {
+        setCreateFileTab(openFile);
+        return () => setCreateFileTab(null);
+      }, [setCreateFileTab]);
+      return null;
+    }
+    render(
+      <TerminalProvider>
+        <RegisterFileTab />
+        <NativeMessage
+          message={makeMessage([
+            command({
+              additions: 12,
+              deletions: 3,
+              files: [
+                { path: "src/a.ts", additions: 10, deletions: 3 },
+                { path: "src/b.ts", additions: 2, deletions: 0 },
+              ],
+            }),
+          ])}
+        />
+      </TerminalProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Run Command python3 rewrite.py/i });
+    const stats = screen.getByTestId("command-change-stats");
+    expect(trigger.contains(stats)).toBe(true);
+    expect(stats.textContent).toBe("+12-3");
+    expect(stats.getAttribute("title")).toBeNull();
+    // A shell row stays a shell row: the counts must not route it to the edit card.
+    expect(screen.queryByText("Unknown file") === null).toBe(true);
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Changed files")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "src/a.ts" }));
+    expect(openFile).toHaveBeenCalledWith("src/a.ts", { isDiff: true, gitStatus: "M" });
+  });
+
+  test("marks approximate counts and explains why", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          command({
+            additions: 1,
+            deletions: 0,
+            files: [{ path: "a.ts", additions: 1, deletions: 0 }],
+            approximate: true,
+          }),
+        ])}
+      />,
+    );
+    const stats = screen.getByTestId("command-change-stats");
+    expect(stats.textContent).toBe("~+1");
+    expect(stats.getAttribute("title")).toContain("Approximate");
+  });
+
+  test("shows a file count when git cannot count lines, and nothing for a no-op", () => {
+    const { unmount } = render(
+      <NativeMessage
+        message={makeMessage([
+          command({
+            additions: 0,
+            deletions: 0,
+            files: [{ path: "logo.png", additions: 0, deletions: 0, binary: true }],
+          }),
+        ])}
+      />,
+    );
+    expect(screen.getByTestId("command-change-stats").textContent).toBe("1 file");
+    unmount();
+
+    render(
+      <NativeMessage message={makeMessage([command({ additions: 0, deletions: 0, files: [] })])} />,
+    );
+    expect(screen.queryByTestId("command-change-stats") === null).toBe(true);
+  });
+});

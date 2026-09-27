@@ -63,6 +63,11 @@ import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import {
+  commandChangeJournal,
+  deleteCommandChangeJournal,
+  overlayCommandChanges,
+} from "./command-changes.js";
 import * as core from "./session-manager-core.js";
 import * as lifecycle from "./session-manager-lifecycle.js";
 import * as messageParts from "./session-manager-messages.js";
@@ -372,11 +377,18 @@ export async function readPersistedSessionMessages(session: SessionState): Promi
   if (!session.sdkSessionId) return undefined;
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return undefined;
-  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
-    dir: currentWorkingDirectory(),
-    includeSystemMessages: true,
-  });
-  return normalizePersistedSessionMessages(persisted);
+  const [persisted, commandChanges] = await Promise.all([
+    sdk.getSessionMessages(session.sdkSessionId, {
+      dir: currentWorkingDirectory(),
+      includeSystemMessages: true,
+    }),
+    commandChangeJournal(session.sdkSessionId)?.read(),
+  ]);
+  const normalized = normalizePersistedSessionMessages(persisted);
+  // Claude's JSONL has no record of what a Bash call changed; the bridge's
+  // own journal does.
+  if (commandChanges) overlayCommandChanges(normalized.messages, commandChanges);
+  return normalized;
 }
 
 export function readPersistedSessionMessagesOnce(session: SessionState): Promise<
@@ -629,7 +641,10 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
     // bridge-owned metadata. Let a retry finish that cleanup even though the
     // authoritative rollout no longer materializes.
     const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
-    if (sdkSessionId) await deleteSessionPreferences(sdkSessionId);
+    if (sdkSessionId) {
+      await deleteSessionPreferences(sdkSessionId);
+      await deleteCommandChangeJournal(sdkSessionId);
+    }
     return false;
   }
   if (session.deleting) {
@@ -664,6 +679,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
     forgetPromptDispatchesForSession(sessionId);
     if (preferenceSessionId) {
       await deleteSessionPreferences(preferenceSessionId);
+      await deleteCommandChangeJournal(preferenceSessionId);
     }
     sessions.delete(sessionId);
     return true;

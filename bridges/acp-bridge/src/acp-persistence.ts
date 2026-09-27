@@ -3,6 +3,10 @@ import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import {
+  hasMeasuredChanges,
+  parseMeasuredWorkspaceChange,
+} from "@orkestrator/protocol/command-change-journal";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   isNativeAgentExecutionPolicy,
@@ -570,6 +574,8 @@ export function normalizeBridgePart(
   const toolOutput = boundedString(value.toolOutput, MAX_TOOL_OUTPUT_BYTES);
   const toolError = boundedString(value.toolError, MAX_TOOL_OUTPUT_BYTES);
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
+  // Held to the journal's bounds, so a restored badge and a reloaded one agree.
+  const commandChanges = parseMeasuredWorkspaceChange(value.commandChanges);
   const toolName = boundedString(value.toolName, MAX_TOOL_NAME_BYTES);
   const toolTitle = boundedString(value.toolTitle, MAX_TOOL_TITLE_BYTES);
   const parentTaskUseId = boundedString(value.parentTaskUseId, MAX_TOOL_ID_BYTES)?.trim();
@@ -588,6 +594,7 @@ export function normalizeBridgePart(
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),
     ...(toolDiff ? { toolDiff } : {}),
+    ...(commandChanges && hasMeasuredChanges(commandChanges) ? { commandChanges } : {}),
     ...(parentTaskUseId ? { parentTaskUseId } : {}),
     ...(createdAt ? { createdAt } : {}),
   };

@@ -111,6 +111,10 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
 import type { ProviderMcpConfigEvidenceRead } from "./agent-provider-contract.js";
+import {
+  openCodeCommandChangeJournalDirectory,
+  type OpenCodeCommandChangeOptions,
+} from "./opencode-command-changes.js";
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
@@ -170,6 +174,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
         provider = createNativeAgentProvider(connection, {
           autoAnswerRequests: false,
           stageImages: (images) => this.stageImages(environmentId, images),
+          commandChanges: this.openCodeCommandChanges(environmentId),
         });
         this.cacheProvider(cacheKey, provider, identity);
       }
@@ -222,6 +227,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       // reach the catalogue until the environment restarted.
       resolveOpenCodeModelProviders: async () =>
         (await this.storage.loadConfig()).global.openCodeModelProviders,
+      commandChanges: this.openCodeCommandChanges(input.environmentId),
     });
     this.cacheProvider(cacheKey, provider, connectionIdentity);
     return provider;
@@ -251,6 +257,26 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       this.providerConnections.delete(cacheKey);
     }
     this.absentBridgeUntil.delete(cacheKey);
+  }
+
+  /**
+   * Shell-change badges for an interactive OpenCode provider, journaled under
+   * the backend data directory per environment so environment deletion can
+   * drop them. Every creation site passes them: whichever one caches the
+   * provider serves the tab. The provider itself decides whether its worktree
+   * is measurable (local worktrees only). Storage doubles without a data
+   * directory get no badges rather than git runs in fixture directories.
+   */
+  protected openCodeCommandChanges(
+    environmentId: string,
+  ): OpenCodeCommandChangeOptions | undefined {
+    if (typeof this.storage.getDataDir !== "function") return undefined;
+    return {
+      journalDirectory: openCodeCommandChangeJournalDirectory(
+        this.storage.getDataDir(),
+        environmentId,
+      ),
+    };
   }
 
   protected bridgeConnectionIdentity(connection: BridgeConnection): string {
@@ -304,6 +330,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       autoAnswerRequests: false,
       onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
+      commandChanges: this.openCodeCommandChanges(input.environmentId),
     });
     this.cacheProvider(cacheKey, provider, this.bridgeConnectionIdentity(connection));
     return provider;

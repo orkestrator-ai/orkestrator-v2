@@ -99,6 +99,7 @@ import {
 } from "./opencode-commands.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
+import { OpenCodeCommandChanges } from "./opencode-command-changes.js";
 import {
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
@@ -199,6 +200,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
    */
   private readonly health = new RuntimeHealthRecorder();
   private readonly streamState = new OpenCodeStreamState();
+  /** Shell-call badges; absent when the worktree is not readable from here. */
+  private readonly commandChanges?: OpenCodeCommandChanges;
   private activeStreamController: AbortController | null = null;
   private reconciliation: Promise<void> | null = null;
   private streamReconciliation: Promise<void> | null = null;
@@ -276,6 +279,16 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.onInteractionObservation = dependencies.onInteractionObservation;
     this.observation = new OpenCodeObservationStream(dependencies.onObservationHint);
     this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
+    // Only a connection with a host directory runs where git can read it:
+    // local-worktree environments. A container's OpenCode works on a clone
+    // inside the container, so its connection carries no directory.
+    if (dependencies.commandChanges && connection.directory) {
+      this.commandChanges = new OpenCodeCommandChanges(
+        connection.directory,
+        dependencies.commandChanges,
+        (sessionId) => this.streamState.touch(sessionId),
+      );
+    }
     this.monitorPromise = this.monitorRequests();
   }
 
@@ -509,6 +522,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       event.type === "global.disposed";
     if (globalEvent || (rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId))) {
       const effect = this.streamState.apply(event as OpenCodeEvent, this.now());
+      // Before the first await, like `apply`, so tool starts and ends reach the
+      // probe in stream order. It only fires probe work and never waits on it.
+      if (!globalEvent) this.commandChanges?.observe(event);
       if (effect.status && effect.sessionId) {
         this.lifecycle.observeStreamEvent(effect.sessionId, effect.status);
         this.observation.changed(effect.sessionId);
@@ -780,6 +796,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
+      this.commandChanges?.beginTurn(sessionId);
       let response;
       try {
         if (command) {
@@ -979,6 +996,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       replaceMessages: (messages) => this.streamState.replaceMessages(sessionId, messages),
       title: () => this.streamState.title(sessionId),
       recordUnknown: (type) => this.health.recordUnknown(`part:${type}`),
+      ...(this.commandChanges
+        ? { commandChanges: () => this.commandChanges!.changes(sessionId) }
+        : {}),
     });
   }
 
@@ -1055,14 +1075,17 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
     const eventVersionBefore = this.streamState.eventVersion(sessionId);
-    const [status, rawMessages, metadata] = await Promise.all([
+    const [status, rawMessages, metadata, commandChanges] = await Promise.all([
       this.projectedStatus(sessionId),
       this.projectedMessages(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       this.readInteractiveMetadata(sessionId),
+      this.commandChanges?.changes(sessionId),
     ]);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
-    const normalizedMessages = normalizeOpenCodeTranscriptMessages(rawMessages, (type) =>
-      this.health.recordUnknown(`part:${type}`),
+    const normalizedMessages = normalizeOpenCodeTranscriptMessages(
+      rawMessages,
+      (type) => this.health.recordUnknown(`part:${type}`),
+      commandChanges,
     );
     const messages = await this.hydrateSubagentTranscripts(
       normalizedMessages,
@@ -1426,6 +1449,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   releaseSession(sessionId: string): void {
     this.lifecycle.release(sessionId);
     this.streamState.forget(sessionId);
+    this.commandChanges?.forget(sessionId);
     this.interactiveMetadata.delete(sessionId);
     this.sessionPolicies.delete(sessionId);
     this.blockedSessions.delete(sessionId);
@@ -1451,6 +1475,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.answeringRequestIds.clear();
     this.requestTasks.clear();
     this.streamState.clear();
+    this.commandChanges?.dispose();
   }
 
   private requestOptions(): { signal: AbortSignal } {

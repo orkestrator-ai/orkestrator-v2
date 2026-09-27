@@ -186,12 +186,12 @@ Finding → evidence:
       30 KB; tail checkpoint ≈ 42 KB written).
 Tests and isolated profiles (all on this branch head, AMD Ryzen 5 PRO 5650U,
   12 logical CPUs, 30.7 GiB, Bun 1.4.2):
-  - mise run check: pass.
-  - mise run test: pass (workspace 405 s, root 144 s, bridges 178 s, codex
+  - mise run check — pass.
+  - mise run test — pass (workspace 405 s, root 144 s, bridges 178 s, codex
     protocol lockfile). Earlier runs were killed by the no-output watchdog
     only while another session held 7 of 8 shared test slots; every package
     passes alone and the quiet run passed.
-  - mise run test:agent:browser:isolated: 12 passed, 7 skipped (after
+  - mise run test:agent:browser:isolated — 12 passed, 7 skipped (after
     rebuilding bridge bundles; one earlier run hit a first-load dev-server
     502, recorded as environmental flake 0168, and passed on rerun).
   - Isolated profile eff-qa-7f09 (claude, codex; fixture project): real Codex
@@ -208,8 +208,9 @@ Compatibility/migration result: every new wire form is negotiated (v2
   documented downgrade paths (display tails: cache miss; pipelines: bounded
   export command).
 Rollout note: `dev:test` launches bridges from their built `dist/` bundles and
-  does not rebuild them; after bridge source changes run each bridge's
-  `bun run build` before real-stack QA, or the profile tests stale bridges.
+  does not rebuild them; after bridge source changes run
+  the build script in each bridge directory before real-stack QA,
+  or the profile tests stale bridges.
 Remaining limitations (not validated here): remote proxy and compression
   bytes, Docker/container environments, the Electron window, live Cursor/Pi/
   Grok/OpenCode sessions, native iOS, browser long-task and heap/RSS

@@ -758,6 +758,18 @@ exit 0
     const { context } = createContext(environment);
     context.runtimeFlavor = "agent-test";
     context.credentialSources = new Set(["claude", "codex", "cursor", "grok", "opencode"]);
+    // Credentials reach a container only for enabled providers.
+    const baseLoadConfig = context.storage.loadConfig.bind(context.storage);
+    context.storage.loadConfig = async () => {
+      const config = await baseLoadConfig();
+      return {
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+        },
+      };
+    };
     const commands = createCommandRegistry();
     const saved = {
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,

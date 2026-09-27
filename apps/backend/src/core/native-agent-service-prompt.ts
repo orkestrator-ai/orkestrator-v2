@@ -142,7 +142,7 @@ import {
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { assertEnvironmentAcceptsAgentWork } from "./container-readiness.js";
+import { assertEnvironmentAcceptsAgentWork } from "./environment-replacement-fence.js";
 import {
   MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
   nativeAgentObservationGroupKey,

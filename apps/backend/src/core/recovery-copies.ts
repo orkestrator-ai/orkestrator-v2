@@ -1,4 +1,4 @@
-import { withEnvironmentReplacement } from "./container-readiness.js";
+import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   parseContainerLifecycle,

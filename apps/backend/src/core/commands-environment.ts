@@ -1,4 +1,4 @@
-import { withEnvironmentReplacement } from "./container-readiness.js";
+import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
   formatContainerLifecycleError,

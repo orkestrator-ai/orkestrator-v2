@@ -4,7 +4,7 @@
  * prompt definitely did not run and can be sent again afterwards.
  */
 import { describe, expect, test } from "bun:test";
-import { withEnvironmentReplacement } from "./container-readiness.js";
+import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 

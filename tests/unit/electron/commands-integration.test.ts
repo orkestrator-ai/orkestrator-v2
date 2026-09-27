@@ -1597,7 +1597,11 @@ exit 0
       networkAccessMode: "full",
     });
     const { context } = createContext(environment);
-    let global: Record<string, unknown> = { useHostGitHubCredentials: false };
+    // Cursor is enabled: credentials reach a container only for enabled providers.
+    let global: Record<string, unknown> = {
+      useHostGitHubCredentials: false,
+      enabledAgentPlatforms: ["claude", "cursor"],
+    };
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",

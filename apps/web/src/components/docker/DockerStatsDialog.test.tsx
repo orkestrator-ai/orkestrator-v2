@@ -63,8 +63,8 @@ describe("Docker stats dialog", () => {
     render(<DockerStatsDialog open onOpenChange={() => undefined} />);
     await screen.findByText(/Not measured: Docker did not answer/);
     expect(screen.getAllByText(/unknown/).length).toBeGreaterThanOrEqual(4);
-    expect(screen.queryByText("0 B")).toBeNull();
-    expect(screen.queryByText(/0%/)).toBeNull();
+    expect(screen.queryAllByText("0 B")).toHaveLength(0);
+    expect(screen.queryAllByText(/0%/)).toHaveLength(0);
   });
 
   test("per-container figures are cores, a child's out-of-memory kills show while running", async () => {
@@ -86,7 +86,7 @@ describe("Docker stats dialog", () => {
     expect(screen.getByText("2 out-of-memory kills")).toBeTruthy();
     expect(screen.getByText(/created time unknown/)).toBeTruthy();
     expect(screen.getByText(/2.5 cores/)).toBeTruthy();
-    expect(screen.queryByText(/stale/)).toBeNull();
+    expect(screen.queryAllByText(/stale/)).toHaveLength(0);
   });
 
   test("refresh reloads both the figures and the containers", async () => {

@@ -1502,10 +1502,14 @@ export async function deleteEnvironment(
         shutdownClaudeStatePolling(environment.containerId);
         cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
         // Bridges and agents get the drain's SIGTERM, so they settle their
-        // journals and deny parked approvals before the forced removal.
-        await drainContainerProcesses(environment.containerId, DELETION_DRAIN_GRACE_SECONDS).catch(
-          () => null,
-        );
+        // journals and deny parked approvals before the forced removal. A
+        // stopped container has nothing to drain and is not exec'd into.
+        if (environment.status === "running") {
+          await drainContainerProcesses(
+            environment.containerId,
+            DELETION_DRAIN_GRACE_SECONDS,
+          ).catch(() => null);
+        }
         // Ownership was asserted before the tombstone, above.
         if (cleanup) {
           await runEnvironmentCleanupStep(cleanup, "container", context, {

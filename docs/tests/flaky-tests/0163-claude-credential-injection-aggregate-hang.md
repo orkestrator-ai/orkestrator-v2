@@ -22,5 +22,10 @@
   The file had run for 386 seconds when terminated, with no failed assertions.
   A direct isolated run passed all 28 cases in 0.44 seconds, and the preceding
   full suite on that branch passed. The branch did not change credential code.
+- **Occurrence (2026-09-28):** `mise run test:logged -- --name root-tests --
+  bun test ./tests --parallel=4` on the disk-state cleanup branch: 4663 pass,
+  4 skip, 1 fail. "replaces a stale credential" timed out. The owning file
+  passed alone (28/28). The branch changes the test preloads (worktree-root
+  and temp-directory isolation) but not credential code.
 - **Hypothesis:** none yet. The hang, rather than a slow pass, suggests a child
   process or filesystem wait that never resolves under aggregate load.

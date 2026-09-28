@@ -384,7 +384,16 @@ export async function syncStoredEnvironmentStatus(
 }
 
 export function getWorktreeBaseDir(context?: Pick<CommandContext, "worktreeDir">): string {
-  return context?.worktreeDir ?? path.join(os.homedir(), APP_SLUG, "workspaces");
+  return context?.worktreeDir ?? defaultWorktreeBaseDir();
+}
+
+// `ORKESTRATOR_WORKTREE_DIR` is what the backend reads into `worktreeDir` at
+// startup, so a caller without a context resolves the same root. The test
+// preloads also point it at a temporary directory, which keeps a test that
+// omits `worktreeDir` out of the user's real workspaces.
+function defaultWorktreeBaseDir(): string {
+  const configured = process.env.ORKESTRATOR_WORKTREE_DIR?.trim();
+  return configured ? path.resolve(configured) : path.join(os.homedir(), APP_SLUG, "workspaces");
 }
 
 export async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {

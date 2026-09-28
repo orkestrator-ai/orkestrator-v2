@@ -329,6 +329,7 @@ describe("bounded test diagnostics", () => {
     for (const setup of ["tests/setup.ts", "tests/setup-node.ts"]) {
       const source = await readFile(path.join(root, setup), "utf8");
       expect(source).toContain('import "./isolate-git-config"');
+      expect(source).toContain('import "./isolate-worktree-dir"');
     }
     for (const config of ["bunfig.toml", "apps/web/bunfig.toml", "apps/web-public/bunfig.toml"]) {
       const source = await readFile(path.join(root, config), "utf8");

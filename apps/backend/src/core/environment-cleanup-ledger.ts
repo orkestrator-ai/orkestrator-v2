@@ -202,19 +202,11 @@ export class EnvironmentCleanupLedger {
   }
 
   private async save(ledger: EnvironmentCleanupLedgerFile): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
     if (Object.keys(ledger.entries).length === 0) {
       await rm(this.filePath, { force: true });
       return;
     }
-    const temp = `${this.filePath}.${randomBytes(6).toString("hex")}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(ledger, null, 2)}\n`, { mode: 0o600 });
-      await rename(temp, this.filePath);
-    } catch (error) {
-      await rm(temp, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    await writeJsonAtomically(this.filePath, ledger);
   }
 
   private mutate(operation: (ledger: EnvironmentCleanupLedgerFile) => void): Promise<void> {
@@ -237,6 +229,19 @@ function trimLedger(ledger: EnvironmentCleanupLedgerFile): void {
   }
 }
 
+/** Writes beside the target and renames over it, so a crash leaves the old file. */
+async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temp = `${filePath}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    await rename(temp, filePath);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 const ledgers = new Map<string, EnvironmentCleanupLedger>();
 
 /** One ledger per data directory so deletion and reconciliation share a queue. */
@@ -248,4 +253,77 @@ export function environmentCleanupLedger(dataDir: string): EnvironmentCleanupLed
     ledgers.set(key, ledger);
   }
   return ledger;
+}
+
+interface EnvironmentCleanupSweepFile {
+  version: 1;
+  /** Project id -> ISO time the orphaned-branch sweep last completed for it. */
+  branchSweeps: Record<string, string>;
+}
+
+export const ENVIRONMENT_CLEANUP_SWEEPS_FILE = "environment-cleanup-sweeps.json";
+
+/**
+ * When the throttled orphan sweeps last ran. Losing this file only makes the
+ * next sweep run early, so a torn or unreadable file reads as empty.
+ */
+export class EnvironmentCleanupSweepState {
+  private readonly filePath: string;
+  private mutation: Promise<unknown> = Promise.resolve();
+
+  constructor(dataDir: string) {
+    this.filePath = path.join(dataDir, ENVIRONMENT_CLEANUP_SWEEPS_FILE);
+  }
+
+  async branchSweeps(): Promise<Record<string, string>> {
+    await this.mutation.catch(() => undefined);
+    return (await this.load()).branchSweeps;
+  }
+
+  /**
+   * Records a completed branch sweep. Projects outside `knownProjectIds` are
+   * dropped, which bounds the file by the number of projects.
+   */
+  async recordBranchSweep(projectId: string, at: Date, knownProjectIds: string[]): Promise<void> {
+    const known = new Set([...knownProjectIds, projectId]);
+    const run = this.mutation.then(async () => {
+      const state = await this.load();
+      state.branchSweeps[projectId] = at.toISOString();
+      for (const id of Object.keys(state.branchSweeps)) {
+        if (!known.has(id)) delete state.branchSweeps[id];
+      }
+      await writeJsonAtomically(this.filePath, state);
+    });
+    this.mutation = run.catch(() => undefined);
+    return run;
+  }
+
+  private async load(): Promise<EnvironmentCleanupSweepFile> {
+    const empty: EnvironmentCleanupSweepFile = { version: 1, branchSweeps: {} };
+    let parsed: { version?: unknown; branchSweeps?: unknown };
+    try {
+      parsed = JSON.parse(await readFile(this.filePath, "utf8"));
+    } catch {
+      return empty;
+    }
+    if (parsed?.version !== 1 || !parsed.branchSweeps || typeof parsed.branchSweeps !== "object") {
+      return empty;
+    }
+    for (const [id, at] of Object.entries(parsed.branchSweeps as Record<string, unknown>)) {
+      if (typeof at === "string" && Number.isFinite(Date.parse(at))) empty.branchSweeps[id] = at;
+    }
+    return empty;
+  }
+}
+
+const sweepStates = new Map<string, EnvironmentCleanupSweepState>();
+
+export function environmentCleanupSweepState(dataDir: string): EnvironmentCleanupSweepState {
+  const key = path.resolve(dataDir);
+  let state = sweepStates.get(key);
+  if (!state) {
+    state = new EnvironmentCleanupSweepState(key);
+    sweepStates.set(key, state);
+  }
+  return state;
 }

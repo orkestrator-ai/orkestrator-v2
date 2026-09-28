@@ -4,7 +4,6 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
-import { APP_SLUG } from "../../../apps/backend/src/core/constants";
 import {
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILE_SIZE_LABEL,
@@ -77,6 +76,7 @@ const {
   __testing: commandTesting,
 } = await import("../../../apps/backend/src/core/commands");
 const { resolveBunBinary } = await import("../../../apps/backend/src/core/commands-agent-support");
+const { getWorktreeBaseDir } = await import("../../../apps/backend/src/core/commands-environment");
 
 const tempDirs: string[] = [];
 
@@ -535,7 +535,7 @@ describe("backend command I/O coverage", () => {
   });
 
   test("reads base64 only from regular files in workspace storage", async () => {
-    const workspaceStorage = path.join(os.homedir(), APP_SLUG, "workspaces");
+    const workspaceStorage = getWorktreeBaseDir();
     const allowedRoot = await createTempDir("commands-io-host-", workspaceStorage);
     const filePath = path.join(allowedRoot, "image.bin");
     await fs.writeFile(filePath, Buffer.from([0, 255, 128]));
@@ -619,7 +619,7 @@ describe("backend command I/O coverage", () => {
 
   test("rejects an image-named FIFO promptly without waiting for a writer", async () => {
     if (process.platform === "win32") return;
-    const workspaceStorage = path.join(os.homedir(), APP_SLUG, "workspaces");
+    const workspaceStorage = getWorktreeBaseDir();
     const allowedRoot = await createTempDir("commands-io-fifo-", workspaceStorage);
     const fifoPath = path.join(allowedRoot, "blocked.png");
     await runCommand("mkfifo", [fifoPath]);

@@ -54,7 +54,17 @@ type PtyExitEvent = { exitCode: number; signal?: number };
 export async function createCommandFixtures() {
   const execFileAsync = promisify(execFile);
 
-  const liveDockerTest = process.env.RUN_LIVE_DOCKER_TESTS === "1" ? test : test.skip;
+  const liveDocker = process.env.RUN_LIVE_DOCKER_TESTS === "1";
+  const liveDockerTest = liveDocker ? test : test.skip;
+
+  // Fake-Docker tests put their stub first on PATH for one test. A test that
+  // times out keeps running and restores PATH late, which hands the real CLI
+  // to whichever test is running then. Unless live Docker was requested, the
+  // real CLI gets a daemon socket that does not exist while this file runs.
+  const originalDockerHost = process.env.DOCKER_HOST;
+  if (!liveDocker) {
+    process.env.DOCKER_HOST = `unix://${path.join(os.tmpdir(), `orkestrator-no-docker-${process.pid}.sock`)}`;
+  }
 
   const showOpenDialog = mock(async () => ({ canceled: false, filePaths: ["/tmp/project"] }));
 
@@ -154,6 +164,18 @@ export async function createCommandFixtures() {
 
   async function createTempDir(prefix: string): Promise<string> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  // Each context gets its own worktree root, so a command that creates a
+  // worktree never reaches the user's real workspaces. It sits under the test
+  // preload's temporary root and is created on first use.
+  function createWorktreeDir(): string {
+    const dir = path.join(
+      process.env.ORKESTRATOR_WORKTREE_DIR ?? os.tmpdir(),
+      `command-worktrees-${randomUUID()}`,
+    );
     tempDirs.push(dir);
     return dir;
   }
@@ -398,6 +420,7 @@ export async function createCommandFixtures() {
         models: unknown[],
       ) => Promise<unknown>;
       dataDir?: string;
+      worktreeDir?: string;
     } = {},
   ): {
     context: CommandContext;
@@ -427,6 +450,7 @@ export async function createCommandFixtures() {
     const context = {
       appRoot: "",
       resourceRoot: "",
+      worktreeDir: options.worktreeDir ?? createWorktreeDir(),
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
       emit: mock((event: string, payload: unknown) => {
         emitted.push({ event, payload });
@@ -869,8 +893,12 @@ export async function createCommandFixtures() {
     };
   }
 
-  function expectedManagedWorktreePath(projectName: string, branch: string): string {
-    return path.join(os.homedir(), APP_SLUG, "workspaces", `${projectName}-${branch}`);
+  function expectedManagedWorktreePath(
+    context: CommandContext,
+    projectName: string,
+    branch: string,
+  ): string {
+    return path.join(context.worktreeDir!, `${projectName}-${branch}`);
   }
 
   async function expectLocalWorktreeRolledBack(
@@ -1358,11 +1386,16 @@ exit 0
   });
 
   afterAll(async () => {
-    const commands = createCommandRegistry();
-    await commands.get("stop_local_codex_server_cmd")?.(
-      { environmentId: "env-local" },
-      createContext(createEnvironment()).context,
-    );
+    try {
+      const commands = createCommandRegistry();
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: "env-local" },
+        createContext(createEnvironment()).context,
+      );
+    } finally {
+      if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
+      else process.env.DOCKER_HOST = originalDockerHost;
+    }
   });
 
   return {

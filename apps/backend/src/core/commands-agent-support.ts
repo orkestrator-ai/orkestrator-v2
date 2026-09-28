@@ -191,10 +191,7 @@ export function environmentBranchBase(
   environmentId: string,
   branchRevision = 0,
 ): string {
-  const namespace = environmentId
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "")
-    .slice(0, ENVIRONMENT_BRANCH_NAMESPACE_LENGTH);
+  const namespace = environmentBranchNamespace(environmentId);
   if (!namespace)
     throw new Error(`Environment id cannot form a branch namespace: ${environmentId}`);
   if (!Number.isSafeInteger(branchRevision) || branchRevision < 0) {
@@ -204,6 +201,28 @@ export function environmentBranchBase(
   }
   const base = `${sanitizeBranchName(name)}-${namespace}`;
   return branchRevision === 0 ? base : `${base}-r${branchRevision}`;
+}
+
+/** The compact environment-id prefix that {@link environmentBranchBase} embeds. */
+export function environmentBranchNamespace(environmentId: string): string {
+  return environmentId
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, ENVIRONMENT_BRANCH_NAMESPACE_LENGTH);
+}
+
+/**
+ * `<slug>-<namespace>[-r<revision>][-<collision suffix>]` for an environment
+ * whose id is a UUID, so the namespace is 12 hex characters. Up to two numeric
+ * suffixes cover `allocateGitBranchName` running at allocation and again when
+ * the worktree is created.
+ */
+const ENVIRONMENT_BRANCH_PATTERN =
+  /^[a-z0-9_][a-z0-9_-]*-([0-9a-f]{12})(?:-r[1-9][0-9]{0,5})?(?:-[1-9][0-9]{0,5}){0,2}$/;
+
+/** The namespace of a branch named by the environment scheme, or null. */
+export function parseEnvironmentBranchNamespace(branch: string): string | null {
+  return ENVIRONMENT_BRANCH_PATTERN.exec(branch)?.[1] ?? null;
 }
 
 /** Allocate the first available branch from one shared suffixing policy. */

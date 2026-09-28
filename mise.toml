@@ -30,6 +30,11 @@ description = "Reset an isolated development test profile"
 raw_args = true
 run = "bun apps/desktop/scripts/dev-reset.ts"
 
+[tasks."dev:prune"]
+description = "Remove stopped development profiles whose checkout is gone (--older-than <days> for idle ones)"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-prune.ts"
+
 [tasks."dev:web"]
 description = "Start the Vite frontend and standalone backend"
 run = "bunx turbo run dev:web --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend"
@@ -246,6 +251,11 @@ run = "bun scripts/efficiency/run.ts"
 [tasks.typecheck]
 description = "Typecheck every workspace package"
 run = "bunx turbo --cwd . run typecheck"
+
+[tasks."disk:report"]
+description = "Report disk used by Orkestrator work, what is orphaned, and who cleans it (read-only)"
+raw_args = true
+run = "bun scripts/disk-report.ts"
 
 [tasks.format]
 description = "Format the repository"

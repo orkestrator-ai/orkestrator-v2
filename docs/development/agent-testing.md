@@ -400,8 +400,14 @@ only in the backend process.
 
 Reset refuses a live launcher unless `--stop-first` is explicit. It validates the
 profile sentinel and path, removes only exact-owner Docker containers, and then
-deletes that profile's disposable state. Preserve downloaded binaries with
+deletes that profile's disposable state. Worktrees the profile registered in an
+outside repository are unregistered, and their branches are deleted only when
+already merged into the default branch. Preserve downloaded binaries with
 `--keep-toolchains`.
+
+Profiles whose checkout has since been deleted are removed automatically the
+next time any profile starts. `mise run dev:prune --dry-run` lists what would
+go; `--older-than <days>` also removes stopped profiles idle for that long.
 
 ## Troubleshooting
 

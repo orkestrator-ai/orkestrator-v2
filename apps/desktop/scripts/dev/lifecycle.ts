@@ -19,8 +19,6 @@ import {
   liveness,
   processMatches,
   processStartTime,
-  removeProfileState,
-  readAndValidateSentinel,
   readProfile,
   readStatus,
   reserveLoopbackPorts,
@@ -29,6 +27,12 @@ import {
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
 import { seedFixture } from "./fixture.js";
+import {
+  dockerBuildCacheWarning,
+  formatPruneOutcome,
+  pruneProfiles,
+  removeProfile,
+} from "./profile-cleanup.js";
 import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
@@ -407,6 +411,29 @@ export async function compileElectronForDevelopment(
   if (!build.success) throw new Error(`Electron compilation failed; see ${logPath}`);
 }
 
+/**
+ * Remove profiles whose checkout is gone before starting another. Agents often
+ * finish without `dev:reset`, and the worktree they ran from is deleted soon
+ * after, so this is where their profiles would otherwise be stranded. Only the
+ * orphan rule runs here; age-based pruning stays an explicit `dev:prune`.
+ */
+async function pruneOrphanedProfiles(
+  startingProfileId: string,
+  roots: RuntimeProfileRoots | undefined,
+): Promise<void> {
+  try {
+    const outcomes = await pruneProfiles({ roots, exclude: [startingProfileId] });
+    for (const outcome of outcomes) {
+      if (outcome.action === "removed") console.log(formatPruneOutcome(outcome));
+      else if (outcome.action === "failed") console.warn(formatPruneOutcome(outcome));
+    }
+  } catch (error) {
+    console.warn(
+      `Could not prune orphaned development profiles: ${error instanceof Error ? error.message : error}`,
+    );
+  }
+}
+
 export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
@@ -427,6 +454,7 @@ export async function startDevelopment(
       `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run mise run dev:stop before restarting.`,
     );
   }
+  await pruneOrphanedProfiles(existingProfile.id, dependencies.roots);
 
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
@@ -470,6 +498,8 @@ export async function startDevelopment(
         encoding: "utf8",
       });
       if (inspected.status !== 0) {
+        const cacheWarning = dockerBuildCacheWarning();
+        if (cacheWarning) console.warn(cacheWarning);
         const imageBuild = spawnSync(
           "docker",
           [
@@ -753,30 +783,12 @@ export async function resetProfile(args: DevArguments): Promise<number> {
     const stopped = await stopProfile(args);
     if (stopped !== 0) return stopped;
   }
-  await readAndValidateSentinel(profile);
-
-  let containersRemoved = 0;
-  const listed = spawnSync(
-    "docker",
-    ["ps", "-aq", "--filter", `label=orkestrator-owner=${profile.dockerOwner}`],
-    { encoding: "utf8" },
-  );
-  if (listed.status === 0) {
-    const ids = listed.stdout
-      .split("\n")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    if (ids.length) {
-      const removed = spawnSync("docker", ["rm", "-f", ...ids], { encoding: "utf8" });
-      if (removed.status !== 0)
-        throw new Error(removed.stderr.trim() || "Could not remove profile Docker containers");
-      containersRemoved = ids.length;
-    }
-  }
-
-  await removeProfileState(profile, args.keepToolchains);
+  const removal = await removeProfile(profile, { keepToolchains: args.keepToolchains });
+  const kept = removal.branchesKept.length
+    ? ` Kept unmerged branch(es): ${removal.branchesKept.join(", ")}.`
+    : "";
   console.log(
-    `Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}`,
+    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}`,
   );
   return 0;
 }

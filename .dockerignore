@@ -7,9 +7,15 @@ node_modules
 src-tauri/target
 dist
 coverage
+.claude
+.turbo
+binaries
+output
+release
 
 **/node_modules
 **/dist
+**/.turbo
 **/.DS_Store
 **/*.log
 **/*.tmp

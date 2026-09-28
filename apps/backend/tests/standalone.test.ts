@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, jest, test } from "bun:test";
 import { semver } from "bun";
 import { chmod, cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../tests/temp-sweep";
 import { waitForStandaloneBackendReady } from "./standalone-ready";
 
 const root = path.resolve(import.meta.dir, "../../..");
@@ -15,8 +15,37 @@ const processes: Bun.Subprocess[] = [];
 // diagnostic instead of Bun killing the fixture at its default five seconds.
 jest.setTimeout(30_000);
 
+// A killed run never reaches `afterAll`. Its directories carry its PID, so a
+// later run removes them once that process has gone; the packaged-backend copy
+// alone is tens of megabytes. Unnamed leftovers predate the PID and are only
+// removed after a day.
+const TEMPORARY_DIRECTORY_PREFIXES = [
+  "orkestrator-standalone-test-",
+  "orkestrator-packaged-backend-",
+  "orkestrator-missing-sharp-",
+  "orkestrator-standalone-worktree-",
+  "orkestrator-tailscale-test-",
+  "orkestrator-tailscale-fail-",
+] as const;
+sweepStaleTempDirs({
+  prefix: TEMPORARY_DIRECTORY_PREFIXES,
+  maxAgeMs: 60 * 60 * 1_000,
+  legacyMaxAgeMs: 24 * 60 * 60 * 1_000,
+});
+
+async function createTemporaryDirectory(
+  prefix: (typeof TEMPORARY_DIRECTORY_PREFIXES)[number],
+): Promise<string> {
+  const directory = await mkdtemp(ownedTempDirPrefix(prefix));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
 afterAll(async () => {
   for (const process of processes) process.kill("SIGTERM");
+  // A backend that is still shutting down can recreate files in its data
+  // directory after it has been removed.
+  await Promise.all(processes.map((child) => Promise.race([child.exited, Bun.sleep(5_000)])));
   await Promise.all(
     temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
   );
@@ -34,8 +63,7 @@ async function startBackend(
   child: Bun.Subprocess;
   dataDir: string;
 }> {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-test-"));
-  temporaryDirectories.push(dataDir);
+  const dataDir = await createTemporaryDirectory("orkestrator-standalone-test-");
   const rendererRoot = path.join(dataDir, "renderer");
   await mkdir(rendererRoot);
   await writeFile(
@@ -137,8 +165,7 @@ async function probeSharpResolution(packagedBackend: string): Promise<{
 
 describe("standalone backend service", () => {
   test("loads Sharp from the packaged runtime closure", async () => {
-    const packageRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-packaged-backend-"));
-    temporaryDirectories.push(packageRoot);
+    const packageRoot = await createTemporaryDirectory("orkestrator-packaged-backend-");
     const packagedBackend = path.join(packageRoot, "backend");
     const packagedNodeModules = path.join(packagedBackend, "node_modules");
     await mkdir(packagedBackend, { recursive: true });
@@ -190,8 +217,7 @@ describe("standalone backend service", () => {
   });
 
   test("fails closed when the packaged Sharp closure is missing", async () => {
-    const packageRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-missing-sharp-"));
-    temporaryDirectories.push(packageRoot);
+    const packageRoot = await createTemporaryDirectory("orkestrator-missing-sharp-");
     const packagedBackend = path.join(packageRoot, "backend");
     await mkdir(packagedBackend, { recursive: true });
 
@@ -280,8 +306,7 @@ describe("standalone backend service", () => {
   });
 
   test("drains an active local server process tree before exiting", async () => {
-    const worktreePath = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-worktree-"));
-    temporaryDirectories.push(worktreePath);
+    const worktreePath = await createTemporaryDirectory("orkestrator-standalone-worktree-");
     let processMarkerPath = "";
     const started = await startBackend([], {}, async ({ dataDir }) => {
       processMarkerPath = path.join(dataDir, "fake-opencode-processes.json");
@@ -395,8 +420,7 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
   });
 
   test("can own a Tailscale Serve listener and publish its HTTPS URL", async () => {
-    const testDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-tailscale-test-"));
-    temporaryDirectories.push(testDir);
+    const testDir = await createTemporaryDirectory("orkestrator-tailscale-test-");
     const executable = path.join(testDir, "tailscale");
     const logFile = path.join(testDir, "calls.log");
     // Tracks the root mount separately from the user's own `/api` handler, so a
@@ -455,8 +479,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
   }, 60_000);
 
   test("exits without a leftover listener when environment-managed Serve setup fails", async () => {
-    const testDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-tailscale-fail-"));
-    temporaryDirectories.push(testDir);
+    const testDir = await createTemporaryDirectory("orkestrator-tailscale-fail-");
     const executable = path.join(testDir, "tailscale");
     const logFile = path.join(testDir, "calls.log");
     await writeFile(
@@ -473,8 +496,7 @@ exit 1
     );
     await chmod(executable, 0o755);
 
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-test-"));
-    temporaryDirectories.push(dataDir);
+    const dataDir = await createTemporaryDirectory("orkestrator-standalone-test-");
     const rendererRoot = path.join(dataDir, "renderer");
     await mkdir(rendererRoot);
     await writeFile(

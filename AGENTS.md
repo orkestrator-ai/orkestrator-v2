@@ -1300,7 +1300,16 @@ mise run dev:reset --profile agent-settings-dialog
 owned processes. `dev:reset` refuses live or unsafe targets, validates the
 profile sentinel, and removes only that profile's exact-owner containers and
 state. Use `--stop-first` only when intentionally combining those steps; use
-`--keep-toolchains` when downloaded toolchains should survive the reset.
+`--keep-toolchains` when downloaded toolchains should survive the reset. It also
+unregisters worktrees the profile created in an outside repository, and deletes
+their branches only when already merged.
+
+A forgotten reset is not permanent: every `dev`/`dev:test` start prunes stopped
+profiles whose checkout no longer exists, and `mise run dev:prune` does the
+same on demand (`--older-than <days>` also removes idle ones, `--dry-run`
+lists). `mise run disk:report` shows everything Orkestrator work leaves on disk
+and who cleans it; see
+[`docs/development/disk-usage.md`](docs/development/disk-usage.md).
 
 Before handing off, confirm there is no live launcher for the test profile and
 report whether its state was reset or deliberately retained.

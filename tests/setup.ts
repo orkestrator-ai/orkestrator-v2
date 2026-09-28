@@ -1,5 +1,6 @@
 // Test setup file for Bun. tests/register-dom.ts runs first.
 import "./isolate-git-config";
+import "./isolate-worktree-dir";
 import { installBoundedTestDiagnostics } from "./bounded-test-diagnostics";
 
 process.env.CODEX_BRIDGE_NO_SERVER ??= "1";

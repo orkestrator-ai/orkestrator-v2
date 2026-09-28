@@ -31,8 +31,8 @@ describe("resolveCodexMaxConcurrentThreads", () => {
 });
 
 describe("requiredAgentNetworkDomains", () => {
-  test("returns nothing when no ACP platform is enabled", () => {
-    expect(requiredAgentNetworkDomains(["claude", "codex", "opencode"])).toEqual([]);
+  test("returns nothing when no platform with its own hosts is enabled", () => {
+    expect(requiredAgentNetworkDomains(["claude", "opencode"])).toEqual([]);
     expect(requiredAgentNetworkDomains([])).toEqual([]);
   });
 
@@ -56,6 +56,9 @@ describe("requiredAgentNetworkDomains", () => {
     expect(requiredAgentNetworkDomains(["pi"])).toContain("radius.pi.dev");
     expect(requiredAgentNetworkDomains(["pi"])).toContain("api.anthropic.com");
     expect(requiredAgentNetworkDomains(["pi"])).not.toContain("auth.x.ai");
+    // Codex signed in with ChatGPT needs ChatGPT's backend and OpenAI's auth host.
+    expect(requiredAgentNetworkDomains(["codex"])).toEqual(["chatgpt.com", "auth.openai.com"]);
+    expect(requiredAgentNetworkDomains(["claude"])).not.toContain("chatgpt.com");
   });
 
   test("combines enabled platforms without overlap", () => {

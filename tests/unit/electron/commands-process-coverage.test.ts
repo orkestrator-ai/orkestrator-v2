@@ -655,14 +655,24 @@ describe("process and platform command behavior", () => {
     expect(allowed.filter((domain) => domain === "github.com")).toHaveLength(1);
   });
 
-  test("keeps an explicit per-environment allowlist intact when no ACP platform is enabled", async () => {
+  test("keeps an explicit per-environment allowlist intact when no platform with its own hosts is enabled", async () => {
     fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
-    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex", "opencode"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "opencode"];
     fixture.environment.containerId = null;
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const allowed = lastAllowedDomains(await readCommandLog());
     expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
+  });
+
+  test("adds ChatGPT's hosts when Codex is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toEqual(["github.com", "chatgpt.com", "auth.openai.com"]);
   });
 
   test("parses container status, listings, ports, logs, prune output, and aggregate stats", async () => {

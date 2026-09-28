@@ -111,6 +111,7 @@ further gaps; they are tracked to closure in
   the script re-qualifies another provider once its sessions work in a test
   profile. Credential rotation while a provider process is live (C21) was not
   run against a real provider.
-- Codex's default allowlist lacks `chatgpt.com`, which Codex needs when signed
-  in with ChatGPT; restricted containers must add it (now applied in place).
+- Codex signed in with ChatGPT needs `chatgpt.com` and `auth.openai.com`; they
+  are now added to a restricted container's allowlist whenever Codex is
+  enabled (`requiredAgentNetworkDomains`), and to the image's fallback list.
 - Docker Desktop, rootless Engine and arm64 were not available on this host.

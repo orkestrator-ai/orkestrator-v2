@@ -227,6 +227,8 @@ else
         "api.anthropic.com"
         "anthropic.com"
         "openai.com"
+        "chatgpt.com"
+        "auth.openai.com"
         "googleapis.com"
         "api.openrouter.ai"
         "openrouter.ai"

@@ -19,8 +19,14 @@ export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 
-/** Endpoints each managed ACP provider requires in restricted containers. */
+/** Endpoints each managed provider requires in restricted containers. */
 export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({
+  /**
+   * Codex signed in with ChatGPT talks to ChatGPT's backend and refreshes its
+   * token at OpenAI's auth host. Without them its turns complete with no
+   * reply in a restricted container.
+   */
+  codex: Object.freeze(["chatgpt.com", "auth.openai.com"] as readonly string[]),
   cursor: Object.freeze([
     "api2.cursor.sh",
     "api3.cursor.sh",
@@ -65,19 +71,20 @@ export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({
 } as const);
 
 /**
- * Hosts that must be reachable for the ACP platforms this install has enabled.
+ * Hosts that must be reachable for the agent platforms this install has
+ * enabled.
  *
  * These are deliberately NOT part of the default allowlist: an explicit
  * allowlist is the isolation boundary the user configured, and a restricted
- * container running neither Cursor nor Grok has no reason to reach either
- * vendor. Container creation unions in only what the enabled platforms need.
+ * container running none of these platforms has no reason to reach their
+ * vendors. Container creation unions in only what the enabled platforms need.
  */
 export function requiredAgentNetworkDomains(
   enabledPlatforms: readonly string[] | undefined,
 ): readonly string[] {
   if (!enabledPlatforms) return [];
   const domains = new Set<string>();
-  for (const platform of ["cursor", "grok", "pi"] as const) {
+  for (const platform of ["codex", "cursor", "grok", "pi"] as const) {
     if (enabledPlatforms.includes(platform)) {
       for (const domain of AGENT_NETWORK_DOMAINS_BY_PLATFORM[platform]) {
         domains.add(domain);

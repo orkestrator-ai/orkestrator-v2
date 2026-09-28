@@ -1115,8 +1115,8 @@ else is rejected outright. `full` mode skips the firewall entirely.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
-  re-adds Cursor's, Grok's and Pi's hosts only when those platforms are
-  enabled). Pi's list is necessarily partial: it fronts the user's own model
+  re-adds Codex's (`chatgpt.com`, `auth.openai.com`, for ChatGPT sign-in),
+  Cursor's, Grok's and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`

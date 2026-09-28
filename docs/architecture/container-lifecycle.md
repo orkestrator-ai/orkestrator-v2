@@ -537,6 +537,37 @@ The network is removed by the deletion ledger's `network` step after the
 environment's containers (never while one is attached), and reviewed cleanup
 offers networks of environments that no longer exist.
 
+## Agent tools reachability (`container-host-reachability.ts`)
+
+Container agents reach the backend's agent tools server (workflow results,
+mail, tickets) at `http://host.docker.internal:<port>/mcp`. A host firewall
+that drops Docker traffic (ufw's default policy on many Linux desktops) makes
+those calls hang: a review stage used to idle until its result poll gave up.
+The server answers any non-POST with 405 before authenticating, so a
+credential-free GET that gets *any* HTTP status proves the path; a timeout,
+refusal or unresolved name proves it broken. Three checks share one probe
+script and parser:
+
+| When | From | Effect |
+| --- | --- | --- |
+| Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
+| Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
+| Before a tool-mode workflow stage dispatches (Multi Review, Looped Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+
+The startup check pulls busybox once (`--pull never` on every run afterwards)
+and falls back to the environment image; with neither it reports
+`unverified`, never a pass. It detects ufw (`/etc/ufw/ufw.conf`), firewalld,
+nftables or iptables and builds fix commands for the actual port, scoped to
+the private ranges covering Docker's subnets (for example
+`sudo ufw allow proto tcp from 172.16.0.0/12 to any port <port>`), so the port
+stays closed to other machines. Probe containers and the temporary network
+carry the owner and `host-reachability-probe` role labels (not the `app`
+label, so cleanup inventories never see them) and are removed after each
+check; leftovers are reaped by the next one. Every step is logged with the
+`[container-host-reachability]` prefix, one fixed-shape line per probe. The
+probe URL carries no credential. Commands: `get_container_host_reachability`,
+`check_container_host_reachability`.
+
 ## Resource budgets and usage (`container-resources.ts`)
 
 Budgets are opt-in. `global.containerResourceLimits` (Settings → Container)

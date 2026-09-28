@@ -445,6 +445,12 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
   /**
+   * Preflight for a stage that submits through the agent tools server: rejects
+   * with a descriptive error when the environment's container cannot reach it,
+   * so the stage fails now instead of idling until its result poll gives up.
+   */
+  assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+  /**
    * Delivers the durable interactive handoff after {@link address} records it.
    * The supervisor, not a mounted renderer, retries this callback until it
    * succeeds and acknowledges the persisted intent.
@@ -2934,7 +2940,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       provider: (selection) => this.provider(workflow, selection),
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
-        this.workflowAgentMcp(workflow, resultKey, selection.agent),
+        this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
       ...(this.options.workflowResults
         ? {
             supportsToolResult: (selection: MultiReviewModelSelection) =>
@@ -3420,7 +3426,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             : "fix-result";
       const agentMcp =
         request.resultTransport === "tool-v1"
-          ? await this.workflowAgentMcp(workflow, request.requestId, selection.agent)
+          ? await this.workflowAgentMcp(
+              workflow,
+              request.requestId,
+              selection.agent,
+              `Multi Review ${modelLabel} step`,
+            )
           : undefined;
       if (request.resultTransport === "tool-v1" && this.options.workflowResults) {
         await this.options.workflowResults.prepare({
@@ -4250,11 +4261,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private async workflowAgentMcp(
     workflow: MultiReviewWorkflow,
     resultKey: string,
-    provider?: StructuredOutputProvider,
+    provider: StructuredOutputProvider | undefined,
+    stage: string,
   ): Promise<AgentToolConnection | undefined> {
     if (!this.options.resolveAgentToolConnection) return undefined;
     const environment = await this.storage.getEnvironment(workflow.environmentId);
     if (!environment) return undefined;
+    if (environment.environmentType !== "local") {
+      await this.options.assertAgentToolsReachable?.(workflow.environmentId, stage);
+    }
     return this.options.resolveAgentToolConnection(
       workflow.environmentId,
       workflow.projectId,

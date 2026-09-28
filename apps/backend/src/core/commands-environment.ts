@@ -2388,6 +2388,15 @@ export async function resolveContainerAgentToolConnection(
   if (!environment) return undefined;
   await ensureContainerAgentToolsHost(containerId);
   await ensureContainerHostServicePorts(containerId, context.agentTools.servicePort?.() ?? null);
+  // Evidence, not a gate: an interactive agent can still work without its
+  // Orkestrator tools, so a blocked path is logged and raised in the app
+  // (the probe re-runs the host check) rather than failing the bridge start.
+  void context.containerHostReachability
+    ?.checkEnvironmentContainer(containerId, {
+      reason: "bridge-start",
+      environmentName: environment.name,
+    })
+    .catch(() => undefined);
   return context.agentTools.connection(environment.id, environment.projectId, "container");
 }
 

@@ -201,6 +201,8 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         resultKey: string,
         provider?: StructuredOutputProvider,
       ) => AgentToolConnection;
+      /** Rejects when the environment's container cannot reach the agent tools server. */
+      assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
       /** Multi-reviewer stage concurrency; clamped by the shared fan-out runner. */
       reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
       /** Content-free fan-out measurements (tests and benchmarks). */
@@ -291,12 +293,17 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     return undefined;
   }
 
-  protected workflowAgentMcp(
+  protected async workflowAgentMcp(
     pipeline: BuildPipeline,
     resultKey: string,
-    provider?: StructuredOutputProvider,
-  ): AgentToolConnection | undefined {
-    return this.options.resolveAgentToolConnection?.(
+    provider: StructuredOutputProvider | undefined,
+    stage: string,
+  ): Promise<AgentToolConnection | undefined> {
+    if (!this.options.resolveAgentToolConnection) return undefined;
+    if (pipeline.environmentType !== "local") {
+      await this.options.assertAgentToolsReachable?.(pipeline.environmentId, stage);
+    }
+    return this.options.resolveAgentToolConnection(
       pipeline.environmentId,
       pipeline.projectId,
       pipeline.environmentType === "local" ? "host" : "container",

@@ -1,3 +1,4 @@
+import { initialContainerHostReachability } from "@orkestrator/protocol/container-host-reachability";
 import { createSharedContainerLogReader } from "./container-log-snapshots.js";
 import { detectDockerTopology, getImageStatus } from "./docker-image.js";
 import {
@@ -175,6 +176,19 @@ export function registerDockerCommands(
     ).stdout.trim(),
   );
   register("get_docker_image_status", (_args, context) => getImageStatus(context));
+  // Can agents in containers reach the agent tools server? The startup check
+  // result, or a fresh check on request ("Check again").
+  register(
+    "get_container_host_reachability",
+    (_args, context) =>
+      context.containerHostReachability?.snapshot() ?? initialContainerHostReachability(),
+  );
+  register(
+    "check_container_host_reachability",
+    async (_args, context) =>
+      (await context.containerHostReachability?.check("manual")) ??
+      initialContainerHostReachability(),
+  );
   register("get_docker_topology", ({ refresh }) =>
     detectDockerTopology({ refresh: refresh === true }),
   );

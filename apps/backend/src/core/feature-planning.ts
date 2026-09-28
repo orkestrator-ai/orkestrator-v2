@@ -204,6 +204,8 @@ export interface FeaturePlanningServiceOptions extends KeyedWorkflowServiceOptio
     resultKey: string,
     provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
+  /** Rejects when the environment's container cannot reach the agent tools server. */
+  assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
 }
 
 /**
@@ -639,7 +641,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       // a legacy dispatch would offer a second result channel for a turn whose
       // transport was already decided.
       const agentMcp = toolMode
-        ? this.agentMcp(environment, record.projectId, requestId)
+        ? await this.agentMcp(environment, record.projectId, requestId, record.kind)
         : undefined;
       try {
         await provider.prepareDispatch?.(sessionId, {
@@ -1190,12 +1192,19 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     };
   }
 
-  private agentMcp(
+  private async agentMcp(
     environment: Environment | null,
     projectId: string,
     resultKey: string,
-  ): AgentToolConnection | undefined {
+    kind: FeaturePlanningRecord["kind"],
+  ): Promise<AgentToolConnection | undefined> {
     if (!environment || !this.options.resolveAgentToolConnection) return undefined;
+    if (environment.environmentType !== "local") {
+      await this.options.assertAgentToolsReachable?.(
+        environment.id,
+        kind === "story" ? "story refinement step" : "feature planning step",
+      );
+    }
     return this.options.resolveAgentToolConnection(
       environment.id,
       projectId,

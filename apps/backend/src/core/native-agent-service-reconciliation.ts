@@ -1537,7 +1537,14 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const resolved = resolveAgentPlatformSettings(tiers, agent);
     const mode = resolved.mode;
     const claudeNativeBackend = resolveAgentPlatformSettings(tiers, "claude").claudeNativeBackend;
-    const model = environment.initialAgentModel ?? resolved.model;
+    const selectedModel = environment.initialAgentModel ?? resolved.model;
+    // The Claude catalogue exposes Sonnet through its stable alias. Stored
+    // release ids remain valid preferences but must be dispatched as that alias.
+    const model =
+      agent === "claude" &&
+      (selectedModel === "claude-sonnet-5" || selectedModel === "claude-sonnet-5-5")
+        ? "sonnet"
+        : selectedModel;
     const reasoningEffort = environment.initialReasoningEffort ?? resolved.reasoningEffort;
     // Same one-shot-over-tier rule as the two above: a launcher that offered a
     // Fast/Normal control for this run must win over the platform's durable

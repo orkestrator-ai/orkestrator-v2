@@ -3510,11 +3510,12 @@ describe("NativeAgentService", () => {
     });
 
     test.each([
-      ["initial-prompt dispatch", "Start with the configured defaults"],
-      ["prompt-less ensure", undefined],
+      ["initial-prompt dispatch", "Start with the configured defaults", "claude-sonnet-5-5"],
+      ["older Sonnet preference", "Start with the older model choice", "claude-sonnet-5"],
+      ["prompt-less ensure", undefined, "claude-sonnet-5-5"],
     ] as const)(
       "applies inherited Claude SDK defaults during %s",
-      async (_label, initialPrompt) => {
+      async (_label, initialPrompt, preferredModel) => {
         const { provider, send } = createProviderStub("claude");
         await withService(
           {
@@ -3527,6 +3528,7 @@ describe("NativeAgentService", () => {
                 platforms: {
                   claude: {
                     mode: "native",
+                    model: preferredModel,
                     claudeThinkingMode: "budget-16384",
                     claudeContext1m: true,
                   },
@@ -3542,6 +3544,11 @@ describe("NativeAgentService", () => {
               nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
             );
             if (initialPrompt) {
+              expect(send).toHaveBeenCalledWith(
+                "provider-session",
+                initialPrompt,
+                expect.objectContaining({ model: "sonnet" }),
+              );
               expect(stored?.controls?.parameterValues).toEqual({
                 thinking: "budget-16384",
                 context1m: true,

@@ -839,6 +839,7 @@ export async function sendPrompt(
     const fastMode = options?.fastMode === true;
     const ultracode = requestsUltracode(options?.parameterValues);
     session.ultracode = ultracode;
+    session.ultracodeApplied = ultracode;
 
     debugLog("[session-manager] Starting query", {
       sessionId,
@@ -3013,6 +3014,7 @@ export async function sendPrompt(
         model: options?.model,
         effort: options?.effort,
         fastMode: options?.fastMode,
+        parameterValues: options?.parameterValues,
         permissionMode: "plan",
         _isReprompt: true,
       };
@@ -3058,6 +3060,7 @@ export async function sendPrompt(
         model: options?.model,
         effort: options?.effort,
         fastMode: options?.fastMode,
+        parameterValues: options?.parameterValues,
         _isReprompt: true,
       };
 

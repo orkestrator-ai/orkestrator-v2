@@ -10,10 +10,9 @@
  *
  * - It is a flag-layer setting (`settings.ultracode`), never persisted, so each
  *   turn's query has to be started with it again.
- * - `applyFlagSettings` with an `effortLevel` that changes the level and no
- *   `ultracode` key turns Ultracode off. The backend's control updates are
- *   partial — an effort change carries no `ultracode` — so the bridge must
- *   resend the live value alongside the effort or the change silently drops it.
+ * - A partial `applyFlagSettings` can turn Ultracode off. The backend's control
+ *   updates are partial, so the bridge carries the applied value into a flag
+ *   change to keep it on.
  */
 
 import { CLAUDE_ULTRACODE_PARAMETER_ID as ULTRACODE_PARAMETER_ID } from "@orkestrator/protocol/claude-model-catalog";
@@ -30,7 +29,7 @@ export function requestsUltracode(
  * The `ultracode` key to merge into one `applyFlagSettings` call, if any.
  *
  * An explicit toggle wins. Otherwise the live value is carried along with an
- * effort change so the CLI keeps it on. A model change instead turns it off:
+ * flag change so the CLI keeps it on. A model change instead turns it off:
  * the backend clears model-scoped parameters on a model switch, so the live
  * query has to follow or the composer would show Off over a turn running with
  * it. `false` is always accepted; `true` makes the CLI refuse the whole call
@@ -39,6 +38,7 @@ export function requestsUltracode(
 export function ultracodeFlagSetting(input: {
   parameterValues?: Record<string, string | boolean>;
   effortChanged: boolean;
+  fastModeChanged: boolean;
   modelChanged: boolean;
   live: boolean | undefined;
 }): { ultracode: boolean } | Record<string, never> {
@@ -46,7 +46,7 @@ export function ultracodeFlagSetting(input: {
   if (typeof explicit === "boolean") return { ultracode: explicit };
   if (input.live !== true) return {};
   if (input.modelChanged) return { ultracode: false };
-  return input.effortChanged ? { ultracode: true } : {};
+  return input.effortChanged || input.fastModeChanged ? { ultracode: true } : {};
 }
 
 export interface UltracodeRuntimeState {
@@ -109,7 +109,9 @@ export function reportUltracodeRuntime(session: SessionState, control: ClaudeQue
   void control
     .getSettings()
     .then((settings) => {
+      if (session.queryControl !== control) return;
       const state = ultracodeRuntimeState(settings);
+      if (state) session.ultracodeApplied = state.active;
       if (state?.active) {
         noticedSessions.delete(session);
         return;

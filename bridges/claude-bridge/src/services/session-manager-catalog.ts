@@ -533,15 +533,19 @@ export async function configureClaudeSession(
       ...ultracodeFlagSetting({
         parameterValues: input.parameterValues,
         effortChanged: input.effort !== undefined,
+        fastModeChanged: input.fastMode !== undefined,
         modelChanged: input.model !== undefined,
-        live: session.ultracode,
+        live: session.ultracodeApplied,
       }),
     };
     if (input.effort !== undefined) settings.effortLevel = input.effort;
     if (input.fastMode !== undefined) settings.fastMode = input.fastMode;
     if (Object.keys(settings).length > 0 && control.applyFlagSettings) {
       await control.applyFlagSettings(settings);
-      if (typeof settings.ultracode === "boolean") session.ultracode = settings.ultracode;
+      if (typeof settings.ultracode === "boolean") {
+        session.ultracode = settings.ultracode;
+        session.ultracodeApplied = settings.ultracode;
+      }
     }
     const thinking = input.parameterValues?.thinking;
     if (thinking === "disabled") await control.setMaxThinkingTokens?.(0, "omitted");

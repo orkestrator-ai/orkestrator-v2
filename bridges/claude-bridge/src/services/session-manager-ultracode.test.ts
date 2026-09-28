@@ -30,6 +30,7 @@ describe("ultracodeFlagSetting", () => {
       ultracodeFlagSetting({
         parameterValues: { ultracode: false },
         effortChanged: true,
+        fastModeChanged: false,
         modelChanged: false,
         live: true,
       }),
@@ -38,6 +39,7 @@ describe("ultracodeFlagSetting", () => {
       ultracodeFlagSetting({
         parameterValues: { ultracode: true },
         effortChanged: false,
+        fastModeChanged: false,
         modelChanged: true,
         live: false,
       }),
@@ -45,24 +47,61 @@ describe("ultracodeFlagSetting", () => {
   });
 
   test("an effort change carries a live Ultracode along", () => {
-    expect(ultracodeFlagSetting({ effortChanged: true, modelChanged: false, live: true })).toEqual({
+    expect(
+      ultracodeFlagSetting({
+        effortChanged: true,
+        fastModeChanged: false,
+        modelChanged: false,
+        live: true,
+      }),
+    ).toEqual({
       ultracode: true,
     });
   });
 
+  test("a fast-mode change carries an applied Ultracode along", () => {
+    expect(
+      ultracodeFlagSetting({
+        effortChanged: false,
+        fastModeChanged: true,
+        modelChanged: false,
+        live: true,
+      }),
+    ).toEqual({ ultracode: true });
+  });
+
   test("a model change turns a live Ultracode off, matching the cleared parameter", () => {
-    expect(ultracodeFlagSetting({ effortChanged: true, modelChanged: true, live: true })).toEqual({
+    expect(
+      ultracodeFlagSetting({
+        effortChanged: true,
+        fastModeChanged: false,
+        modelChanged: true,
+        live: true,
+      }),
+    ).toEqual({
       ultracode: false,
     });
   });
 
   test("nothing is sent when Ultracode is not live", () => {
     for (const live of [false, undefined]) {
-      expect(ultracodeFlagSetting({ effortChanged: true, modelChanged: true, live })).toEqual({});
+      expect(
+        ultracodeFlagSetting({
+          effortChanged: true,
+          fastModeChanged: false,
+          modelChanged: true,
+          live,
+        }),
+      ).toEqual({});
     }
-    expect(ultracodeFlagSetting({ effortChanged: false, modelChanged: false, live: true })).toEqual(
-      {},
-    );
+    expect(
+      ultracodeFlagSetting({
+        effortChanged: false,
+        fastModeChanged: false,
+        modelChanged: false,
+        live: true,
+      }),
+    ).toEqual({});
   });
 });
 
@@ -140,6 +179,7 @@ describe("Ultracode on the turn query", () => {
     const call = await nextQueryCall();
     await waitFor(() => (getSession(session.id)?.health?.listNotices().length ?? 0) > 0);
     expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(getSession(session.id)?.ultracodeApplied).toBe(false);
     expect(getSession(session.id)?.health?.listNotices()[0]).toMatchObject({
       message: "Ultracode is not available for this Claude session",
       method: "settings/ultracode",
@@ -171,11 +211,47 @@ describe("Ultracode across live settings changes", () => {
     queryControlOverrides.applyFlagSettings = applyFlagSettings;
     const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
     session.ultracode = true;
+    session.ultracodeApplied = true;
 
     await configureClaudeSession(session, { effort: "medium" });
 
     expect(applyFlagSettings).toHaveBeenCalledWith({ ultracode: true, effortLevel: "medium" });
     expect(session.ultracode).toBe(true);
+    await finish();
+  });
+
+  test("an unavailable query does not resend Ultracode with a later effort change", async () => {
+    queryControlOverrides.getSettings = mock(async () => ({
+      applied: { ultracode: false, ultracodeRequested: true, ultracodeAvailable: false },
+    }));
+    const applyFlagSettings = mock(async (settings: Record<string, unknown>) => {
+      if (settings.ultracode === true) throw new Error("ultracode is not available");
+    });
+    queryControlOverrides.applyFlagSettings = applyFlagSettings;
+    const session = createSession();
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Orchestrate this", {
+      parameterValues: { ultracode: true },
+    });
+    const call = await nextQueryCall();
+    await waitFor(() => session.ultracodeApplied === false);
+
+    await configureClaudeSession(session, { effort: "medium" });
+    expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "medium" });
+    expect(session.ultracode).toBe(true);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test("fast-mode changes preserve an applied Ultracode", async () => {
+    const applyFlagSettings = mock(async (_settings: Record<string, unknown>) => undefined);
+    queryControlOverrides.applyFlagSettings = applyFlagSettings;
+    const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
+    session.ultracode = true;
+    session.ultracodeApplied = true;
+    await configureClaudeSession(session, { fastMode: true });
+    expect(applyFlagSettings).toHaveBeenCalledWith({ ultracode: true, fastMode: true });
     await finish();
   });
 
@@ -187,10 +263,12 @@ describe("Ultracode across live settings changes", () => {
     await configureClaudeSession(session, { parameterValues: { ultracode: true } });
     expect(applyFlagSettings).toHaveBeenLastCalledWith({ ultracode: true });
     expect(session.ultracode).toBe(true);
+    expect(session.ultracodeApplied).toBe(true);
 
     await configureClaudeSession(session, { effort: "low", parameterValues: { ultracode: false } });
     expect(applyFlagSettings).toHaveBeenLastCalledWith({ ultracode: false, effortLevel: "low" });
     expect(session.ultracode).toBe(false);
+    expect(session.ultracodeApplied).toBe(false);
     await finish();
   });
 
@@ -200,6 +278,7 @@ describe("Ultracode across live settings changes", () => {
     });
     const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
     session.ultracode = false;
+    session.ultracodeApplied = false;
 
     await expect(
       configureClaudeSession(session, { parameterValues: { ultracode: true } }),

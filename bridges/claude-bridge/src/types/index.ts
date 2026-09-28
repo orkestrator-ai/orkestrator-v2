@@ -462,11 +462,11 @@ export interface SessionState {
   /** Last init's plugin errors, so unchanged load failures do not reissue advisories each turn. */
   pluginErrorSignatures?: string[];
   /**
-   * Ultracode as last sent to the live turn query: from the prompt at start,
-   * then from each accepted `applyFlagSettings`. Read to keep it on across an
-   * effort change, which the CLI otherwise treats as turning it off.
+   * Ultracode requested for the live turn. The CLI can decline the request.
    */
   ultracode?: boolean;
+  /** Ultracode actually applied by the CLI, when known. */
+  ultracodeApplied?: boolean;
   /** Last bounded MCP inventory, retained while no turn query is attached. */
   mcpInventory?: import("@orkestrator/protocol/native-agent").NativeAgentMcpServer[];
   /**

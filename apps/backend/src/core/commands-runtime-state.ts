@@ -91,6 +91,16 @@ export const localGrokBridgeTokens = new Map<string, string>();
 export const localPiBridgeTokens = new Map<string, string>();
 /** Credential generation used by each live local Cursor bridge. */
 export const localCursorCredentialFingerprints = new Map<string, string>();
+/**
+ * Agent account (`default` or an added account id) each live local Claude or
+ * Codex bridge was launched with, keyed like `localServerProcesses`.
+ */
+export const localAgentAccountIds = new Map<string, string>();
+/**
+ * Expiry of a short-lived Claude access token handed to a coordinator bridge
+ * in place of a login its private directory cannot hold, keyed the same way.
+ */
+export const localAgentAccountTokenExpiry = new Map<string, number>();
 export type OpenCodeAgentToolsConfiguration = {
   fingerprint: string;
   controller: AbortController;

@@ -12,6 +12,8 @@ import {
   LOCAL_SERVER_SHUTDOWN_GRACE_MS,
   configuredOpenCodeAgentTools,
   environmentBaselineTasks,
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
   localClaudeBridgeTokens,
   localCodexBridgeTokens,
   localCursorBridgeTokens,
@@ -192,6 +194,8 @@ export function releaseLocalServerOwnership(
   localServerProcesses.delete(key);
   localServerWorkingDirectories.delete(key);
   localServerUnresponsiveSince.delete(key);
+  localAgentAccountIds.delete(key);
+  localAgentAccountTokenExpiry.delete(key);
   if (key.startsWith("codex:")) {
     localCodexBridgeTokens.delete(key.slice("codex:".length));
   } else if (key.startsWith("claude:")) {

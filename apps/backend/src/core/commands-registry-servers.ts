@@ -64,6 +64,32 @@ import {
   conciseError,
   refreshClaudeModelCatalog,
 } from "./commands-helpers.js";
+import {
+  reconcileContainerAgentAccount,
+  type ContainerBridgeControl,
+} from "./agent-accounts-containers.js";
+
+/**
+ * Health and stop for one in-container bridge, as the account reconciliation
+ * needs them. The bracketed pattern keeps pkill from matching its own shell.
+ */
+function containerBridgeControl(
+  containerId: string,
+  port: number,
+  processPattern: string,
+): ContainerBridgeControl {
+  return {
+    isRunning: async () => {
+      const hostPort = await getHostPort(containerId, port);
+      return Boolean(hostPort && (await checkHttpHealth(hostPort)));
+    },
+    stop: async () => {
+      const hostPort = await getHostPort(containerId, port);
+      await dockerExec(containerId, `pkill -f '${processPattern}' || true`);
+      if (hostPort) await waitForUnhealthy(hostPort);
+    },
+  };
+}
 
 export function registerServerCommands(
   register: CommandRegistrar,
@@ -172,6 +198,12 @@ export function registerServerCommands(
   register("start_claude_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation("claude", id, async () => {
+      await reconcileContainerAgentAccount(
+        context,
+        id,
+        "claude",
+        containerBridgeControl(id, CLAUDE_BRIDGE_PORT, "[c]laude-bridge/dist/index.js"),
+      );
       const connection = await resolveContainerAgentToolConnection(context, id);
       return startContainerClaudeServer(
         id,
@@ -280,6 +312,12 @@ export function registerServerCommands(
   register("start_codex_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation("codex", id, async () => {
+      await reconcileContainerAgentAccount(
+        context,
+        id,
+        "codex",
+        containerBridgeControl(id, CODEX_BRIDGE_PORT, "[c]odex-bridge/dist/index.js"),
+      );
       const config = await context.storage.loadConfig();
       const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
         config.global.codexMaxConcurrentThreads,

@@ -1999,12 +1999,20 @@ async function readMacKeychainPassword(
  * Returns the raw credential JSON, or undefined when the host has no usable
  * credential. A non-JSON or empty Keychain payload is discarded rather than
  * forwarded, so a corrupt entry cannot overwrite a working in-container login.
+ *
+ * `keychainService` and `configDirOnly` read one added account's login: its
+ * Keychain entry is named after its directory, and falling back to
+ * `~/.claude` would report the host login as that account's.
  */
 export async function getHostClaudeCredentials(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = os.homedir(),
   configDir?: string,
-  options: { allowDefaultKeychainSearchList?: boolean } = {},
+  options: {
+    allowDefaultKeychainSearchList?: boolean;
+    keychainService?: string;
+    configDirOnly?: boolean;
+  } = {},
 ): Promise<string | undefined> {
   const isUsable = (value: string | undefined): string | undefined => {
     const trimmed = value?.trim();
@@ -2023,7 +2031,7 @@ export async function getHostClaudeCredentials(
   if (platform === "darwin") {
     const fromKeychain = isUsable(
       await readMacKeychainPassword(
-        HOST_CLAUDE_KEYCHAIN_SERVICE,
+        options.keychainService ?? HOST_CLAUDE_KEYCHAIN_SERVICE,
         homeDir,
         undefined,
         options.allowDefaultKeychainSearchList === true,
@@ -2036,7 +2044,10 @@ export async function getHostClaudeCredentials(
   // the on-disk credential when it is set. An agent-test profile runs with an
   // isolated HOME but is pointed at the host configuration, so reading only
   // `homeDir` would look inside the empty isolated home and report no login.
-  for (const directory of [configDir, path.join(homeDir, ".claude")]) {
+  const directories = options.configDirOnly
+    ? [configDir]
+    : [configDir, path.join(homeDir, ".claude")];
+  for (const directory of directories) {
     if (!directory) continue;
     try {
       const found = isUsable(await fs.readFile(path.join(directory, ".credentials.json"), "utf-8"));
@@ -2154,6 +2165,11 @@ export async function resolveContainerClaudeCredentials(
   globalConfig: AppConfig["global"],
 ): Promise<string | undefined> {
   if (globalConfig.useHostClaudeCredentials === false) return undefined;
+  return readRuntimeHostClaudeCredentials();
+}
+
+/** The host login this runtime's Claude launches use, without the container opt-out. */
+export async function readRuntimeHostClaudeCredentials(): Promise<string | undefined> {
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
   return getHostClaudeCredentials(
     process.platform,
@@ -2166,30 +2182,6 @@ export async function resolveContainerClaudeCredentials(
     // outside `login.keychain-db`, so it keeps the default search list.
     { allowDefaultKeychainSearchList: !agentTestHostHome },
   );
-}
-
-/**
- * Best-effort variant used on the environment start path.
- *
- * A credential that cannot be delivered leaves the agent logged out, which the
- * agent itself reports clearly. Failing the whole environment start over it
- * would be a worse outcome, so this only warns — and never with the payload.
- */
-export async function syncContainerClaudeCredentialBestEffort(
-  containerId: string,
-  globalConfig: AppConfig["global"],
-): Promise<void> {
-  try {
-    await syncContainerClaudeCredential(
-      containerId,
-      await resolveContainerClaudeCredentials(globalConfig),
-    );
-  } catch (error) {
-    console.warn(
-      "[commands] Failed to sync Claude credentials into container:",
-      error instanceof Error ? error.message : String(error),
-    );
-  }
 }
 
 // `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and

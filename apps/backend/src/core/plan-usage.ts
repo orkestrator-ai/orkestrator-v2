@@ -41,6 +41,11 @@ import {
 import { asRecord } from "./agent-provider-runtime.js";
 import { resolveCursorApiKey, resolveOpenCodeZenApiKey } from "./commands-validation.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
+import {
+  readAddedClaudeCredentials,
+  readAddedCodexAuth,
+  resolveActiveAgentAccount,
+} from "./agent-accounts-active.js";
 
 /**
  * Platforms whose plan quota Orkestrator can read outside an agent session.
@@ -484,17 +489,26 @@ async function defaultCursorApiKey(
   return apiKey;
 }
 
-/** Claude's stored OAuth token, from the Keychain or the credentials file. */
+/**
+ * The active Claude account's OAuth token: an added account's own login, or
+ * the host's from the Keychain or the credentials file.
+ */
 async function defaultClaudeOAuthToken(
   context: CommandContext,
   now: number,
 ): Promise<string | undefined> {
+  const active = await resolveActiveAgentAccount(context, "claude");
+  if (active.home) {
+    return getClaudeOAuthAccessToken(await readAddedClaudeCredentials(active.home), now);
+  }
   if (!hostCredentialAllowed(context, "claude")) return undefined;
   const { global } = await context.storage.loadConfig();
   return getClaudeOAuthAccessToken(await resolveContainerClaudeCredentials(global), now);
 }
 
 async function defaultCodexAuthFile(context: CommandContext): Promise<string | undefined> {
+  const active = await resolveActiveAgentAccount(context, "codex");
+  if (active.home) return await readAddedCodexAuth(active.home);
   if (!hostCredentialAllowed(context, "codex")) return undefined;
   return await readFileIfPresent(codexAuthPath());
 }
@@ -546,7 +560,16 @@ type ReaderRuntime = {
   codexAuth: (context: CommandContext) => Promise<string | undefined>;
   cursorApiKey: (context: CommandContext, now: number) => Promise<string | undefined>;
   cursorTokens: CursorTokenCache;
+  /**
+   * Whether the Claude token comes from an added account. The host-credential
+   * opt-out only governs the host login, so it must not hide an added one.
+   */
+  claudeUsesAddedAccount: (context: CommandContext) => Promise<boolean>;
 };
+
+async function defaultClaudeUsesAddedAccount(context: CommandContext): Promise<boolean> {
+  return Boolean((await resolveActiveAgentAccount(context, "claude")).home);
+}
 
 async function readOpenCodePlanUsage(
   context: CommandContext,
@@ -594,7 +617,10 @@ async function readClaudePlanUsage(
 ): Promise<PlanUsageSnapshot> {
   const nowIso = new Date(runtime.now()).toISOString();
   const { global } = await context.storage.loadConfig();
-  if (global.useHostClaudeCredentials === false) {
+  if (
+    global.useHostClaudeCredentials === false &&
+    !(await runtime.claudeUsesAddedAccount(context))
+  ) {
     return unavailableSnapshot(
       "claude",
       "Host Claude credentials are turned off, so plan usage cannot be read.",
@@ -802,6 +828,10 @@ export function createPlanUsageReader(
     codexAuth: overrides.credentials?.codex ?? defaultCodexAuthFile,
     cursorApiKey: overrides.credentials?.cursor ?? defaultCursorApiKey,
     cursorTokens: {},
+    // An injected Claude credential stands in for the host login.
+    claudeUsesAddedAccount: overrides.credentials?.claude
+      ? async () => false
+      : defaultClaudeUsesAddedAccount,
   };
 
   const reader = ((context, platform, options) => {
@@ -872,3 +902,39 @@ export function createPlanUsageReader(
 }
 
 export const readPlanUsage = createPlanUsageReader({ cache: sharedPlanUsageCache });
+
+/**
+ * One account's plan windows read with an explicit credential: an access token
+ * for Claude, the raw `auth.json` for Codex. Bypasses the shared cache, which
+ * describes the active account only.
+ */
+export async function readAgentAccountPlanUsage(
+  context: CommandContext,
+  platform: "claude" | "codex",
+  credential: string | undefined,
+  overrides: { fetchImpl?: FetchLike; now?: () => number } = {},
+): Promise<PlanUsageSnapshot> {
+  const now = overrides.now ?? Date.now;
+  const runtime: ReaderRuntime = {
+    fetchImpl: overrides.fetchImpl ?? fetch,
+    now,
+    claudeToken: async () => credential,
+    codexAuth: async () => credential,
+    cursorApiKey: async () => undefined,
+    cursorTokens: {},
+    claudeUsesAddedAccount: async () => true,
+  };
+  try {
+    return platform === "claude"
+      ? await readClaudePlanUsage(context, runtime)
+      : await readCodexPlanUsage(context, runtime);
+  } catch (error) {
+    return {
+      platform,
+      status: "error",
+      windows: [],
+      message: error instanceof Error ? error.message : "Plan usage is unavailable",
+      fetchedAt: new Date(now()).toISOString(),
+    };
+  }
+}

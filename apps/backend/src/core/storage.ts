@@ -13,15 +13,61 @@ import {
 
 import { StoragePublicOperations } from "./storage-public-operations.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
+import { parseAgentAccountStore, type AgentAccountStore } from "./agent-accounts-store.js";
 
 const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
 export class StorageService extends StoragePublicOperations {
+  private agentAccountMutation: Promise<unknown> = Promise.resolve();
+
   override async init(): Promise<void> {
     await super.init();
     await this.migrateConfigSchema();
     await this.migrateNativeAgentSessionOwners();
+  }
+
+  /** Root of the per-account provider configuration directories. */
+  agentAccountsDirectory(): string {
+    return path.join(this.dataDir, "agent-accounts");
+  }
+
+  private agentAccountsFile(): string {
+    return this.file("agent-accounts.json");
+  }
+
+  async loadAgentAccounts(): Promise<AgentAccountStore> {
+    return parseAgentAccountStore(
+      await this.loadJsonCached<unknown>(this.agentAccountsFile(), () => null),
+    );
+  }
+
+  /**
+   * Serialized read-modify-write of the account registry. Returning the store
+   * unchanged (the same object) skips the write.
+   */
+  mutateAgentAccounts<T>(
+    mutate: (store: AgentAccountStore) => { store: AgentAccountStore; result: T },
+  ): Promise<T> {
+    const run = async (): Promise<T> => {
+      const release = await this.acquireMutationLock(
+        this.agentAccountsFile(),
+        "agent account storage",
+      );
+      try {
+        const current = await this.loadAgentAccounts();
+        const { store, result } = mutate(current);
+        if (store !== current) {
+          await this.saveSensitiveJson(this.agentAccountsFile(), parseAgentAccountStore(store));
+        }
+        return result;
+      } finally {
+        await release();
+      }
+    };
+    const next = this.agentAccountMutation.then(run, run);
+    this.agentAccountMutation = next.catch(() => undefined);
+    return next;
   }
 
   private async migrateNativeAgentSessionOwners(): Promise<void> {

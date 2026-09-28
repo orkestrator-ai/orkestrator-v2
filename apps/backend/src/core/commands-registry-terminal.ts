@@ -129,6 +129,7 @@ import {
   resumeTerminalHistory,
   resizeTerminalHistory,
 } from "./terminal-history.js";
+import { activeAgentAccountShellEnvironment } from "./agent-accounts-active.js";
 
 /**
  * Answers a file-list or tree read in the command's legacy shapes.
@@ -698,6 +699,9 @@ export function registerTerminalCommands(
     if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
       throw new Error("Local terminal session is no longer available");
     }
+    // A terminal keeps the account that was active when it started; a switch
+    // applies to terminals opened after it.
+    const accountEnvironment = await activeAgentAccountShellEnvironment(context);
     await resumeTerminalHistory(id);
     spawnTerminalProcess(
       id,
@@ -707,7 +711,7 @@ export function registerTerminalCommands(
         cwd: currentEnvironment.worktreePath,
         cols: config.cols,
         rows: config.rows,
-        env: envWithManagedBinaries(context),
+        env: { ...envWithManagedBinaries(context), ...accountEnvironment },
       },
       emit,
       trackedTerminalActivityHooks(id, context),

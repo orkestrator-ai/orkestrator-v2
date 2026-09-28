@@ -61,6 +61,8 @@ import {
   localGrokBridgeTokens,
   localPiBridgeTokens,
   localCursorCredentialFingerprints,
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
   openCodeAgentToolsConfigurations,
   configuredOpenCodeAgentTools,
   BRIDGE_TOKEN_PATTERN,
@@ -150,6 +152,14 @@ import {
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
 import { drainContainerProcesses } from "./container-readiness.js";
+import { setLocalClaudeConfigDirectoryProvider } from "./tmux-session-manager.js";
+import {
+  activeAgentAccountShellEnvironment,
+  applyActiveAgentAccountEnvironment,
+  applyCoordinatorClaudeAccount,
+  localBridgeIsOnActiveAccount,
+  resolveActiveAgentAccount,
+} from "./agent-accounts-active.js";
 
 /** Deletion drains briefly: the container is removed right after. */
 const DELETION_DRAIN_GRACE_SECONDS = 5;
@@ -950,9 +960,12 @@ export async function startLocalServerUnlocked(
       localCursorCredentialFingerprints.get(environmentId) === cursorCredentialFingerprint;
     const workingDirectoryMatches =
       Boolean(env?.worktreePath) && localServerWorkingDirectories.get(key) === env?.worktreePath;
+    const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);
     let replaceReason: string;
     if (!credentialMatches) {
       replaceReason = "Cursor credentials changed";
+    } else if (!accountMatches) {
+      replaceReason = "the active agent account changed";
     } else if (!workingDirectoryMatches) {
       replaceReason = "worktree path changed";
     } else if (!port) {
@@ -1057,6 +1070,8 @@ export async function startLocalServerUnlocked(
   const port = await allocateLocalPort();
   let command = "";
   let cwd = environment.worktreePath;
+  let launchedAccountId: string | undefined;
+  let launchedTokenExpiresAt: number | undefined;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
@@ -1123,16 +1138,16 @@ export async function startLocalServerUnlocked(
         coordinatorConversationId!,
         "claude-home",
       );
-      // Seeded from whatever directory this run would otherwise have used,
-      // which `applyClaudeHostCredentialEnvironment` may already have pointed
-      // at an isolated agent-test home. On macOS the credential lives in the
-      // Keychain rather than this directory; that lookup is by service name
-      // and is unaffected by the override.
-      await prepareCoordinatorClaudeHome(
+      const account = await applyCoordinatorClaudeAccount(
+        context,
         coordinatorClaudeHome,
-        env.CLAUDE_CONFIG_DIR?.trim() || undefined,
+        env,
+        prepareCoordinatorClaudeHome,
       );
-      env.CLAUDE_CONFIG_DIR = coordinatorClaudeHome;
+      launchedAccountId = account.accountId;
+      launchedTokenExpiresAt = account.tokenExpiresAt;
+    } else {
+      launchedAccountId = await applyActiveAgentAccountEnvironment(context, "claude", env);
     }
   } else if (kind === "codex") {
     command = resolveBunBinary(context);
@@ -1166,8 +1181,16 @@ export async function startLocalServerUnlocked(
         coordinatorConversationId!,
         "codex-home",
       );
-      await prepareCoordinatorCodexHome(coordinatorCodexHome);
+      // Only the login is copied: from the active account's directory, or
+      // the host's when no account was added.
+      const account = await resolveActiveAgentAccount(context, "codex");
+      // The directory outlives a launch: drop an earlier account's login.
+      await rm(path.join(coordinatorCodexHome, "auth.json"), { force: true });
+      await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
       env.CODEX_HOME = coordinatorCodexHome;
+      launchedAccountId = account.accountId;
+    } else {
+      launchedAccountId = await applyActiveAgentAccountEnvironment(context, "codex", env);
     }
   } else if (kind === "pi") {
     command = resolveBunBinary(context);
@@ -1345,6 +1368,10 @@ export async function startLocalServerUnlocked(
   }
   localServerProcesses.set(key, child);
   localServerWorkingDirectories.set(key, environment.worktreePath);
+  if (launchedAccountId) localAgentAccountIds.set(key, launchedAccountId);
+  else localAgentAccountIds.delete(key);
+  if (launchedTokenExpiresAt) localAgentAccountTokenExpiry.set(key, launchedTokenExpiresAt);
+  else localAgentAccountTokenExpiry.delete(key);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
   child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
   child.once("exit", () => {
@@ -1757,6 +1784,10 @@ export function deleteEnvironmentTask(
  */
 // Registered at module scope: the PR monitor observes merges and hands them
 // back here, without importing this module.
+// tmux cannot import the account modules without a cycle; the owner registers.
+setLocalClaudeConfigDirectoryProvider(
+  async (context) => (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR,
+);
 setMergeCleanupScheduler((environmentId, context) =>
   scheduleMergeCleanupRecovery(environmentId, context),
 );

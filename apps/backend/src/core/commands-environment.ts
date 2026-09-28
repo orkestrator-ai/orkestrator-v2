@@ -42,7 +42,6 @@ import {
 } from "./container-lifecycle-service.js";
 import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
 import { applyEnvironmentAllowedDomains } from "./container-network.js";
-import { providerCredentialsAllowed } from "./portable-input-status.js";
 import {
   assertRecoveryCapacity,
   discardRecoveryCopy,
@@ -159,7 +158,6 @@ import {
   enableGitScanCaches,
   resolveContainerGitHubToken,
   syncContainerGitHubCredential,
-  syncContainerClaudeCredentialBestEffort,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
@@ -176,6 +174,10 @@ import {
 } from "./commands-error-text.js";
 import type { EnvironmentSetupStartResult } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
+import {
+  refreshStagedAgentAccountLogins,
+  syncContainerAgentAccountsOnStart,
+} from "./agent-accounts-containers.js";
 
 export function spawnTerminalProcess(
   id: string,
@@ -1398,6 +1400,7 @@ async function startContainerRuntimeAdmitted(
       phase: "starting",
       boot: { phase: "starting" },
     });
+    await refreshStagedAgentAccountLogins(context, environment, containerId);
     await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
     await ensureContainerProjectFilesAccess(containerId);
     // Readiness belongs to this boot: nothing is prepared or launched until
@@ -1595,16 +1598,7 @@ export async function startEnvironmentOnce(
       const githubToken = await resolveContainerGitHubToken(config.global);
       await syncContainerGitHubCredential(containerId, githubToken);
     }
-    if (
-      providerCredentialsAllowed(
-        context,
-        config.global.enabledAgentPlatforms,
-        environment,
-        "claude",
-      )
-    ) {
-      await syncContainerClaudeCredentialBestEffort(containerId, config.global);
-    }
+    await syncContainerAgentAccountsOnStart(context, environment, containerId, config.global);
     const hostEntryPort = environment.entryPort
       ? await getHostPort(containerId, environment.entryPort)
       : null;

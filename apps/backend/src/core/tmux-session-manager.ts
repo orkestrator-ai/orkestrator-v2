@@ -56,6 +56,20 @@ import {
   workspaceHookPaths,
 } from "./tmux-hooks.js";
 type CommandContext = shared.CommandContext;
+
+/**
+ * Supplies the Claude configuration directory a local tmux launch should use.
+ * The agent-account owner registers it (see `commands-servers`): tmux does not
+ * depend on the account modules, whose imports lead back here.
+ */
+type LocalClaudeConfigDirectoryProvider = (context: CommandContext) => Promise<string | undefined>;
+let localClaudeConfigDirectory: LocalClaudeConfigDirectoryProvider = async () => undefined;
+
+export function setLocalClaudeConfigDirectoryProvider(
+  provider: LocalClaudeConfigDirectoryProvider,
+): void {
+  localClaudeConfigDirectory = provider;
+}
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
 type JsonRecord = shared.JsonRecord;
@@ -333,7 +347,14 @@ export class TmuxSession {
             ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; " +
               "orkestrator_source_runtime_env 2>/dev/null || true; "
             : "";
-        const wrapped = `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        // A local tmux server keeps the environment it was first started
+        // with, so the active Claude account is exported per session instead.
+        const accountDirectory =
+          this.backend.kind === "local" ? await localClaudeConfigDirectory(context) : undefined;
+        const accountPrefix = accountDirectory
+          ? `export CLAUDE_CONFIG_DIR=${shellArg(accountDirectory)}; `
+          : "";
+        const wrapped = `${runtimePrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
           "new-session",

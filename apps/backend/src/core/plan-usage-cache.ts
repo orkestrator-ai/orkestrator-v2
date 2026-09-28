@@ -59,6 +59,8 @@ export type PlanUsageCache = {
    * window.
    */
   recordSessionWindows: (platform: AgentPlatform, windows: NativeAgentAccountUsageWindow[]) => void;
+  /** Drop one platform's entry, e.g. after its active account changed. */
+  invalidate: (platform: PlanUsagePlatform) => void;
   /** Drop every cached entry. Test isolation, and a credential change. */
   clear: () => void;
 };
@@ -112,6 +114,9 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
         expiresAt: at + CACHE_TTL_MS,
         snapshot: okSnapshot(platform, merged, new Date(at).toISOString()),
       });
+    },
+    invalidate(platform) {
+      entries.delete(platform);
     },
     clear() {
       entries.clear();

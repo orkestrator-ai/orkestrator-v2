@@ -86,6 +86,8 @@ import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
+import { AgentAccountsSection } from "./AgentAccountsSection";
+import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useProjectStore, useUIStore } from "@/stores";
 import {
@@ -546,6 +548,13 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     <div className="max-w-2xl space-y-5">
       {(PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
         <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
+      ) : null}
+      {isAgentAccountPlatform(platform) ? (
+        <AgentAccountsSection
+          key={`accounts-${platform}`}
+          platform={platform}
+          onActiveAccountChange={() => setPlanUsageRefreshToken((token) => token + 1)}
+        />
       ) : null}
       <AgentPlatformPane
         platform={platform}

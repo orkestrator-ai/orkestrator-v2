@@ -461,6 +461,13 @@ export async function createCommandFixtures() {
           async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
         ),
         loadConfig: mock(async () => config),
+        // No added agent accounts: every launch uses the host login.
+        loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
+        agentAccountsDirectory: () =>
+          path.join(
+            options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
+            "agent-accounts",
+          ),
         saveConfig: mock(async (nextConfig: typeof config) => {
           Object.assign(config, nextConfig);
         }),

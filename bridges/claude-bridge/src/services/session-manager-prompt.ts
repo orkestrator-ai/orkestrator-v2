@@ -54,6 +54,7 @@ import type {
 } from "../types/index.js";
 import {
   isHandledSdkMessageType,
+  isKnownInternalSdkMessageType,
   isSdkResultMessage,
   sessionHealth,
   systemSubtypeDisposition,
@@ -2948,6 +2949,10 @@ export async function sendPrompt(
           severity: "warning",
           createdAt: new Date().toISOString(),
         });
+      } else if (isKnownInternalSdkMessageType(message.type)) {
+        // An internal CLI frame outside the SDK's union that the bridge has
+        // read and needs nothing from. Not drift: counting it flagged every
+        // prompt as an unrecognised event.
       } else {
         // Everything the chain above did not claim. `HANDLED_SDK_MESSAGE_TYPES`
         // is a `Record` over the SDK's own union, so a type it does not name is

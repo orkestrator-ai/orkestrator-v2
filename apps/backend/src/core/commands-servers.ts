@@ -69,6 +69,7 @@ import {
   mergeCleanupRecoveryTasks,
   retryableBridgeStartupError,
   LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS,
+  LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS,
   LOCAL_SERVER_KINDS,
   isLocalServerShutdownRequested,
   requestLocalServerShutdown,
@@ -428,7 +429,13 @@ export async function peekLocalAgentBridgeState(
         ? bearerBridgeHeaders(authToken)
         : undefined,
   );
-  if (healthy) return { status: "running", port, authToken };
+  if (healthy) {
+    const key = `${kind}:${environmentId}`;
+    if (localServerUnresponsiveSince.get(key)?.child === child) {
+      localServerUnresponsiveSince.delete(key);
+    }
+    return { status: "running", port, authToken };
+  }
   return child.exitCode === null && child.signalCode === null
     ? { status: "unresponsive" }
     : { status: "absent" };
@@ -973,9 +980,14 @@ export async function startLocalServerUnlocked(
       } else {
         replaceReason = `health check failed ${health.failedProbes} consecutive times`;
         const marker = localServerUnresponsiveSince.get(key);
-        const since = marker?.child === existing ? marker.since : Date.now();
-        localServerUnresponsiveSince.set(key, { child: existing, since });
-        const unresponsiveForMs = Date.now() - since;
+        const now = Date.now();
+        const since =
+          marker?.child === existing &&
+          now - marker.lastFailureAt <= LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS
+            ? marker.since
+            : now;
+        localServerUnresponsiveSince.set(key, { child: existing, since, lastFailureAt: now });
+        const unresponsiveForMs = now - since;
         if (
           unresponsiveForMs < LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS &&
           (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind))

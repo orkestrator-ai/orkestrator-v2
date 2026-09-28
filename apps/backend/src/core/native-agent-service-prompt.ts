@@ -190,14 +190,16 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   }
 
   /**
-   * Whether any session on one environment's bridge was last observed doing
-   * work: a turn in flight, a parked question, or background tasks it launched.
+   * Whether one environment's bridge has an in-flight dispatch or a session
+   * last observed working, waiting, or running background tasks.
    *
    * Uses the raw state, not the turn view: replacing the bridge kills its whole
    * process tree, so a backgrounded test run or dev server is lost just like a
    * turn. Purely in-memory apart from the session list; never reads a bridge.
    */
   async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
+    const provider = this.providers.get(`${environmentId}\0${agent}`);
+    if (provider && this.providerDispatchCounts.has(provider)) return true;
     const sessions = await this.storage.listNativeAgentSessions();
     return sessions.some((session) => {
       if (session.environmentId !== environmentId || session.agent !== agent) return false;

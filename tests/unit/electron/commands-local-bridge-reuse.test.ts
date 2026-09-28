@@ -1,7 +1,14 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import http from "node:http";
 
 import { createCommandFixtures } from "./command-fixtures";
 import type { CommandContext } from "./command-fixtures";
+import { installStandaloneBackendLogging } from "../../../apps/backend/src/standalone-logging";
+import {
+  createProviderStub,
+  withService,
+  waitForCondition,
+} from "../../../apps/backend/src/core/native-agent-service-projection-test-support";
 
 const {
   commandTesting,
@@ -28,6 +35,11 @@ const CONTROLLABLE_BRIDGE = `
     if (url.pathname === "/fail") failRemaining = Number(url.searchParams.get("n"));
     else if (url.pathname === "/stall") stalled = true;
     else if (url.pathname === "/recover") stalled = false;
+    else if (url.pathname === "/supervision") {
+      res.writeHead(200);
+      res.end(process.env.ORKESTRATOR_DESKTOP_SUPERVISED || "unset");
+      return;
+    }
     else if (url.pathname === "/global/health") {
       const healthy = !stalled && failRemaining === 0;
       if (failRemaining > 0) failRemaining -= 1;
@@ -77,6 +89,31 @@ async function startControllableBridge(
 }
 
 describe("local bridge reuse under load", () => {
+  test("does not pass desktop supervision to a spawned bridge", async () => {
+    const previous = process.env.ORKESTRATOR_DESKTOP_SUPERVISED;
+    process.env.ORKESTRATOR_DESKTOP_SUPERVISED = "1";
+    try {
+      expect(
+        installStandaloneBackendLogging({ dataDir: "/unused", runtimeFlavor: "production" }),
+      ).toBeNull();
+      const { first } = await startControllableBridge("env-bridge-supervision-env", () => false);
+      const supervision = await new Promise<string>((resolve, reject) => {
+        http
+          .get(`http://127.0.0.1:${first.port}/supervision`, (response) => {
+            let body = "";
+            response.setEncoding("utf8");
+            response.on("data", (chunk: string) => (body += chunk));
+            response.on("end", () => resolve(body));
+          })
+          .on("error", reject);
+      });
+      expect(supervision).toBe("unset");
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_DESKTOP_SUPERVISED;
+      else process.env.ORKESTRATOR_DESKTOP_SUPERVISED = previous;
+    }
+  });
+
   test("keeps a live bridge that misses a health probe and then answers", async () => {
     // A host saturated by a test suite can stall a healthy bridge past one
     // probe. Replacing it on that alone killed the agent mid-turn.
@@ -118,6 +155,106 @@ describe("local bridge reuse under load", () => {
       context,
     )) as Started;
     expect(recovered).toMatchObject({ wasRunning: true, pid: first.pid });
+  });
+
+  test("keeps the bridge while a provider send has not yet produced an activity observation", async () => {
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-1",
+      () => false,
+    );
+    let finishSend: (() => void) | undefined;
+    const sendHeld = new Promise<void>((resolve) => {
+      finishSend = resolve;
+    });
+    const { provider, send } = createProviderStub("codex", { send: async () => sendHeld });
+    await withService(
+      { prefix: "ork-bridge-inflight-dispatch-", provider: async () => provider },
+      async ({ service }) => {
+        context.nativeAgents = service;
+        const dispatch = service.dispatchPrompt({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: "tab-1",
+          prompt: "Run work",
+          requestId: "dispatch-1",
+        });
+        try {
+          await waitForCondition(() => send.mock.calls.length > 0);
+          expect(await service.hasObservedLiveWork("env-1", "codex")).toBe(true);
+          await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+          await expect(
+            commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+          ).rejects.toMatchObject({ retryable: true });
+          expect(isProcessRunning(first.pid)).toBe(true);
+        } finally {
+          finishSend?.();
+          await dispatch;
+        }
+      },
+    );
+  });
+
+  test("starts a fresh grace period after recovery is observed by a peek", async () => {
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-bridge-reuse-recovered",
+      () => true,
+    );
+    await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+    ).rejects.toMatchObject({ retryable: true });
+    commandTesting.markLocalServerUnresponsiveSince(
+      `codex:${environmentId}`,
+      Date.now() - 3 * 60_000,
+    );
+    await expect(requestOk(first.port, "/recover")).resolves.toBe(true);
+    await expect(
+      commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
+    ).resolves.toMatchObject({ port: first.port });
+    await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+    ).rejects.toMatchObject({ retryable: true });
+    expect(isProcessRunning(first.pid)).toBe(true);
+  });
+
+  test("classifies a child that exited during its peek as absent", async () => {
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-bridge-reuse-exited-peek",
+      () => false,
+    );
+    await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    const child = commandTesting.getLocalServerProcess(`codex:${environmentId}`);
+    expect(child).toBeDefined();
+    if (!child) return;
+    const originalExitCode = child.exitCode;
+    try {
+      child.exitCode = 1;
+      await expect(
+        commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
+      ).resolves.toBeNull();
+    } finally {
+      child.exitCode = originalExitCode;
+    }
+    expect(isProcessRunning(first.pid)).toBe(true);
+  });
+
+  test("treats a new failure after a long observation gap as a new stall", async () => {
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-bridge-reuse-failure-gap",
+      () => true,
+    );
+    await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    commandTesting.markLocalServerUnresponsiveSince(
+      `codex:${environmentId}`,
+      Date.now() - 3 * 60_000,
+    );
+    // Model a bridge that recovered while a cached provider skipped peeks.
+    commandTesting.markLocalServerLastFailureAt(`codex:${environmentId}`, Date.now() - 31_000);
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+    ).rejects.toMatchObject({ retryable: true });
+    expect(isProcessRunning(first.pid)).toBe(true);
   });
 
   test("replaces a busy bridge that has stayed unresponsive past the grace period", async () => {

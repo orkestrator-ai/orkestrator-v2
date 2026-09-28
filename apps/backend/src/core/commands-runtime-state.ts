@@ -171,10 +171,12 @@ export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
  * stall this long is treated as a hang rather than load.
  */
 export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
+/** A gap this long starts a new run of failed health checks. */
+export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
 /** When each owned bridge process was first seen failing its reuse health check. */
 export const localServerUnresponsiveSince = new Map<
   string,
-  { child: ChildProcessWithoutNullStreams; since: number }
+  { child: ChildProcessWithoutNullStreams; since: number; lastFailureAt: number }
 >();
 /**
  * Grok, Cursor, and Pi may need longer to initialize their agent runtime before

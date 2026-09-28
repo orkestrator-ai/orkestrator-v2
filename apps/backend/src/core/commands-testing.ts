@@ -215,7 +215,12 @@ export const __testing = {
   markLocalServerUnresponsiveSince(key: string, since: number): void {
     const child = localServerProcesses.get(key);
     if (!child) throw new Error(`No local server owns ${key}`);
-    localServerUnresponsiveSince.set(key, { child, since });
+    localServerUnresponsiveSince.set(key, { child, since, lastFailureAt: Date.now() });
+  },
+  markLocalServerLastFailureAt(key: string, lastFailureAt: number): void {
+    const marker = localServerUnresponsiveSince.get(key);
+    if (!marker) throw new Error(`No unresponsive marker for ${key}`);
+    marker.lastFailureAt = lastFailureAt;
   },
   resetLocalServerLifecycle(): void {
     if (localServerEnvironmentOperations.size > 0) {

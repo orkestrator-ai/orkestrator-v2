@@ -22,7 +22,12 @@ export function installStandaloneBackendLogging(
   options: Pick<BackendOptions, "dataDir" | "runtimeFlavor">,
   env: NodeJS.ProcessEnv = process.env,
 ): InstalledApplicationLogging | null {
-  if (env[DESKTOP_SUPERVISED_ENV] === "1") return null;
+  if (env[DESKTOP_SUPERVISED_ENV] === "1") {
+    // Only this directly supervised process should inherit the flag. Agent
+    // CLIs, terminals and bridges can launch independent backends later.
+    delete env[DESKTOP_SUPERVISED_ENV];
+    return null;
+  }
   // Isolated test profiles keep their diagnostics under the profile's logDir.
   if (options.runtimeFlavor === "agent-test") return null;
   return installProductionApplicationLogging({

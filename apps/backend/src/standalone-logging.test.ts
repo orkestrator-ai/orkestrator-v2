@@ -47,12 +47,11 @@ describe("standalone backend logging", () => {
 
   test("stays off under Electron, which already records this process's output", async () => {
     const dataDir = await dataDirWithDebugLogging(true);
+    const env: NodeJS.ProcessEnv = { ORKESTRATOR_DESKTOP_SUPERVISED: "1", PATH: "/test/bin" };
     expect(
-      installStandaloneBackendLogging(
-        { dataDir, runtimeFlavor: "production" },
-        { ORKESTRATOR_DESKTOP_SUPERVISED: "1" },
-      ),
+      installStandaloneBackendLogging({ dataDir, runtimeFlavor: "production" }, env),
     ).toBeNull();
+    expect(env).toEqual({ PATH: "/test/bin" });
   });
 
   test("stays off for isolated test profiles and when Debug logging is off", async () => {

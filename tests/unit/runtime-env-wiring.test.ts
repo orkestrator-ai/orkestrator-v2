@@ -205,6 +205,40 @@ describe("container runtime environment wiring", () => {
     expect(setup).toContain("export GIT_TERMINAL_PROMPT=0");
   });
 
+  test("container activity hooks write the terminal state file only outside the native bridge", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    const settingsBody = entrypoint.match(
+      /cat > "\$HOME\/\.claude\/settings\.json" << 'EOF'\n([\s\S]*?)\nEOF\n/,
+    )?.[1];
+    expect(settingsBody).toBeDefined();
+    const hooks = (
+      JSON.parse(settingsBody!) as {
+        hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+      }
+    ).hooks;
+
+    for (const [event, expected] of [
+      ["UserPromptSubmit", "working"],
+      ["Stop", "waiting"],
+    ] as const) {
+      const command = hooks[event]?.[0]?.hooks[0]?.command;
+      expect(command).toContain("/tmp/.claude-state");
+      withTempDir((dir) => {
+        const stateFile = join(dir, "state");
+        const script = command!.replaceAll("/tmp/.claude-state", shellQuote(stateFile));
+        const path = process.env.PATH ?? "/usr/bin:/bin";
+
+        expect(
+          runShell(script, { PATH: path, ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" }).exitCode,
+        ).toBe(0);
+        expect(() => statSync(stateFile)).toThrow();
+
+        expect(runShell(script, { PATH: path }).exitCode).toBe(0);
+        expect(readFileSync(stateFile, "utf8").trim()).toBe(expected);
+      });
+    }
+  });
+
   test("container startup copies only bounded Codex configuration state", () => {
     const entrypoint = read("docker/entrypoint.sh");
 

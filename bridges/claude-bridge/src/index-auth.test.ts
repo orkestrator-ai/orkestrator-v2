@@ -73,6 +73,10 @@ async function withLiveBridge<T>(run: (baseUrl: string) => Promise<T>): Promise<
 }
 
 describe("bridge authentication and origin policy", () => {
+  test("marks the environment inherited by children so terminal activity hooks stay silent", () => {
+    expect(process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE).toBe("claude");
+  });
+
   test("captures the token once and removes it from the environment inherited by children", async () => {
     expect(process.env.CLAUDE_BRIDGE_TOKEN).toBeUndefined();
     expect(

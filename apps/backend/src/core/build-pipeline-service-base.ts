@@ -29,6 +29,7 @@ import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import {
   type BridgeConnection,
@@ -224,6 +225,47 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     return this.options.transcriptPersistIntervalMs ?? DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS;
   }
 
+  private cachedTranscriptCheckpoints: BuildPipelineTranscriptCheckpoints | null = null;
+
+  /**
+   * Newest observed transcripts and their checkpointing into the transcript
+   * store ahead of each control-record save. Lazy for the same reason as the
+   * rollout below: parameter properties are assigned after field initializers.
+   */
+  protected get transcriptCheckpoints(): BuildPipelineTranscriptCheckpoints {
+    this.cachedTranscriptCheckpoints ??= new BuildPipelineTranscriptCheckpoints(this.storage);
+    return this.cachedTranscriptCheckpoints;
+  }
+
+  /** Background legacy-transcript migration and orphan sweep started by {@link init}. */
+  protected transcriptMaintenance: Promise<void> | null = null;
+
+  /**
+   * Moves legacy inline transcripts out of the control file and collects
+   * transcripts no pipeline owns. Runs once per `init` in the background: a
+   * large legacy file must not delay re-arming the supervisors, and every
+   * unmigrated record stays readable through the legacy adapter meanwhile.
+   */
+  protected startTranscriptMaintenance(): void {
+    if (this.transcriptMaintenance) return;
+    this.transcriptMaintenance = (async () => {
+      try {
+        const report = await this.storage.migrateBuildPipelineTranscripts({
+          shouldContinue: () => !this.stopped,
+        });
+        if (report.migrated || report.deferred || report.orphaned) {
+          console.info(
+            `[build-pipeline] Transcript migration: ${report.migrated} migrated, ${report.deferred} deferred, ${report.orphaned} orphaned, ${report.remaining} remaining`,
+          );
+        }
+        if (this.stopped) return;
+        await this.storage.sweepBuildPipelineTranscripts();
+      } catch (error) {
+        console.warn("[build-pipeline] Transcript maintenance failed:", errorMessage(error));
+      }
+    })();
+  }
+
   private cachedWorkflowRollout: WorkflowResultRollout | null = null;
 
   /**
@@ -398,6 +440,9 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     }
     await this.finishDurablyRecordedInteractionJournalEntries();
     if (this.options.autoAdvance !== false) {
+      // Supervised services own storage maintenance; manually driven services
+      // (tests) still migrate each legacy record on its next save.
+      this.startTranscriptMaintenance();
       if (this.keyed) {
         // Non-blocking: the first discovery runs on the scheduler and joins the
         // terminal reconciliations above through the same per-pipeline lock.
@@ -528,6 +573,8 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     if (this.tickPromise) {
       await this.tickPromise;
     }
+    await this.transcriptMaintenance;
+    this.transcriptMaintenance = null;
     while (this.locks.size > 0) {
       await Promise.allSettled(this.locks.values());
     }
@@ -1365,6 +1412,9 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
+    if (record && isBuildPipeline(record.snapshot)) {
+      this.transcriptCheckpoints.forget(record.snapshot.sessions);
+    }
     this.supervisor?.forget(pipelineId);
     this.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
     this.lastProviderAgent.delete(pipelineId);

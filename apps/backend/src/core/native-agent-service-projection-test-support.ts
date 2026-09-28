@@ -75,6 +75,8 @@ export function createProviderStub(
     messages?: (sessionId: string) => Promise<unknown[]>;
     interactiveSnapshot?: (sessionId: string) => Promise<ProviderInteractiveSnapshot>;
     transcriptSnapshot?: NativeAgentRuntimeProvider["transcriptSnapshot"];
+    transcriptDetail?: NativeAgentRuntimeProvider["transcriptDetail"];
+    transcriptPage?: NativeAgentRuntimeProvider["transcriptPage"];
     sessionStateSnapshot?: NativeAgentRuntimeProvider["sessionStateSnapshot"];
     modelCatalog?: NativeAgentRuntimeProvider["modelCatalog"];
     rawModelCatalog?: NativeAgentRuntimeProvider["rawModelCatalog"];
@@ -114,6 +116,10 @@ export function createProviderStub(
   const transcriptSnapshot = behaviour.transcriptSnapshot
     ? mock(behaviour.transcriptSnapshot)
     : undefined;
+  const transcriptDetail = behaviour.transcriptDetail
+    ? mock(behaviour.transcriptDetail)
+    : undefined;
+  const transcriptPage = behaviour.transcriptPage ? mock(behaviour.transcriptPage) : undefined;
   const sessionStateSnapshot = behaviour.sessionStateSnapshot
     ? mock(behaviour.sessionStateSnapshot)
     : undefined;
@@ -146,6 +152,8 @@ export function createProviderStub(
     messages: behaviour.messages ?? (async () => []),
     interactiveSnapshot,
     transcriptSnapshot,
+    transcriptDetail,
+    transcriptPage,
     sessionStateSnapshot,
     modelCatalog,
     rawModelCatalog,
@@ -182,6 +190,8 @@ export function createProviderStub(
     dismissSuggestedPrompt,
     interactiveSnapshot,
     transcriptSnapshot,
+    transcriptDetail,
+    transcriptPage,
     sessionStateSnapshot,
     modelCatalog,
     rawModelCatalog,
@@ -276,6 +286,8 @@ export async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    projectedMessageCacheLimits?: NativeAgentServiceOptions["projectedMessageCacheLimits"];
+    directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -323,6 +335,12 @@ export async function withService(
     ...(setup.toolDetailCacheMaxBytes === undefined
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
+    ...(setup.projectedMessageCacheLimits
+      ? { projectedMessageCacheLimits: setup.projectedMessageCacheLimits }
+      : {}),
+    ...(setup.directHistoryPageCacheLimits
+      ? { directHistoryPageCacheLimits: setup.directHistoryPageCacheLimits }
+      : {}),
   });
   try {
     await run({ storage, service });

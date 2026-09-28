@@ -54,6 +54,7 @@ import type {
 } from "../types/index.js";
 import {
   isHandledSdkMessageType,
+  isKnownInternalSdkMessageType,
   isSdkResultMessage,
   sessionHealth,
   systemSubtypeDisposition,
@@ -70,6 +71,7 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
@@ -106,6 +108,8 @@ import {
   recordInitCommandInventory,
 } from "./session-manager-commands.js";
 import type { McpToolMetadata } from "../types/mcp.js";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import { commandChangeHooks, commandChangeProbe } from "./command-changes.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
   switch (reason) {
@@ -251,6 +255,7 @@ import {
   refreshSettledToolRows,
   resultAnswersOtherInput,
   taskNotificationNoticePart,
+  toolResultIds,
 } from "./session-manager-messages.js";
 export { memoryRecallPart } from "./session-manager-messages.js";
 import {
@@ -350,6 +355,7 @@ function settlePendingApiRetry(
   const part = message?.parts[0];
   if (!message || part?.type !== "retry") return;
   part.toolState = outcome.state;
+  markTranscriptChanged(session);
   emit({ type: "message.updated", sessionId, data: { message } });
 }
 
@@ -375,6 +381,7 @@ function appendTranscriptNotice(
     createdAt: new Date().toISOString(),
   };
   session.messages.push(message);
+  markTranscriptChanged(session);
   emit({ type: "message.updated", sessionId, data: { message } });
   return message;
 }
@@ -544,6 +551,9 @@ export async function sendPrompt(
     session.claudeUsageBaseline === undefined &&
     (needsTranscriptHydration || session.messages.length > 0 || session.usage !== undefined);
   session.persistedMessagesLoaded = true;
+  // The flip from preview to loaded is itself a new history for readers, even
+  // before the read below installs its messages.
+  if (needsTranscriptHydration) resetTranscriptEpoch(session);
   // Set when the pre-turn read fails. The claim above is still correct for the
   // duration of the turn, but leaving it set afterwards would hide the on-disk
   // history until the bridge restarted, so the turn's `finally` clears it.
@@ -596,6 +606,7 @@ export async function sendPrompt(
         session.error = errorBeforeStartup;
         session.lastActivity = lastActivityBeforeStartup;
         session.persistedMessagesLoaded = persistedMessagesLoadedBeforeStartup;
+        if (needsTranscriptHydration) resetTranscriptEpoch(session);
         session.structuredOutput = structuredOutputBeforeStartup;
         session.structuredOutputRequestId = structuredOutputRequestIdBeforeStartup;
         session.inProgressUsage = inProgressUsageBeforeStartup;
@@ -627,6 +638,7 @@ export async function sendPrompt(
         session.messages = hydrated.messages;
         session.taskRegistry = hydrated.taskRegistry;
         session.backgroundTasks = hydrated.backgroundTasks;
+        resetTranscriptEpoch(session);
       }
     } catch (error) {
       // A turn that cannot read its own history is not a debug-level event: the
@@ -668,6 +680,7 @@ export async function sendPrompt(
     createdAt: new Date().toISOString(),
   };
   session.messages.push(userMessage);
+  markTranscriptChanged(session);
   eventEmitter.emit({
     type: "message.updated",
     sessionId,
@@ -1208,6 +1221,32 @@ export async function sendPrompt(
       finishTurnInputIfSettled();
       return {};
     };
+    // A measurement usually lands on a call the tracker already holds; one that
+    // outruns the assistant message carrying the call waits here for its
+    // tool result, which cannot precede it.
+    const pendingCommandChanges = new Map<string, MeasuredWorkspaceChange>();
+    const applyCommandChanges = (toolUseId: string, change: MeasuredWorkspaceChange) => {
+      if (!toolTracker.setCommandChanges(toolUseId, change)) {
+        pendingCommandChanges.set(toolUseId, change);
+        return;
+      }
+      if (session.latestTurnGeneration !== turnGeneration) return;
+      if (stream.currentAssistantMessage) {
+        stream.currentAssistantMessage.parts = buildMessageParts(
+          stream.accumulatedOrderedParts,
+          toolTracker,
+        );
+        stream.emitCurrentAssistantMessage();
+      }
+      refreshSettledToolRows(
+        session,
+        sessionId,
+        toolTracker,
+        [toolUseId],
+        stream.currentAssistantMessage,
+      );
+    };
+    const commandChangeHook = commandChangeHooks(applyCommandChanges);
     const queryIterator = query({
       prompt: heldSdkPrompt.prompt,
       options: {
@@ -1312,9 +1351,16 @@ export async function sendPrompt(
         hooks: {
           // Registered here rather than through settings so a workspace cannot
           // remove the one control that actually holds the boundary.
-          ...(coordinatorReadOnly && policy
-            ? { PreToolUse: [{ hooks: [createCoordinatorReadOnlyHook(policy)] }] }
-            : {}),
+          // The read-only hook runs first: a call it denies must never be
+          // snapshotted, and the measuring hook only opens a window.
+          PreToolUse: [
+            ...(coordinatorReadOnly && policy
+              ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
+              : []),
+            commandChangeHook.PreToolUse,
+          ],
+          PostToolUse: [commandChangeHook.PostToolUse],
+          PostToolUseFailure: [commandChangeHook.PostToolUseFailure],
           TaskCreated: [{ hooks: [recordBackgroundTaskHook] }],
           TaskCompleted: [{ hooks: [recordBackgroundTaskHook] }],
           SubagentStart: [{ hooks: [recordBackgroundTaskHook] }],
@@ -2225,6 +2271,7 @@ export async function sendPrompt(
             if (existing) {
               existing.content = part.content;
               existing.parts = [part];
+              markTranscriptChanged(session);
               eventEmitter.emit({
                 type: "message.updated",
                 sessionId,
@@ -2248,6 +2295,11 @@ export async function sendPrompt(
           // What only this frame says is *who* decided and why, so that is
           // what is kept on the call, where the renderer shows it.
           const reason = boundedNoticeText(denial.decision_reason ?? denial.message);
+          // PreToolUse ran before the permission decision; no PostToolUse
+          // will close the window it opened.
+          if (typeof denial.tool_use_id === "string") {
+            commandChangeProbe.discard(denial.tool_use_id);
+          }
           const marked =
             typeof denial.tool_use_id === "string" &&
             toolTracker.recordDenial(denial.tool_use_id, {
@@ -2261,6 +2313,7 @@ export async function sendPrompt(
               stream.accumulatedOrderedParts,
               toolTracker,
             );
+            markTranscriptChanged(session);
             stream.emitCurrentAssistantMessage();
           }
           if (marked) {
@@ -2462,6 +2515,7 @@ export async function sendPrompt(
             ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(stream.currentAssistantMessage);
+          markTranscriptChanged(session);
           debugLog("[session-manager] Created assistant message", {
             sessionId,
             messageId: stream.currentAssistantMessage.id,
@@ -2475,6 +2529,7 @@ export async function sendPrompt(
           if (typeof sdkMessageUuid === "string") {
             stream.currentAssistantMessage.sdkUuid = sdkMessageUuid;
           }
+          markTranscriptChanged(session);
           debugLog("[session-manager] Updated assistant message", {
             sessionId,
             messageId: stream.currentAssistantMessage.id,
@@ -2501,6 +2556,17 @@ export async function sendPrompt(
         );
 
         const sdkUserMessage = message as SDKUserMessage;
+        for (const toolUseId of toolResultIds(sdkUserMessage)) {
+          // A call whose PostToolUse already ran has closed its window, so this
+          // only drops one no hook will close: a call refused by `canUseTool`,
+          // or one cut off by an interrupt.
+          commandChangeProbe.discard(toolUseId);
+          const pending = pendingCommandChanges.get(toolUseId);
+          if (pending) {
+            pendingCommandChanges.delete(toolUseId);
+            toolTracker.setCommandChanges(toolUseId, pending);
+          }
+        }
         let settledProvisionalTask = false;
         for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
           if (outcome.launch) {
@@ -2567,6 +2633,7 @@ export async function sendPrompt(
         if (stream.currentAssistantMessage) {
           const finalParts = buildMessageParts(stream.accumulatedOrderedParts, toolTracker);
           stream.currentAssistantMessage.parts = finalParts;
+          markTranscriptChanged(session);
 
           stream.emitCurrentAssistantMessage();
         }
@@ -2660,6 +2727,7 @@ export async function sendPrompt(
           userMessage.sdkUuid !== resultMsg.user_message_uuid
         ) {
           userMessage.sdkUuid = resultMsg.user_message_uuid;
+          markTranscriptChanged(session);
           eventEmitter.emit({
             type: "message.updated",
             sessionId,
@@ -2853,6 +2921,7 @@ export async function sendPrompt(
             createdAt: new Date().toISOString(),
           });
           stream.currentAssistantMessage.parts = parts;
+          markTranscriptChanged(session);
           stream.emitCurrentAssistantMessage();
         }
       } else if (message.type === "tool_use_summary") {
@@ -2870,6 +2939,7 @@ export async function sendPrompt(
         // the old messages would show history the model has no memory of and
         // will not answer questions about.
         session.messages = [];
+        resetTranscriptEpoch(session);
         // No bespoke "cleared" event: the backend re-reads the whole transcript
         // on every projection poll, so the authoritative snapshot already
         // reflects the clear. The status row below is what a live client needs.
@@ -2879,6 +2949,10 @@ export async function sendPrompt(
           severity: "warning",
           createdAt: new Date().toISOString(),
         });
+      } else if (isKnownInternalSdkMessageType(message.type)) {
+        // An internal CLI frame outside the SDK's union that the bridge has
+        // read and needs nothing from. Not drift: counting it flagged every
+        // prompt as an unrecognised event.
       } else {
         // Everything the chain above did not claim. `HANDLED_SDK_MESSAGE_TYPES`
         // is a `Record` over the SDK's own union, so a type it does not name is
@@ -3161,6 +3235,7 @@ export async function sendPrompt(
     // until the bridge restarted.
     if (transcriptHydrationFailed && sessions.get(sessionId) === session && !session.deleting) {
       session.persistedMessagesLoaded = false;
+      resetTranscriptEpoch(session);
     }
     stream.clearFlushTimer();
   }

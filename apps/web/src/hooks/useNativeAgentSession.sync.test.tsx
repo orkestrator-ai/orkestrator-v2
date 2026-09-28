@@ -15,7 +15,10 @@ import type {
   NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import {
+  evictNativeAgentHistoryCaches,
+  useNativeAgentProjectionStore,
+} from "@/stores/nativeAgentProjectionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 interface TestMessage {
@@ -842,9 +845,8 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
     const newer = message("m2", "b".repeat(256));
     const messageBytes = new TextEncoder().encode(JSON.stringify(newer)).byteLength;
     act(() => {
-      const store = useNativeAgentProjectionStore.getState();
-      const syncCaches = new Map(store.syncCaches);
-      syncCaches.set("other-session", {
+      // Through the store action, so the running history total counts it.
+      useNativeAgentProjectionStore.getState().setProjection("other-session", projection([]), {
         token: "other-token",
         liveProjection: projection([]),
         historyEpoch: "epoch-other",
@@ -852,7 +854,6 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
         historyMessages: [],
         historyBytes: CLIENT_HISTORY_TOTAL_MAX_BYTES - messageBytes - 20,
       });
-      useNativeAgentProjectionStore.setState({ syncCaches });
     });
 
     messagePages = [
@@ -918,16 +919,10 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
 
     // Another tab's eviction pass reclaims this session's history.
     act(() => {
-      const store = useNativeAgentProjectionStore.getState();
-      const cache = store.syncCaches.get(SESSION_KEY)!;
-      const syncCaches = new Map(store.syncCaches);
-      syncCaches.delete(SESSION_KEY);
-      const projections = new Map(store.projections);
-      projections.set(SESSION_KEY, cache.liveProjection);
-      const historyEvictions = new Map(store.historyEvictions);
-      historyEvictions.set(SESSION_KEY, 1);
-      useNativeAgentProjectionStore.setState({ projections, syncCaches, historyEvictions });
+      evictNativeAgentHistoryCaches("other-session", CLIENT_HISTORY_TOTAL_MAX_BYTES, 0);
     });
+    expect(useNativeAgentProjectionStore.getState().historyEvictions.get(SESSION_KEY)).toBe(1);
+    expect(useNativeAgentProjectionStore.getState().historyBytesTotal).toBe(0);
 
     projectionUpdates = [
       () =>

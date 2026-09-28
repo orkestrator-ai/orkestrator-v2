@@ -18,6 +18,7 @@ import type {
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
 
 export type JsonObject = Record<string, unknown>;
@@ -87,6 +88,12 @@ export interface BridgeToolPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /**
+   * What a shell call changed in the worktree, measured around it by
+   * `command-changes.ts`. Only set when something changed; persisted with the
+   * transcript and journaled so a resumed session gets it back.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
 }
 
 /**
@@ -281,6 +288,14 @@ export interface SessionState {
   droppedParts: number;
   transcriptTruncated: boolean;
   revision: number;
+  /**
+   * Bumped whenever retained history is replaced rather than appended to
+   * (branch navigation re-renders a different history from index 0). Part of
+   * the transcript read's `contentEpoch`, so a reader's absolute positions —
+   * a history cursor, a window's `startIndex` — cannot survive the switch.
+   * Process-local: a new bridge process already has a new generation.
+   */
+  transcriptEpoch?: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
   steerJournal: Map<string, SteerJournalEntry>;
@@ -371,6 +386,13 @@ export interface SessionState {
    * from the transcript it already wrote.
    */
   toolInputs: Map<string, JsonObject>;
+  /**
+   * Measured shell changes whose card has not been rendered yet, by tool call
+   * id. Pi emits `tool_execution_start` before the pre-tool hook, so the card
+   * normally exists first; this only catches a measurement that lands before
+   * it. Runtime-only and bounded, like {@link toolInputs}.
+   */
+  pendingCommandChanges?: Map<string, MeasuredWorkspaceChange>;
   /** Bytes appended since the transcript was last measured against its budget. */
   uncheckedTranscriptBytes: number;
   usage?: PersistedUsage;

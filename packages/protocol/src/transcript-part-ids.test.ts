@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { toolResultImagePartId, toolUseIdFromImagePartId } from "./transcript-part-ids.js";
+import {
+  nextPartOrdinal,
+  toolResultImagePartId,
+  toolUseIdFromImagePartId,
+} from "./transcript-part-ids.js";
 
 describe("tool result image part ids", () => {
   test("round-trips the tool call a bridge attributed an image to", () => {
@@ -24,5 +28,37 @@ describe("tool result image part ids", () => {
     expect(toolUseIdFromImagePartId("image:call_123:last")).toBeNull();
     expect(toolUseIdFromImagePartId("image::0")).toBeNull();
     expect(toolUseIdFromImagePartId(undefined)).toBeNull();
+  });
+});
+
+describe("nextPartOrdinal", () => {
+  test("never reissues an ordinal after parts are shed from the front", () => {
+    const message = { id: "m", parts: [] as { sourcePartId: string }[] };
+    for (let index = 0; index < 10; index += 1) {
+      message.parts.push({ sourcePartId: `m:${nextPartOrdinal(message)}` });
+    }
+    message.parts.splice(0, 6);
+    const next = `m:${nextPartOrdinal(message)}`;
+    expect(message.parts.map((part) => part.sourcePartId)).not.toContain(next);
+    expect(next).toBe("m:10");
+  });
+
+  test("continues past the largest ordinal of a message it has not seen", () => {
+    const restored = {
+      parts: [
+        { sourcePartId: "m:597" },
+        { sourcePartId: "summary:598" },
+        { sourcePartId: "m:599" },
+      ],
+    };
+    expect(nextPartOrdinal(restored)).toBe(600);
+    expect(nextPartOrdinal(restored)).toBe(601);
+  });
+
+  test("ignores suffixes that are not ordinals", () => {
+    const message = {
+      parts: [{ sourcePartId: "progress:call" }, { sourcePartId: "x:99999999999999999999" }],
+    };
+    expect(nextPartOrdinal(message)).toBe(2);
   });
 });

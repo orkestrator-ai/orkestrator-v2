@@ -1,6 +1,6 @@
 # 09 — Implement lightweight transcript and detail reads for every provider
 
-Status: Not started. Prerequisites: 02, 05, 08. Finding: E06.
+Status: Complete — all five HTTP bridges serve v2 and pass one shared contract (f83a6206); OpenCode is in-process (projection defers artifacts before windowing, no detail/page routes). Validated on real Claude, Codex, OpenCode, Cursor and Pi sessions; Grok could not start a session (ACP "Invalid params", tracked separately).
 
 ## Outcome
 
@@ -85,3 +85,180 @@ enable backend preference only when that adapter's tests pass. Measure raw bridg
 bytes and incomplete-hydration calls before/after. E06 is complete only when all
 six providers have the new behavior or an explicit bounded fallback documented
 with its remaining cost.
+
+## Execution record
+
+```text
+Status: Complete — bridge half and backend half implemented (backend half below)
+Implementation commit / PR: branch worktree-agent-a4451cb3afadce5d0, commit "perf(bridges): serve v2 lightweight transcripts, exact details and history pages"; no PR yet
+Protocol or storage decisions: see "Bridge half" below
+Tests and isolated profiles: focused Bun suites below; no isolated Electron/browser profile was started
+Before/after measurements: synthetic 300-message transcript, each message with a 20 KiB tool output, default 100-message / 512 KiB window: v1 517,803 bytes carrying 25 messages; v2 36,207 bytes carrying 100 messages (every output behind a detail locator)
+Compatibility/migration result: absent or non-"2" `version` answers the v1 envelope byte-for-byte from the same inputs; detail/page are new routes that answer unknown sessions in band; stored nothing, so there is no migration
+Remaining limitations: see below
+```
+
+### Bridge half (Claude, Codex, Cursor, Pi, Grok/ACP)
+
+- `packages/protocol/src/bridge-transcript-routes.ts` (new, additive): one
+  `BridgeTranscriptSource` per request (messages, identity, generation,
+  content epoch, revision, completeness, freshness, title) and the three route
+  bodies built from it. `bridgeTranscriptRouteBody` answers
+  `bridgeTranscriptSummaryUpdate(..., { pages: true })` for `version=2` and the
+  unchanged `bridgeTranscriptUpdate` otherwise; the detail and page bodies
+  answer an absent source `missing` / `expired` and an absent locator or
+  cursor `invalid`. The semantics of `bridge-transcript-summary.ts` are
+  untouched.
+- Each bridge computes the source once in a small helper, so the summary,
+  detail and page routes read the same array, generation, epoch and
+  completeness: Claude `routes/session-transcript.ts` (`peekSession` +
+  `getSessionMessages` + `readTranscriptVersion`; also owns the three routes
+  and the detail/page gzip registration), Codex `transcript-routes.ts`
+  (`getStatus(id, false)` + `getCachedMessages`; no touch, attach or await),
+  Cursor/Pi `transcript-source.ts`, ACP `acp-transcript-source.ts`. Cursor, Pi
+  and ACP call `boundTranscriptForRead` before building it, exactly as the
+  summary route does.
+- New routes `GET /session/:id/transcript/detail?locator=` and
+  `GET /session/:id/transcript/page?cursor=&limit=&targetBytes=` on every
+  bridge, behind the same auth. Unknown sessions answer 200
+  `{version:1,status:"missing"}` / `{version:1,status:"expired"}`; the summary
+  route keeps its 404. Routing: Claude/Codex are Hono paths (no route swallows
+  them; `/transcript/other` stays 404). Cursor and Pi route by
+  `action`/`subject`, where `/transcript/<anything>` always answered the
+  summary; `detail` and `page` are now dispatched first and other sub-paths
+  keep that behavior. ACP's anchored route regex gained exactly
+  `transcript/(detail|page)`, so other sub-paths stay 404.
+- Liveness: Claude refreshes the idle clock through `getSessionMessages`, as
+  the summary route does; detail/page never hydrate, never start hydration and
+  never probe the catalogue. A cursor minted from the preview epoch expires
+  once hydration flips it to `hydrated:<epoch>`. Codex reads do not touch
+  liveness (as before). Cursor/Pi refresh `lastAccessed` for every
+  `transcript` action; ACP has no idle clock.
+- Compression: Claude and Codex register gzip + `Vary: Accept-Encoding` for
+  the detail and page paths beside the transcript's own; Cursor/Pi/ACP use
+  their `json` helper, which compresses only when the client asked.
+- Epoch fixes needed for positional pages (both also correct v1 `startIndex`):
+  Codex's local ring (`appendLocalMessages`) now bumps `contentEpoch` when it
+  drops its oldest rows; Pi gains a process-local `transcriptEpoch`, bumped by
+  branch navigation's `resetRenderedHistory`, and the epoch becomes
+  `"<transcriptEpoch>:<droppedMessages>"` only after such a replacement (the
+  same scheme Cursor already used), so an untouched session keeps its numeric
+  epoch and token.
+- The Claude source-scan test now asserts that no route calls the envelope
+  helpers directly and that all three bodies read the revisioned source.
+- `AGENTS.md`: one bullet under "Tab close and conversation retention".
+
+### Tests run (bridge half)
+
+- `bun test ./bridges/{claude,codex,cursor,pi,acp}-bridge/src --parallel=2`
+  (logged runner): all pass. New suites:
+  `claude-bridge/src/services/session-manager-transcript-v2.test.ts`,
+  `codex-bridge/src/transcript-routes.test.ts`,
+  `cursor-bridge/src/http-transcript-v2.test.ts`,
+  `pi-bridge/src/http-transcript-v2.test.ts`,
+  `acp-bridge/src/acp-http-transcript-v2.test.ts`; each covers a v2 snapshot
+  where a >4 KiB output becomes a locator and an earlier message stays in a
+  window v1 drops it from, v2/v1 unchanged tokens, detail ok/expired/missing/
+  invalid, a 250-message page walk with advancing cursors, cursor expiry after
+  an epoch change, and in-band unknown-session answers (plus auth, gzip,
+  no-hydration and liveness where the bridge has them).
+- `bun test --cwd packages/protocol ./src --parallel=2`: pass (new
+  `bridge-transcript-routes.test.ts`).
+- Typecheck of protocol and all five bridges; `mise run format:check`;
+  `mise run lint` (no new warnings).
+
+### Remaining limitations (bridge half)
+
+- Superseded: the backend half below now requests `version=2` and calls
+  detail/page. OpenCode (in-process) is not covered by the bridge half.
+- Summaries are built per read from the retained messages (the protocol
+  memoizes per-part digests); no provider freezes detail revisions, so a
+  streaming tool card's locator expires as soon as its output changes.
+- Claude history before the live array is not pageable beyond what the
+  session holds; Cursor/Pi/ACP pages stop at their retained front trim and
+  Codex's detached preview pages only the local tail until hydration.
+- Claude harness suites cannot share one Bun process with each other (true of
+  the existing suites too); they pass under the repo's `--parallel` runner.
+
+### Backend half (orchestrator)
+
+- `http-bridge-transcript-v2.ts` + `http-bridge-transcript-reader.ts`: the
+  native projection's `transcriptSnapshot` asks for `representation:
+  "summary"`; the HTTP provider sends `version=2` unless this connection
+  already answered v1 (negative answer cached 10 minutes; a 5xx, timeout or
+  malformed body is a failed read, never a capability verdict). A v1 answer to
+  the v2 request is used as-is, so an old bridge costs no second request.
+  Detail/page 404/405 mean "route absent" for that connection. Other
+  consumers (reviewer views, workflows) keep raw v1 bodies.
+- Projection: summary `detail` locators become session-scoped backend
+  `detailRef`s registered as remote entries (no body fetched); expanding a
+  row calls `provider.transcriptDetail` once, caches the exact body under the
+  existing tool-detail budget, and reports missing/expired as "no longer
+  available" (never a newer body). Summary windows skip the legacy
+  incomplete-preview hydration (the `/messages` full read) unless the head is
+  part-trimmed.
+- OpenCode is in-process: there is no bridge hop to move artifacts across.
+  Its snapshot is projected (heavy fields → local detail refs) before the
+  live-window byte bound is applied, so large artifacts already do not
+  displace earlier rows. Remaining cost: inline heavy bodies are serialized
+  and hashed once per changed read to mint content-addressed refs (as for v1
+  bridges).
+- Tests: `apps/backend/src/core/http-bridge-transcript-v2.test.ts`
+  (v2 bridge, old bridge answered-v1-and-remembered, missing routes, failures
+  prove nothing, malformed v2 is an error, negative expiry) and
+  `native-agent-service-summary-transcripts.test.ts` (remote reference
+  resolved exactly once and cached, changed body → expired, no legacy
+  `/messages` or interactive snapshot on the summary path).
+- Measured structurally: a 300 × 20 KiB-output transcript sends 36 KB with
+  100 messages over v2 versus 518 KB with 25 messages over v1 (bridge half).
+
+### Shared contract and gap closure (commit f83a6206)
+
+```text
+- packages/protocol/src/bridge-transcript-contract.ts
+  (@orkestrator/protocol/bridge-transcript-contract): framework-free
+  scenarios run by every bridge's v2 suite — large tool output leaves a
+  detail reference whose detail returns the exact body; a detail read returns
+  its own revision or expired/missing/invalid; pages join with no gaps at
+  sizes 100 and 37; unchanged only while nothing changed; a rewrite rotates
+  the epoch and refuses the old token, cursor and positions; after a restart
+  nothing issued earlier answers unchanged or pages. The protocol test runs
+  it against a reference bridge and shows it fails a bridge that keeps its
+  generation across a restart or its epoch across a rewrite.
+- Rewrite/restart per bridge: Cursor rewind (rewindTranscriptTo) and real
+  persisted-state reload; Pi resetRenderedHistory and real persist/load;
+  ACP front trim (no rewind) and real state writer/loader; Codex
+  ThreadRegistry counters and restoreSession; Claude message replacement plus
+  resetTranscriptEpoch and a freshly loaded router.
+- Bug found and fixed: the Codex transcript generation was the app-server
+  counter, which restarts at 1 in each process while restored sessions
+  restart revision and epoch at 0, so a pre-restart token could answer
+  unchanged for different content. The generation is now
+  "<per-process uuid>:<engineGeneration>" (the backend accepts string
+  generations up to 63 characters).
+- Limitations: restart is simulated in-process by loading a fresh route
+  module, not a new OS process; Claude's process-wide revision counter
+  cannot be reset in-process; Pi re-renders without a real session file;
+  Codex runs through the runtime seam, not a real app-server.
+Gap-closure real-stack run (2026-09-27; isolated profile eff-gap-7f09,
+  fixture project, bridges rebuilt from source): Claude (haiku), Codex
+  (gpt-5.5, low) and OpenCode sessions each ran a 14 KB `seq 1 3000` tool
+  call. Gateway reads: snapshot 3.1-4.4 KB; unchanged re-read with the known
+  token 489-504 B; the large output deferred behind a detail reference and
+  returned exactly on expansion (17.0 KB Claude/Codex, 12.2 KB OpenCode).
+  Cursor (HTTP 401, not signed in), Pi (no authenticated model provider) and
+  Grok (ACP authenticate timed out) could not start in the profile. Live
+  history paging was not exercised: no session exceeded the 100-message
+  live window.
+Follow-up live run (same day, fresh isolated profile): Cursor
+  (composer-2.5; the saved app API key injected as CURSOR_API_KEY for the
+  dev profile only) and Pi (openai-codex/gpt-6-sol; the host Pi login copied
+  owner-only into the profile's isolated home and removed on reset) each ran
+  the same 14 KB tool call. Snapshot 2.3 KB / 2.0 KB; unchanged re-read
+  489 B / 485 B; the output deferred and expanded exactly (17.0 KB /
+  12.2 KB). Cursor runtime-health reported transcriptBounds live (24 checks,
+  0 trims, limits 128 parts / 4,161,536 B per sub-agent). Grok rejects ACP
+  session/new with "Invalid params" and its model catalogue is empty; the
+  bridge's session-creation code is unchanged from main, so this is tracked
+  separately as a Grok integration issue.
+```

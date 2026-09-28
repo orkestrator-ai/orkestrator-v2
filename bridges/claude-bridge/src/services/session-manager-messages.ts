@@ -40,8 +40,12 @@ import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
-import { toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
+import {
+  toolDiffFromToolInput,
+  type MeasuredWorkspaceChange,
+} from "@orkestrator/protocol/tool-diff";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged } from "./transcript-revision.js";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
@@ -123,6 +127,17 @@ export class ToolTracker {
         ...(denial.source ? { source: denial.source } : {}),
       },
     });
+    return true;
+  }
+
+  /**
+   * Attach what a Bash call changed. Replaces the entry, as publishing compares
+   * parts by identity. Returns `false` for an untracked call.
+   */
+  setCommandChanges(toolUseId: string, change: MeasuredWorkspaceChange): boolean {
+    const existing = this.tools.get(toolUseId);
+    if (!existing) return false;
+    this.tools.set(toolUseId, { ...existing, commandChanges: change });
     return true;
   }
 
@@ -393,6 +408,7 @@ export function appendInterruptedNotice(session: SessionState, sessionId: string
     createdAt,
   };
   session.messages.push(message);
+  markTranscriptChanged(session);
   eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
 }
 
@@ -442,6 +458,7 @@ export function appendSubagentInterruptedNotice(
   };
   if (sourceToolUseId) subagentNoticeSources.set(message, sourceToolUseId);
   session.messages.push(message);
+  markTranscriptChanged(session);
   eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
 }
 
@@ -516,6 +533,7 @@ export function refreshSettledToolRows(
     });
     if (changed) {
       message.parts = parts;
+      markTranscriptChanged(session);
       eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
     }
   }
@@ -1120,6 +1138,21 @@ export interface BashToolResultOutcome {
    * lifecycle frame supplies the id.
    */
   retainCandidate: boolean;
+}
+
+/** The `tool_use_id` of every `tool_result` block in a user message. */
+export function toolResultIds(message: SDKUserMessage): string[] {
+  const content = (message.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return [];
+  const ids: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const { type, tool_use_id: toolUseId } = block as { type?: unknown; tool_use_id?: unknown };
+    if (type === "tool_result" && typeof toolUseId === "string" && toolUseId.length > 0) {
+      ids.push(toolUseId);
+    }
+  }
+  return ids;
 }
 
 /**

@@ -36,7 +36,7 @@ Run from the repository root with the pinned Bun runtime. The environment
 override applies only to this command.
 
 ```bash
-CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 bun run - <<'EOF'
+CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 bun - <<'EOF'
 import { bridgeTranscriptUpdate } from './packages/protocol/src/progressive-transcript.ts';
 import { boundTranscriptResponse } from './packages/protocol/src/transcript-window.ts';
 import { boundTranscript } from './bridges/cursor-bridge/src/transcript.ts';
@@ -89,7 +89,7 @@ reasoning-update variants. It tests the producer boundary, not an end-to-end
 SDK run or a desktop environment switch.
 
 ```bash
-CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 bun run - <<'EOF'
+CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 bun - <<'EOF'
 import { applyInteractionUpdate } from './bridges/cursor-bridge/src/translate.ts';
 import { boundTranscriptForRead } from './bridges/cursor-bridge/src/transcript.ts';
 

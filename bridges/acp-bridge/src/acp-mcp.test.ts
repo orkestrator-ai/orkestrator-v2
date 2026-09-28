@@ -32,10 +32,12 @@ describe("ACP Orkestrator MCP", () => {
         name: "orkestrator",
         type: "http",
         url: "http://127.0.0.1:4567/mcp",
-        headers: { Authorization: "Bearer tab-a" },
+        headers: [{ name: "Authorization", value: "Bearer tab-a" }],
       },
     ]);
-    expect(second[0]).toMatchObject({ headers: { Authorization: "Bearer tab-b" } });
+    expect(second[0]).toMatchObject({
+      headers: [{ name: "Authorization", value: "Bearer tab-b" }],
+    });
     expect(process.env.ORKESTRATOR_AGENT_MCP_TOKEN).toBe("env-token");
   });
 
@@ -43,7 +45,10 @@ describe("ACP Orkestrator MCP", () => {
     process.env.ORKESTRATOR_AGENT_MCP_URL = "http://127.0.0.1:4321/mcp";
     process.env.ORKESTRATOR_AGENT_MCP_TOKEN = "env-token";
     expect(configuredAcpMcpServers()).toMatchObject([
-      { url: "http://127.0.0.1:4321/mcp", headers: { Authorization: "Bearer env-token" } },
+      {
+        url: "http://127.0.0.1:4321/mcp",
+        headers: [{ name: "Authorization", value: "Bearer env-token" }],
+      },
     ]);
   });
 

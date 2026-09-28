@@ -6,6 +6,7 @@ import path from "node:path";
 import type {
   BuildPipeline,
   BuildPipelineAgent,
+  PipelineSession,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -1359,7 +1360,11 @@ describe("build pipeline multi-model review", () => {
 
   test("persists a reviewer's final transcript even inside the persist interval", async () => {
     await withPipeline(
-      async ({ service, read, provider }) => {
+      async ({ service, read, provider, storage }) => {
+        const transcriptOf = async (pipelineId: string, session: PipelineSession) => {
+          const stored = await storage.readBuildPipelineTranscript(pipelineId, session);
+          return stored.status === "found" ? JSON.stringify(stored.messages) : stored.status;
+        };
         provider.runningModels.add("opus");
         provider.runningModels.add("sonnet");
         provider.changingMessages = true;
@@ -1376,7 +1381,7 @@ describe("build pipeline multi-model review", () => {
         const sessionBefore = before.sessions.find(
           (entry) => entry.sessionKey === reviewer.sessionKey,
         )!;
-        const priorMessages = JSON.stringify(sessionBefore.messages);
+        const priorMessages = await transcriptOf(started.id, sessionBefore);
         provider.runningModels.delete("opus");
         await service.advanceNow(started.id);
         const after = await read(started.id);
@@ -1385,7 +1390,10 @@ describe("build pipeline multi-model review", () => {
         )!;
         expect(after.reviewFanout!.reviewers[0]!.status).toBe("completed");
         expect(sessionAfter.status).toBe("idle");
-        expect(JSON.stringify(sessionAfter.messages)).not.toBe(priorMessages);
+        // The body lives in the transcript store; the control record only references it.
+        expect(sessionAfter.messages).toBeUndefined();
+        expect(sessionAfter.transcript?.revision).toBe(sessionAfter.messageRevision);
+        expect(await transcriptOf(started.id, sessionAfter)).not.toBe(priorMessages);
       },
       { transcriptPersistIntervalMs: 60_000 },
     );

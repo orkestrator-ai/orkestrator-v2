@@ -3450,6 +3450,24 @@ describe("sendPrompt", () => {
     expect(JSON.stringify(drift)).not.toContain("private prompt");
   });
 
+  test("does not count the CLI's internal command lifecycle frames as drift", async () => {
+    // The CLI emits these for every uuid-stamped prompt and steer, and the SDK
+    // union does not name them; counting them flagged every prompt.
+    const session = createSession("drift-command-lifecycle");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "command_lifecycle", command_uuid: "prompt-1", state: "queued" });
+    call.push({ type: "command_lifecycle", command_uuid: "prompt-1", state: "started" });
+    call.push({ type: "result", subtype: "success" });
+    call.push({ type: "command_lifecycle", command_uuid: "prompt-1", state: "completed" });
+    call.finish();
+    await promptPromise;
+
+    expect(getSession(session.id)?.health?.drift()).toBeUndefined();
+  });
+
   test("consumes SDK authentication status without recording protocol drift", async () => {
     const session = createSession("drift-unconsumed-type");
     track(session.id);

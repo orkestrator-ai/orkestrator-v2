@@ -14,7 +14,9 @@
  */
 import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
+import { encodedJsonBytes, jsonStringContentBytes } from "@orkestrator/protocol/transcript-budget";
+import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { noteCommandOutput } from "./commands.js";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
@@ -310,26 +312,28 @@ function applyTextDelta(state: SessionState, text: string, kind: "text" | "think
   const message = currentAssistantMessage(state);
   const existing = openTextPart(state, message, kind);
   if (existing) {
-    const before = existing.content.length;
+    const before = existing.content;
     existing.content = appendBounded(existing, existing.content, text);
-    chargeTranscript(state, existing.content.length - before);
+    chargeAppended(state, before, existing.content);
   } else {
     const part: BridgeTextPart = {
       type: kind,
       content: text,
-      sourcePartId: `${message.id}:${message.parts.length}`,
+      sourcePartId: `${message.id}:${nextPartOrdinal(message)}`,
       sourceMessageId: message.id,
       createdAt: new Date().toISOString(),
     };
     message.parts.push(part);
     state.openTextParts.set(kind, part.sourcePartId);
-    chargeTranscript(state, text.length + 128);
+    chargeNewEntry(state, part);
   }
 
   // `content` is the flat text the transcript exposes as the message body, and
   // reasoning is not part of it: it is shown in its own collapsed block.
   if (kind === "text") {
+    const before = message.content;
     message.content = appendBounded(message, message.content, text);
+    chargeAppended(state, before, message.content);
   }
   state.revision += 1;
 }
@@ -399,6 +403,11 @@ function applyToolExecution(
   if (rendered.toolOutput !== undefined) part.toolOutput = rendered.toolOutput;
   if (rendered.toolError !== undefined) part.toolError = rendered.toolError;
   if (rendered.toolDiff) part.toolDiff = rendered.toolDiff;
+  const pendingChanges = state.pendingCommandChanges?.get(toolCallId);
+  if (pendingChanges) {
+    part.commandChanges = pendingChanges;
+    state.pendingCommandChanges?.delete(toolCallId);
+  }
 
   if (phase === "settled") {
     part.toolState = rendered.toolError === undefined ? "success" : "failure";
@@ -420,6 +429,41 @@ function applyToolExecution(
   // worse than one that appears a moment late.
   if (phase === "settled") appendToolResultImages(state, message, toolCallId, rendered.images);
   state.revision += 1;
+}
+
+/** Measured changes held for cards not rendered yet; see `pendingCommandChanges`. */
+const MAX_PENDING_COMMAND_CHANGES = 64;
+
+/**
+ * Stamp a shell call's measured line changes onto its card.
+ *
+ * The measurement finishes in Pi's post-tool hook, which runs before the
+ * call's `tool_execution_end` — so the card is normally there, mid-flight, and
+ * is patched in place; the end frame's re-render leaves the field alone. A
+ * card not rendered yet picks the change up from the pending map when its
+ * first frame arrives. Newest messages first: the call is almost always in the
+ * turn still running.
+ */
+export function applyCommandChanges(
+  state: SessionState,
+  toolCallId: string,
+  change: MeasuredWorkspaceChange,
+): void {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    for (const part of state.messages[index]!.parts) {
+      if (part.type !== "tool-invocation" || part.toolUseId !== toolCallId) continue;
+      part.commandChanges = change;
+      chargeToolPart(state, part);
+      state.revision += 1;
+      return;
+    }
+  }
+  const pending = (state.pendingCommandChanges ??= new Map());
+  if (pending.size >= MAX_PENDING_COMMAND_CHANGES) {
+    const oldest = pending.keys().next();
+    if (!oldest.done) pending.delete(oldest.value);
+  }
+  pending.set(toolCallId, change);
 }
 
 /**
@@ -451,7 +495,7 @@ function appendToolResultImages(
       imageSource: "viewed",
     };
     message.parts.push(part);
-    chargeTranscript(state, part.content.length + part.fileUrl!.length);
+    chargeNewEntry(state, part);
   }
 }
 
@@ -516,7 +560,7 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
   closeTextParts(state);
 
   if (nonBlank(event.errorMessage)) {
-    const part = upsertToolPart(state, message, `compaction:${message.parts.length}`);
+    const part = upsertToolPart(state, message, `compaction:${nextPartOrdinal(message)}`);
     part.toolName = "compact_context";
     part.content = "Compacting context failed";
     part.toolTitle = part.content;
@@ -532,7 +576,7 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
   const tokensBefore = typeof result.tokensBefore === "number" ? result.tokensBefore : undefined;
   const estimatedAfter =
     typeof result.estimatedTokensAfter === "number" ? result.estimatedTokensAfter : undefined;
-  const sourcePartId = `compaction:${message.parts.length}`;
+  const sourcePartId = `compaction:${nextPartOrdinal(message)}`;
   const part: BridgeCompactionPart = {
     type: "compaction",
     content: boundText(summary, MAX_TOOL_TITLE_BYTES * 32),
@@ -548,7 +592,7 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
       : {}),
   };
   message.parts.push(part);
-  chargeTranscript(state, part.content.length + sourcePartId.length);
+  chargeNewEntry(state, part);
   state.revision += 1;
 }
 
@@ -556,7 +600,7 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
 function applyRetryStart(state: SessionState, event: JsonObject): void {
   const message = currentAssistantMessage(state);
   closeTextParts(state);
-  const sourcePartId = `retry:${message.parts.length}`;
+  const sourcePartId = `retry:${nextPartOrdinal(message)}`;
   const part: BridgeRetryPart = {
     type: "retry",
     content: boundText(
@@ -570,7 +614,7 @@ function applyRetryStart(state: SessionState, event: JsonObject): void {
     ...(typeof event.attempt === "number" ? { retryAttempt: event.attempt } : {}),
   };
   message.parts.push(part);
-  chargeTranscript(state, part.content.length + sourcePartId.length);
+  chargeNewEntry(state, part);
   state.revision += 1;
 }
 
@@ -631,7 +675,7 @@ function retryNotice(event: JsonObject): string {
 function applyNotice(state: SessionState, text: string): void {
   const message = currentAssistantMessage(state);
   closeTextParts(state);
-  const part = upsertToolPart(state, message, `notice:${message.parts.length}`);
+  const part = upsertToolPart(state, message, `notice:${nextPartOrdinal(message)}`);
   part.toolName = "notice";
   part.content = boundText(text, MAX_TOOL_TITLE_BYTES);
   part.toolTitle = part.content;
@@ -662,7 +706,7 @@ export function currentAssistantMessage(state: SessionState): BridgeMessage {
   state.currentAssistantMessageId = message.id;
   // Blocks belong to the message that opened them.
   state.openTextParts.clear();
-  chargeTranscript(state, 256);
+  chargeNewEntry(state, message);
   return message;
 }
 
@@ -682,7 +726,9 @@ function openTextPart(
 ): BridgeTextPart | undefined {
   const sourcePartId = state.openTextParts.get(kind);
   if (!sourcePartId) return undefined;
-  for (const part of message.parts) {
+  // Newest first: the open block is almost always at or near the end.
+  for (let index = message.parts.length - 1; index >= 0; index -= 1) {
+    const part = message.parts[index]!;
     if (part.type === kind && part.sourcePartId === sourcePartId) return part;
   }
   // The part was trimmed, or belongs to an earlier message. Either way it can
@@ -706,13 +752,13 @@ function upsertToolPart(
   const part: BridgeToolPart = {
     type: "tool-invocation",
     content: "",
-    sourcePartId: `${message.id}:${message.parts.length}`,
+    sourcePartId: `${message.id}:${nextPartOrdinal(message)}`,
     sourceMessageId: message.id,
     toolUseId: toolCallId,
     createdAt: new Date().toISOString(),
   };
   message.parts.push(part);
-  chargeTranscript(state, 256);
+  chargeNewEntry(state, part);
   return part;
 }
 
@@ -729,6 +775,27 @@ function chargeToolPart(state: SessionState, part: BridgeToolPart): void {
   chargeTranscript(state, Math.max(0, size - (source.chargedBytes ?? 0)));
   source.chargedBytes = size;
   toolSourceStates.set(part, source);
+}
+
+/**
+ * Charge a new message or part at its exact encoded size plus the separator it
+ * adds to its array. New entries are small skeletons or a single delta, so
+ * measuring them costs what appending them did.
+ */
+function chargeNewEntry(state: SessionState, entry: object): void {
+  chargeTranscript(state, encodedJsonBytes(entry) + 1);
+}
+
+/**
+ * Charge what an append added to a string field.
+ *
+ * `appendBounded` only ever extends its input (or returns it unchanged once
+ * saturated), so the suffix past the old length is exactly what was written.
+ * Comparing prefixes instead would cost a multi-megabyte scan per token.
+ */
+function chargeAppended(state: SessionState, before: string, after: string): void {
+  if (after === before) return;
+  chargeTranscript(state, jsonStringContentBytes(after.slice(before.length)));
 }
 
 function readText(value: unknown): string {

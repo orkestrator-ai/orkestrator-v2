@@ -261,9 +261,13 @@ describe("local slash-command transcript", () => {
 
     expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
     expect(session.localMessagesTrimmed).toBe(false);
+    expect(session.contentEpoch).toBe(0);
 
     registry.appendLocalMessages(session, localMessage("overflow"));
     expect(session.localMessagesTrimmed).toBe(true);
+    // A front trim moves every absolute position, so positions (history page
+    // cursors, `startIndex`) from before it must belong to another epoch.
+    expect(session.contentEpoch).toBe(1);
   });
 
   test("each non-empty append operation advances the revision exactly once", () => {

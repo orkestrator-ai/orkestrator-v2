@@ -13,6 +13,10 @@ import {
   toClientEnvironment,
 } from "./commands-helpers.js";
 import { createFeatureBuild } from "./feature-build.js";
+import {
+  conditionalBuildPipelineRead,
+  withoutTranscriptBodies,
+} from "./build-pipeline-transcript-projection.js";
 
 export function registerBuildPipelineCommands(
   register: CommandRegistrar,
@@ -88,80 +92,36 @@ export function registerBuildPipelineCommands(
     }
     return context.buildPipelines.importLegacy(id, snapshots);
   });
+  /**
+   * Control state for one pipeline. Transcript bodies are never embedded:
+   * a caller that names the transcript revision/count it holds per session in
+   * `knownSessions` receives only the windows its stale sessions need, read
+   * from the referenced transcript records (plan step 16).
+   */
   register(
     "get_build_pipeline",
-    async ({ pipelineId, knownRevision, knownSessions }, { storage }) => {
+    async ({ pipelineId, knownRevision, knownSessions, prioritySessionKey }, { storage }) => {
       const record = await storage.getBuildPipeline(asNonBlankString(pipelineId, "pipelineId"));
-      if (record && Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
+      if (!record) return null;
+      if (knownSessions && typeof knownSessions === "object" && !Array.isArray(knownSessions)) {
+        return conditionalBuildPipelineRead(storage, record, {
+          knownRevision,
+          knownSessions: knownSessions as Record<string, unknown>,
+          prioritySessionKey,
+        });
+      }
+      if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
         return { unchanged: true, revision: record.revision };
       }
-      if (
-        record &&
-        knownRevision !== undefined &&
-        knownSessions &&
-        typeof knownSessions === "object" &&
-        !Array.isArray(knownSessions) &&
-        record.snapshot &&
-        typeof record.snapshot === "object" &&
-        !Array.isArray(record.snapshot) &&
-        Array.isArray((record.snapshot as { sessions?: unknown }).sessions)
-      ) {
-        const cursors = knownSessions as Record<string, unknown>;
-        const snapshot = record.snapshot as Record<string, unknown>;
-        const messagePatches: Array<Record<string, unknown>> = [];
-        const sessions = (snapshot.sessions as unknown[]).map((value) => {
-          if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-          const session = value as Record<string, unknown>;
-          const sessionKey = session.sessionKey;
-          const messages = session.messages;
-          const revision = session.messageRevision;
-          if (
-            typeof sessionKey !== "string" ||
-            !Array.isArray(messages) ||
-            !Number.isSafeInteger(revision)
-          ) {
-            return session;
-          }
-          const cursor = cursors[sessionKey];
-          const cursorRecord =
-            cursor && typeof cursor === "object" && !Array.isArray(cursor)
-              ? (cursor as Record<string, unknown>)
-              : undefined;
-          const baseRevision = cursorRecord?.revision;
-          const baseCount = cursorRecord?.count;
-          if (baseRevision === revision && baseCount === messages.length) {
-            const { messages: _messages, ...withoutMessages } = session;
-            return withoutMessages;
-          }
-          const usableBase =
-            Number.isSafeInteger(baseRevision) &&
-            (baseRevision as number) >= 0 &&
-            (baseRevision as number) < (revision as number) &&
-            Number.isSafeInteger(baseCount) &&
-            (baseCount as number) >= 0 &&
-            (baseCount as number) <= messages.length;
-          const startIndex = usableBase ? Math.max(0, (baseCount as number) - 1) : 0;
-          messagePatches.push({
-            sessionKey,
-            ...(usableBase ? { baseRevision, baseCount } : {}),
-            startIndex,
-            revision,
-            messages: messages.slice(startIndex),
-          });
-          const { messages: _messages, ...withoutMessages } = session;
-          return withoutMessages;
-        });
-        return {
-          unchanged: false,
-          record: {
-            ...record,
-            snapshot: { ...snapshot, sessions },
-          },
-          messagePatches,
-        };
-      }
-      return record;
+      return withoutTranscriptBodies(record);
     },
+  );
+  /**
+   * Explicit downgrade export of one pipeline in the pre-split inline schema,
+   * bounded by the old 32 MiB snapshot limit. Read-only.
+   */
+  register("export_build_pipeline_for_downgrade", ({ pipelineId }, { storage }) =>
+    storage.exportBuildPipelineForDowngrade(asNonBlankString(pipelineId, "pipelineId")),
   );
   register(
     "get_build_pipeline_session_projection",
@@ -202,7 +162,11 @@ export function registerBuildPipelineCommands(
   register("list_build_pipelines", async (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "build-pipeline", async () => {
       const { projectId, knownRevisions } = args;
-      const records = await storage.listBuildPipelines(asNonBlankString(projectId, "projectId"));
+      // Summaries never reattach transcript bodies; an unmigrated legacy
+      // record is stripped here too.
+      const records = (
+        await storage.listBuildPipelines(asNonBlankString(projectId, "projectId"))
+      ).map(withoutTranscriptBodies);
       if (!knownRevisions || typeof knownRevisions !== "object" || Array.isArray(knownRevisions)) {
         return records;
       }

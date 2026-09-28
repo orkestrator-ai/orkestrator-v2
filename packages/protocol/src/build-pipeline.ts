@@ -316,6 +316,58 @@ export function isVerificationVerdict(value: unknown): value is VerificationVerd
  */
 export const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
 
+export const PIPELINE_TRANSCRIPT_REFERENCE_VERSION = 1;
+
+/**
+ * Control-record pointer to a session's separately stored display transcript.
+ *
+ * The transcript chunks and their manifest are committed before the workflow
+ * record that references them, so a reference always names a manifest
+ * revision that was durable when the reference was written. Everything here is
+ * small and content-free; the body is read on demand.
+ */
+export interface PipelineTranscriptReference {
+  version: typeof PIPELINE_TRANSCRIPT_REFERENCE_VERSION;
+  /** Provider session whose display transcript the stored record holds. */
+  sdkSessionId: string;
+  /** Committed manifest revision this workflow record points at. */
+  manifestRevision: number;
+  /** Display revision of that manifest; equals the session's `messageRevision`. */
+  revision: number;
+  /** Messages retained in the stored transcript. */
+  messageCount: number;
+  /** Serialized bytes retained in the stored transcript. */
+  bytes: number;
+  /**
+   * False when some messages could not be retained (one message beyond the
+   * chunk bound, or history beyond the per-session bound). The workflow record
+   * and its dispatch evidence are saved either way.
+   */
+  complete: boolean;
+  /** Messages the stored transcript omits when {@link complete} is false. */
+  omittedMessages?: number;
+  committedAt: string;
+}
+
+export function isPipelineTranscriptReference(
+  value: unknown,
+): value is PipelineTranscriptReference {
+  return (
+    isRecord(value) &&
+    value.version === PIPELINE_TRANSCRIPT_REFERENCE_VERSION &&
+    typeof value.sdkSessionId === "string" &&
+    value.sdkSessionId.length > 0 &&
+    Number.isSafeInteger(value.manifestRevision) &&
+    (value.manifestRevision as number) >= 1 &&
+    isNonNegativeInteger(value.revision) &&
+    isNonNegativeInteger(value.messageCount) &&
+    isNonNegativeInteger(value.bytes) &&
+    typeof value.complete === "boolean" &&
+    (value.omittedMessages === undefined || isNonNegativeInteger(value.omittedMessages)) &&
+    isIsoDate(value.committedAt)
+  );
+}
+
 export interface PipelineSession {
   phase: PipelineSessionPhase;
   /**
@@ -345,16 +397,41 @@ export interface PipelineSession {
   /** Cumulative provider-session usage captured for an independent reviewer. */
   tokenCount?: number;
   label: string;
-  /** Provider transcript snapshot. The backend refreshes it; clients only render it. */
+  /**
+   * Display transcript body.
+   *
+   * The backend no longer keeps it in the workflow control record: bodies live
+   * in separately stored chunks named by {@link transcript}. A record written
+   * before that split still carries the array inline and is read through the
+   * backend's legacy adapter until it is migrated. Clients attach the body they
+   * fetched here for rendering only.
+   */
   messages?: unknown[];
+  /** Display revision of the committed transcript; bumps on every checkpoint. */
   messageRevision?: number;
   /**
-   * Cheap change detector for {@link messages}. Comparing two full transcript
-   * serializations on every supervisor tick is O(transcript) twice per pass;
-   * this collapses that to the length plus the tail entry, which is what an
-   * append-or-stream-the-last-entry transcript actually varies.
+   * Cheap change detector for the committed transcript: a fixed-size digest of
+   * the length plus the tail entry, which is what an append-or-stream-the-last-
+   * entry transcript actually varies. Records written before the digest form
+   * carry the raw key, which the backend normalizes to the same digest.
    */
   messagesFingerprint?: string;
+  /** Versioned reference to the separately stored display transcript. */
+  transcript?: PipelineTranscriptReference;
+  /**
+   * Content-free reason (for example `quota`) the newest observed transcript
+   * could not be stored, so {@link transcript} is older than the provider's.
+   * The workflow still advanced; the next successful checkpoint clears it.
+   */
+  transcriptCheckpointError?: string;
+  /**
+   * Structured request identity recovered from a legacy inline transcript for
+   * a session that predates {@link structuredRequestId}. Persisted when the
+   * transcript moves out of the control record so recovery never needs to read
+   * transcript bodies. Deliberately separate from `structuredRequestId`, whose
+   * presence also classifies review-package preparation turns.
+   */
+  legacyStructuredRequestId?: string;
   /** Last time a transcript-only delta was persisted, used to throttle writes. */
   messagesPersistedAt?: string;
   /** Start of the current provider turn, used by liveness and stall timing. */
@@ -953,6 +1030,11 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.messageRevision === undefined || isNonNegativeInteger(value.messageRevision)) &&
     isOptionalNonBlankString(value.messagesFingerprint) &&
     (value.messagesPersistedAt === undefined || isIsoDate(value.messagesPersistedAt)) &&
+    (value.transcript === undefined || isPipelineTranscriptReference(value.transcript)) &&
+    (value.transcriptCheckpointError === undefined ||
+      (isNonBlankString(value.transcriptCheckpointError) &&
+        value.transcriptCheckpointError.length <= 128)) &&
+    isOptionalNonBlankString(value.legacyStructuredRequestId) &&
     (value.turnStartedAt === undefined || isIsoDate(value.turnStartedAt)) &&
     isOptionalNonBlankString(value.structuredRequestId) &&
     (value.resultTransport === undefined ||

@@ -1,7 +1,6 @@
 # 19 — Validate the full pipeline and roll out in measured waves
 
-Status: Not started. Prerequisites: mandatory steps 01–18 implemented; step 14
-has an explicit adopt/defer decision. Findings: all.
+Status: Complete for the function-level, repository-suite and isolated real-stack evidence below, including the 2026-09-27 gap-closure pass; steps 01 and 13 remain partial, and remote-proxy, live Grok, iOS and profiling runs were not performed. Findings: all.
 
 ## Outcome
 
@@ -140,13 +139,158 @@ not a storage downgrade strategy.
 
 ## Completion checklist
 
-- [ ] Each numbered step has an execution record and truthful status.
-- [ ] Every finding maps to a commit/PR and validation evidence or a documented
+- [x] Each numbered step has an execution record and truthful status.
+- [x] Every finding maps to a commit/PR and validation evidence or a documented
       remaining limitation; none is closed solely because a plan exists.
-- [ ] Mixed-version and migration tests pass, including explicit deletion.
-- [ ] Background agent/terminal work survives tab and document lifecycle changes.
-- [ ] Diagnostics and artifacts contain only synthetic data and bounded metrics.
-- [ ] Isolated profiles are stopped and reset, or intentional retention recorded.
-- [ ] Documentation catalog, review status, and existing TODOs reflect shipped
+- [x] Mixed-version and migration tests pass, including explicit deletion.
+- [x] Background agent/terminal work survives tab and document lifecycle changes
+      (owning suites and the isolated browser suite's inactive/reload cases).
+- [x] Diagnostics and artifacts contain only synthetic data and bounded metrics.
+- [x] Isolated profiles are stopped and reset, or intentional retention recorded.
+- [x] Documentation catalog, review status, and existing TODOs reflect shipped
       versus deferred work. Keep the original review as dated evidence.
 - [ ] Changes reach `main` only through reviewed PRs; final merge is human-owned.
+
+## Execution record
+
+```text
+Status: Complete for the evidence below; unrun surfaces listed as limitations.
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1
+  (commits 5d819c87 .. final head); no PR opened from this change.
+Finding → evidence:
+  E01 steps 02/03 — producer bound; harness c (600 → ≤ 440 parts, bounded bytes);
+      cursor translate-bounds.test.ts.
+  E02 step 04 — unique temp, fsync, newest-tail shedding, barrier failures;
+      persistence-durability.test.ts and budget/durability suites.
+  E03 step 05 — Claude revisions + title/freshness token; harness a (1,000 → 0
+      visits); real Claude session unchanged re-read (504 B response).
+  E04 steps 06/07 — keyed records, bounded checkpoints, deletion fence;
+      harness d (one-tail update 16,734 KiB read → 8 KiB).
+  E05 steps 12/14 — encoding memo (400 → 100 serializations) and negotiated
+      part patches (85–94% fewer decoded delta bytes, harness j).
+  E06 steps 08/09 — v2 summaries on all five bridges; harness e; real Codex
+      and Claude bridges: 1.5–1.9 KB v2 vs 18.2–18.6 KB v1 for a 14 KB tool
+      output, exact detail on expansion.
+  E07 step 11 — direct pages; harness i (4 interactive snapshots → 0).
+  E08 step 10 — bounded rollout reader; harness h (20 full parses → 1);
+      unreadable rollouts no longer read as empty transcripts.
+  E09 step 02 — linear trimming; harness b (4,585 → 100 visits).
+  E10 step 13 — incremental accounting; harness g (4,196 → 1 visits);
+      provider-replacement ordering fix in the hook.
+  E11 step 17 — batched no-touch activity (100 sessions: 100 → 2 requests);
+      frontend visibility scheduling from 0ba8628e.
+  E12 step 18 — single serialization per walk, container TTL, ad hoc cache
+      (quiet container panel 12 → 4 walks/min).
+  E13 step 15 — conditional probes, lightweight reviewer windows + details.
+  E14 step 16 — transcripts in a chunk/manifest store (control file 25.9 MB →
+      30 KB; tail checkpoint ≈ 42 KB written).
+Tests and isolated profiles (all on this branch head, AMD Ryzen 5 PRO 5650U,
+  12 logical CPUs, 30.7 GiB, Bun 1.4.2):
+  - mise run check — pass.
+  - mise run test — pass (workspace 405 s, root 144 s, bridges 178 s, codex
+    protocol lockfile). Earlier runs were killed by the no-output watchdog
+    only while another session held 7 of 8 shared test slots; every package
+    passes alone and the quiet run passed.
+  - mise run test:agent:browser:isolated — 12 passed, 7 skipped (after
+    rebuilding bridge bundles; one earlier run hit a first-load dev-server
+    502, recorded as environmental flake 0168, and passed on rerun).
+  - Isolated profile eff-qa-7f09 (claude, codex; fixture project): real Codex
+    and Claude sessions via the orkestrator CLI, then gateway reads: summary
+    rows carry a detail reference, expansion returns the exact 13.9 KB
+    output, an unchanged re-read answers `unchanged` (≈ 500 B), and each
+    bridge answers v2 with details and pages advertised. Environment deleted,
+    profile stopped and reset.
+  - scripts/efficiency final run: ../baseline/final-summary.json and README.
+Compatibility/migration result: every new wire form is negotiated (v2
+  envelope discriminator, detail/page route presence, transcriptPatchVersions,
+  batch activity route) and old readers keep v1; storage migrations (display
+  tails, pipeline transcripts) are idempotent with deletion markers and
+  documented downgrade paths (display tails: cache miss; pipelines: bounded
+  export command).
+Rollout note: `dev:test` launches bridges from their built `dist/` bundles and
+  does not rebuild them; after bridge source changes run
+  the build script in each bridge directory before real-stack QA,
+  or the profile tests stale bridges.
+Remaining limitations (not validated here): remote proxy and compression
+  bytes, Docker/container environments, the Electron window, live Cursor/Pi/
+  Grok/OpenCode sessions, native iOS, browser long-task and heap/RSS
+  profiling, and p95 latency on real providers. Per-pipeline control-record
+  partitioning (E14) and a container file watcher (E12) remain deferred with
+  their measured costs; part patches cover the backend-to-client hop only.
+```
+
+### Gap-closure pass (2026-09-27)
+
+```text
+Why: an independent code check of the first execution found steps 03, 09,
+  11, 12 and 15 short of their acceptance criteria, step 17's multi-review
+  path unbatched, several record/header status mismatches, and this record's
+  claim that the full suite passed no longer true at the branch head (two command
+  names in this file tripped the docs task-surface guard; fixed in
+  20ede8b8).
+Commits: a81a4a66 (steps 12/11: projected-row reuse, direct page cache),
+  e79798e3 (step 15: progress over the newest 8 messages), 308b1865
+  (step 17: batched multi-review activity reads), c150f423 (step 15:
+  reviewer "load earlier"), f833ebea (step 03: per-sub-agent bounds and
+  counters), f83a6206 (step 09: shared bridge contract; Codex restart
+  generation fix), 20ede8b8 (docs guard).
+Review: an independent review of the combined diff found three defects,
+  fixed before commit: the reviewer fallback exceeded OpenCode's 64-message
+  read limit; a direct-page read could restore an older epoch when none was
+  remembered; a provider-reported but unreturnable history paged to
+  "complete". Each has a regression test.
+Updated finding map:
+  E01 step 03 — plus per-sub-agent part/byte bounds, todo and argument
+      caps, runtime-health bound counters.
+  E05 step 12 — a tail change over 1,000 rows re-normalizes 2 parts instead
+      of 2,000; one comparison walk per changed read remains.
+  E06 step 09 — one shared v2 contract passes on all five bridges.
+  E07 step 11 — bounded direct-page cache with shared in-flight reads.
+  E11 step 17 — multi-review interactive Fix reads batched per connection.
+  E13 step 15 — late updates within the newest 8 messages are progress;
+      reviewer history pages with expiry semantics.
+Tests (branch head, same machine as above):
+  - mise run check — pass.
+  - mise run test — pass (workspace 459 s, root 99 s, bridges 145 s, codex
+    protocol lockfile).
+  - mise run test:agent:browser:isolated — 12 passed, 7 skipped.
+  - mise run test:agent:electron — 2 passed, 1 skipped, 1 failed, 5 not run:
+    web-annotations-electron "capture ... survives renderer reload and
+    backend restart" (password mask uniformity 0.923 < 0.98). The same test
+    fails identically on main (d4df09d5) on this host, so it is
+    pre-existing and host-specific; the suite stops after it, so the five
+    later annotation tests did not run. One earlier branch run also failed
+    the multi-window count check; it passed on main and on two other
+    branch runs (flaky).
+  - Docker: container fixture profile eff-docker-7f09, then
+    mise run test:agent:docker — pass (container ownership and the seeded
+    container; the step 18 tree cache is covered by its unit tests only).
+    Profile stopped and reset (1 owned container removed).
+Live providers (isolated profile eff-gap-7f09, bridges rebuilt): Claude
+  (haiku), Codex (gpt-5.5, low) and OpenCode each ran a 14 KB tool output.
+  Snapshot 3.1-4.4 KB; unchanged re-read 489-504 B; the output was deferred
+  behind a detail reference and expanded exactly (17.0 KB / 12.2 KB).
+  Cursor (not signed in, HTTP 401), Pi (no authenticated provider) and Grok
+  (ACP authenticate timed out) could not start. No session exceeded the
+  100-message live window, so live history paging and the reviewer "load
+  earlier" control were not exercised. Environments deleted; profile stopped
+  and reset.
+Follow-up live run (same day, fresh isolated profile): Cursor
+  (composer-2.5; the saved app API key injected as CURSOR_API_KEY for the
+  dev profile only) and Pi (openai-codex/gpt-6-sol; the host Pi login copied
+  owner-only into the profile's isolated home and removed on reset) each ran
+  the same 14 KB tool call. Snapshot 2.3 KB / 2.0 KB; unchanged re-read
+  489 B / 485 B; the output deferred and expanded exactly (17.0 KB /
+  12.2 KB). Cursor runtime-health reported transcriptBounds live (24 checks,
+  0 trims, limits 128 parts / 4,161,536 B per sub-agent). Grok rejects ACP
+  session/new with "Invalid params" and its model catalogue is empty; the
+  bridge's session-creation code is unchanged from main, so this is tracked
+  separately as a Grok integration issue.
+Remaining limitations after this pass: step 01 (E11-E14 workloads, heap/RSS,
+  browser long tasks, remote path) and step 13 (items 1, 4, 7; browser
+  profiling) remain partial; a live Grok session, live history
+  paging, a live multi-review run, the Claude inactive-tab QA, remote
+  proxy/compression bytes, native iOS and p95 latency on real providers are
+  unrun; per-pipeline control partitioning (E14) and a container watcher
+  (E12) stay deferred.
+```

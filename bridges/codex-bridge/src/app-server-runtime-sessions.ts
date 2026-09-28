@@ -41,6 +41,7 @@ import {
   PromptAcceptedResult,
   AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
+import { inheritCommandChanges } from "./sessions/command-changes.js";
 import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
@@ -247,6 +248,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     // Only hydrate when this is the first tab on the thread; a second tab must
     // join the existing canonical transcript rather than rebuild it.
+    let unreadable = false;
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
         structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
@@ -260,6 +262,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       }
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
+      if (hydrated.readFailed) unreadable = true;
     } else {
       this.publishPersistedModelOverrides(context);
       const existing = this.registry
@@ -268,7 +271,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       session.title = existing?.title ?? thread.name ?? undefined;
       session.titleSource = existing?.titleSource;
     }
-    context.transcriptHydrated = true;
+    // A rollout that could not be read at all is not an empty conversation:
+    // leave the transcript unhydrated so readers keep reporting a cached,
+    // incomplete preview (and the next attach retries) instead of an
+    // authoritative empty history that would overwrite a display tail.
+    if (!unreadable) context.transcriptHydrated = true;
 
     await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
     await this.persistSession(session);
@@ -356,6 +363,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id, {
         structuredOutputTurns: this.structuredOutputTurnsForThread(fork.id),
       });
+      await inheritCommandChanges(
+        this.options.codexHome,
+        parent.threadId,
+        fork.id,
+        hydrated.messages,
+      );
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
@@ -363,7 +376,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         this.bumpMessageRevision(context);
         this.registry.bumpContentEpoch(child);
       }
-      context.transcriptHydrated = true;
+      // A rollout that could not be read at all is not an empty conversation:
+      // leave the transcript unhydrated so readers keep reporting a cached,
+      // incomplete preview (and the next attach retries) instead of an
+      // authoritative empty history that would overwrite a display tail.
+      if (!hydrated.readFailed) context.transcriptHydrated = true;
       await this.persistSession(child);
       return {
         outcome: "created",
@@ -864,6 +881,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     const errorBeforeReview = context.error;
     context.dispatchInFlight = true;
     this.registry.setPhase(context, "starting");
+    await this.primeCommandChanges(context);
 
     const modelForReview = context.modelId ?? session.config.model;
     const assistantMessage: NormalizedMessage = {

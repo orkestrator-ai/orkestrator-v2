@@ -190,6 +190,26 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       : observed.state;
   }
 
+  /**
+   * Whether one environment's bridge has an in-flight dispatch or a session
+   * last observed working, waiting, or running background tasks.
+   *
+   * Uses the raw state, not the turn view: replacing the bridge kills its whole
+   * process tree, so a backgrounded test run or dev server is lost just like a
+   * turn. Purely in-memory apart from the session list; never reads a bridge.
+   */
+  async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
+    const provider = this.providers.get(`${environmentId}\0${agent}`);
+    if (provider && this.providerDispatchCounts.has(provider)) return true;
+    const sessions = await this.storage.listNativeAgentSessions();
+    return sessions.some((session) => {
+      if (session.environmentId !== environmentId || session.agent !== agent) return false;
+      const observed = this.observedSessionActivity.get(session.key);
+      if (!observed || observed.providerSessionId !== session.providerSessionId) return false;
+      return observed.state === "working" || observed.state === "waiting";
+    });
+  }
+
   sessionPresentationSnapshot(
     environmentId: string,
     agent: BuildPipelineAgent,
@@ -833,7 +853,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     try {
       const environment = await this.storage.getEnvironment(input.environmentId);
       if (!environment || !isGeneratedEnvironmentName(environment.name)) return;
-      const messages = await provider.messages(session.providerSessionId);
+      // Emptiness is all this needs; one message answers it on any transport
+      // that can bound the read.
+      const messages = await provider.messages(session.providerSessionId, { limit: 1 });
       if (messages.length > 0) return;
       await this.invoke("prepare_environment_first_prompt", {
         environmentId: input.environmentId,

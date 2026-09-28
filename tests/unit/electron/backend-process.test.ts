@@ -335,6 +335,7 @@ describe("Electron backend process supervisor", () => {
     expect(development).toEqual({
       PATH: "/bin",
       NODE_PATH: "/existing",
+      ORKESTRATOR_DESKTOP_SUPERVISED: "1",
       ORKESTRATOR_GATEWAY_DISABLED: "0",
     });
     expect(parent.ORKESTRATOR_GATEWAY_TOKEN).toBe("not-forwarded");
@@ -365,6 +366,7 @@ describe("Electron backend process supervisor", () => {
 
     expect(development).toEqual({
       NODE_PATH: "/existing",
+      ORKESTRATOR_DESKTOP_SUPERVISED: "1",
       ORKESTRATOR_GATEWAY_DISABLED: "0",
       ORKESTRATOR_VERSION: "2.4.9",
     });

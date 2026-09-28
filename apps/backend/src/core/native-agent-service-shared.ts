@@ -80,6 +80,8 @@ import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import type { StorageService } from "./storage.js";
+import type { DirectHistoryPageCacheLimits } from "./native-agent-direct-history.js";
+import type { ProjectedMessageCacheLimits } from "./native-agent-projection-entries.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
@@ -245,6 +247,8 @@ export interface NativeAgentProgressiveInput {
 
 export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {
   liveWindow: NativeAgentLiveWindow;
+  /** Part-level message patches the client can apply (step 14); absent: none. */
+  patchVersion?: 2;
 }
 
 export interface NativeAgentDiscoveryUpdateInput extends NativeAgentProgressiveInput {
@@ -438,6 +442,10 @@ export interface NativeAgentServiceOptions {
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */
   toolDetailCacheMaxBytes?: number;
+  /** Test seam for projected-row reuse bounds; `maxEntries: 0` disables reuse. */
+  projectedMessageCacheLimits?: Partial<ProjectedMessageCacheLimits>;
+  /** Test seam for direct history page cache bounds; `ttlMs: 0` disables it. */
+  directHistoryPageCacheLimits?: Partial<DirectHistoryPageCacheLimits>;
   /** Test seam for the obsolete-provider disposal grace period. */
   providerRetirementGraceMs?: number;
   /**
@@ -579,6 +587,27 @@ export const NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES = 100;
 export const NATIVE_HISTORY_PAGE_DEFAULT_BYTES = 512 * 1024;
 export const NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES = 1024 * 1024;
 export const NATIVE_HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+/**
+ * Direct (provider-positioned) history pages kept for repeat reads; see
+ * `DirectHistoryPageCache`. A page is at most about one target's worth of
+ * summaries, so a session holds its sixteen most recent pages.
+ */
+export const NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES = 64;
+export const NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+export const NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES = 16;
+export const NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES = 8 * 1024 * 1024;
+export const NATIVE_DIRECT_PAGE_CACHE_TTL_MS = 5 * 60_000;
+/**
+ * Projected rows reused across changed reads; see `ProjectedMessageCache`.
+ * Bytes count the private source copy and the projected encoding. A session
+ * may hold the widest window (`NATIVE_PROJECTION_MAX_WINDOW_MESSAGES`) of
+ * ordinary rows; a row over the per-entry ceiling is projected every read.
+ */
+export const NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES = 8_192;
+export const NATIVE_PROJECTED_MESSAGE_CACHE_MAX_BYTES = 48 * 1024 * 1024;
+export const NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_ENTRIES = 4_096;
+export const NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_BYTES = 24 * 1024 * 1024;
+export const NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024;
 export const NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES = 4_096;
 export const NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 export const NATIVE_TOOL_DETAIL_MAX_BYTES = 4 * 1024 * 1024;

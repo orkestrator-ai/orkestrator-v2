@@ -1,8 +1,11 @@
 # Documentation catalog
 
-`AGENTS.md` is the agent source of truth. This file is the living catalog of
-`docs/` only — status, location, and which document to open. Do not copy
-invariants from `AGENTS.md` here.
+`AGENTS.md` is the agent source of truth. The root file holds repository-wide
+rules and an index of area-specific instruction files (`bridges/AGENTS.md`,
+`bridges/<bridge>/AGENTS.md`, `docker/AGENTS.md`), each paired with a
+`CLAUDE.md` that imports it. This file is the living catalog of `docs/` only —
+status, location, and which document to open. Do not copy invariants from any
+`AGENTS.md` here.
 
 Refreshed 2026-09-17 against the current tree.
 
@@ -48,6 +51,7 @@ Refreshed 2026-09-17 against the current tree.
 | [upgrade-agents.md](development/upgrade-agents.md) | Living | SDK/CLI bump runbook. Pins are test-enforced. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Living | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Living | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
+| [linting.md](development/linting.md) | Living | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 
 ## Tests
 
@@ -72,8 +76,8 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | [Container implementation plan](improvements/containers/plan/00-index.md) | Active | Index and 14 numbered steps covering data protection, durable lifecycle, storage migration, isolation, resources, images and rollout. All steps implemented on a branch awaiting review; evidence in [qualification](improvements/containers/qualification.md) and [benchmarks](improvements/containers/benchmarks.md). |
 | [Container qualification](improvements/containers/qualification.md) | Active | C01–C30 evidence (unit, live Docker, real-stack browser/CLI), rollout stage status, rollback gates and known limitations. |
 | [Container benchmarks](improvements/containers/benchmarks.md) | Active | Step 13 baselines, dominant costs and the optimization decision table. |
-| [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. Includes synthetic probes; implementation not started. |
-| [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | Detailed 19-step implementation plan with dependencies, compatibility, migrations, tests, and rollout gates. All implementation steps not started. |
+| [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. All findings implemented (2026-09-27); measured before/after in [efficiency/baseline/](improvements/efficiency/baseline/README.md). |
+| [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | 19-step implementation plan. All findings have shipped changes; steps 01 and 13 remain partial. Step 14 part deltas adopted behind negotiation. Deferred with measured cost: per-pipeline control-record partitioning, container file watcher. Remote-proxy, Docker, Electron-window and live Cursor/Pi/Grok runs not performed (step 19). |
 
 ## Plans
 

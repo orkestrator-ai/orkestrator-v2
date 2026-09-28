@@ -22,11 +22,13 @@ import type {
   ReviewValidationRun,
   StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
-import type {
-  MultiReviewWorkflow as BackendMultiReviewWorkflow,
-  MultiReviewReviewerTranscript,
-  StartMultiReviewCustomFixInput,
-  StartMultiReviewInput,
+import {
+  isMultiReviewReviewerHistoryPage,
+  type MultiReviewWorkflow as BackendMultiReviewWorkflow,
+  type MultiReviewReviewerHistoryPage,
+  type MultiReviewReviewerTranscript,
+  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import type {
   Environment,
@@ -373,6 +375,42 @@ export async function getMultiReviewReviewerTranscript(
   });
 }
 
+/** The body behind a reviewer row's deferred `detailRef`, read on expansion. */
+export async function getMultiReviewReviewerToolDetails(
+  workflowId: string,
+  reviewerId: string,
+  detailRef: string,
+): Promise<NativeAgentToolDetails> {
+  return invoke<NativeAgentToolDetails>("get_multi_review_reviewer_tool_details", {
+    workflowId,
+    reviewerId,
+    detailRef,
+  });
+}
+
+/**
+ * Reviewer history before `before` (a transcript `historyCursor` or a page's
+ * `nextCursor`). An answer outside the protocol's bounds is refused rather
+ * than rendered.
+ */
+export async function getMultiReviewReviewerHistoryPage(
+  workflowId: string,
+  reviewerId: string,
+  options: { before: string; limit?: number; targetBytes?: number },
+): Promise<MultiReviewReviewerHistoryPage> {
+  const page = await invoke<unknown>("get_multi_review_reviewer_history_page", {
+    workflowId,
+    reviewerId,
+    before: options.before,
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+    ...(options.targetBytes === undefined ? {} : { targetBytes: options.targetBytes }),
+  });
+  if (!isMultiReviewReviewerHistoryPage(page)) {
+    throw new Error("The reviewer history page was malformed");
+  }
+  return page;
+}
+
 export async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
   return invoke("delete_multi_review_workflow", { workflowId });
 }
@@ -448,6 +486,8 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   progressiveViewVersions?: number[];
   /** Stamped, session-scoped activity announcements (step 07). */
   observationEventVersions?: number[];
+  /** Part-level patches inside transcript deltas (efficiency step 14). */
+  transcriptPatchVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -468,7 +508,11 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     (candidate.observationEventVersions !== undefined &&
       (!Array.isArray(candidate.observationEventVersions) ||
         candidate.observationEventVersions.length > 16 ||
-        !candidate.observationEventVersions.every(Number.isSafeInteger)))
+        !candidate.observationEventVersions.every(Number.isSafeInteger))) ||
+    (candidate.transcriptPatchVersions !== undefined &&
+      (!Array.isArray(candidate.transcriptPatchVersions) ||
+        candidate.transcriptPatchVersions.length > 16 ||
+        !candidate.transcriptPatchVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
@@ -477,6 +521,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     historyPagingVersions: number[];
     progressiveViewVersions?: number[];
     observationEventVersions?: number[];
+    transcriptPatchVersions?: number[];
   };
 }
 
@@ -488,6 +533,8 @@ export async function getNativeAgentTranscriptUpdate<TMessage = unknown>(input: 
   liveWindow: NativeAgentLiveWindow;
   knownToken?: string;
   forceSnapshot?: boolean;
+  /** Ask for part-level patches; only when the backend advertised them. */
+  patchVersion?: 2;
 }): Promise<NativeAgentTranscriptUpdate<TMessage>> {
   const response = await invoke<unknown>("get_native_agent_transcript_update", input);
   if (
@@ -911,20 +958,34 @@ export type ConditionalBuildPipeline<T> =
         startIndex: number;
         revision: number;
         messages: unknown[];
+        /** The stored transcript could not be read; keep what is held. */
+        unavailable?: true;
+        /** Over the response budget; a later read fetches it. */
+        deferred?: true;
+        /** Some history was not retained by the backend's transcript bound. */
+        complete?: false;
       }>;
     }
   | PersistedBuildPipeline<T>
   | null;
 
+/**
+ * Control state plus transcript windows for the sessions whose bodies the
+ * caller does not hold at their committed revision. `knownSessions` names the
+ * bodies held (revision and count); omitted sessions come back whole, and
+ * `prioritySessionKey` is served first when the response budget runs out.
+ */
 export async function getBuildPipelineConditional<T = unknown>(
   pipelineId: string,
   knownRevision?: number,
-  knownSessions?: Record<string, { revision: number; count: number }>,
+  knownSessions: Record<string, { revision: number; count: number }> = {},
+  prioritySessionKey?: string,
 ): Promise<ConditionalBuildPipeline<T>> {
   const response = await invoke<unknown>("get_build_pipeline", {
     pipelineId,
     knownRevision,
     knownSessions,
+    ...(prioritySessionKey ? { prioritySessionKey } : {}),
   });
   if (response === null) return null;
   if (!isRecord(response)) {
@@ -960,6 +1021,9 @@ export async function getBuildPipelineConditional<T = unknown>(
           (Number.isSafeInteger(value.baseRevision) && (value.baseRevision as number) >= 0)) &&
         (value.baseCount === undefined ||
           (Number.isSafeInteger(value.baseCount) && (value.baseCount as number) >= 0)) &&
+        (value.unavailable === undefined || value.unavailable === true) &&
+        (value.deferred === undefined || value.deferred === true) &&
+        (value.complete === undefined || value.complete === false) &&
         Array.isArray(value.messages)
       );
     })

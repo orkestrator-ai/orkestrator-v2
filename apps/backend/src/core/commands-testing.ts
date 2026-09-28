@@ -37,6 +37,7 @@ import {
   localOpenCodeServerPasswords,
   localServerEnvironmentOperations,
   localServerProcesses,
+  localServerUnresponsiveSince,
   mergingEnvironments,
   openCodeAgentToolsConfigurations,
   openCodeAgentToolsState,
@@ -210,11 +211,23 @@ export const __testing = {
   deleteLocalOpenCodeServerPassword(environmentId: string): void {
     localOpenCodeServerPasswords.delete(environmentId);
   },
+  /** Backdates when a running bridge first failed its reuse health check. */
+  markLocalServerUnresponsiveSince(key: string, since: number): void {
+    const child = localServerProcesses.get(key);
+    if (!child) throw new Error(`No local server owns ${key}`);
+    localServerUnresponsiveSince.set(key, { child, since, lastFailureAt: Date.now() });
+  },
+  markLocalServerLastFailureAt(key: string, lastFailureAt: number): void {
+    const marker = localServerUnresponsiveSince.get(key);
+    if (!marker) throw new Error(`No unresponsive marker for ${key}`);
+    marker.lastFailureAt = lastFailureAt;
+  },
   resetLocalServerLifecycle(): void {
     if (localServerEnvironmentOperations.size > 0) {
       throw new Error("Cannot reset local server lifecycle while operations are active");
     }
     localServerProcesses.clear();
+    localServerUnresponsiveSince.clear();
     localCodexBridgeTokens.clear();
     localClaudeBridgeTokens.clear();
     localOpenCodeServerPasswords.clear();

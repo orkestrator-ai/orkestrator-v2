@@ -129,6 +129,26 @@ test("build pipeline point reads omit unchanged transcripts and return tail patc
     },
   };
   context.storage.getBuildPipeline = mock(async () => record);
+  // An unmigrated record: the storage read adapter serves its inline array.
+  context.storage.readBuildPipelineTranscript = mock(
+    async (
+      _pipelineId: string,
+      session: { messages?: unknown[]; messageRevision?: number },
+      window: { fromIndex?: number } = {},
+    ) => {
+      const messages = session.messages ?? [];
+      const fromIndex = Math.min(window.fromIndex ?? 0, messages.length);
+      return {
+        status: "found" as const,
+        messages: messages.slice(fromIndex),
+        startIndex: fromIndex,
+        messageCount: messages.length,
+        revision: session.messageRevision ?? 0,
+        complete: true,
+        substituted: false,
+      };
+    },
+  );
   const commands = createCommandRegistry();
 
   expect(
@@ -217,6 +237,8 @@ test("build pipeline point reads omit unchanged transcripts and return tail patc
     ],
   });
 
+  // A plain read returns control state only: an unmigrated record's inline
+  // transcript is stripped rather than shipped (plan step 16).
   expect(
     await commands.get("get_build_pipeline")?.(
       {
@@ -225,7 +247,13 @@ test("build pipeline point reads omit unchanged transcripts and return tail patc
       },
       context,
     ),
-  ).toBe(record);
+  ).toEqual({
+    ...record,
+    snapshot: {
+      id: "pipeline-1",
+      sessions: [{ sessionKey: "session-1", messageRevision: 3 }],
+    },
+  });
 
   context.storage.getBuildPipeline = mock(async () => null);
   expect(
@@ -273,7 +301,7 @@ test("build pipeline list reads return only changed records and retain deletion 
       },
       context,
     ),
-  ).toBe(records);
+  ).toEqual(records);
   expect(
     await commands.get("list_build_pipelines")?.(
       {
@@ -282,7 +310,7 @@ test("build pipeline list reads return only changed records and retain deletion 
       },
       context,
     ),
-  ).toBe(records);
+  ).toEqual(records);
   expect(
     await commands.get("list_build_pipelines")?.(
       {
@@ -299,6 +327,17 @@ test("build pipeline list reads return only changed records and retain deletion 
     ids: ["pipeline-1", "pipeline-2"],
     records: [records[1]],
   });
+
+  // Summaries never carry transcript bodies, even for an unmigrated record.
+  context.storage.listBuildPipelines = mock(async () => [
+    {
+      ...records[0]!,
+      snapshot: { id: "pipeline-1", sessions: [{ sessionKey: "s", messages: [{ id: "m" }] }] },
+    },
+  ]);
+  expect(
+    await commands.get("list_build_pipelines")?.({ projectId: environment.projectId }, context),
+  ).toEqual([{ ...records[0]!, snapshot: { id: "pipeline-1", sessions: [{ sessionKey: "s" }] } }]);
 
   context.storage.listBuildPipelines = mock(async () => []);
   expect(

@@ -35,6 +35,11 @@ import {
   workingDirectory,
 } from "./config.js";
 import {
+  commandChangeExtension,
+  discardToolCall,
+  overlayCommandChanges,
+} from "./command-changes.js";
+import {
   markCommandCatalogueStale,
   noteCommandError,
   readSessionCommandCatalogue,
@@ -451,6 +456,8 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
         extensionFactories: [
           { name: "orkestrator", factory: approvalExtension(state) },
           { name: "orkestrator-mcp", factory: piMcpExtension(state) },
+          // After the approval gate, so a refused call is never measured.
+          { name: "orkestrator-command-changes", factory: commandChangeExtension(state) },
         ],
       },
     });
@@ -583,7 +590,12 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // The one subscription that builds the transcript. Held so detaching can
   // release it: a listener left attached to a disposed session keeps the whole
   // object graph — messages, tools, extension runner — alive.
-  state.unsubscribe = session.subscribe((event) => applySessionEvent(state, event));
+  state.unsubscribe = session.subscribe((event) => {
+    applySessionEvent(state, event);
+    // Every call that ran was already measured in the `tool_result` hook,
+    // which precedes this frame. What is left open here never ran.
+    if (event.type === "tool_execution_end") discardToolCall(state, event.toolCallId);
+  });
   // A fresh runtime loaded its resources from scratch, so this read is also
   // the reload any refresh deferred while the session was detached or busy.
   state.commandReloadPending = false;
@@ -1188,6 +1200,7 @@ export async function resumeSession(
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposerForSession(state.composer);
     hydrateHistory(state);
+    await overlayCommandChanges(state);
     sessions.set(state.id, state);
     return state;
   })();
@@ -1229,6 +1242,7 @@ export async function forkSession(
         : {}),
     });
     forked.policy = state.policy;
+    await overlayCommandChanges(forked, { inheritFrom: state.piSessionId });
     return forked;
   }
   const forked = newSessionState(undefined, state.policy);
@@ -1247,6 +1261,7 @@ export async function forkSession(
     publishAttachedSession(forked, runtime.session);
     resetRenderedHistory(forked);
     hydrateHistory(forked);
+    await overlayCommandChanges(forked, { inheritFrom: state.piSessionId });
     sessions.set(forked.id, forked);
     return outcome.selectedText
       ? Object.assign(forked, { forkDraft: outcome.selectedText })
@@ -1271,6 +1286,7 @@ export async function navigateSessionHistory(
   if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
   resetRenderedHistory(state);
   hydrateHistory(state);
+  await overlayCommandChanges(state);
 }
 
 export async function setSessionTitle(state: SessionState, title: string): Promise<void> {
@@ -1296,13 +1312,22 @@ function resolveUserEntryId(
   return messageIndex >= 0 ? entries[messageIndex]?.entryId : undefined;
 }
 
-function resetRenderedHistory(state: SessionState): void {
+/**
+ * Forget the rendered transcript before it is rebuilt from another branch.
+ *
+ * A different history then starts at index 0 again, so the transcript epoch
+ * moves and every position, page cursor and token from before expires.
+ */
+export function resetRenderedHistory(state: SessionState): void {
   state.messages = [];
+  // A different history now starts at index 0 again; old positions must expire.
+  state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
   state.droppedMessages = 0;
   state.droppedParts = 0;
   state.transcriptTruncated = false;
   state.openTextParts.clear();
   state.toolInputs.clear();
+  state.pendingCommandChanges?.clear();
   state.currentAssistantMessageId = undefined;
   state.uncheckedTranscriptBytes = 0;
 }

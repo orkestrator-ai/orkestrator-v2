@@ -20,6 +20,7 @@ import {
   type MultiReviewPausablePhase,
   type MultiReviewPhase,
   type MultiReviewModelSelection,
+  type MultiReviewReviewerHistoryPage,
   type MultiReviewReviewerTranscript,
   type MultiReviewStepKind,
   type MultiReviewWorkflow,
@@ -33,7 +34,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { AgentModel, NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
   ReviewContractValidationError,
@@ -92,10 +93,11 @@ import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
   MultiReviewProgressTracker,
-  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
+import { readTranscriptProgressSample } from "./transcript-progress.js";
+import { ActivityReadCoalescer } from "./activity-read-coalescer.js";
 
 import {
   recordEfficiency,
@@ -131,7 +133,10 @@ import {
 } from "./workflow-supervisor.js";
 import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
 import {
+  readReviewerHistoryPage,
+  readReviewerToolDetails,
   readReviewerTranscript,
+  reviewerHistoryKey,
   type ReviewerTranscriptRead,
 } from "./multi-review-reviewer-transcript.js";
 import {
@@ -406,6 +411,8 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   controllerRenewMs?: number;
   cancellationDeadlineMs?: number;
   progressProbeIntervalMs?: number;
+  /** Batch collection window of interactive Fix activity reads (`ActivityReadCoalescer`). */
+  activityReadCoalesceWindowMs?: number;
   stallWarningMs?: number;
   stallAbandonMs?: number;
   /**
@@ -482,6 +489,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly providerReaders = new Map<string, number>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private readonly progress: MultiReviewProgressTracker;
+  private readonly activityReads: ActivityReadCoalescer;
   private readonly evidencePermits = new ReviewEvidencePermits();
   /**
    * Per-workflow-object write queue. Reviewers advance concurrently and every
@@ -521,6 +529,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     this.progress = new MultiReviewProgressTracker(
       options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
     );
+    this.activityReads = new ActivityReadCoalescer(options.activityReadCoalesceWindowMs);
     this.keyed =
       options.keyedScheduling ??
       (options.adaptiveScheduling !== false && keyedSchedulingEnabled("multi-review"));
@@ -677,7 +686,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           fence: reviewer.sessionKey,
         });
         const started = Date.now();
-        transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken);
+        transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
+          key: reviewerHistoryKey(workflow.id, reviewer.id),
+        });
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
           operation:
@@ -714,12 +725,120 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       transcript: transcript?.kind === "unchanged" ? "unchanged" : "snapshot",
       ...(transcript?.sourceToken ? { sourceToken: transcript.sourceToken } : {}),
       ...(transcript?.kind === "snapshot" && transcript.truncated ? { truncated: true } : {}),
+      ...(transcript?.kind === "snapshot" && transcript.historyCursor
+        ? { historyCursor: transcript.historyCursor }
+        : {}),
+      ...(transcript?.kind === "snapshot" && transcript.historyEpoch
+        ? { historyEpoch: transcript.historyEpoch }
+        : {}),
       ...(reviewer.report ? { report: reviewer.report } : {}),
       ...(reviewer.error ? { error: reviewer.error } : {}),
       ...(reviewer.progressAt ? { progressAt: reviewer.progressAt } : {}),
       ...(reviewer.stalledSince ? { stalledSince: reviewer.stalledSince } : {}),
       ...(reviewer.startedAt ? { startedAt: reviewer.startedAt } : {}),
       ...(reviewer.completedAt ? { completedAt: reviewer.completedAt } : {}),
+    };
+  }
+
+  /** The body behind one reviewer row's deferred `detailRef`, from its own session. */
+  async reviewerToolDetails(
+    workflowId: string,
+    reviewerId: string,
+    detailRef: string,
+  ): Promise<NativeAgentToolDetails> {
+    const record = await this.storage.getMultiReviewWorkflow(workflowId);
+    if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+      throw new Error(`Multi review workflow not found: ${workflowId}`);
+    }
+    const workflow = record.snapshot;
+    const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+    if (!reviewer?.providerSessionId) {
+      throw new Error("Reviewer tool details are no longer available");
+    }
+    const key = this.providerKey(workflow, reviewer);
+    this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+    try {
+      const provider = await this.providerInstance(workflow, reviewer);
+      return await readReviewerToolDetails(provider, reviewer.providerSessionId, detailRef);
+    } finally {
+      await this.releaseProviderReaderByKey(key);
+    }
+  }
+
+  /**
+   * Reviewer history before `before` (a transcript `historyCursor` or a page's
+   * `nextCursor`), read from the reviewer's current provider session. A
+   * restarted reviewer or rewritten history answers `expired`, never an empty
+   * page, so the tab re-reads instead of stitching two histories.
+   */
+  async reviewerHistoryPage(
+    workflowId: string,
+    reviewerId: string,
+    before: string,
+    options: { limit?: number; targetBytes?: number } = {},
+  ): Promise<MultiReviewReviewerHistoryPage> {
+    const loadReviewer = async () => {
+      const record = await this.storage.getMultiReviewWorkflow(workflowId);
+      if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+        throw new Error(`Multi review workflow not found: ${workflowId}`);
+      }
+      const workflow = record.snapshot;
+      const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+      if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+      return { workflow, reviewer };
+    };
+    const { workflow, reviewer } = await loadReviewer();
+    const readSessionId = reviewer.providerSessionId;
+    if (!readSessionId) return { status: "expired", reason: "session-replaced" };
+    const key = this.providerKey(workflow, reviewer);
+    this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+    let page: Awaited<ReturnType<typeof readReviewerHistoryPage>>;
+    try {
+      const provider = await this.providerInstance(workflow, reviewer);
+      provider.registerSession?.(readSessionId, {
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: "review",
+        workflowId: workflow.id,
+        provider: reviewer.agent,
+        fence: reviewer.sessionKey,
+      });
+      const started = Date.now();
+      page = await readReviewerHistoryPage(
+        provider,
+        {
+          sessionKey: reviewerHistoryKey(workflow.id, reviewer.id),
+          providerSessionId: readSessionId,
+        },
+        before,
+        options,
+      );
+      recordEfficiency(this.options.efficiency, {
+        owner: "multi-review",
+        operation:
+          page.kind === "page" && page.fallback
+            ? "transcript.ui_history_fallback"
+            : "transcript.ui_history_page",
+        phase: "ui",
+        bytes: page.kind === "page" ? page.bytes : 0,
+        elapsedMs: Date.now() - started,
+      });
+    } finally {
+      await this.releaseProviderReaderByKey(key);
+    }
+    // A restart during the read makes this page another session's history.
+    const current = await loadReviewer();
+    if (current.reviewer.providerSessionId !== readSessionId) {
+      return { status: "expired", reason: "session-replaced" };
+    }
+    if (page.kind === "expired") return { status: "expired", reason: page.reason };
+    return {
+      status: "page",
+      messages: page.messages,
+      historyEpoch: page.historyEpoch,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      complete: page.complete,
+      truncated: page.truncated,
     };
   }
 
@@ -2364,11 +2483,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         provider: session.agent,
         fence: session.sessionKey,
       });
-      const activity = provider.observeActivity
-        ? (await provider.observeActivity(session.providerSessionId)).state
-        : provider.activity
-          ? await provider.activity(session.providerSessionId)
-          : undefined;
+      // One session per workflow, read under this workflow's fence. Reads of
+      // workflows advanced together share one batched no-touch request per
+      // provider connection where it has one (older bridges fall back to the
+      // single route); a failed or `unavailable` read rejects this workflow's
+      // read alone, exactly like a failed single read.
+      const activity = ActivityReadCoalescer.batches(provider)
+        ? (await this.activityReads.read(provider, session.providerSessionId)).state
+        : provider.observeActivity
+          ? (await provider.observeActivity(session.providerSessionId)).state
+          : provider.activity
+            ? await provider.activity(session.providerSessionId)
+            : undefined;
       let observation: (ProviderSessionObservation & { error?: string }) | undefined;
       if (activity === undefined) {
         observation = await readProviderStatus(provider, session.providerSessionId);
@@ -2934,13 +3060,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     let messages: Promise<unknown[]> | undefined;
     const observation = await this.progress.observe(
       session.providerSessionId,
-      async () => {
-        messages = needsTranscriptUsage
-          ? this.readFixSessionMessages(provider, session)
-          : provider.messages(session.providerSessionId, {
-              limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
-            });
-        return (await messages).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES);
+      (known) => {
+        // Usage metering reads its bounded (`usageMessageLimit`) tail only when
+        // a probe is due. The progress sample prefers the provider's bounded
+        // conditional snapshot and shares the usage read only as a fallback.
+        if (needsTranscriptUsage) {
+          const usageRead = this.readFixSessionMessages(provider, session);
+          // Awaited (and its failure logged) by the usage refresh below; this
+          // keeps the rejection observed while the progress sample runs.
+          usageRead.catch(() => undefined);
+          messages = usageRead;
+        }
+        return readTranscriptProgressSample({
+          provider,
+          sessionId: session.providerSessionId,
+          known,
+          ...(messages ? { fallbackRead: () => messages! } : {}),
+        });
       },
       session.progressDigest,
     );
@@ -2984,6 +3120,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /**
    * Reads the transcript tail once for the providers that meter usage from it.
+   * Bounded by the provider's `usageMessageLimit` (OpenCode: its retained
+   * history window); a provider without one would need every message.
    *
    * The promise deliberately remains rejectable. The progress tracker treats a
    * failed read as "nothing learned", while usage metering catches and logs the

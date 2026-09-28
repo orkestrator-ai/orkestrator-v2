@@ -9,6 +9,7 @@ import {
   PROTOCOL_VERSION,
   type InitializeRequest,
   type InitializeResponse,
+  type McpServer,
 } from "@agentclientprotocol/sdk";
 import type {
   NativeAgentComposerState,
@@ -19,6 +20,7 @@ import type {
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
@@ -118,6 +120,12 @@ export interface BridgeToolPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /**
+   * What a shell call changed in the worktree, measured around the command by
+   * `acp-command-changes.ts`. No ACP frame carries it, so it lives apart from
+   * `toolDiff` (which marks an edit row) and survives on the source state.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /** Launch tool this nested call belongs to, when the provider names a parent. */
   parentTaskUseId?: string;
 }
@@ -138,6 +146,12 @@ export interface AcpToolSourceState {
   lifecycleError?: string;
   contentDiffs: BridgeToolDiff[];
   locationPath?: string;
+  /**
+   * Bridge-measured shell change. `renderAcpToolSource` rebuilds the part from
+   * this state on every vendor update and deletes whatever is absent here, so
+   * a measurement kept only on the part would vanish with the next frame.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /**
    * Cursor's `cursor/task` extension names the sub-agent. Keep it off the live
    * `rawInput` patch so a later generic Task update cannot wipe the prompt.
@@ -630,8 +644,12 @@ export function mcpConnectionKey(connection?: AgentMcpConnection): string {
   return connection ? `${connection.url}\u0000${connection.token}` : "";
 }
 
-/** MCP launch configuration for one ACP session. */
-export function configuredAcpMcpServers(connection?: AgentMcpConnection): JsonObject[] {
+/**
+ * MCP launch configuration for one ACP session. Typed against the ACP schema
+ * because agents deserialize it strictly: Grok rejects the whole `session/new`
+ * with "Invalid params" when `headers` is a map instead of `{ name, value }[]`.
+ */
+export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpServer[] {
   const url = connection?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = connection?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (!url || !token) return [];
@@ -649,7 +667,7 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): JsonOb
       name: "orkestrator",
       type: "http",
       url,
-      headers: { Authorization: `Bearer ${token}` },
+      headers: [{ name: "Authorization", value: `Bearer ${token}` }],
     },
   ];
 }

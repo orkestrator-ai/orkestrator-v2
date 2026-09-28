@@ -19,6 +19,7 @@ import {
   PROMPT_TIMEOUT_MS,
   PROVIDER,
 } from "./config.js";
+import { trackCommandChanges } from "./command-changes.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
 import { setStructuredResult } from "./structured-results.js";
@@ -91,6 +92,9 @@ export async function dispatchPrompt(
 
   const promptSequence = state.promptSequence;
   const diagnostics = createRunDiagnostics(state);
+  // Primes the worktree baseline now, before the run can execute anything.
+  const commandChanges = trackCommandChanges(state);
+  await commandChanges.ready;
   const send = () =>
     agent.send(
       { text, ...(images.length > 0 ? { images } : {}) },
@@ -107,6 +111,9 @@ export async function dispatchPrompt(
         onDelta: ({ update }) => {
           if (!turnStillOwned(state, promptSequence)) return;
           diagnostics?.delta(update);
+          // Detached and total over any payload, so it can neither stall the
+          // run nor stop the frame from reaching the transcript.
+          commandChanges.observe(update);
           try {
             applyInteractionUpdate(state, update);
           } catch (error) {
@@ -131,6 +138,7 @@ export async function dispatchPrompt(
     );
   const run = await (diagnostics ? diagnostics.follow(send) : send()).catch((error) => {
     diagnostics?.close("send-failed");
+    commandChanges.close();
     throw error;
   });
   diagnostics?.sent(run.id);
@@ -186,6 +194,7 @@ export async function dispatchPrompt(
       diagnostics,
     ).finally(() => {
       diagnostics?.close();
+      commandChanges.close();
       unsubscribeStatus();
       if (state.activeRun === run) state.activeRun = undefined;
     }),

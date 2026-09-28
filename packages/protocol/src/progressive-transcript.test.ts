@@ -86,6 +86,114 @@ describe("progressive bridge transcript", () => {
     expect(changed.token).not.toBe(first.token);
   });
 
+  describe("envelope fields outside the message revision", () => {
+    const options = {
+      sessionIdentity: "session-1",
+      generation: "generation-1",
+      contentEpoch: "epoch-1",
+      revision: 7,
+      limit: 100,
+      targetBytes: 512 * 1024,
+      complete: true,
+      freshness: "current",
+      title: "First title",
+    } as const;
+
+    // Each row changes exactly one envelope field and leaves the message
+    // revision alone, which is what a bridge that passes a revision does on a
+    // rename or a hydration transition. The reader must still get a snapshot.
+    test.each([
+      ["title", { title: "Renamed" }],
+      ["a cleared title", { title: undefined }],
+      ["freshness", { freshness: "cached" as const }],
+      ["completeness", { complete: false }],
+    ])("a %s-only change invalidates the token", (_name, change) => {
+      const first = bridgeTranscriptUpdate([message("1")], options);
+      const changed = bridgeTranscriptUpdate([message("1")], {
+        ...options,
+        ...change,
+        knownToken: first.token,
+      });
+      expect(changed.status).toBe("snapshot");
+      expect(changed.token).not.toBe(first.token);
+      if (changed.status !== "snapshot") throw new Error("expected snapshot");
+      expect(changed.value.title).toBe("title" in change ? change.title : options.title);
+
+      // And the new token is itself stable once the reader holds it.
+      expect(
+        bridgeTranscriptUpdate([message("1")], {
+          ...options,
+          ...change,
+          knownToken: changed.token,
+        }).status,
+      ).toBe("unchanged");
+    });
+
+    test("an omitted freshness is the same identity as an explicit current one", () => {
+      const { freshness: _freshness, ...implicit } = options;
+      expect(bridgeTranscriptUpdate([], implicit).token).toBe(
+        bridgeTranscriptUpdate([], options).token,
+      );
+    });
+  });
+
+  describe("message serialization on an unchanged read", () => {
+    // `toJSON` fires once per message per `JSON.stringify` visit, returning the
+    // same fields, so the count is the number of message bodies walked.
+    function countedHistory(count: number) {
+      const visits = { count: 0 };
+      const messages = Array.from({ length: count }, (_, index) => ({
+        id: String(index),
+        content: "x".repeat(1_024),
+        parts: [] as unknown[],
+        toJSON() {
+          visits.count += 1;
+          return { id: this.id, content: this.content, parts: this.parts };
+        },
+      }));
+      return { messages, visits };
+    }
+    const base = {
+      sessionIdentity: "session-large",
+      generation: "generation-1",
+      contentEpoch: "epoch-1",
+      limit: 100,
+      targetBytes: 512 * 1024,
+      complete: true,
+      title: "Large",
+    } as const;
+
+    test("a revision answers unchanged without visiting any of 1,000 messages", () => {
+      const { messages, visits } = countedHistory(1_000);
+      const first = bridgeTranscriptUpdate(messages, { ...base, revision: 1 });
+      visits.count = 0;
+      const unchanged = bridgeTranscriptUpdate(messages, {
+        ...base,
+        revision: 1,
+        knownToken: first.token,
+      });
+      expect(unchanged.status).toBe("unchanged");
+      expect(visits.count).toBe(0);
+    });
+
+    test("the legacy content-hash fallback still invalidates on changed text", () => {
+      const { messages, visits } = countedHistory(3);
+      const first = bridgeTranscriptUpdate(messages, base);
+      // Proves the fallback is the linear path this contract replaces for
+      // bridges that can supply a revision.
+      visits.count = 0;
+      expect(bridgeTranscriptUpdate(messages, { ...base, knownToken: first.token }).status).toBe(
+        "unchanged",
+      );
+      expect(visits.count).toBe(3);
+
+      messages[1]!.content = "changed";
+      expect(bridgeTranscriptUpdate(messages, { ...base, knownToken: first.token }).status).toBe(
+        "snapshot",
+      );
+    });
+  });
+
   test("keeps a ten-thousand-message source bounded at the transport boundary", () => {
     const messages = Array.from({ length: 10_000 }, (_, index) =>
       message(String(index), `message-${index}-${"x".repeat(8_192)}`),

@@ -238,6 +238,11 @@ run = "bun scripts/test-ios.ts"
 description = "Run the root unit tests"
 run = "bun test tests/unit"
 
+[tasks."efficiency:baseline"]
+description = "Run the efficiency counters harness (docs/improvements/efficiency/baseline)"
+raw_args = true
+run = "bun scripts/efficiency/run.ts"
+
 [tasks.typecheck]
 description = "Typecheck every workspace package"
 run = "bunx turbo --cwd . run typecheck"

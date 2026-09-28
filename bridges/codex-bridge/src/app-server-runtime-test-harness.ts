@@ -54,6 +54,8 @@ import {
 
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 
+import type { CommandChangeProbe } from "./sessions/command-changes.js";
+
 import { persistSessionTitle } from "./session-titles.js";
 
 import {
@@ -314,6 +316,7 @@ export async function harness(
     adaptiveCoalesce?: boolean;
     /** Leaves `runtime.start()` to the caller, so startup itself can be observed. */
     deferStart?: boolean;
+    commandChangeProbe?: CommandChangeProbe;
   } = {},
 ): Promise<Harness> {
   const merged = { ...BASE_HANDLERS, ...handlers };
@@ -403,6 +406,7 @@ export async function harness(
     ...(options.skillRefreshDebounceMs !== undefined
       ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
       : {}),
+    ...(options.commandChangeProbe ? { commandChangeProbe: options.commandChangeProbe } : {}),
   });
   if (options.deferStart !== true) await runtime.start();
 

@@ -4,7 +4,11 @@ import {
   DEFAULT_THREAD_IDLE_MS,
   MAX_RECOVERED_CONTEXT_CHARS,
 } from "./app-server-runtime.js";
-import { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./app-server-runtime-lifecycle.js";
+import {
+  CODEX_RESTARTED_MID_TURN_MESSAGE,
+  patchCommandChangePart,
+} from "./app-server-runtime-lifecycle.js";
+import type { NormalizedPart } from "./messages/types.js";
 import type { EngineEvent } from "./engine/types.js";
 import {
   getTranscriptCatalogInvalidationCountForTesting,
@@ -30,6 +34,21 @@ import {
   waitUntil,
 } from "./app-server-runtime-test-harness.js";
 import type { Harness } from "./app-server-runtime-test-harness.js";
+
+test("late command measurements patch nested subagent actions", () => {
+  const command: NormalizedPart = {
+    type: "tool-invocation",
+    content: "",
+    toolUseId: "child-command",
+    toolName: "command",
+  };
+  const nested: NormalizedPart = { type: "subagent", content: "", subagentActions: [command] };
+  const outer: NormalizedPart = { type: "subagent", content: "", subagentActions: [nested] };
+  const change = { additions: 1, deletions: 0, files: [] };
+  const updated = patchCommandChangePart(outer, "child-command", change);
+  expect(updated.subagentActions?.[0]?.subagentActions?.[0]?.commandChanges).toEqual(change);
+  expect(patchCommandChangePart(updated, "child-command", change)).toBe(updated);
+});
 
 describe("session lifecycle", () => {
   test("concurrent start callers share initialization and wait for it to finish", async () => {

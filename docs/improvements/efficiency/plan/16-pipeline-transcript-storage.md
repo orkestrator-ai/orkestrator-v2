@@ -1,7 +1,6 @@
 # 16 — Separate pipeline transcripts from durable workflow control records
 
-Status: Not started. Prerequisites: 06, 09, 11; coordinate with 15.
-Finding: E14. Priority: high after storage prerequisites.
+Status: Complete — transcripts moved out of the shared control file; per-pipeline control-record partitioning deferred with its measured remaining cost (see record). Prerequisites: 06, 09, 11. Finding: E14.
 
 ## Outcome
 
@@ -108,3 +107,194 @@ safe downgrade procedure.
 Land digest change, read adapters, schema migration, and writer cutover as
 separate reviewable changes. Mark E14 resolved only after the full read/write
 and migration path has been exercised.
+
+## Execution record
+
+```text
+Status: Complete (per-pipeline control-record partitioning deferred)
+Implementation commit / PR: the step-16 commit on this branch (the first small
+  change shipped earlier as a1bafecb: fixed-size `tf2:` transcript fingerprint)
+Protocol or storage decisions: below
+Tests and isolated profiles: focused and full package suites below; no
+  isolated real-stack profile
+Before/after measurements: below (deterministic byte bounds in the suite plus
+  one local timing run)
+Compatibility/migration result: legacy inline records migrate in place, per
+  pipeline with a CAS on the source revision; bounded downgrade export provided
+Remaining limitations: below
+```
+
+### What was implemented
+
+- **Data classification.** Workflow control state (phase, leases, selections,
+  queues, prompt attempts, dispatch/completion evidence, structured review and
+  verification results, task snapshot) stays in the control record under its
+  existing rules. Display transcripts move to
+  `apps/backend/src/core/build-pipeline-transcript-store.ts`: a durable
+  (fsynced, one previous generation, never evicted) step-06 manifest store,
+  one manifest per pipeline session, immutable content-addressed chunks
+  (whole-message JSON arrays packed to 256 KiB) and one unsealed tail chunk.
+  Live provider transcripts between checkpoints sit in a bounded in-memory
+  cache (`build-pipeline-transcript-checkpoints.ts`, at most 256 pending
+  sessions; eviction only means the next observation re-detects the change).
+- **Versioned reference** on `PipelineSession`
+  (`packages/protocol/src/build-pipeline.ts`): `transcript:
+  PipelineTranscriptReference` (version, provider session id, committed
+  manifest revision, display revision, retained count and bytes, `complete`,
+  `omittedMessages`, `committedAt`), validated by `isPipelineSession`.
+  `messageRevision` and `messagesFingerprint` now describe the committed copy.
+  `transcriptCheckpointError` is an explicit, content-free "stored transcript
+  is behind the provider" state. Inline `messages` stays readable through the
+  legacy adapter and is where clients attach a fetched body.
+- **Semantic fields extracted.** `finishVerification` resolves
+  `structuredRequestId ?? legacyStructuredRequestId ?? recovery`, where
+  recovery reads the newest observed transcript, an unmigrated inline array or
+  a 64-message stored tail. `legacyStructuredRequestId` is persisted whenever a
+  legacy verify session's body leaves the snapshot (migration or first save);
+  it is kept apart from `structuredRequestId` because that field also
+  classifies review-package preparation turns. The address-issues handoff
+  (`build-pipeline-handoff.ts`) takes an explicit bounded `sourceTranscript`
+  (first message plus the newest 2,000, more than the 180 k-character budget
+  can select), read from the pending copy or the store; a test proves the
+  window renders exactly what the full history would. The other audited
+  readers (review reports, usage/token counts, retry baselines, interaction
+  transcripts, fan-out progress probes) never read `session.messages`; the
+  fan-out progress probe was not touched.
+- **Write order.** The service save boundary
+  (`build-pipeline-service-interactions.ts`) commits every changed transcript
+  (chunks, then manifest) and stamps its reference before the control CAS. A
+  transcript failure keeps the previous reference, records
+  `transcriptCheckpointError`, keeps the pending copy for the next save, and
+  never blocks or reorders the control write (phase transitions, queues,
+  cancel, leases). Structured results never came from the display transcript.
+  The 5 s transcript throttle and the immediate final persist are unchanged;
+  "changed" still means "differs from the committed copy".
+- **Reads** resolve exactly the referenced manifest revision (current or the
+  retained previous generation, each chunk verified by length, checksum and
+  message count). If neither matches, another committed generation is served
+  and marked substituted; otherwise the session is reported unavailable,
+  separately from pipeline state.
+- **Migration** (`build-pipeline-transcript-migration.ts`, run in the
+  background by a supervised `init`, and also performed by the first save of
+  any unmigrated record): per pipeline, import every inline transcript tagged
+  with the source control revision, read it back and verify it, then under the
+  cross-process build-pipeline lock replace the arrays with references only if
+  the revision is unchanged. The control revision itself is left unchanged
+  (same workflow state, new representation), so an in-flight supervisor pass
+  and renderer cursors stay valid; a concurrent writer wins and the pipeline
+  is retried later. Retries are idempotent (content-addressed chunks,
+  full-content digest reuse). Control rewrites are batched (8 pipelines) with
+  per-pipeline checks. All retained messages are imported (48 MiB per session,
+  above the old 32 MiB whole-snapshot bound).
+- **Deletion.** Control-record removal and legacy backup scrubbing are
+  unchanged; then every manifest generation and chunk the pipeline owns is
+  deleted and further checkpoints for it are fenced in-process. A crash in
+  between leaves orphans that the startup sweep (orphans older than 10 min,
+  then unreferenced chunks) removes. Legacy inline copies in the control
+  file's five rotating backups age out after five control writes; deleting a
+  pipeline scrubs them immediately.
+- **Commands** (`commands-registry-build.ts`,
+  `build-pipeline-transcript-projection.ts`). `get_build_pipeline` never embeds
+  bodies. With `knownSessions` it answers `unchanged` only when the control
+  revision and every held body are current; otherwise it returns the body-free
+  record plus per-session windows read straight from the referenced chunks
+  (tail overlap of one, whole body when not held), the viewed
+  `prioritySessionKey` first, within a 32 MiB response budget (`deferred`
+  beyond it), and `unavailable` for unreadable transcripts.
+  `list_build_pipelines` strips bodies, including from unmigrated records.
+  `export_build_pipeline_for_downgrade` is the bounded explicit export.
+- **Renderer** (`build-pipeline-persistence.ts`, `BuildChatTab.tsx`): cached
+  sessions remember which revision their body is; project list hydration keeps
+  held bodies; the viewed stage fetches its committed transcript once per
+  revision, prioritized; unreadable, trimmed and lagging transcripts show an
+  explicit notice. Completed stages stay viewable offline from the durable
+  store after the provider session is gone.
+- **Control-record reads** are served from a stat-validated decoded cache in
+  the new `storage-build-pipelines.ts` storage layer (one `stat` per read when
+  the file is unchanged; per-record clones so callers can still mutate).
+
+### Per-pipeline control-record partitioning: deferred
+
+The shared `build-pipelines.json` remains the control store. It now holds
+control state only, so its size scales with pipeline count times the control
+record (about 3 KB per pipeline without task attachments), not with transcript
+history. Moving each record to keyed storage was deferred as a separate,
+riskier change: the build-pipeline resource revision (conditional and scoped
+snapshot sync) fingerprints this one file; admission-key and GitHub-reservation
+uniqueness would need a cross-pipeline reservation index kept under the same
+lock; and legacy import, backup scrubbing and whole-file corruption recovery all
+assume one file. Measured remaining cost (one local run, 10 pipelines x 4
+sessions x 1,500 messages of about 300 B):
+
+| | Before (inline) | After |
+| --- | --- | --- |
+| Control file | 25,850,193 B | 30,153 B |
+| Bytes per active tail checkpoint | 25.9 MB control file plus backup rotation | 10,774 B tail chunk + 1,500 B manifest + 30,153 B control file |
+| Full control-file parse | 50.9 ms | 0.17 ms |
+| `getBuildPipeline`, file unchanged | 6.9 ms (read and parse) | 0.05 ms (stat and clone) |
+| `listAllBuildPipelines`, file unchanged | read and parse of 25.9 MB | 0.24 ms |
+
+A control write therefore still rewrites every pipeline's control record (plus
+five rotated backups), and task snapshots with large base64 attachments still
+count against every pipeline's writes and the 32 MiB per-snapshot bound. That
+is the condition under which partitioning should be revisited; transcripts no
+longer contribute to it.
+
+### Tests
+
+New suites: `build-pipeline-transcript-store.test.ts` (windows; one tail chunk
+plus manifest per active update with sealed chunks untouched; idempotent retry;
+explicit incomplete state; exact referenced revision after a newer
+unreferenced commit; crash after chunk write, then repair; crash after manifest
+publish; deletion and fence; orphan sweep),
+`storage-build-pipeline-transcripts.test.ts` (migration keeps revisions and
+persists the recovered request id; a concurrent writer wins; crash during
+migration, then an idempotent restart; first save migrates; deletion removes
+chunks and scrubs legacy backups; crash during deletion, then sweep; phase,
+queue, lease and cancel updates beyond the former 32 MiB transcript limit;
+downgrade export fits or is incompatible; two concurrent admissions across
+storage instances cannot share a GitHub reservation; cached reads see another
+process's write), `build-pipeline-transcript-checkpoints.test.ts` (bytes per
+active tail update across several long pipelines with completed stages; a
+failed checkpoint never blocks the control write; crash before and after the
+control CAS; bounded handoff window and request recovery from the stored
+tail), `build-pipeline-transcript-projection.test.ts`,
+`packages/protocol/src/build-pipeline-transcript-reference.test.ts` and
+`BuildChatTab.transcript.test.tsx`, plus a service test that recovers a legacy
+verification request after its transcript left the control record. Existing
+supervisor, recovery, fan-out, handoff, persistence and command tests now read
+transcripts through storage.
+
+Commands run (all passed unless noted):
+
+```text
+mise exec -- bun run --cwd apps/backend typecheck      # also apps/web and packages/protocol
+mise run test:logged -- --name be-e14 -- mise exec -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./src --parallel=3 --only-failures      # PASS (84.5 s)
+mise run test:logged -- --name web-e14 -- mise exec -- bun test --cwd apps/web ./src \
+  --parallel=2 --only-failures                                               # PASS (130.5 s)
+mise run test:logged -- --name proto-e14 -- mise exec -- bun test --cwd packages/protocol \
+  --preload ../../tests/setup-node.ts ./src --parallel=2 --only-failures      # PASS
+mise exec -- bun test ./tests --only-failures --parallel=3   # root suite: only the two
+  # pre-existing mise-tasks documentation failures (plan/13, validation.md)
+mise run format && mise run format:check && mise run lint                    # clean
+```
+
+### Remaining limitations
+
+- Not run: aggregate `mise run test`, isolated real-stack QA (restart between
+  dispatch and completion, inactive-environment transcript catch-up) and the
+  step-01 timing profile. The table above is one local run; the byte bounds
+  are asserted deterministically in the suite.
+- Control records are not partitioned (see above).
+- The deletion fence is per process; another backend sharing the data
+  directory can leave an orphan that the startup sweep removes later.
+- The durable transcript quota is 2 GiB and 16,384 sessions. When exhausted,
+  checkpoints are refused with `transcriptCheckpointError` instead of evicting
+  history. Retention of completed pipelines is unchanged (kept until deleted);
+  changing it is a separate product decision.
+- A session manifest names every chunk, so it grows with history (about 200 B
+  per 256 KiB chunk).
+- Downgrade: the export is per pipeline and read-only. Running an older binary
+  against a migrated data directory is not supported by itself: it would see
+  sessions without inline transcripts.

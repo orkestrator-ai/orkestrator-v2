@@ -9,6 +9,7 @@ import {
   terminateProcessTree,
 } from "./commands-dependencies.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
+import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type {
@@ -155,6 +156,28 @@ export const LOCAL_SERVER_SHUTDOWN_GRACE_MS = 8_000;
 export const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 export const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
 export const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
+/**
+ * Reusing a running bridge re-checks its health first. The first probe keeps
+ * the historical 2s budget so a healthy bridge costs nothing extra; only a miss
+ * pays for the slower retries. Worst case before replacement is about 13s.
+ */
+export const LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS = 3;
+export const LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS = 2_000;
+export const LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS = 5_000;
+export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
+/**
+ * How long an unresponsive bridge with a turn or background work in progress is
+ * left alone before it is replaced anyway. Replacing it kills that work, so a
+ * stall this long is treated as a hang rather than load.
+ */
+export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
+/** A gap this long starts a new run of failed health checks. */
+export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
+/** When each owned bridge process was first seen failing its reuse health check. */
+export const localServerUnresponsiveSince = new Map<
+  string,
+  { child: ChildProcessWithoutNullStreams; since: number; lastFailureAt: number }
+>();
 /**
  * Grok, Cursor, and Pi may need longer to initialize their agent runtime before
  * binding than the lightweight HTTP bridges.
@@ -589,6 +612,12 @@ export function invalidateEnvironmentRemoteFreshness(
  * count is unchanged by design. With a 5 s panel poll, any bound of 5 s or
  * more would serve every other read from the previous poll and let a change
  * take up to ~10 s to show, over the 6 s Files-panel budget.
+ *
+ * Container *trees* are the exception (step 18): while a recent, complete
+ * file list covers them they use `CONTAINER_TREE_MAX_AGE_MS`, because a
+ * Git-visible membership change reaches the tree through that list within the
+ * budget anyway (see `DiffStatsService`). Ad hoc (untracked) tree reads have
+ * no such signal and keep this bound.
  */
 export const DIFF_CACHE_MAX_AGE_MS = 3_000;
 
@@ -606,6 +635,7 @@ export const diffStatsService = new DiffStatsService({
   emit: (event, payload) => diffStatsEmit?.(event, payload),
   admission: gitDockerScanPool,
   fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
+  containerTreeMaxAgeMs: CONTAINER_TREE_MAX_AGE_MS,
   remoteFreshness: (target) =>
     target.kind === "container" && target.containerId
       ? containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)

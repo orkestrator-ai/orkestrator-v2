@@ -3,6 +3,7 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 
 export type {
   JsonSchema,
@@ -61,6 +62,27 @@ export const HANDLED_SDK_MESSAGE_TYPES: Record<SDKMessage["type"], boolean> = {
 
 export function isHandledSdkMessageType(type: unknown): boolean {
   return typeof type === "string" && type in HANDLED_SDK_MESSAGE_TYPES;
+}
+
+/**
+ * Top-level frames the CLI puts on the SDK stream that the public `SDKMessage`
+ * union does not name (they are `@internal` in the CLI's own schemas), so
+ * {@link HANDLED_SDK_MESSAGE_TYPES} cannot key on them. Each one here has been
+ * read and deliberately needs nothing from the bridge; anything else outside
+ * the union is still counted as drift.
+ */
+const KNOWN_INTERNAL_SDK_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  // The fate of a uuid-stamped inbound message: queued, started, then
+  // completed / cancelled / discarded / refused. The CLI emits it for every
+  // prompt and steer because the bridge stamps each with a client uuid. The
+  // bridge already learns the same outcomes from the turn's result (which
+  // echoes that uuid) and its own interrupt and teardown paths; `refused`
+  // applies only to cross-session peer messages, which this bridge never sends.
+  "command_lifecycle",
+]);
+
+export function isKnownInternalSdkMessageType(type: unknown): boolean {
+  return typeof type === "string" && KNOWN_INTERNAL_SDK_MESSAGE_TYPES.has(type);
 }
 
 /** Every `subtype` the SDK can put on a `type: "system"` message. */
@@ -270,6 +292,11 @@ export interface NormalizedPart {
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
   /**
+   * What a Bash call changed in the worktree, measured around the command
+   * because its input cannot say (see `command-changes.ts`).
+   */
+  commandChanges?: MeasuredWorkspaceChange;
+  /**
    * The permission layer refused this call (a deny rule, auto mode's
    * classifier, `dontAsk`), as opposed to the tool running and failing.
    * `source` is the SDK's decision-reason discriminator, e.g. `rule`.
@@ -470,6 +497,25 @@ export interface SessionState {
   taskRegistry?: TaskRegistry;
   /** True once the persisted SDK transcript has been normalized on demand. */
   persistedMessagesLoaded?: boolean;
+  /**
+   * Transcript content revision: advances whenever anything serialized from
+   * {@link messages} changes, so `GET /:id/transcript` can answer a matching
+   * token without walking the history.
+   *
+   * Not the per-message {@link NormalizedMessage.revision} (an SSE patch
+   * counter), the turn generation, or any status/usage revision. Owned by
+   * `transcript-revision.ts`: write it only through `markTranscriptChanged` /
+   * `resetTranscriptEpoch`. Runtime-only; a restarted bridge has a new
+   * transcript generation, so no token outlives the process that issued it.
+   */
+  transcriptRevision?: number;
+  /**
+   * History epoch: replaced whenever {@link messages} is replaced wholesale
+   * (hydration, eviction, a conversation reset) rather than appended to or
+   * edited in place. Readers treat positions from different epochs as
+   * unrelated. Same ownership rules as {@link transcriptRevision}.
+   */
+  transcriptEpoch?: number;
   /**
    * Epoch millis of the last read or hydration of this session's state.
    *

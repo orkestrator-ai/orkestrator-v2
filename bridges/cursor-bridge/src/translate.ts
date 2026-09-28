@@ -9,8 +9,10 @@
  *  - It never awaits. Updates arrive on the SDK's own callback and every
  *    branch here is synchronous, so a slow consumer can never stall the run
  *    that is producing them.
- *  - It charges every byte it appends against the transcript budget, so a
- *    long turn is bounded by `boundTranscript` rather than by hope.
+ *  - It charges every byte it appends against the transcript budget, and
+ *    enforces that budget itself after each top-level update. A tab can stay
+ *    inactive for a whole turn, so a bound that waited for a reader would
+ *    let an unobserved session grow without limit.
  */
 import { randomBytes } from "node:crypto";
 import {
@@ -20,9 +22,17 @@ import {
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
 import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { recordObservedMcpTool } from "./mcp.js";
+import { jsonStringContentBytes, encodedJsonBytes } from "@orkestrator/protocol/transcript-budget";
+import { nextPartOrdinal } from "@orkestrator/protocol/transcript-part-ids";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
-import { appendBounded, boundText, chargeTranscript } from "./transcript.js";
+import {
+  appendBounded,
+  boundText,
+  boundTranscriptDuringStreaming,
+  chargeTranscript,
+} from "./transcript.js";
 import {
   isObject,
   nonBlank,
@@ -97,12 +107,42 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
  * vocabulary faster than this bridge can track it, and an unrecognized frame
  * mid-turn must degrade to "not rendered", never to a failed turn — but it must
  * not degrade to *invisible* either, which is what a bare `default: break` did.
+ *
+ * The display budget is enforced once per top-level update, after any nested
+ * sub-agent updates it carries have been applied, so a deep update pays for
+ * one check rather than one per level.
  */
 export function applyInteractionUpdate(
   state: SessionState,
   update: unknown,
   context: UpdateContext = {},
 ): void {
+  const grown = new Set<string>();
+  const outer = grownParents;
+  grownParents = grown;
+  try {
+    applyUpdate(state, update, context);
+  } finally {
+    grownParents = outer;
+  }
+  boundTranscriptDuringStreaming(state, grown);
+}
+
+/**
+ * Sub-agents that gained a display part during the update being applied.
+ *
+ * Only a new nested part can raise a child's count, so the per-child bound
+ * checks exactly these once the whole update has landed, rather than every
+ * child on every token. Set for the duration of one synchronous
+ * `applyInteractionUpdate` call.
+ */
+let grownParents: Set<string> | undefined;
+
+function noteNestedPart(parentTaskUseId: string | undefined): void {
+  if (parentTaskUseId) grownParents?.add(parentTaskUseId);
+}
+
+function applyUpdate(state: SessionState, update: unknown, context: UpdateContext): void {
   if (!isObject(update) || !nonBlank(update.type)) return;
 
   switch (update.type) {
@@ -132,7 +172,7 @@ export function applyInteractionUpdate(
       break;
     case "tool-call-delta":
       // A sub-agent's own activity, addressed by the launch call that owns it.
-      applyInteractionUpdate(state, update.taskUpdate, {
+      applyUpdate(state, update.taskUpdate, {
         parentTaskUseId: nonBlank(update.callId) ? update.callId : context.parentTaskUseId,
       });
       break;
@@ -191,28 +231,31 @@ function applyTextDelta(
   const message = currentAssistantMessage(state);
   const existing = openTextPart(state, message, kind, context.parentTaskUseId);
   if (existing) {
-    const before = existing.content.length;
+    const before = existing.content;
     existing.content = appendBounded(existing, existing.content, text);
-    chargeTranscript(state, existing.content.length - before);
+    chargeAppended(state, before, existing.content);
   } else {
     const part: BridgeTextPart = {
       type: kind,
       content: text,
-      sourcePartId: `${message.id}:${message.parts.length}`,
+      sourcePartId: `${message.id}:${nextPartOrdinal(message)}`,
       sourceMessageId: message.id,
       createdAt: new Date().toISOString(),
       ...(context.parentTaskUseId ? { parentTaskUseId: context.parentTaskUseId } : {}),
     };
     message.parts.push(part);
     state.openTextParts.set(openTextKey(kind, context.parentTaskUseId), part.sourcePartId);
-    chargeTranscript(state, text.length + 128);
+    chargeNewEntry(state, part);
+    noteNestedPart(context.parentTaskUseId);
   }
 
   // `content` is the flat text the transcript exposes as the message body.
   // Only top-level assistant prose belongs there: a sub-agent's output is
   // shown inside its own card, and folding it in would duplicate it.
   if (kind === "text" && !context.parentTaskUseId) {
+    const before = message.content;
     message.content = appendBounded(message, message.content, text);
+    chargeAppended(state, before, message.content);
     if (state.currentTurnOutput !== null) {
       state.currentTurnOutput = appendBounded(message, state.currentTurnOutput, text);
     }
@@ -274,6 +317,32 @@ function applyToolCall(
   }
   chargeToolPart(state, part);
   state.revision += 1;
+}
+
+/**
+ * Put a shell call's measured worktree change on its card.
+ *
+ * The measurement settles after the call does, on its own schedule, so the
+ * card is found again by call id — newest first, since it is almost always in
+ * the message still being written. False when the card is gone: a transcript
+ * trim evicted it, or a rewind removed its turn.
+ */
+export function applyCommandChanges(
+  state: SessionState,
+  callId: string,
+  change: MeasuredWorkspaceChange,
+): boolean {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    for (const part of state.messages[index]!.parts) {
+      if (part.type !== "tool-invocation" || part.toolUseId !== callId) continue;
+      part.commandChanges = change;
+      // Bounded by the probe (at most fifty files, each a path and two counts).
+      chargeTranscript(state, Buffer.byteLength(JSON.stringify(change)));
+      state.revision += 1;
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -342,7 +411,7 @@ export function settleBackgroundChildren(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation" || !active.has(part.toolUseId)) continue;
-      settleDetachedSubagentPart(part);
+      settleDetachedSubagentPart(part, state);
     }
   }
   state.revision += 1;
@@ -359,7 +428,8 @@ export const DETACHED_SUBAGENT_NOTE =
  * of a process that no longer exists, so nothing will ever arrive to settle it
  * and the tab would show a sub-agent spinning forever.
  */
-export function settleDetachedSubagentPart(part: BridgeToolPart): void {
+export function settleDetachedSubagentPart(part: BridgeToolPart, state?: SessionState): void {
+  if (state) chargeTranscript(state, jsonStringContentBytes(DETACHED_SUBAGENT_NOTE) + 2);
   part.agentState = "finished";
   if (part.toolState === "pending") part.toolState = "success";
   part.toolOutput = part.toolOutput
@@ -395,14 +465,20 @@ export function settleAbandonedToolParts(state: SessionState): void {
       if (part.type === "compaction") {
         if (part.toolState === "success" || part.toolState === "failure") continue;
         part.toolState = "failure";
-        if (!part.content.trim()) part.content = ABANDONED_COMPACTION_NOTE;
+        if (!part.content.trim()) {
+          part.content = ABANDONED_COMPACTION_NOTE;
+          chargeTranscript(state, jsonStringContentBytes(ABANDONED_COMPACTION_NOTE));
+        }
         settledCompaction = true;
         continue;
       }
       if (part.type !== "tool-invocation") continue;
       if (part.toolState === "success" || part.toolState === "failure") continue;
       part.toolState = "failure";
-      part.toolError = part.toolError ?? ABANDONED_TOOL_NOTE;
+      if (part.toolError === undefined) {
+        part.toolError = ABANDONED_TOOL_NOTE;
+        chargeTranscript(state, jsonStringContentBytes(ABANDONED_TOOL_NOTE) + 16);
+      }
       abandoned.add(part.toolUseId);
     }
   }
@@ -431,19 +507,26 @@ function applyShellOutputDelta(
   const part = trailingPendingToolPart(message, "shell", context.parentTaskUseId);
   if (!part) return;
   const source = toolSourceStates.get(part) ?? {};
-  source.streamedOutput = appendBounded(
-    part,
-    source.streamedOutput ?? "",
-    text,
-    MAX_TOOL_OUTPUT_BYTES,
-  );
+  const before = source.streamedOutput ?? "";
+  // Continuing the buffer the card already shows is the per-frame case: charge
+  // just the appended text instead of re-encoding a card whose output can be
+  // half a megabyte. Anything else (the first frame, or output a tool render
+  // replaced) takes the exact whole-part measurement.
+  const continues =
+    source.chargedBytes !== undefined && part.toolOutput === before && before !== "";
+  source.streamedOutput = appendBounded(part, before, text, MAX_TOOL_OUTPUT_BYTES);
   toolSourceStates.set(part, source);
   part.toolOutput = source.streamedOutput;
   // A live sub-line beside the accumulating output: the output is what the
   // command produced, the progress line is "it is still producing it". The
   // backend projection folds it onto this row by call id.
   if (part.toolUseId) upsertProgressPart(state, message, part.toolUseId, text);
-  chargeToolPart(state, part);
+  if (continues) {
+    const added = chargeAppended(state, before, source.streamedOutput);
+    source.chargedBytes = source.chargedBytes! + added;
+  } else {
+    chargeToolPart(state, part);
+  }
   state.revision += 1;
 }
 
@@ -466,19 +549,22 @@ function upsertProgressPart(
     (candidate) => candidate.type === "progress" && candidate.toolUseId === toolUseId,
   ) as BridgeProgressPart | undefined;
   if (existing) {
+    // A replacement; its new text is an upper bound on the growth.
     existing.content = content;
+    chargeTranscript(state, jsonStringContentBytes(content));
     return;
   }
   const sourcePartId = `progress:${toolUseId}`;
-  message.parts.push({
+  const part: BridgeProgressPart = {
     type: "progress",
     content,
     sourcePartId,
     sourceMessageId: message.id,
     createdAt: new Date().toISOString(),
     toolUseId,
-  });
-  chargeTranscript(state, content.length + sourcePartId.length);
+  };
+  message.parts.push(part);
+  chargeNewEntry(state, part);
 }
 
 /** The newest non-empty line of streamed output, which is what is happening now. */
@@ -512,7 +598,7 @@ function appendGeneratedImage(
     imageSource: "generated",
   };
   message.parts.push(part);
-  chargeTranscript(state, part.content.length + sourcePartId.length);
+  chargeNewEntry(state, part);
 }
 
 /**
@@ -544,6 +630,7 @@ function applySummary(state: SessionState, summary: string, context: UpdateConte
   const open = openCompactionPart(state);
   if (open) {
     open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+    chargeTranscript(state, jsonStringContentBytes(open.content));
     open.toolState = "success";
     state.revision += 1;
     return;
@@ -563,7 +650,10 @@ function applySummaryCompleted(state: SessionState, summary: string, context: Up
     appendCompactionPart(state, summary, "success", context);
     return;
   }
-  if (summary) open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+  if (summary) {
+    open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+    chargeTranscript(state, jsonStringContentBytes(open.content));
+  }
   open.toolState = "success";
   state.revision += 1;
 }
@@ -593,7 +683,7 @@ function appendCompactionPart(
 ): void {
   const message = currentAssistantMessage(state);
   closeTextParts(state, context.parentTaskUseId);
-  const sourcePartId = `summary:${message.parts.length}`;
+  const sourcePartId = `summary:${nextPartOrdinal(message)}`;
   const part: BridgeCompactionPart = {
     type: "compaction",
     content: boundText(summary, MAX_TOOL_OUTPUT_BYTES),
@@ -603,7 +693,7 @@ function appendCompactionPart(
     toolState,
   };
   message.parts.push(part);
-  chargeTranscript(state, part.content.length + sourcePartId.length);
+  chargeNewEntry(state, part);
   state.revision += 1;
 }
 
@@ -620,7 +710,9 @@ function applyAppendedUserMessage(
 ): void {
   const text = update.userMessage.text;
   if (!text) return;
-  const messageId = `appended-${state.messages.length}`;
+  // Not the array length: trimming shrinks it, and a repeated id would make
+  // two different rows look like one to every keyed consumer.
+  const messageId = `appended-${randomBytes(8).toString("hex")}`;
   const part: BridgeTextPart = {
     type: "text",
     content: boundText(text, MAX_MESSAGE_TEXT_BYTES),
@@ -628,14 +720,15 @@ function applyAppendedUserMessage(
     sourceMessageId: messageId,
     createdAt: new Date().toISOString(),
   };
-  state.messages.push({
+  const message: BridgeMessage = {
     id: messageId,
     role: "user",
     content: part.content,
     parts: [part],
     createdAt: part.createdAt!,
-  });
-  chargeTranscript(state, part.content.length);
+  };
+  state.messages.push(message);
+  chargeNewEntry(state, message);
   state.revision += 1;
 }
 
@@ -756,7 +849,7 @@ export function currentAssistantMessage(state: SessionState): BridgeMessage {
   state.currentAssistantMessageId = message.id;
   // Blocks belong to the message that opened them.
   state.openTextParts.clear();
-  chargeTranscript(state, 256);
+  chargeNewEntry(state, message);
   return message;
 }
 
@@ -784,7 +877,9 @@ function openTextPart(
 ): BridgeTextPart | undefined {
   const sourcePartId = state.openTextParts.get(openTextKey(kind, parentTaskUseId));
   if (!sourcePartId) return undefined;
-  for (const part of message.parts) {
+  // Newest first: the open block is almost always at or near the end.
+  for (let index = message.parts.length - 1; index >= 0; index -= 1) {
+    const part = message.parts[index]!;
     if (part.type === kind && part.sourcePartId === sourcePartId) return part;
   }
   // The part was trimmed, or belongs to an earlier message. Either way it can
@@ -831,14 +926,15 @@ function upsertToolPart(
   const part: BridgeToolPart = {
     type: "tool-invocation",
     content: "",
-    sourcePartId: `${message.id}:${message.parts.length}`,
+    sourcePartId: `${message.id}:${nextPartOrdinal(message)}`,
     sourceMessageId: message.id,
     toolUseId: callId,
     createdAt: new Date().toISOString(),
     ...(parentTaskUseId ? { parentTaskUseId } : {}),
   };
   message.parts.push(part);
-  chargeTranscript(state, 256);
+  chargeNewEntry(state, part);
+  noteNestedPart(parentTaskUseId);
   return part;
 }
 
@@ -855,6 +951,32 @@ function chargeToolPart(state: SessionState, part: BridgeToolPart): void {
   chargeTranscript(state, Math.max(0, size - (source.chargedBytes ?? 0)));
   source.chargedBytes = size;
   toolSourceStates.set(part, source);
+}
+
+/**
+ * Charge a new message or part at its exact encoded size plus the separator it
+ * adds to its array. New entries are small skeletons or a single delta, so
+ * measuring them costs what appending them did.
+ */
+function chargeNewEntry(state: SessionState, entry: object): void {
+  chargeTranscript(state, encodedJsonBytes(entry) + 1);
+}
+
+/**
+ * Charge what an append added to a string field, returning the charge.
+ *
+ * `appendBounded` only ever extends its input (or returns it unchanged once
+ * saturated), so the suffix past the old length is exactly what was written.
+ * Comparing prefixes instead would cost a multi-megabyte scan per token.
+ */
+function chargeAppended(state: SessionState, before: string, after: string): number {
+  if (after === before) return 0;
+  const added =
+    after.length >= before.length
+      ? jsonStringContentBytes(after.slice(before.length))
+      : jsonStringContentBytes(after);
+  chargeTranscript(state, added);
+  return added;
 }
 
 function readText(value: unknown): string {

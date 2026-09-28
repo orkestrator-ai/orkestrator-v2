@@ -28,6 +28,7 @@ import {
   readTranscriptLines,
 } from "./rollout.js";
 import { persistSessionTitle } from "../session-titles.js";
+import { recordCommandChanges } from "../sessions/command-changes.js";
 import { clearTranscriptCache, getTranscriptCacheStats } from "../transcript-cache.js";
 import type { StructuredOutputTurnRecord } from "@orkestrator/protocol/structured-output";
 
@@ -284,7 +285,13 @@ describe("rollout public helpers (continued)", () => {
     ]);
 
     expect(await getSessionMetaFromTranscriptPath(path)).toBeNull();
-    expect(getTranscriptCacheStats()).toEqual({ entries: 0, bytes: 0 });
+    // A catalogue head read never scans, indexes or caches the rollout.
+    expect(getTranscriptCacheStats()).toMatchObject({
+      entries: 0,
+      bytes: 0,
+      coldScans: 0,
+      sourceBytesRead: 0,
+    });
   });
 
   test("catalog aliases, malformed index lines, and generated title overrides are defensive", async () => {
@@ -1121,7 +1128,7 @@ describe("rollout public helpers (continued)", () => {
     ]);
   });
 
-  test("hydrates one rollout defensively while skipping malformed and synthetic records", async () => {
+  test("hydrates one rollout defensively, marking malformed records and skipping synthetic ones", async () => {
     const root = await mkdtemp(join(tmpdir(), "rollout-hydration-"));
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "2026", "07", "thread-hydrate.jsonl");
@@ -1187,8 +1194,24 @@ describe("rollout public helpers (continued)", () => {
     process.env.CWD = "/workspace";
     try {
       const hydrated = await hydrateMessagesFromPersistedSession("thread-hydrate");
+      // A line that is not JSON is not silently dropped: it stays visible, in
+      // place, with its byte range, and the result is flagged as degraded.
+      expect(hydrated.transcriptStatus).toBe("degraded");
+      expect(hydrated.messages[0]).toMatchObject({
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "status",
+            severity: "warning",
+            content: expect.stringMatching(
+              /^A rollout record could not be restored \(not valid JSON; rollout bytes \d+–\d+\)\.$/,
+            ),
+          },
+        ],
+      });
       expect(
-        hydrated.messages.map((message) => ({
+        hydrated.messages.slice(1).map((message) => ({
           role: message.role,
           content: message.content,
           createdAt: message.createdAt,
@@ -1642,6 +1665,8 @@ describe("rollout public helpers (continued)", () => {
           // command produces exactly this same pair of records.
           toolState: undefined,
           toolTitle: "exec_command",
+          // The rollout's `call_id`, which is also the live row's item id.
+          toolUseId: "call-exec",
           toolOutput: " M src/example.ts",
           toolError: undefined,
         },
@@ -1654,6 +1679,7 @@ describe("rollout public helpers (continued)", () => {
           },
           toolState: undefined,
           toolTitle: "update_plan",
+          toolUseId: "call-plan",
           toolOutput: "Plan updated",
           toolError: undefined,
         },
@@ -1665,6 +1691,7 @@ describe("rollout public helpers (continued)", () => {
           // This successful patch output agrees with the call record.
           toolState: "success",
           toolTitle: "update: src/a.ts",
+          toolUseId: "call-patch",
           toolOutput: "Patch applied to 2 files",
           toolError: undefined,
           toolDiff: {
@@ -1681,6 +1708,7 @@ describe("rollout public helpers (continued)", () => {
           toolArgs: { path: "src/b.ts", kind: "add" },
           toolState: "success",
           toolTitle: "add: src/b.ts",
+          toolUseId: "call-patch",
           toolOutput: "Patch applied to 2 files",
           toolError: undefined,
           toolDiff: {
@@ -1701,6 +1729,7 @@ describe("rollout public helpers (continued)", () => {
           },
           toolState: "success",
           toolTitle: "exec",
+          toolUseId: "call-custom-exec",
           toolOutput: "All tests passed",
           toolError: undefined,
         },
@@ -1711,6 +1740,67 @@ describe("rollout public helpers (continued)", () => {
       else process.env.CODEX_HOME = previousHome;
       if (previousCwd === undefined) delete process.env.CWD;
       else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("overlays journalled command line changes onto shell rows by call id", async () => {
+    const path = await temporaryRollout("thread-measured", [
+      sessionMeta("thread-measured"),
+      { type: "turn_context", payload: { turn_id: "turn-measured", cwd: "/workspace" } },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Format it" }],
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call-measured",
+          arguments: JSON.stringify({ cmd: "bunx prettier --write src" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: "call-measured", output: "done" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call-unmeasured",
+          arguments: JSON.stringify({ cmd: "git status" }),
+        },
+      },
+    ]);
+    const change = {
+      additions: 3,
+      deletions: 1,
+      files: [{ path: "src/a.ts", additions: 3, deletions: 1 }],
+    };
+    await recordCommandChanges(dirname(dirname(path)), "thread-measured", "call-measured", change);
+    // Another thread's measurement for the same id must stay with that thread.
+    await recordCommandChanges(dirname(dirname(path)), "thread-other", "call-unmeasured", change);
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(dirname(path));
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-measured");
+      const tools = hydrated.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "tool-invocation");
+      expect(tools.map((part) => [part.toolUseId, part.commandChanges])).toEqual([
+        ["call-measured", change],
+        ["call-unmeasured", undefined],
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
     }
   });
 

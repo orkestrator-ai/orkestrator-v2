@@ -14,6 +14,7 @@ import type {
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
@@ -100,6 +101,12 @@ export interface BridgeToolPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /**
+   * What a shell call changed in the worktree, measured by this bridge (see
+   * `command-changes.ts`). Set once the call settles, and only when something
+   * changed; the SDK reports nothing like it.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /** Launch tool this nested call belongs to. */
   parentTaskUseId?: string;
 }
@@ -359,8 +366,18 @@ export interface SessionState {
    * fails the lookup and starts a new block.
    */
   openTextParts: Map<string, string>;
-  /** Bytes appended since the transcript was last measured against its budget. */
+  /**
+   * Upper bound on encoded bytes appended since the transcript was last
+   * measured against its budget.
+   */
   uncheckedTranscriptBytes: number;
+  /**
+   * Bumped whenever retained history is replaced or rewritten rather than
+   * appended to (rewind, run recovery). Part of the transcript read's
+   * `contentEpoch`, so a reader's absolute positions cannot survive a rewrite.
+   * Process-local: a new bridge process already has a new generation.
+   */
+  transcriptEpoch?: number;
   /** Accumulates the assistant text of a structured-output turn. */
   currentTurnOutput: string | null;
   usage?: PersistedUsage;

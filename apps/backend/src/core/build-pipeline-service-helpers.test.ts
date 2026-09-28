@@ -19,7 +19,13 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { connectionDefaultsFor, fastModeForModel } from "./build-pipeline-service-helpers.js";
+import {
+  connectionDefaultsFor,
+  fastModeForModel,
+  legacyTranscriptFingerprint,
+  normalizeTranscriptFingerprint,
+  transcriptFingerprint,
+} from "./build-pipeline-service-helpers.js";
 
 import type {
   BuildPipelineProvider,
@@ -600,5 +606,33 @@ describe("BuildPipelineService", () => {
 
       expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
     });
+  });
+});
+
+describe("transcript fingerprints", () => {
+  const tail = { id: "m2", content: "x".repeat(1024 * 1024), parts: [{ toolOutput: "y" }] };
+
+  test("stay fixed-size however large the newest entry is", () => {
+    const fingerprint = transcriptFingerprint([{ id: "m1" }, tail]);
+    expect(fingerprint).toMatch(/^tf2:2:[0-9a-f]{32}$/);
+    expect(fingerprint).not.toContain("xxx");
+  });
+
+  test("change with the length or with the newest entry alone", () => {
+    const base = transcriptFingerprint([{ id: "m1" }, tail]);
+    expect(transcriptFingerprint([{ id: "m1" }, { ...tail, content: "changed" }])).not.toBe(base);
+    expect(transcriptFingerprint([{ id: "m0" }, { id: "m1" }, tail])).not.toBe(base);
+    expect(transcriptFingerprint([{ id: "other" }, tail])).toBe(base);
+    expect(transcriptFingerprint([])).toBe(transcriptFingerprint([]));
+  });
+
+  test("a stored raw key normalizes to the digest of the same transcript", () => {
+    const messages = [{ id: "m1" }, tail];
+    const legacy = legacyTranscriptFingerprint(messages);
+    expect(normalizeTranscriptFingerprint(legacy)).toBe(transcriptFingerprint(messages));
+    expect(normalizeTranscriptFingerprint(transcriptFingerprint(messages))).toBe(
+      transcriptFingerprint(messages),
+    );
+    expect(normalizeTranscriptFingerprint(undefined)).toBeUndefined();
   });
 });

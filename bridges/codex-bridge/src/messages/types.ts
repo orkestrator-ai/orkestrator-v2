@@ -7,6 +7,7 @@
  *   - subagent activity from two different sources can be merged in one place,
  *   - recovery and deduplication have somewhere to live.
  */
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { BaselineMap } from "./diff-budget.js";
 
 export type ToolState = "success" | "failure" | "pending";
@@ -57,6 +58,12 @@ export interface NormalizedPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /**
+   * What a shell command changed in its worktree, measured around it (see
+   * `sessions/command-changes.ts`). Set only on `bash` rows that changed
+   * something; the renderer shows it as the row's +N −M badge.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   subagentId?: string;
   subagentName?: string;
   subagentRole?: string;

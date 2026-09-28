@@ -3,11 +3,12 @@ import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import {
   BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET,
+  BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
   buildReviewHandoffPrompt,
   prependReviewHandoff,
 } from "./build-pipeline-handoff.js";
 
-function session(messages: unknown[]): PipelineSession {
+function session(): PipelineSession {
   return {
     phase: "review",
     agent: "codex",
@@ -17,7 +18,17 @@ function session(messages: unknown[]): PipelineSession {
     status: "idle",
     startedAt: "2026-08-07T10:00:00.000Z",
     label: "Review Session",
-    messages,
+  };
+}
+
+/** The explicit transcript input: every message, as a caller with the whole history passes it. */
+function source(messages: unknown[]) {
+  return {
+    sourceSession: session(),
+    sourceTranscript: {
+      entries: messages.map((message, index) => ({ index, message })),
+      total: messages.length,
+    },
   };
 }
 
@@ -27,7 +38,7 @@ describe("build review handoff", () => {
       environmentId: "env-1",
       sourceAgent: "codex",
       destinationAgent: "claude",
-      sourceSession: session([
+      ...source([
         {
           id: "user-1",
           role: "user",
@@ -69,7 +80,7 @@ describe("build review handoff", () => {
       environmentId: "env-1",
       sourceAgent: "claude",
       destinationAgent: "opencode",
-      sourceSession: session([message]),
+      ...source([message]),
     });
 
     expect(prompt).toContain("[circular]");
@@ -87,7 +98,7 @@ describe("build review handoff", () => {
       environmentId: "env-1",
       sourceAgent: "claude",
       destinationAgent: "codex",
-      sourceSession: session(messages),
+      ...source(messages),
     });
 
     expect(prompt.length).toBeLessThanOrEqual(BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET);
@@ -107,12 +118,47 @@ describe("build review handoff", () => {
       environmentId: "env-1",
       sourceAgent: "codex",
       destinationAgent: "claude",
-      sourceSession: session(messages),
+      ...source(messages),
     });
 
     expect(prompt.length).toBeLessThanOrEqual(BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET);
     expect(prompt).toContain('"sourceId": "message-0"');
     expect(prompt).toContain('"sourceId": "message-1999"');
     expect(prompt).toMatch(/review messages were omitted/);
+  });
+
+  test("the bounded first-plus-newest window renders exactly what the full history would", () => {
+    const messages = Array.from(
+      { length: BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES * 2 },
+      (_, index) => ({
+        id: `message-${index}`,
+        role: index === 0 ? "user" : "assistant",
+        content: `${index}:${"y".repeat(10)}`,
+      }),
+    );
+    const tailStart = messages.length - BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES;
+    const windowed = {
+      sourceSession: session(),
+      sourceTranscript: {
+        entries: [
+          { index: 0, message: messages[0] },
+          ...messages.slice(tailStart).map((message, offset) => ({
+            index: tailStart + offset,
+            message,
+          })),
+        ],
+        total: messages.length,
+      },
+    };
+    const common = {
+      environmentId: "env-1",
+      sourceAgent: "claude" as const,
+      destinationAgent: "codex" as const,
+    };
+    const normalize = (prompt: string) => prompt.replace(/"createdAt": "[^"]+"/g, "");
+
+    expect(normalize(buildReviewHandoffPrompt({ ...common, ...windowed }))).toBe(
+      normalize(buildReviewHandoffPrompt({ ...common, ...source(messages) })),
+    );
   });
 });

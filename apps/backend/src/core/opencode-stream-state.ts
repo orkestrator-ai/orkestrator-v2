@@ -246,6 +246,17 @@ export class OpenCodeStreamState {
     delete state.turnConfirmed;
   }
 
+  /**
+   * Record a transcript change that did not come from the event stream — a
+   * shell badge measured after its part completed — so the next read's source
+   * token differs and the projection re-normalizes. Untracked sessions have
+   * no cached projection to invalidate.
+   */
+  touch(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) this.bump(state);
+  }
+
   markGap(): void {
     for (const state of this.sessions.values()) {
       state.messagesCurrent = false;

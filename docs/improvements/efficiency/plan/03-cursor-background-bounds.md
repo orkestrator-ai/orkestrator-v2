@@ -1,6 +1,6 @@
 # 03 — Bound Cursor transcripts while no UI is reading
 
-Status: Not started. Prerequisite: 02. Finding: E01. Priority: urgent.
+Status: Complete — nested sub-agent parts, todo lists and SDK-built arguments bounded and bound counters exposed (f833ebea); a live Cursor session ran and reported its bound counters, but no live run reached the trim thresholds in an inactive tab. Prerequisite: 02. Finding: E01. Priority: urgent.
 
 ## Outcome and scope
 
@@ -66,3 +66,84 @@ Benchmark producer latency to ensure enforcement does not stall unrelated
 sessions. Ship independently of the larger protocol migration. Do not add an
 option that disables background bounding in production as a rollback mechanism;
 if the implementation regresses, retain a simpler bounded enforcement path.
+
+## Execution record
+
+```text
+Status: Complete; real-stack inactive-tab QA unrun (see limitations)
+Implementation commit / PR: branch 20260927-125815-7f0993836777 (same commit as step 02)
+Protocol or storage decisions:
+  - applyInteractionUpdate is now a wrapper: the recursive translator runs
+    (nested tool-call-delta updates recurse into the internal function) and
+    boundTranscriptDuringStreaming runs once per top-level update. Prompt
+    onDelta and recovered-stream replay both go through it.
+  - Structural limits (500 messages, 512 parts on the newest message) are
+    checked on every update; the exact byte bound runs after
+    STREAM_BOUND_INTERVAL_BYTES = min(MAX_TRANSCRIPT_BYTES, 1 MiB) of charged
+    growth. Documented transient bound: MAX_TRANSCRIPT_BYTES +
+    STREAM_BOUND_INTERVAL_BYTES + one admitted update (itself capped by the
+    per-field limits: 2 MiB text, 512 KiB args/output, 1 MiB diff).
+  - Charges are upper bounds on encoded growth: new entries at exact encoded
+    size + separator, appends at escaped suffix bytes (part and message body),
+    replacements (progress line, summaries, settle notes) at their new text.
+    Shell-output frames that continue the displayed buffer charge the suffix
+    instead of re-encoding a card holding up to 512 KiB of output per frame.
+  - Part ids use nextPartOrdinal; steered user rows use random ids instead of
+    `appended-${messages.length}`. Open-text lookups scan newest-first.
+  - hydrateHistory bounds after each appended historic turn; recovery that
+    replaces the transcript clears open blocks/current assistant id and bumps
+    a process-local transcriptEpoch, which (with droppedMessages) forms the
+    /transcript contentEpoch so absolute positions cannot survive a rewrite;
+    rewind bumps it too.
+  - Active child lifecycle stays in activeSubagentDescriptors (outside the
+    display buffer); read-side boundTranscriptForRead remains as a defensive check.
+Tests and isolated profiles: bridges/cursor-bridge/src/translate-bounds.test.ts
+  (600 reasoning blocks without reads keep <=512 parts at every step and
+  unique ids; 80 x 512 KiB multibyte text + tool cards stay below the
+  documented transient bound at every observation; UTF-8/escape charging;
+  charges never lag real growth; 700 interleaved rounds of reasoning, text,
+  tools, summaries and nested updates keep unique ids and working open-block
+  lookups; a background child's launch card trimmed away keeps the child
+  active until settleBackgroundChildren). Full cursor suite passes.
+Before/after measurements: validation probe "600 x 1 KiB reasoning, no reads":
+  before 600 parts / 712,206 bytes retained; after <=512 parts throughout,
+  byte growth bounded by the documented ceiling.
+Compatibility/migration result: no wire/schema change; contentEpoch becomes
+  "<epoch>:<droppedMessages>" only after a rewind/recovery replacement in the
+  current process (opaque to the backend).
+Remaining limitations: the isolated dev:test inactive-environment run with a
+  real Cursor account was not performed in this change; coverage is the
+  producer-level regression suite above.
+
+Gap closure (commit f833ebea):
+  - Nested-array audit. The bridge has no childTools array (grouping happens
+    in the web adapter): a sub-agent's output is flat parts tagged
+    parentTaskUseId inside the parent message, previously limited only by
+    the 512-part message cap and the global byte cap, so one busy child
+    could push out its own launch card, its siblings and the parent's prose.
+    Todo lists were unbounded and stored twice; the shell command and the
+    paths/ignore/targetDirectories arrays bypassed the argument bound;
+    openTextParts could keep entries for trimmed parts. Already bounded:
+    active sub-agents (512), observed MCP tools (512), health notices,
+    structured results, directory-tree output.
+  - boundNestedParts (transcript.ts): at most 128 parts per sub-agent
+    (hysteresis to 96), checked when an update adds a nested part; a byte
+    budget of min(4 MiB, MAX_TRANSCRIPT_BYTES / 4) per sub-agent, checked on
+    each full byte check. Oldest first, settled steps before live ones,
+    never the child's newest step; one notice part per child (ACP wording).
+    Trimming never settles a call; a trimmed running grandchild's real
+    completion rebuilds its card.
+  - Todos capped at 128 items of 2 KiB with a truncated count; SDK-built
+    arguments go through the argument bound; openTextParts forgets trimmed
+    parts after any trim.
+  - GET /session/:id/runtime-health includes transcriptBounds: checks, full
+    byte checks, per-child checks, trims, child parts dropped, slowest check
+    (ms) and the limits. Counts only; the backend does not surface it yet.
+  - Tests: translate-bounds.test.ts (1,000 child tools stay bounded and keep
+    the launch card; per-child byte ceiling; running grandchild trimmed then
+    completes; open child block survives; trimmed open block forgotten;
+    counters; todo and argument caps); http.test.ts (health read).
+  Live: a real Cursor session (composer-2.5, isolated profile) reported
+  transcriptBounds through runtime-health (24 checks, 0 trims). Still unrun:
+  a live background run long enough to reach the trim thresholds.
+```

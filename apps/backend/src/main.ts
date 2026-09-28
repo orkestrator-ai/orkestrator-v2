@@ -14,6 +14,10 @@ import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
+import {
+  installStandaloneBackendLogging,
+  stopStandaloneBackendLogging,
+} from "./standalone-logging.js";
 
 assertSupportedPlatform();
 // Before any other startup work: a rejection thrown while the backend is still
@@ -35,6 +39,9 @@ if (
   throw new Error(`${mode} requires --host 127.0.0.1`);
 }
 await mkdir(options.dataDir, { recursive: true });
+// Installed before startup logs anything worth keeping. A no-op under Electron,
+// which already records this process's output.
+const standaloneLogging = installStandaloneBackendLogging(options);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
   runtimeFlavor: options.runtimeFlavor,
@@ -168,7 +175,9 @@ const stop = createBackendShutdownHandler({
     await backend.shutdown();
   },
   warn: (message) => console.warn(message),
-  exit: (code) => process.exit(code),
+  exit: (code) => {
+    void stopStandaloneBackendLogging(standaloneLogging).finally(() => process.exit(code));
+  },
 });
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));

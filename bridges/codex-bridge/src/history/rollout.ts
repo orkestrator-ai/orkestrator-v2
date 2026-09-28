@@ -14,7 +14,15 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { readCachedTranscript, readTranscriptHead } from "../transcript-cache.js";
+import {
+  acquireTranscriptSnapshot,
+  forEachTranscriptBatch,
+  readTranscriptHead,
+  unreadableRolloutRecord,
+  type TranscriptSnapshot,
+  type UnreadableRolloutRecord,
+} from "../transcript-cache.js";
+import { readCachedChildTranscriptSummary } from "../transcript-queries.js";
 import {
   buildFallbackSessionTitle,
   readPersistedSessionTitleEntries,
@@ -29,6 +37,7 @@ import {
   type ToolState,
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
+import { overlayCommandChanges, readCommandChanges } from "../sessions/command-changes.js";
 import {
   isAuthoritativeAgentMessagePhase,
   visibleCommentaryText,
@@ -42,11 +51,16 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import {
   applyTranscriptToolOutput,
-  deriveSubagentPartsFromTranscriptRecords,
+  createCollaborationRecordFilter,
+  deriveSubagentPartsFromChildSummaries,
+  EMPTY_CHILD_TRANSCRIPT_SUMMARY,
   normalizeTranscriptToolArgs,
   parseSubAgentActivityRecords,
   resolveTranscriptToolOutputState,
+  type ChildTranscriptSummary,
+  type TranscriptReadStatus,
   type TranscriptRecord,
+  type TranscriptSubagentPart,
 } from "../subagent-transcript.js";
 import {
   parentAgentPath,
@@ -515,9 +529,7 @@ export async function resolvePersistedChildThreadIds(
   return resolved;
 }
 
-function normalizedSubagentPart(
-  part: ReturnType<typeof deriveSubagentPartsFromTranscriptRecords>[number],
-): NormalizedPart {
+function normalizedSubagentPart(part: TranscriptSubagentPart): NormalizedPart {
   return {
     type: "subagent",
     content: part.content,
@@ -538,7 +550,8 @@ export const MAX_CONCURRENT_PERSISTED_SUBAGENT_READS = 4;
 export interface PersistedSubagentHydrationDependencies {
   resolveChildPaths: typeof resolvePersistedChildThreadIds;
   createTranscriptMetaLoader: typeof createSharedTranscriptMetaLoader;
-  readTranscript: typeof readCachedTranscript;
+  /** A child rollout folded over its whole history (incrementally cached). */
+  readChildSummary: (path: string) => Promise<ChildTranscriptSummary>;
 }
 
 async function mapWithConcurrency<T>(
@@ -558,14 +571,19 @@ async function mapWithConcurrency<T>(
   );
 }
 
-/** Rebuild rich child cards before the generic persisted-tool hydrator runs. */
+/**
+ * Rebuild rich child cards for a persisted parent rollout.
+ *
+ * `records` need only be the parent's collaboration records
+ * (`createCollaborationRecordFilter`); the full rollout gives the same result.
+ */
 export async function hydratePersistedSubagentParts(
   parentThreadId: string,
-  records: TranscriptRecord[],
+  records: readonly TranscriptRecord[],
   dependencies: PersistedSubagentHydrationDependencies = {
     resolveChildPaths: resolvePersistedChildThreadIds,
     createTranscriptMetaLoader: createSharedTranscriptMetaLoader,
-    readTranscript: readCachedTranscript,
+    readChildSummary: readCachedChildTranscriptSummary,
   },
 ): Promise<Map<string, NormalizedPart>> {
   const spawnCallIds: string[] = [];
@@ -631,23 +649,23 @@ export async function hydratePersistedSubagentParts(
   }
   agentIdsToHydrate.reverse();
 
-  const childRecordsByAgentId = new Map<string, TranscriptRecord[]>();
+  const childSummaryByAgentId = new Map<string, ChildTranscriptSummary>();
   const loadMeta = dependencies.createTranscriptMetaLoader();
   await mapWithConcurrency(
     agentIdsToHydrate,
     MAX_CONCURRENT_PERSISTED_SUBAGENT_READS,
     async (agentId) => {
       const childMeta = await loadMeta(agentId);
-      const childRecords = childMeta?.transcriptPath
-        ? (await dependencies.readTranscript(childMeta.transcriptPath)).records
-        : [];
-      childRecordsByAgentId.set(agentId, childRecords);
+      const childSummary = childMeta?.transcriptPath
+        ? await dependencies.readChildSummary(childMeta.transcriptPath)
+        : EMPTY_CHILD_TRANSCRIPT_SUMMARY;
+      childSummaryByAgentId.set(agentId, childSummary);
     },
   );
 
-  const parts = deriveSubagentPartsFromTranscriptRecords(
+  const parts = deriveSubagentPartsFromChildSummaries(
     records,
-    childRecordsByAgentId,
+    childSummaryByAgentId,
     resolvedAgentIdByCallId,
   );
   return new Map(
@@ -928,13 +946,22 @@ function asNonEmptyString(value: unknown): string | undefined {
  * one, always `"completed"` in 34,640 sampled records; `"failed"` is the
  * counterpart in the same field and is kept as a guard rather than deleted.
  *
- * Mirrors `parseChildTranscript`, which reads the same records from child rollouts.
+ * Mirrors `foldChildTranscriptRecord`, which reads the same records from child rollouts.
  */
 function persistedToolState(value: unknown): ToolState {
   return value === "failed" ? "failure" : value === "completed" ? "success" : "pending";
 }
 
-function createPersistedToolParts(payload: Record<string, unknown>, cwd: string): NormalizedPart[] {
+/**
+ * `callId` becomes the rows' `toolUseId`, as it is on a live row: app-server's
+ * item id *is* the rollout's `call_id`, and that shared key is what lets a
+ * reload find the measured line changes journalled against the live row.
+ */
+function createPersistedToolParts(
+  payload: Record<string, unknown>,
+  cwd: string,
+  callId: string | undefined,
+): NormalizedPart[] {
   const toolName = asNonEmptyString(payload.name) ?? "tool";
   const rawArgs = payload.type === "custom_tool_call" ? payload.input : payload.arguments;
   const toolState = persistedToolState(payload.status);
@@ -942,7 +969,7 @@ function createPersistedToolParts(payload: Record<string, unknown>, cwd: string)
     toolName.trim().toLowerCase() === "apply_patch"
       ? rawApplyPatchParts(rawArgs, cwd, toolState)
       : [];
-  const parts: NormalizedPart[] =
+  const builtParts: NormalizedPart[] =
     parsedPatchParts.length > 0
       ? parsedPatchParts
       : [
@@ -955,6 +982,7 @@ function createPersistedToolParts(payload: Record<string, unknown>, cwd: string)
             toolTitle: toolName,
           },
         ];
+  const parts = callId ? builtParts.map((part) => ({ ...part, toolUseId: callId })) : builtParts;
 
   // Only a `custom_tool_call` can carry both a terminal outcome and an inline
   // result on the call record itself; a `function_call` never does.
@@ -1065,14 +1093,28 @@ export function setHydrateMessagesFromPersistedSessionGateForTesting(
   hydrateMessagesFromPersistedSessionGate = gate;
 }
 
-export async function hydrateMessagesFromPersistedSession(
-  threadId: string,
-  options: { structuredOutputTurns?: readonly StructuredOutputTurnRecord[] } = {},
-): Promise<{
+export interface PersistedSessionHydration {
   messages: NormalizedMessage[];
   title?: string;
   titleSource?: PersistedSessionMeta["titleSource"];
-}> {
+  /**
+   * `complete`: every rollout record was replayed. `degraded`: some records
+   * were unreadable and appear as warning rows where they were. `unavailable`:
+   * the rollout could not be read at all — the empty `messages` are then not
+   * evidence of an empty session.
+   */
+  transcriptStatus: TranscriptReadStatus;
+  /**
+   * True only when a rollout exists but could not be read. A thread with no
+   * rollout on disk yet is a different, genuinely empty case.
+   */
+  readFailed?: true;
+}
+
+export async function hydrateMessagesFromPersistedSession(
+  threadId: string,
+  options: { structuredOutputTurns?: readonly StructuredOutputTurnRecord[] } = {},
+): Promise<PersistedSessionHydration> {
   if (hydrateMessagesFromPersistedSessionGate) await hydrateMessagesFromPersistedSessionGate();
   // Direct per-thread lookup first: hydration runs on every re-attach, and the
   // cwd listing behind the fallback rebuilds the whole transcript catalog — one
@@ -1085,31 +1127,110 @@ export async function hydrateMessagesFromPersistedSession(
       })
     ).find((session) => session.id === threadId);
   if (!meta?.transcriptPath) {
-    return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
+    return {
+      messages: [],
+      title: meta?.title,
+      titleSource: meta?.titleSource,
+      transcriptStatus: "unavailable",
+    };
   }
 
-  const { records } = await readCachedTranscript(meta.transcriptPath);
   const structuredTurns = new Map(
     options.structuredOutputTurns
       ?.slice(-MAX_STRUCTURED_OUTPUT_TURNS)
       .map((entry) => [entry.turnId, entry.accepted]),
   );
-  const finalAssistantRecordByTurn = new Map<string, number>();
-  let indexedTurnId: string | undefined;
-  for (const [recordIndex, record] of records.entries()) {
-    indexedTurnId = readTurnId(record.payload) ?? indexedTurnId;
-    if (
-      indexedTurnId &&
-      structuredTurns.has(indexedTurnId) &&
-      record.type === "response_item" &&
-      record.payload?.type === "message" &&
-      record.payload.role === "assistant" &&
-      isAuthoritativeAgentMessagePhase(record.payload.phase)
-    ) {
-      finalAssistantRecordByTurn.set(indexedTurnId, recordIndex);
+  // One retry: a snapshot goes stale only if the rollout is replaced or
+  // truncated while it is being replayed.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const snapshot = await acquireTranscriptSnapshot(meta.transcriptPath);
+    if (snapshot.status === "unavailable") break;
+    const messages = await replayPersistedRollout(threadId, snapshot, meta, structuredTurns);
+    if (messages) {
+      return {
+        messages,
+        title: meta.title,
+        titleSource: meta.titleSource,
+        transcriptStatus: snapshot.status,
+      };
     }
   }
-  const persistedSubagentParts = await hydratePersistedSubagentParts(threadId, records);
+  console.warn(`[codex-bridge] Rollout for thread ${threadId} could not be read for hydration`);
+  return {
+    messages: [],
+    title: meta.title,
+    titleSource: meta.titleSource,
+    transcriptStatus: "unavailable",
+    readFailed: true,
+  };
+}
+
+function describeUnreadableRecords(
+  count: number,
+  reasons: ReadonlySet<UnreadableRolloutRecord["reason"]>,
+  start: number,
+  end: number,
+): string {
+  const subject = count === 1 ? "A rollout record" : `${count} rollout records`;
+  const why =
+    reasons.size > 1
+      ? "unreadable"
+      : reasons.has("overlong")
+        ? "larger than the record size limit"
+        : "not valid JSON";
+  return `${subject} could not be restored (${why}; rollout bytes ${start}–${end}).`;
+}
+
+/**
+ * Replays one rollout snapshot into normalized messages, streaming its record
+ * blocks in file order. Returns `null` if the snapshot went stale mid-replay.
+ *
+ * Nothing but the output and a filtered set of collaboration records is kept,
+ * so a rollout larger than the transcript cache is replayed without holding all
+ * of its records at once.
+ */
+async function replayPersistedRollout(
+  threadId: string,
+  snapshot: TranscriptSnapshot,
+  meta: PersistedSessionMeta,
+  structuredTurns: ReadonlyMap<string, boolean>,
+): Promise<NormalizedMessage[] | null> {
+  const finalAssistantRecordByTurn = new Map<string, number>();
+  // Only structured-output turns need to know their last authoritative answer
+  // ahead of time, and only they pay for this extra pass.
+  if (structuredTurns.size > 0) {
+    let recordIndex = 0;
+    let indexedTurnId: string | undefined;
+    const indexed = await forEachTranscriptBatch(snapshot, (records) => {
+      for (const record of records) {
+        indexedTurnId = readTurnId(record.payload) ?? indexedTurnId;
+        if (
+          indexedTurnId &&
+          structuredTurns.has(indexedTurnId) &&
+          record.type === "response_item" &&
+          record.payload?.type === "message" &&
+          record.payload.role === "assistant" &&
+          isAuthoritativeAgentMessagePhase(record.payload.phase)
+        ) {
+          finalAssistantRecordByTurn.set(indexedTurnId, recordIndex);
+        }
+        recordIndex += 1;
+      }
+    });
+    if (!indexed) return null;
+  }
+
+  const isCollaborationRecord = createCollaborationRecordFilter();
+  const collaborationRecords: TranscriptRecord[] = [];
+  /**
+   * Where each `spawn_agent` call's generic tool part landed. The rich child
+   * card replaces it once the collaboration records have all been seen, which
+   * is what lets this replay stay a single streaming pass.
+   */
+  const spawnPartSlots = new Map<
+    string,
+    Array<{ message: NormalizedMessage; partIndex: number }>
+  >();
   const messages: NormalizedMessage[] = [];
   const toolPartsByCallId = new Map<
     string,
@@ -1133,8 +1254,64 @@ export async function hydrateMessagesFromPersistedSession(
   let currentTurnId: string | undefined;
   let currentTurnModel: string | undefined;
   let currentAssistantMessage: NormalizedMessage | undefined;
+  let lastTimestamp: string | undefined;
+  /** Consecutive unreadable records share one warning row. */
+  let unreadableRun:
+    | {
+        message: NormalizedMessage;
+        count: number;
+        reasons: Set<UnreadableRolloutRecord["reason"]>;
+        start: number;
+        end: number;
+      }
+    | undefined;
 
-  for (const [recordIndex, record] of records.entries()) {
+  const visit = (record: TranscriptRecord, recordIndex: number): void => {
+    if (isCollaborationRecord(record)) collaborationRecords.push(record);
+    if (typeof record.timestamp === "string") lastTimestamp = record.timestamp;
+
+    const unreadable = unreadableRolloutRecord(record);
+    if (unreadable) {
+      const end = unreadable.offset + unreadable.bytes;
+      if (unreadableRun && messages.at(-1) === unreadableRun.message) {
+        unreadableRun.count += 1;
+        unreadableRun.reasons.add(unreadable.reason);
+        unreadableRun.end = end;
+      } else {
+        unreadableRun = {
+          message: {
+            id: createMessageId(),
+            role: "assistant",
+            content: "",
+            parts: [],
+            createdAt: lastTimestamp ?? new Date().toISOString(),
+            ...(currentTurnId ? { turnId: currentTurnId } : {}),
+          },
+          count: 1,
+          reasons: new Set([unreadable.reason]),
+          start: unreadable.offset,
+          end,
+        };
+        messages.push(unreadableRun.message);
+      }
+      unreadableRun.message.parts = [
+        {
+          type: "status",
+          severity: "warning",
+          content: describeUnreadableRecords(
+            unreadableRun.count,
+            unreadableRun.reasons,
+            unreadableRun.start,
+            unreadableRun.end,
+          ),
+        },
+      ];
+      // Whatever the lost record was, later content must not be merged into
+      // the message before the gap as if nothing were missing.
+      currentAssistantMessage = undefined;
+      return;
+    }
+
     const recordTurnId = readTurnId(record.payload);
     if (recordTurnId && recordTurnId !== currentTurnId) {
       currentTurnId = recordTurnId;
@@ -1146,7 +1323,7 @@ export async function hydrateMessagesFromPersistedSession(
     }
 
     if (record.type !== "response_item" || !record.payload) {
-      continue;
+      return;
     }
 
     const payload = record.payload;
@@ -1171,17 +1348,14 @@ export async function hydrateMessagesFromPersistedSession(
     if (payload.type === "function_call" || payload.type === "custom_tool_call") {
       const assistantMessage = ensureAssistantMessage();
       const callId = asNonEmptyString(payload.call_id);
-      const subagentPart =
-        payload.type === "function_call" && payload.name === "spawn_agent" && callId
-          ? persistedSubagentParts.get(callId)
-          : undefined;
-      if (subagentPart) {
-        assistantMessage.parts.push(subagentPart);
-        continue;
-      }
-      const parts = createPersistedToolParts(payload, transcriptCwd);
+      const parts = createPersistedToolParts(payload, transcriptCwd, callId);
       const firstPartIndex = assistantMessage.parts.length;
       assistantMessage.parts.push(...parts);
+      if (payload.type === "function_call" && payload.name === "spawn_agent" && callId) {
+        const slots = spawnPartSlots.get(callId) ?? [];
+        slots.push({ message: assistantMessage, partIndex: firstPartIndex });
+        spawnPartSlots.set(callId, slots);
+      }
 
       if (callId) {
         toolPartsByCallId.set(callId, {
@@ -1189,7 +1363,7 @@ export async function hydrateMessagesFromPersistedSession(
           partIndexes: parts.map((_part, index) => firstPartIndex + index),
         });
       }
-      continue;
+      return;
     }
 
     if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
@@ -1208,21 +1382,21 @@ export async function hydrateMessagesFromPersistedSession(
           );
         }
       }
-      continue;
+      return;
     }
 
     if (payload.type !== "message") {
-      continue;
+      return;
     }
 
     const role =
       payload.role === "assistant" || payload.role === "user"
         ? (payload.role as MessageRole)
         : null;
-    if (!role) continue;
+    if (!role) return;
 
     const persisted = extractPersistedMessageContent(payload.content, role);
-    if (!persisted) continue;
+    if (!persisted) return;
     const { text, attachments } = persisted;
 
     if (role === "assistant") {
@@ -1234,13 +1408,13 @@ export async function hydrateMessagesFromPersistedSession(
         isWithheldMachineOutput(text) &&
         !(acceptedStructuredTurn && finalAssistantRecordByTurn.get(currentTurnId!) === recordIndex)
       ) {
-        continue;
+        return;
       }
       const displayText = commentary ? visibleCommentaryText(text) : text;
       const assistantMessage = ensureAssistantMessage();
       assistantMessage.content = displayText;
       assistantMessage.parts.push({ type: "text", content: displayText });
-      continue;
+      return;
     }
 
     currentAssistantMessage = undefined;
@@ -1252,11 +1426,31 @@ export async function hydrateMessagesFromPersistedSession(
       createdAt: timestamp,
       ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });
-  }
-
-  return {
-    messages,
-    title: meta.title,
-    titleSource: meta.titleSource,
   };
+
+  let recordIndex = 0;
+  const replayed = await forEachTranscriptBatch(snapshot, (records) => {
+    for (const record of records) {
+      visit(record, recordIndex);
+      recordIndex += 1;
+    }
+  });
+  if (!replayed) return null;
+
+  // A spawn's generic tool part (with any output folded into it) gives way to
+  // the rich child card, exactly as if the card had been placed when the call
+  // was replayed.
+  const persistedSubagentParts = await hydratePersistedSubagentParts(
+    threadId,
+    collaborationRecords,
+  );
+  for (const [callId, slots] of spawnPartSlots) {
+    const subagentPart = persistedSubagentParts.get(callId);
+    if (!subagentPart) continue;
+    for (const slot of slots) slot.message.parts[slot.partIndex] = subagentPart;
+  }
+  // Shell rows' measured line changes are the bridge's own record; the rollout
+  // never had them.
+  overlayCommandChanges(messages, await readCommandChanges(getCodexHomeDir(), threadId));
+  return messages;
 }

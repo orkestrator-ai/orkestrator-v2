@@ -14,6 +14,8 @@
 import type { ToolCall } from "@cursor/sdk";
 import type { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
+  MAX_TODO_ITEMS,
+  MAX_TODO_TEXT_BYTES,
   MAX_TOOL_ARGUMENT_BYTES,
   MAX_TOOL_DIFF_BYTES,
   MAX_TOOL_OUTPUT_BYTES,
@@ -377,10 +379,14 @@ function renderUpdateTodos(rendered: RenderedToolCall, args: JsonObject, result:
   // holds, whereas the arguments are only the requested change.
   const value = successValue(result);
   const source = Array.isArray(value?.todos) ? value.todos : args.todos;
-  const todos = readTodos(source);
+  const { todos, omitted } = readBoundedTodos(source);
   rendered.toolTitle = "Todos";
   rendered.todos = todos;
-  rendered.toolArgs = { todos: todos as unknown as JsonObject[] };
+  rendered.toolArgs = boundArgs({
+    todos: todos as unknown as JsonObject[],
+    // The same field `boundArgs` uses, so a shortened list says so.
+    ...(omitted > 0 ? { truncated: `${omitted} more todo items omitted` } : {}),
+  });
 }
 
 function renderTask(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {
@@ -471,16 +477,30 @@ function errorMessage(error: unknown): string {
  * and rejects the item rather than showing it as running.
  */
 export function readTodos(value: unknown): TodoItem[] {
-  if (!Array.isArray(value)) return [];
+  return readBoundedTodos(value).todos;
+}
+
+/**
+ * The list is a nested array the SDK sizes, stored on the card and as the
+ * session's todo state, so it is capped by count and by item text; `omitted`
+ * counts the valid items past the cap.
+ */
+function readBoundedTodos(value: unknown): { todos: TodoItem[]; omitted: number } {
+  if (!Array.isArray(value)) return { todos: [], omitted: 0 };
   const todos: TodoItem[] = [];
+  let omitted = 0;
   for (const entry of value) {
     if (!isObject(entry)) continue;
     const content = readString(entry.content);
     const status = normalizeTodoStatus(entry.status);
     if (!content || !status) continue;
-    todos.push({ content, status });
+    if (todos.length >= MAX_TODO_ITEMS) {
+      omitted += 1;
+      continue;
+    }
+    todos.push({ content: boundText(content, MAX_TODO_TEXT_BYTES), status });
   }
-  return todos;
+  return { todos, omitted };
 }
 
 function normalizeTodoStatus(value: unknown): TodoStatus | undefined {
@@ -538,10 +558,15 @@ function boundTextOrUndefined(value: string | undefined, limit: number): string 
   return value === undefined ? undefined : boundText(value, limit);
 }
 
-/** Drop undefined fields so a tool card never renders an empty argument row. */
+/**
+ * Drop undefined fields so a tool card never renders an empty argument row.
+ *
+ * Bounded like any other argument object: the fields picked here (a shell
+ * command, a path list) come straight from the SDK and are not capped by it.
+ */
 function compact(record: Record<string, unknown>): JsonObject | undefined {
   const entries = Object.entries(record).filter(([, value]) => value !== undefined);
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  return entries.length > 0 ? boundArgs(Object.fromEntries(entries)) : undefined;
 }
 
 function compactDiff(diff: BridgeToolDiff): BridgeToolDiff | undefined {

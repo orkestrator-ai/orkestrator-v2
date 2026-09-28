@@ -84,10 +84,144 @@ function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipe
   };
 }
 
+/**
+ * Renderer-only transcript state carried on a cached session.
+ *
+ * The backend's control record says which transcript revision is committed
+ * (`messageRevision`) and references the stored body; it never embeds it.
+ * The renderer attaches the body it fetched as `messages` and remembers which
+ * revision that body is, so a newer committed revision is detectable.
+ */
+interface LoadedTranscriptState {
+  loadedMessageRevision?: number;
+  transcriptUnavailable?: boolean;
+}
+
+type CachedSession = BuildPipeline["sessions"][number] & LoadedTranscriptState;
+
+function loadedRevision(session: CachedSession): number | undefined {
+  if (session.messages === undefined) return undefined;
+  return session.loadedMessageRevision ?? session.messageRevision ?? 0;
+}
+
+/** The transcript cursor a cached session can offer the backend, if it holds a body. */
+function transcriptCursor(session: CachedSession): { revision: number; count: number } | null {
+  const revision = loadedRevision(session);
+  return revision === undefined || !session.messages
+    ? null
+    : { revision, count: session.messages.length };
+}
+
+/** True when the backend has committed transcript content this cached session does not hold. */
+export function isBuildPipelineTranscriptStale(
+  session: BuildPipeline["sessions"][number] | undefined,
+): boolean {
+  if (!session) return false;
+  const cached = session as CachedSession;
+  const committed = cached.messageRevision ?? 0;
+  if (cached.messages === undefined) {
+    return committed > 0 || (cached.transcript?.messageCount ?? 0) > 0;
+  }
+  return (
+    loadedRevision(cached) !== committed ||
+    (cached.transcript !== undefined && cached.messages.length < cached.transcript.messageCount)
+  );
+}
+
+/** True when the backend reported this session's stored transcript unreadable. */
+export function isBuildPipelineTranscriptUnavailable(
+  session: BuildPipeline["sessions"][number] | undefined,
+): boolean {
+  return Boolean((session as CachedSession | undefined)?.transcriptUnavailable);
+}
+
+/** Keeps the body (and its revision) this renderer already holds for a session. */
+function carryTranscript(local: CachedSession | undefined): LoadedTranscriptState & {
+  messages?: unknown[];
+} {
+  if (!local || local.messages === undefined) return {};
+  return { messages: local.messages, loadedMessageRevision: loadedRevision(local) };
+}
+
+/**
+ * Merges a body-free record (a project list entry, or a plain point read)
+ * with the transcript bodies this renderer already holds. A session whose
+ * committed revision moved on keeps its old body and old loaded revision, so
+ * it reads as stale and the next conditional point read patches it.
+ */
+function withLocalTranscripts(
+  persisted: PersistedBuildPipeline<BuildPipeline> | null,
+  local: BuildPipeline | undefined,
+): PersistedBuildPipeline<BuildPipeline> | null {
+  if (!persisted || !local || !persisted.snapshot || !Array.isArray(persisted.snapshot.sessions)) {
+    return persisted;
+  }
+  const localSessions = new Map<string, CachedSession>(
+    local.sessions.map((session) => [session.sessionKey, session]),
+  );
+  return {
+    ...persisted,
+    snapshot: {
+      ...persisted.snapshot,
+      sessions: persisted.snapshot.sessions.map((session) =>
+        // A legacy backend still embeds bodies; those are authoritative.
+        session.messages !== undefined
+          ? session
+          : { ...session, ...carryTranscript(localSessions.get(session.sessionKey)) },
+      ),
+    },
+  };
+}
+
+type ConditionalPipelineRead = Extract<
+  backend.ConditionalBuildPipeline<BuildPipeline>,
+  { unchanged: false }
+>;
+
+function applyMessagePatches(
+  loaded: ConditionalPipelineRead,
+  localSessions: Map<string, CachedSession>,
+): PersistedBuildPipeline<BuildPipeline> {
+  const patches = new Map(loaded.messagePatches.map((patch) => [patch.sessionKey, patch]));
+  return {
+    ...loaded.record,
+    snapshot: {
+      ...loaded.record.snapshot,
+      sessions: loaded.record.snapshot.sessions.map((session) => {
+        const patch = patches.get(session.sessionKey);
+        const local = localSessions.get(session.sessionKey);
+        // No patch: what this renderer holds is current. Deferred: over the
+        // response budget, fetched by a later read. Either way keep it.
+        if (!patch || patch.deferred) return { ...session, ...carryTranscript(local) };
+        if (patch.unavailable) {
+          return { ...session, ...carryTranscript(local), transcriptUnavailable: true };
+        }
+        const localMessages = local?.messages;
+        const canApply =
+          local !== undefined &&
+          localMessages !== undefined &&
+          patch.baseRevision === loadedRevision(local) &&
+          patch.baseCount === localMessages.length &&
+          patch.startIndex >= 0 &&
+          patch.startIndex <= localMessages.length;
+        const messages = canApply
+          ? [...localMessages.slice(0, patch.startIndex), ...patch.messages]
+          : patch.startIndex === 0
+            ? patch.messages
+            : undefined;
+        return messages
+          ? { ...session, messages, loadedMessageRevision: patch.revision }
+          : { ...session };
+      }),
+    },
+  };
+}
+
 /** Installs one authoritative backend read model into the renderer cache. */
 export async function hydrateBuildPipeline(
   pipelineId: string,
   load?: PipelineLoader,
+  options: { prioritySessionKey?: string } = {},
 ): Promise<BuildPipeline | null> {
   const generation = nextHydrationGeneration();
   setBoundedGeneration(
@@ -97,73 +231,62 @@ export async function hydrateBuildPipeline(
     MAX_PIPELINE_HYDRATION_MARKERS,
   );
   const localBefore = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  const localSessions = new Map<string, CachedSession>(
+    localBefore?.sessions.map((session) => [session.sessionKey, session]) ?? [],
+  );
   const loaded = load
     ? await load(pipelineId)
     : await backend.getBuildPipelineConditional<BuildPipeline>(
         pipelineId,
         localBefore?.backendRevision,
-        localBefore
-          ? Object.fromEntries(
-              localBefore.sessions.map((session) => [
-                session.sessionKey,
-                {
-                  revision: session.messageRevision ?? 0,
-                  count: session.messages?.length ?? 0,
-                },
-              ]),
-            )
-          : undefined,
+        Object.fromEntries(
+          [...localSessions].flatMap(([sessionKey, session]) => {
+            const cursor = transcriptCursor(session);
+            return cursor ? [[sessionKey, cursor]] : [];
+          }),
+        ),
+        options.prioritySessionKey,
       );
   if (loaded && "unchanged" in loaded && loaded.unchanged) {
     return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
   }
   let persisted: PersistedBuildPipeline<BuildPipeline> | null;
   if (loaded && "unchanged" in loaded && loaded.unchanged === false) {
-    const snapshot = loaded.record.snapshot;
-    const localSessions = new Map(
-      localBefore?.sessions.map((session) => [session.sessionKey, session]) ?? [],
-    );
-    const patches = new Map(loaded.messagePatches.map((patch) => [patch.sessionKey, patch]));
     const invalidPatch = loaded.messagePatches.some((patch) => {
-      if (patch.startIndex === 0) return false;
+      if (patch.startIndex === 0 || patch.deferred || patch.unavailable) return false;
       const local = localSessions.get(patch.sessionKey);
       return (
         !local ||
-        patch.baseRevision !== (local.messageRevision ?? 0) ||
-        patch.baseCount !== (local.messages?.length ?? 0) ||
+        local.messages === undefined ||
+        patch.baseRevision !== loadedRevision(local) ||
+        patch.baseCount !== local.messages.length ||
         patch.startIndex < 0 ||
-        patch.startIndex > (local.messages?.length ?? 0)
+        patch.startIndex > local.messages.length
       );
     });
     if (invalidPatch) {
-      persisted = await backend.getBuildPipeline<BuildPipeline>(pipelineId);
+      // Ask again naming no bodies: every stale session comes back whole.
+      const full = await backend.getBuildPipelineConditional<BuildPipeline>(
+        pipelineId,
+        undefined,
+        {},
+        options.prioritySessionKey,
+      );
+      if (full && "unchanged" in full && full.unchanged) {
+        return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
+      }
+      persisted =
+        full && "unchanged" in full
+          ? applyMessagePatches(full, new Map())
+          : (full as PersistedBuildPipeline<BuildPipeline> | null);
     } else {
-      persisted = {
-        ...loaded.record,
-        snapshot: {
-          ...snapshot,
-          sessions: snapshot.sessions.map((session) => {
-            const patch = patches.get(session.sessionKey);
-            const local = localSessions.get(session.sessionKey);
-            if (!patch) return { ...session, messages: local?.messages };
-            const canApply =
-              local &&
-              patch.baseRevision === (local.messageRevision ?? 0) &&
-              patch.baseCount === (local.messages?.length ?? 0) &&
-              patch.startIndex >= 0 &&
-              patch.startIndex <= (local.messages?.length ?? 0);
-            const messages = canApply
-              ? [...(local.messages ?? []).slice(0, patch.startIndex), ...patch.messages]
-              : patch.startIndex === 0
-                ? patch.messages
-                : undefined;
-            return { ...session, messages, messageRevision: patch.revision };
-          }),
-        },
-      };
+      persisted = applyMessagePatches(loaded, localSessions);
     }
   } else {
-    persisted = loaded as PersistedBuildPipeline<BuildPipeline> | null;
+    persisted = withLocalTranscripts(
+      loaded as PersistedBuildPipeline<BuildPipeline> | null,
+      localBefore,
+    );
   }
   if (pipelineHydrationGenerations.get(pipelineId) !== generation) {
     return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
@@ -228,9 +351,12 @@ export async function hydrateBuildPipelinesForProject(
     // began is newer authority. Skipping the stale list entry prevents a slow
     // project hydration from resurrecting a pipeline deleted in the meantime.
     if ((pipelineDeletionGenerations.get(entry.id) ?? 0) > generation) continue;
-    const snapshot = toSnapshot(entry);
-    if (!snapshot) continue;
     const local = useBuildPipelineStore.getState().pipelines.get(entry.id);
+    // List entries are control state only; keep the transcript bodies this
+    // renderer already fetched rather than blanking every open build tab.
+    const merged = withLocalTranscripts(entry, local);
+    const snapshot = merged ? toSnapshot(merged) : null;
+    if (!snapshot) continue;
     if (!local || local.backendRevision <= snapshot.backendRevision) {
       useBuildPipelineStore.getState().replacePipeline(snapshot);
       restored.push(snapshot);

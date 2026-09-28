@@ -8,15 +8,16 @@
  * skipped too, and a restart loses new sessions, composer choices and the
  * at-most-once journals along with the transcripts.
  *
- * What is shed instead is the one thing that is reconstructible: the persisted
- * copy of a rendered transcript, oldest-touched session first. Session
- * identity, the provider agent id, policy, composer, journals and structured
- * results are recovery state and are never shed. If they alone do not fit, the
- * snapshot is refused with a typed error so a caller that needed it published
- * cannot proceed as though it had been.
+ * What is shortened instead is the one thing that is only a display copy: the
+ * persisted copy of a rendered transcript, oldest messages of the
+ * oldest-touched sessions first. Session identity, the provider agent id,
+ * policy, composer, journals and structured results are recovery state and are
+ * never shed. If they alone do not fit, the snapshot is refused with a typed
+ * error so a caller that needed it published cannot proceed as though it had
+ * been.
  *
  * Pure: builds a string from records it is handed and never touches a live
- * session, so the tab the user is watching keeps its transcript.
+ * session, so the tab the user is watching keeps its whole transcript.
  */
 import type { BridgeMessage, PersistedSession } from "./state.js";
 
@@ -34,7 +35,10 @@ export interface BudgetedSession {
 export interface BudgetedSnapshot {
   serialized: string;
   bytes: number;
-  /** Sessions whose transcript copy was left out of this snapshot. */
+  /**
+   * Sessions whose persisted transcript copy is incomplete in this snapshot:
+   * left out entirely, or cut to its newest messages.
+   */
   shed: string[];
 }
 
@@ -70,8 +74,26 @@ export class PersistenceError extends Error {
 /** Sessions a budget refusal names at most. */
 export const MAX_BUDGET_OFFENDERS = 8;
 
+/** One session's record while its transcript tail is being chosen. */
+interface PlannedRecord {
+  session: BudgetedSession;
+  essential: EssentialRecord;
+  /** `{"id":…,` — every essential field except the truncation ones. */
+  head: string;
+  headBytes: number;
+  /** Parts across the whole live transcript, for the dropped-parts count. */
+  totalParts: number;
+  /** Retained message encodings, newest first. */
+  kept: string[];
+  keptParts: number;
+  /** Encoded bytes of `kept` joined with commas. */
+  keptBytes: number;
+  /** Encoded bytes of the whole record as currently planned. */
+  bytes: number;
+}
+
 /**
- * Serialize `sessions` under `budget` bytes, shedding transcripts as needed.
+ * Serialize `sessions` under `budget` bytes, shortening transcripts as needed.
  *
  * Every session is first charged at its minimal size — the essential record
  * with an empty transcript — which is also the admission check. Records are
@@ -81,16 +103,23 @@ export const MAX_BUDGET_OFFENDERS = 8;
  * `persistence-budget-exceeded` error naming the largest records measured, and
  * nothing is published.
  *
- * Transcripts are then added newest-touched first until the next one would not
- * fit; that one and every older one are shed. This is exactly "drop the oldest
- * until it fits", computed without re-serializing the aggregate once per
- * dropped session.
+ * Transcripts are then added newest-touched session first (id breaks ties).
+ * Within a session, messages are added newest first and whole while they fit
+ * the bytes left; the first one that does not fit ends that session's tail and
+ * every older message of it is left out. A session that does not fit whole so
+ * keeps its newest bounded tail instead of nothing, and older-touched sessions
+ * are still offered whatever room remains. This is "drop the oldest until it
+ * fits", computed without re-serializing the aggregate per dropped message.
  *
- * Scratch memory on success, honestly: the retained records (at most the
- * budget), plus one transcript's encoding and the record built around it while
- * that transcript is being considered (about twice the largest transcript),
- * plus the final joined string (at most the budget). So roughly two budgets
- * plus two transcripts at the peak, all bounded; the essential objects handed
+ * Each essential record and each considered message is encoded exactly once.
+ * The accounting is exact UTF-8 bytes, commas and brackets included: a record
+ * is `head` + the truncation fields + `"messages":[` + tail + `]}`, and only
+ * the few truncation fields depend on how many messages are kept.
+ *
+ * Scratch memory on success, honestly: the essential encodings and the kept
+ * message encodings (together at most the budget), plus at most one encoded
+ * message per session that turned out not to fit (released immediately), plus
+ * the final joined string (at most the budget). The essential objects handed
  * in are shallow projections of live state and are not re-copied here.
  */
 export function serializeWithinBudget(
@@ -102,15 +131,14 @@ export function serializeWithinBudget(
   // `...,"sessions":[]}` — the records are spliced between the brackets.
   const head = envelopeJson.slice(0, -2);
   const tail = "]}";
-  const records: string[] = [];
+  const planned: PlannedRecord[] = [];
   const recordBytes: number[] = [];
   let total = Buffer.byteLength(head) + Buffer.byteLength(tail);
   for (const [index, session] of sessions.entries()) {
-    const record = recordJson(shedEssential(session), EMPTY_TRANSCRIPT);
-    const bytes = Buffer.byteLength(record);
-    records.push(record);
-    recordBytes.push(bytes);
-    total += bytes + (index > 0 ? 1 : 0);
+    const record = planRecord(session);
+    planned.push(record);
+    recordBytes.push(record.bytes);
+    total += record.bytes + (index > 0 ? 1 : 0);
     if (total > budget) {
       throw new PersistenceError(
         "persistence-budget-exceeded",
@@ -120,25 +148,41 @@ export function serializeWithinBudget(
     }
   }
 
-  const shed = new Set(sessions.filter((session) => session.messages.length > 0).map((s) => s.id));
-  const byRecency = sessions
-    .map((session, index) => ({ session, index }))
+  const byRecency = planned
+    .slice()
     .sort(
       (left, right) =>
         right.session.lastAccessed - left.session.lastAccessed ||
         (left.session.id < right.session.id ? -1 : left.session.id > right.session.id ? 1 : 0),
     );
-  for (const { session, index } of byRecency) {
-    if (session.messages.length === 0) continue;
-    const kept = recordJson(session.essential, JSON.stringify(session.messages));
-    const delta = Buffer.byteLength(kept) - recordBytes[index]!;
-    if (total + delta > budget) break;
-    records[index] = kept;
-    recordBytes[index] = recordBytes[index]! + delta;
-    total += delta;
-    shed.delete(session.id);
+  for (const record of byRecency) {
+    const messages = record.session.messages;
+    // Newest first, whole messages only, stopping at the first that does not
+    // fit: what is kept is always a contiguous tail.
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      const encoded = JSON.stringify(message);
+      const keptBytes =
+        record.keptBytes + Buffer.byteLength(encoded) + (record.kept.length > 0 ? 1 : 0);
+      const keptParts = record.keptParts + message.parts.length;
+      const bytes = recordSize(record, record.kept.length + 1, keptParts, keptBytes);
+      if (total + bytes - record.bytes > budget) break;
+      total += bytes - record.bytes;
+      record.kept.push(encoded);
+      record.keptParts = keptParts;
+      record.keptBytes = keptBytes;
+      record.bytes = bytes;
+    }
   }
 
+  const shed: string[] = [];
+  const records = planned.map((record) => {
+    const count = record.session.messages.length;
+    if (record.kept.length < count) shed.push(record.session.id);
+    // `kept` is newest first; the file holds messages oldest first.
+    const transcript = record.kept.reverse().join(",");
+    return `${record.head}${truncationFields(record, count - record.kept.length, record.keptParts)}${transcript}]}`;
+  });
   const serialized = `${head}${records.join(",")}${tail}`;
   const bytes = Buffer.byteLength(serialized);
   // The accounting above is exact by construction. Verify it anyway: a
@@ -149,7 +193,87 @@ export function serializeWithinBudget(
       "Cursor bridge could not size its session state; nothing was saved",
     );
   }
-  return { serialized, bytes, shed: Array.from(shed) };
+  return { serialized, bytes, shed };
+}
+
+/**
+ * Encode a session's essential record once and charge it at its minimal size:
+ * no messages kept.
+ */
+function planRecord(session: BudgetedSession): PlannedRecord {
+  // Read once: the record is a projection of live state and is not re-read
+  // after admission.
+  const essential = session.essential;
+  const {
+    droppedMessages: _droppedMessages,
+    droppedParts: _droppedParts,
+    transcriptTruncated: _transcriptTruncated,
+    revision: _revision,
+    ...rest
+  } = essential;
+  const restJson = JSON.stringify(rest);
+  const head = restJson === "{}" ? "{" : `${restJson.slice(0, -1)},`;
+  let totalParts = 0;
+  for (const message of session.messages) totalParts += message.parts.length;
+  const record: PlannedRecord = {
+    session,
+    essential,
+    head,
+    headBytes: Buffer.byteLength(head),
+    totalParts,
+    kept: [],
+    keptParts: 0,
+    keptBytes: 0,
+    bytes: 0,
+  };
+  record.bytes = recordSize(record, 0, 0, 0);
+  return record;
+}
+
+function recordSize(
+  record: PlannedRecord,
+  keptCount: number,
+  keptParts: number,
+  keptBytes: number,
+): number {
+  const dropped = record.session.messages.length - keptCount;
+  return (
+    record.headBytes +
+    Buffer.byteLength(truncationFields(record, dropped, keptParts)) +
+    keptBytes +
+    RECORD_CLOSE.length
+  );
+}
+
+const RECORD_CLOSE = "]}";
+
+/**
+ * The fields that describe what the persisted copy left out, then the opening
+ * of its `messages` array.
+ *
+ * A complete copy keeps the live values. An incomplete one advances the
+ * absolute base by what it dropped, rather than resetting it, so a renderer
+ * cursor from before the restart lands on an honest, shorter retained window
+ * instead of being matched against a different message at the same index.
+ * The revision moves too: a client holding the old revision must not read an
+ * unchanged number as an unchanged transcript.
+ */
+function truncationFields(
+  record: PlannedRecord,
+  droppedMessages: number,
+  keptParts: number,
+): string {
+  const essential = record.essential;
+  const complete = droppedMessages === 0;
+  const fields = {
+    droppedMessages: (essential.droppedMessages ?? 0) + droppedMessages,
+    droppedParts: (essential.droppedParts ?? 0) + (record.totalParts - keptParts),
+    transcriptTruncated: complete ? (essential.transcriptTruncated ?? false) : true,
+    revision: complete ? essential.revision : essential.revision + 1,
+  };
+  // Four scalars: cheap to encode per candidate, and encoded by the same
+  // serializer as the rest of the record so the byte count cannot drift.
+  return `${JSON.stringify(fields).slice(1, -1)},"messages":[`;
 }
 
 /**
@@ -175,40 +299,3 @@ function largestRecords(
   }
   return named;
 }
-
-const EMPTY_TRANSCRIPT = "[]";
-
-/**
- * The record a shed session is published as.
- *
- * The absolute index is carried forward rather than reset, so a renderer
- * cursor from before the restart lands on an honest, empty retained window
- * instead of being matched against a different message at the same index.
- * The revision moves too: a client holding the old revision must not read an
- * unchanged number as an unchanged transcript.
- */
-function shedEssential(session: BudgetedSession): EssentialRecord {
-  if (session.messages.length === 0) return session.essential;
-  return {
-    ...session.essential,
-    droppedMessages: (session.essential.droppedMessages ?? 0) + session.messages.length,
-    droppedParts:
-      (session.essential.droppedParts ?? 0) +
-      session.messages.reduce((sum, message) => sum + message.parts.length, 0),
-    transcriptTruncated: true,
-    revision: session.essential.revision + 1,
-  };
-}
-
-/**
- * One session record with the transcript spliced in as the final property.
- *
- * `messages` is serialized separately so its bytes can be measured once and
- * reused, rather than serialized again inside the record.
- */
-function recordJson(essential: EssentialRecord, messagesJson: string): string {
-  const withPlaceholder = JSON.stringify({ ...essential, messages: [] });
-  return `${withPlaceholder.slice(0, -EMPTY_PLACEHOLDER.length)}${messagesJson}}`;
-}
-
-const EMPTY_PLACEHOLDER = "[]}";

@@ -1375,8 +1375,16 @@ describe("BuildPipelineService transcript persistence", () => {
         const session = finished.sessions.find(
           (candidate) => candidate.sdkSessionId === sessionId,
         )!;
-        expect(session.messages).toHaveLength(1);
+        // The final body is committed to the transcript store before the
+        // control record that references it; the record carries no copy.
+        expect(session.messages).toBeUndefined();
         expect(session.messagesFingerprint).toBeTruthy();
+        expect(session.transcript).toMatchObject({ messageCount: 1, complete: true });
+        const stored = await storage.readBuildPipelineTranscript(built.id, session);
+        expect(stored).toMatchObject({ status: "found", messageCount: 1 });
+        expect(stored.status === "found" ? stored.messages : []).toEqual([
+          { id: "final", role: "assistant", parts: ["done"] },
+        ]);
       },
       { transcriptPersistIntervalMs: 60_000 },
     );

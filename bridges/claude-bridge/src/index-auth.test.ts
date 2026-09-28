@@ -110,11 +110,35 @@ describe("bridge authentication and origin policy", () => {
         ).status,
       ).toBe(200);
       expect((await app.request("/session/list")).status).toBe(401);
+      expect((await app.request("/session/s-1/transcript/detail?locator=x")).status).toBe(401);
+      expect((await app.request("/session/s-1/transcript/page?cursor=x")).status).toBe(401);
       expect((await app.request("/")).status).toBe(401);
 
       const health = await app.request("/global/health");
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ status: "ok", version: "1.0.0" });
+    } finally {
+      __testing.setBridgeAuthForTesting();
+    }
+  });
+
+  test("mounts the batch activity route behind the same token", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      const request = (headers: Record<string, string>) =>
+        app.request("/sessions/activity", {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ version: 1, sessionIds: ["not-a-session-id"] }),
+        });
+      expect((await request({})).status).toBe(401);
+      expect((await request({ Authorization: "Bearer wrong" })).status).toBe(401);
+      const response = await request({ "X-Orkestrator-Claude-Token": AUTH_TOKEN });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        version: 1,
+        observations: { "not-a-session-id": { activity: "missing" } },
+      });
     } finally {
       __testing.setBridgeAuthForTesting();
     }

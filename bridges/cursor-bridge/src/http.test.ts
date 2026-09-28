@@ -413,6 +413,19 @@ describe("liveness routes", () => {
     expect(state.lastAccessed).toBeGreaterThan(0);
   });
 
+  test("runtime health carries the producer bound counters, and nothing of the content", async () => {
+    const state = await createSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "private prompt echo" });
+    const body = await (await call(`/session/${state.id}/runtime-health`)).json();
+    expect(body.transcriptBounds).toMatchObject({
+      checks: 1,
+      exactChecks: 0,
+      maxCheckMs: expect.any(Number),
+      limits: { childParts: expect.any(Number), childBytes: expect.any(Number) },
+    });
+    expect(JSON.stringify(body.transcriptBounds)).not.toContain("private");
+  });
+
   test("runtime health reports the attached agent's MCP configuration without attaching", async () => {
     const home = await mkdtemp(join(tmpdir(), "cursor-http-mcp-config-"));
     setCursorMcpConfigHomeForTests(home);

@@ -7,8 +7,9 @@
  * them: an attached agent, an in-flight turn, a cancel handle. A promise from
  * a dead process means nothing to its successor.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+import { mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { MAX_CLOSING_TOMBSTONES, MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { emptyComposer } from "./models.js";
@@ -58,11 +59,39 @@ let admissionClosed = false;
 let barrierWaiters = 0;
 
 /**
- * The three filesystem calls a publication makes. Replaceable only so a test
- * can hold or fail one of them while serialization, the queue and the routes
- * stay real.
+ * The filesystem calls a publication makes. Replaceable only so a test can
+ * hold or fail one of them — the write, the flush, the rename, the directory
+ * flush — while serialization, the queue and the routes stay real.
  */
-const realFs = { mkdir, writeFile, rename };
+const realFs = {
+  mkdir,
+  writeFile,
+  /** Flush a written file's data and metadata to stable storage. */
+  fsyncFile: async (path: string): Promise<void> => {
+    // `r+`: Windows refuses to flush a handle opened read-only. fsync applies
+    // to the file, not the descriptor, so a fresh handle flushes what the
+    // write through another one left dirty.
+    const handle = await open(path, "r+");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  },
+  rename,
+  /** Flush a directory entry change (the rename) to stable storage. */
+  fsyncDirectory: async (path: string): Promise<void> => {
+    const handle = await open(path, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  },
+  unlink,
+  readdir: (path: string): Promise<string[]> => readdir(path),
+  stat,
+};
 let fs: typeof realFs = realFs;
 
 export function usePersistenceFsForTests(overrides: Partial<typeof realFs>): () => void {
@@ -73,10 +102,92 @@ export function usePersistenceFsForTests(overrides: Partial<typeof realFs>): () 
   };
 }
 
+/**
+ * Errors a directory flush reports where a directory cannot be flushed at all
+ * (Windows has no directory handle to flush; some network and FUSE
+ * filesystems reject the call). The rename itself succeeded; there is simply
+ * no stronger guarantee to be had there.
+ */
+const UNSUPPORTED_DIRECTORY_SYNC = new Set(["EISDIR", "EPERM", "EINVAL", "ENOTSUP"]);
+
+/** Distinguishes this process's temporary files from each other. */
+let temporarySequence = 0;
+
+/**
+ * A name unique to this write, `state.json.<pid>.<seq>.<random>.tmp`, beside
+ * the state file so the rename stays within one filesystem.
+ */
+function temporaryPath(stateFile: string): string {
+  temporarySequence += 1;
+  return `${stateFile}.${process.pid}.${temporarySequence}.${randomBytes(4).toString("hex")}.tmp`;
+}
+
+const TEMPORARY_NAME = /^(\d+)\.\d+\.[0-9a-f]+$/;
+/** How often leftover temporary files are looked for. */
+const TEMPORARY_SWEEP_INTERVAL_MS = 10 * 60 * 1_000;
+/**
+ * Another process's temporary file younger than this may still be mid-write
+ * (a bridge being replaced can briefly overlap its successor). Older ones are
+ * crash leftovers: no write of a bounded state file takes this long.
+ */
+const STALE_TEMPORARY_MS = 5 * 60 * 1_000;
+/** Deletions one sweep performs at most. */
+const MAX_TEMPORARY_SWEEP = 32;
+let lastTemporarySweep: number | undefined;
+
+/**
+ * Remove temporary files a killed bridge left beside the state file.
+ *
+ * Bounded and best-effort: at most once per interval, at most
+ * {@link MAX_TEMPORARY_SWEEP} deletions, and only names this module writes
+ * (plus the fixed `state.json.tmp` of earlier versions). It runs inside the
+ * write queue, between this process's writes, so none of its own temporaries
+ * is in flight; another process's is left alone until it is clearly stale. A
+ * failure here never fails a publication.
+ */
+async function sweepTemporaries(stateFile: string): Promise<void> {
+  const now = Date.now();
+  if (lastTemporarySweep !== undefined && now - lastTemporarySweep < TEMPORARY_SWEEP_INTERVAL_MS) {
+    return;
+  }
+  lastTemporarySweep = now;
+  const directory = dirname(stateFile);
+  const prefix = `${basename(stateFile)}.`;
+  const names = await fs.readdir(directory).catch(() => [] as string[]);
+  let removed = 0;
+  for (const name of names) {
+    if (removed >= MAX_TEMPORARY_SWEEP) break;
+    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+    const middle = name.slice(prefix.length, -".tmp".length);
+    const match = TEMPORARY_NAME.exec(middle);
+    if (middle !== "" && !match) continue;
+    const path = join(directory, name);
+    // This process's own name while none of its writes is in flight: a
+    // leftover of a failed cleanup, or of an earlier process that had the
+    // same pid (routine for a container's entrypoint).
+    if (match?.[1] !== String(process.pid)) {
+      const modified = await fs.stat(path).then(
+        (info) => info.mtimeMs,
+        () => undefined,
+      );
+      if (modified === undefined || now - modified < STALE_TEMPORARY_MS) continue;
+    }
+    const unlinked = await fs.unlink(path).then(
+      () => true,
+      () => false,
+    );
+    if (unlinked) removed += 1;
+  }
+}
+
 /** Identity each session had in the last snapshot that actually reached disk. */
 const durableIdentities = new WeakMap<SessionState, string>();
-/** Failure transitions, so a saturated stream produces one notice, not one per token. */
-let failing: { key: string; failures: number } | undefined;
+/**
+ * The failure episode in progress, so a saturated stream produces one notice,
+ * not one per token. `noticed` holds the notice text each session has already
+ * been shown during this episode; an episode ends with the next success.
+ */
+let failing: { key: string; failures: number; noticed: WeakMap<SessionState, string> } | undefined;
 /** Sessions whose transcript the last published snapshot left out. */
 let lastShed = new Set<string>();
 
@@ -179,6 +290,7 @@ export function reopenPersistenceForTests(): void {
   pendingFailureHooks = undefined;
   failing = undefined;
   lastShed = new Set();
+  lastTemporarySweep = undefined;
 }
 
 /**
@@ -195,6 +307,28 @@ function identityKey(state: SessionState): string {
   return `${state.agentId ?? ""}\u0000${state.configResumePending ? 1 : 0}`;
 }
 
+/**
+ * Publish one snapshot: write a uniquely named temporary file, flush it,
+ * rename it over the state file, then flush the directory.
+ *
+ * Durability, precisely. When this resolves the new file has atomically
+ * replaced the old one, so a process crash (or `kill -9`) at any point leaves
+ * either the previous complete snapshot or this one — never a torn file that
+ * the next start reads as a session with no history. The file is flushed
+ * before the rename and the directory after it, so on Linux the snapshot also
+ * survives power loss. Elsewhere it is as durable as the platform's `fsync`:
+ * macOS `fsync` does not flush the drive's own cache (Node exposes no
+ * `F_FULLFSYNC`), and where a directory cannot be flushed at all (Windows,
+ * some network filesystems) the rename's durability is the filesystem's. So a
+ * barrier guarantees process-crash durability everywhere and power-loss
+ * durability on Linux.
+ *
+ * A failure before the rename removes the temporary file and leaves the
+ * previous snapshot authoritative. A directory flush that fails for any reason
+ * other than being unsupported is reported as a failed publication although
+ * the rename happened: the caller asked for a durable write and did not get
+ * one, and refusing is the side that cannot dispatch twice.
+ */
 async function persistNow(): Promise<void> {
   const stateFile = stateFilePath();
   if (!stateFile) return;
@@ -206,16 +340,35 @@ async function persistNow(): Promise<void> {
   } catch (error) {
     throw noteFailure(error);
   }
+  const directory = dirname(stateFile);
   try {
-    await fs.mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
-    const temporary = `${stateFile}.tmp`;
-    // Write-then-rename: a bridge killed mid-write must not leave a truncated
-    // file that the next start reads as a session with no history. Writes are
-    // serialized by the queue, so two can never share this temporary file.
-    await fs.writeFile(temporary, snapshot.serialized, { mode: 0o600 });
-    await fs.rename(temporary, stateFile);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   } catch (error) {
     throw noteFailure(error);
+  }
+  await sweepTemporaries(stateFile);
+  // Unique per write and created exclusively, so no write can truncate or
+  // rename a temporary file another write — or another process — is producing.
+  const temporary = temporaryPath(stateFile);
+  try {
+    await fs.writeFile(temporary, snapshot.serialized, { mode: 0o600, flag: "wx" });
+    await fs.fsyncFile(temporary);
+    await fs.rename(temporary, stateFile);
+  } catch (error) {
+    // `EEXIST` means the exclusive create found a file this write did not
+    // make; it is not this write's to remove.
+    if ((error as { code?: unknown } | undefined)?.code !== "EEXIST") {
+      await fs.unlink(temporary).catch(() => undefined);
+    }
+    throw noteFailure(error);
+  }
+  try {
+    await fs.fsyncDirectory(directory);
+  } catch (error) {
+    const code = (error as { code?: unknown } | undefined)?.code;
+    if (typeof code !== "string" || !UNSUPPORTED_DIRECTORY_SYNC.has(code)) {
+      throw noteFailure(error);
+    }
   }
   for (const [state, identity] of snapshot.identities) durableIdentities.set(state, identity);
   noteSuccess(snapshot.shed);
@@ -252,6 +405,13 @@ function buildSnapshot(): {
       "Too many pending Cursor session closes to publish safely",
     );
   }
+  // Every session is re-encoded on every write, deliberately. Reusing an
+  // encoding across writes needs a key that every mutation of persisted state
+  // moves, and none exists: `revision` tracks the rendered transcript only
+  // (journals, structured results, composer, status and the sub-agent latch
+  // change without it, and a history rebuild pushes messages across awaits
+  // before its bump), so a cache keyed on it could publish stale recovery
+  // state. Each write encodes each record and each considered message once.
   const budgeted: BudgetedSession[] = live.map((state) => ({
     id: state.id,
     lastAccessed: state.lastAccessed,
@@ -289,7 +449,9 @@ function noteFailure(error: unknown): PersistenceError {
     failing.failures += 1;
     return typed;
   }
-  failing = { key, failures: 1 };
+  failing = failing
+    ? { key, failures: failing.failures + 1, noticed: failing.noticed }
+    : { key, failures: 1, noticed: new WeakMap() };
   const errno = (error as { code?: unknown } | undefined)?.code;
   const offenders = new Set(typed.sessionIds);
   console.warn(
@@ -300,27 +462,30 @@ function noteFailure(error: unknown): PersistenceError {
     }); new prompts and steers are refused until it recovers`,
   );
   for (const state of sessions.values()) {
-    state.health.recordNotice(
-      offenders.has(state.id)
-        ? {
-            // Content-free: which session, never what its saved state holds.
-            message:
-              "This session's saved state (structured results and prompt records) is among the largest keeping the Cursor bridge from saving. Close this tab, or other unused Cursor tabs, to free space.",
-            method: "persistence",
-            severity: "error",
-            detail: `${typed.code}; largest-session`,
-          }
-        : {
-            message: typed.message,
-            method: "persistence",
-            severity: "error",
-            detail: typed.code,
-          },
-    );
+    const offender = offenders.has(state.id);
+    // Content-free: which session, never what its saved state holds.
+    const message = offender ? LARGEST_SESSION_NOTICE : typed.message;
+    // A session already showing this exact notice in this episode has nothing
+    // new to see. Recording it again would add an occurrence, and bumping its
+    // revision would invalidate every client's transcript token for it —
+    // which is what a changed largest-session set used to do to every tab.
+    if (failing.noticed.get(state) === message) continue;
+    failing.noticed.set(state, message);
+    state.health.recordNotice({
+      message,
+      method: "persistence",
+      severity: "error",
+      detail: offender ? `${typed.code}; largest-session` : typed.code,
+    });
+    // Error notices are rendered as transcript advisories, which a client
+    // only re-reads when the revision moves.
     state.revision += 1;
   }
   return typed;
 }
+
+const LARGEST_SESSION_NOTICE =
+  "This session's saved state (structured results and prompt records) is among the largest keeping the Cursor bridge from saving. Close this tab, or other unused Cursor tabs, to free space.";
 
 function noteSuccess(shed: readonly string[]): void {
   if (failing) {
@@ -333,12 +498,12 @@ function noteSuccess(shed: readonly string[]): void {
   lastShed = new Set(shed);
   if (newlyShed.length === 0) return;
   console.warn(
-    `[cursor-bridge] state file at its size limit; saved ${newlyShed.length} session(s) without their transcript copy`,
+    `[cursor-bridge] state file at its size limit; saved ${newlyShed.length} session(s) with a shortened transcript copy`,
   );
   for (const id of newlyShed) {
     sessions.get(id)?.health.recordNotice({
       message:
-        "The saved copy of this transcript was left out to keep bridge state within its size limit. The conversation itself is kept; a bridge restart shows the transcript as truncated.",
+        "The saved copy of this transcript keeps only its newest messages, to keep bridge state within its size limit. The conversation itself is kept; a bridge restart shows the transcript as truncated.",
       method: "persistence",
       severity: "info",
     });
@@ -385,7 +550,9 @@ export async function loadPersistedState(): Promise<void> {
   const stateFile = stateFilePath();
   if (!stateFile) return;
   const raw = await readFile(stateFile, "utf8").catch(() => undefined);
-  if (!raw || Buffer.byteLength(raw) > MAX_STATE_FILE_BYTES) return;
+  if (!raw) return;
+  const fileBytes = Buffer.byteLength(raw);
+  if (fileBytes > MAX_STATE_FILE_BYTES) return;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -414,14 +581,14 @@ export async function loadPersistedState(): Promise<void> {
     }
   }
   for (const entry of parsed.sessions) {
-    const restored = restoreSession(entry);
+    const restored = restoreSession(entry, fileBytes);
     if (!restored || closing.has(restored.id)) continue;
     sessions.set(restored.id, restored);
     if (restored.clientSessionKey) clientSessionKeys.set(restored.clientSessionKey, restored.id);
   }
 }
 
-function restoreSession(entry: unknown): SessionState | undefined {
+function restoreSession(entry: unknown, fileBytes: number): SessionState | undefined {
   if (!isObject(entry) || !nonBlank(entry.id)) return undefined;
   const state = newSessionState(
     nonBlank(entry.clientSessionKey) ? entry.clientSessionKey : undefined,
@@ -446,7 +613,11 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.subagentLimitExceeded = entry.subagentLimitExceeded === true;
   // The whole transcript is unmeasured after a restore, so the first read
   // re-bounds it rather than trusting a budget this process never charged.
-  state.uncheckedTranscriptBytes = Buffer.byteLength(JSON.stringify(state.messages));
+  // Charged at the size of the file it came from: an upper bound on this
+  // transcript's encoding that costs nothing to know, where re-encoding every
+  // restored transcript here would serialize the whole file a second time at
+  // startup. The first bound measures it exactly and resets the charge.
+  state.uncheckedTranscriptBytes = state.messages.length > 0 ? fileBytes : 0;
 
   if (Array.isArray(entry.structured)) {
     // Through the same count and byte bounds a live result obeys, oldest

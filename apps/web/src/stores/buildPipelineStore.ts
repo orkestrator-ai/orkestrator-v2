@@ -132,7 +132,25 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         return state;
       }
       const pipelines = new Map(state.pipelines);
-      pipelines.set(pipeline.id, pipeline);
+      // Control actions and list refreshes carry the authoritative state but
+      // omit transcript bodies. Preserve any locally loaded body by session
+      // key; its loaded revision lets the view detect a newer backend body.
+      const held = new Map(current?.sessions.map((session) => [session.sessionKey, session]) ?? []);
+      let carried = false;
+      const sessions = pipeline.sessions.map((session) => {
+        if (session.messages !== undefined) return session;
+        const previous = held.get(session.sessionKey);
+        if (!previous || previous.messages === undefined) return session;
+        carried = true;
+        const loadedMessageRevision =
+          (previous as typeof previous & { loadedMessageRevision?: number })
+            .loadedMessageRevision ??
+          previous.messageRevision ??
+          0;
+        return { ...session, messages: previous.messages, loadedMessageRevision };
+      });
+      const merged = carried ? { ...pipeline, sessions } : pipeline;
+      pipelines.set(pipeline.id, merged);
       return pipelineProjection(pipelines);
     });
   },

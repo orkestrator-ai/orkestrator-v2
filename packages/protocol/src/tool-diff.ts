@@ -4,6 +4,36 @@ export interface ToolLineChangeStats {
   deletions: number;
 }
 
+/** One file in a {@link MeasuredWorkspaceChange}. */
+export interface MeasuredFileChange {
+  path: string;
+  /** How the file changed between the two measured trees. */
+  status?: "A" | "D" | "M" | "R";
+  additions: number;
+  deletions: number;
+  /** Git could not count lines; both counts are zero. */
+  binary?: true;
+  /** Set when git paired this file with a removed one as a rename. */
+  previousPath?: string;
+}
+
+/**
+ * What a shell command changed in its worktree, measured by snapshotting the
+ * tree around it (see `workspace-change-probe.ts`) because a command's input
+ * cannot say what it will write.
+ */
+export interface MeasuredWorkspaceChange extends ToolLineChangeStats {
+  files: MeasuredFileChange[];
+  /** `files` lists only the first changed files; the totals cover them all. */
+  filesTruncated?: true;
+  /**
+   * Something else may have changed the tree during the window — another call
+   * overlapping it, or a large untracked file too big to measure — so the
+   * counts can include changes this command did not make.
+   */
+  approximate?: true;
+}
+
 /**
  * The subset of a tool-diff payload that can be derived from a tool's raw
  * `input`. Deliberately a structural superset of nothing: every field is

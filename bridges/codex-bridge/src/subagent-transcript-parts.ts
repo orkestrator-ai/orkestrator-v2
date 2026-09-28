@@ -1,7 +1,9 @@
 import {
-  deriveSubagentPartFromChildRecords,
-  deriveSubagentPartsFromTranscriptRecords,
+  deriveSubagentPartFromChildSummary,
+  deriveSubagentPartsFromChildSummaries,
+  EMPTY_CHILD_TRANSCRIPT_SUMMARY,
   parseSubAgentActivityRecords,
+  type ChildTranscriptSummary,
   type TranscriptRecord,
   type TranscriptSubagentPart,
 } from "./subagent-transcript.js";
@@ -11,16 +13,30 @@ import {
   requestedSpawnPath,
   type SpawnResult,
 } from "./subagent-spawn.js";
+import {
+  transcriptQueriesFromLoader,
+  type TranscriptLike,
+  type TranscriptQueries,
+} from "./transcript-queries.js";
+
+export type { TranscriptLike } from "./transcript-queries.js";
 
 export interface PersistedSessionMetaLike {
   transcriptPath?: string | null;
 }
 
-export interface TranscriptLike {
-  records: TranscriptRecord[];
-}
+/**
+ * Where rollouts come from: the bounded query interface (production), or a
+ * loader of whole in-memory transcripts (fixtures and tests), adapted to it.
+ */
+type TranscriptSourceOptions =
+  | { transcriptQueries: TranscriptQueries; loadTranscript?: never }
+  | { loadTranscript: (path: string) => Promise<TranscriptLike>; transcriptQueries?: never };
 
-interface DeriveTranscriptSubagentPartsOptions {
+type DeriveTranscriptSubagentPartsOptions = DeriveTranscriptSubagentPartsBaseOptions &
+  TranscriptSourceOptions;
+
+interface DeriveTranscriptSubagentPartsBaseOptions {
   threadId?: string | null;
   currentTurnStartedAt?: string;
   /** Optional exclusive boundary for spawn calls owned by this assistant row. */
@@ -42,7 +58,6 @@ interface DeriveTranscriptSubagentPartsOptions {
     paths: readonly string[],
   ) => Promise<ReadonlyMap<string, string | null>>;
   loadSessionMeta: (threadId: string) => Promise<PersistedSessionMetaLike | null>;
-  loadTranscript: (path: string) => Promise<TranscriptLike>;
 }
 
 interface SpawnOutputAgent {
@@ -83,7 +98,11 @@ export async function deriveTranscriptSubagentPartsForTurn({
   resolveChildPaths,
   loadSessionMeta,
   loadTranscript,
+  transcriptQueries,
 }: DeriveTranscriptSubagentPartsOptions): Promise<TranscriptSubagentPart[]> {
+  const queries =
+    transcriptQueries ?? (loadTranscript ? transcriptQueriesFromLoader(loadTranscript) : undefined);
+  if (!queries) return [];
   if (!threadId || !currentTurnStartedAt) {
     return [];
   }
@@ -103,15 +122,10 @@ export async function deriveTranscriptSubagentPartsForTurn({
     return [];
   }
 
-  const parentTranscript = await loadTranscript(parentMeta.transcriptPath);
-  const parentRecords = parentTranscript.records.filter((record) => {
-    if (!record.timestamp) {
-      return false;
-    }
-
-    const timestamp = new Date(record.timestamp).getTime();
-    return !Number.isNaN(timestamp) && timestamp >= turnStartedAt;
-  });
+  // Only this turn's records: the parent rollout can be far larger than the
+  // turn, and this runs on every render of a turn with sub-agents.
+  const parentTranscript = await queries.readTurnRecords(parentMeta.transcriptPath, turnStartedAt);
+  const parentRecords = parentTranscript.records;
 
   // Scoping by the ids this row's items claim is exact, so the timestamp window
   // is used only when they cannot supply one.
@@ -139,7 +153,9 @@ export async function deriveTranscriptSubagentPartsForTurn({
   const outputAgentIdByCallId = new Map<string, string>();
   const resultsByCallId = new Map<string, SpawnResult>();
   const pathsByCallId = new Map<string, string>();
-  const parentPath = parentAgentPath(parentTranscript.records);
+  const parentPath = parentAgentPath(
+    parentTranscript.sessionMeta ? [parentTranscript.sessionMeta] : [],
+  );
 
   for (const record of parentRecords) {
     const outputAgent = parseSpawnOutputAgent(record);
@@ -258,14 +274,17 @@ export async function deriveTranscriptSubagentPartsForTurn({
     }
   }
 
-  const childRecordsByAgentId = new Map(
+  // Each child is folded over its whole history (a reusable child reopens on a
+  // follow-up), but incrementally: the cache extends the fold with appended
+  // records instead of re-walking the rollout every render.
+  const childSummaryByAgentId = new Map<string, ChildTranscriptSummary>(
     await Promise.all(
       [...requestedAgentIds].map(async (requestedAgentId) => {
         const childMeta = await loadSessionMeta(requestedAgentId);
-        const childRecords = childMeta?.transcriptPath
-          ? (await loadTranscript(childMeta.transcriptPath)).records
-          : [];
-        return [requestedAgentId, childRecords] as const;
+        const childSummary = childMeta?.transcriptPath
+          ? await queries.readChildSummary(childMeta.transcriptPath)
+          : EMPTY_CHILD_TRANSCRIPT_SUMMARY;
+        return [requestedAgentId, childSummary] as const;
       }),
     ),
   );
@@ -289,9 +308,9 @@ export async function deriveTranscriptSubagentPartsForTurn({
           return !!callId && selectedSpawnCallIds.has(callId);
         });
 
-  const derivedParts = deriveSubagentPartsFromTranscriptRecords(
+  const derivedParts = deriveSubagentPartsFromChildSummaries(
     scopedParentRecords,
-    childRecordsByAgentId,
+    childSummaryByAgentId,
     resolvedAgentIdBySpawnCallId,
   );
   const derivedAgentIds = new Set(
@@ -300,9 +319,9 @@ export async function deriveTranscriptSubagentPartsForTurn({
   for (const ownedAgentId of owned ?? []) {
     if (derivedAgentIds.has(ownedAgentId)) continue;
     derivedParts.push(
-      deriveSubagentPartFromChildRecords(
+      deriveSubagentPartFromChildSummary(
         ownedAgentId,
-        childRecordsByAgentId.get(ownedAgentId) ?? [],
+        childSummaryByAgentId.get(ownedAgentId) ?? EMPTY_CHILD_TRANSCRIPT_SUMMARY,
       ),
     );
   }

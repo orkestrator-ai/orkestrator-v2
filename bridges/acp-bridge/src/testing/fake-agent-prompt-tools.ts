@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   cursorConfig,
   grokConfig,
@@ -1119,6 +1120,48 @@ export function handlePromptTools(
       },
     });
     write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    return true;
+  }
+  if (prompt.startsWith("SHELLCHANGE")) {
+    // A command that edits a tracked file and creates another in the agent's
+    // cwd (the bridge's working directory), for measured shell badges.
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "shell-change-1",
+          title: "Rewrite the notes",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { command: "./rewrite-notes.sh" },
+        },
+      },
+    });
+    // ACP reports a command only once it runs, so the bridge measures it from
+    // the snapshot it took as the turn was dispatched. Writing before that
+    // snapshot finished would fold the change into the baseline; the pause is
+    // what a real command's startup gives it.
+    setTimeout(() => {
+      writeFileSync(join(process.cwd(), "notes.txt"), "one\nTWO\nthree\n");
+      writeFileSync(join(process.cwd(), "added.txt"), "a\nb\n");
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "shell-change-1",
+            status: "completed",
+            content: [{ type: "content", content: { type: "text", text: "done" } }],
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    }, 750);
     return true;
   }
   if (prompt.startsWith("HANGTOOL")) {

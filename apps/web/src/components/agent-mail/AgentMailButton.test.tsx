@@ -473,7 +473,9 @@ describe("AgentMailButton", () => {
     expect(screen.queryByLabelText("Automatic delivery policy")).toBeTruthy();
 
     act(() => screen.getByRole("button", { name: "Unrelated control" }).focus());
-    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Automatic delivery policy") === null).toBe(true),
+    );
   });
 
   test("stays open through context-menu focus restoration, then closes on unrelated focus", async () => {
@@ -510,7 +512,9 @@ describe("AgentMailButton", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
 
     act(() => screen.getByRole("button", { name: "Unrelated control" }).focus());
-    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Automatic delivery policy") === null).toBe(true),
+    );
   });
 
   test("closes on outside focus after opening from the inbox button", async () => {
@@ -524,7 +528,7 @@ describe("AgentMailButton", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
     expect(await screen.findByRole("button", { name: "New" })).toBeTruthy();
     act(() => screen.getByRole("button", { name: "Unrelated control" }).focus());
-    await waitFor(() => expect(screen.queryByRole("button", { name: "New" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "New" }) === null).toBe(true));
   });
 
   test("closes on outside pointer down after the focus handoff", async () => {
@@ -541,7 +545,9 @@ describe("AgentMailButton", () => {
     act(() => origin.focus());
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Unrelated control" }));
-    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Automatic delivery policy") === null).toBe(true),
+    );
   });
 
   test("closes on Escape after the focus handoff", async () => {
@@ -557,7 +563,9 @@ describe("AgentMailButton", () => {
     act(() => origin.focus());
 
     fireEvent.keyDown(policy, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Automatic delivery policy") === null).toBe(true),
+    );
   });
 
   test("fetches a tab mailbox synchronized after the directory snapshot", async () => {

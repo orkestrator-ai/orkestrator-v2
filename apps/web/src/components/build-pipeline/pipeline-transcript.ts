@@ -154,6 +154,9 @@ function asToolDiff(value: unknown): NativeToolDiffMetadata | undefined {
     diff: asString(raw.diff),
     additions: asNumber(raw.additions),
     deletions: asNumber(raw.deletions),
+    // The body lives behind the part's `detailRef`; the row says so rather
+    // than looking like a location-only hint.
+    ...(raw.deferred === true ? { deferred: true } : {}),
   };
   // An object every field of which was dropped is not a diff at all.
   return Object.values(diff).some((field) => field !== undefined) ? diff : undefined;
@@ -173,6 +176,13 @@ const PART_TYPES = new Set([
 
 function isAgentActivityPart(part: NativeMessagePart): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
+}
+
+const MAX_DETAIL_REF_LENGTH = 2048;
+
+function asDetailRef(value: unknown): string | undefined {
+  const ref = asString(value);
+  return ref && ref.length <= MAX_DETAIL_REF_LENGTH ? ref : undefined;
 }
 
 function toNativeParts(value: unknown): NativeMessagePart[] {
@@ -217,6 +227,10 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     mcpServerName: asString(raw.mcpServerName),
     backgroundTask: asBackgroundTask(raw.backgroundTask),
     taskSnapshot: asTaskSnapshot(raw.taskSnapshot),
+    // Deferred bodies (lightweight reviewer transcripts): resolved on expand
+    // through the view's detail loader. Opaque, bounded, never a path.
+    detailRef: asDetailRef(raw.detailRef),
+    imageDetailRef: asDetailRef(raw.imageDetailRef),
   };
 
   switch (type) {

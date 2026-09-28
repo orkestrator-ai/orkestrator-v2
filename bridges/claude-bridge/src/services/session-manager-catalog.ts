@@ -24,6 +24,7 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
 import { recordPromptDispatch } from "./session-manager-lifecycle.js";
 import type {
@@ -141,6 +142,7 @@ function appendSteerUserMessage(session: SessionState, text: string, requestId: 
     createdAt: new Date().toISOString(),
   };
   session.messages.push(message);
+  markTranscriptChanged(session);
   session.lastActivity = new Date();
   eventEmitter.emit({
     type: "message.updated",
@@ -180,6 +182,7 @@ export async function answerIdleSteerPrompt(
       createdAt: new Date().toISOString(),
     };
     session.messages.push(userMessage, assistantMessage);
+    markTranscriptChanged(session);
     session.localTranscript = [...(session.localTranscript ?? []), userMessage, assistantMessage];
     session.lastActivity = new Date();
     eventEmitter.emit({

@@ -19,7 +19,6 @@ import {
   answerQuestion,
   dismissQuestion,
   getPendingQuestions,
-  getSessionActivity,
   getSessionInitData,
   claimPromptDispatch,
   getPromptDispatchState,
@@ -63,9 +62,10 @@ import {
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { registerSessionCloseRoute } from "./session-close.js";
+import { readSessionActivityObservation } from "./session-activity.js";
+import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
@@ -572,36 +572,8 @@ session.get("/:id/messages", async (c) => {
   return c.json(boundClaudeTranscriptResponse(messages));
 });
 
-// Transcript-first display route. Persisted hydration continues in the
-// background; callers keep the preview visible and poll its conditional token.
-session.get("/:id/transcript", (c) => {
-  const id = c.req.param("id");
-  const sessionData = peekSession(id);
-  if (!sessionData) return c.json({ error: "Session not found" }, 404);
-  const loaded = sessionData.persistedMessagesLoaded !== false;
-  const messages = getSessionMessages(id);
-  if (!loaded) {
-    void hydratePersistedSessionMessages(id).catch((error) => {
-      console.warn(
-        "[session] Background transcript hydration failed:",
-        error instanceof Error ? error.message : "unknown error",
-      );
-    });
-  }
-  return c.json(
-    bridgeTranscriptUpdate(messages, {
-      sessionIdentity: id,
-      generation: TRANSCRIPT_GENERATION,
-      contentEpoch: loaded ? "hydrated" : "preview",
-      limit: Number(c.req.query("limit")),
-      targetBytes: Number(c.req.query("targetBytes")),
-      knownToken: c.req.query("knownToken"),
-      complete: loaded,
-      freshness: loaded ? "current" : "cached",
-      title: sessionData.title,
-    }),
-  );
-});
+// `GET /:id/transcript` and its detail and page reads (`session-transcript.ts`).
+registerSessionTranscriptRoutes(session, TRANSCRIPT_GENERATION);
 
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {
@@ -1115,16 +1087,8 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
  * Registered as a two-segment path, so the `/:id` route above cannot shadow it.
  */
 session.get("/:id/activity", async (c) => {
-  const sessionId = c.req.param("id");
-  const activity = await getSessionActivity(sessionId);
-  const resident = peekSession(sessionId);
-  return c.json({
-    activity,
-    // Readiness and activity deliberately diverge while background work is
-    // alive: the composer may accept a new prompt (and the bell may announce
-    // that fact) while the environment icon must remain blue and pulsing.
-    ...(resident?.status === "idle" ? { readyForInput: true } : {}),
-  });
+  // Shared with `POST /sessions/activity`; see `readSessionActivityObservation`.
+  return c.json(await readSessionActivityObservation(c.req.param("id")));
 });
 
 /**

@@ -31,7 +31,7 @@ import {
 
 /*
  * Only the network-facing helpers are replaced; everything else in each client
- * module stays real (snapshot-and-restore, per AGENTS.md) so the suites that
+ * module stays real (snapshot-and-restore, per the testing guide) so the suites that
  * import those modules for real are unaffected once this file finishes.
  */
 import * as realClaudeClient from "@/lib/claude-client";

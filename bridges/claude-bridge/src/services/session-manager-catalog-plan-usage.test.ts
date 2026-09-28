@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { queryControlOverrides } from "./session-manager-test-harness.js";
 import { readClaudePlanUsage } from "./session-manager.js";
 
@@ -28,16 +28,24 @@ describe("readClaudePlanUsage", () => {
   });
 
   test("maps the structured windows to slugged account windows", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
-      async () => ({
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 31, resets_at: "2026-09-11T18:32:00.000Z" },
-          seven_day: { utilization: 12 },
-        },
-      }),
-    );
-    const windows = await readClaudePlanUsage();
+    const getStructuredUsage = mock(async () => ({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 31, resets_at: "2026-09-11T18:32:00.000Z" },
+        seven_day: { utilization: 12 },
+      },
+    }));
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+    const timeoutSpy = spyOn(globalThis, "setTimeout");
+    let windows: Awaited<ReturnType<typeof readClaudePlanUsage>>;
+    try {
+      windows = await readClaudePlanUsage();
+      expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 10_000)).toBe(true);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+    expect(getStructuredUsage).toHaveBeenCalledWith({ skipBehaviors: true });
     expect(windows).toEqual([
       {
         window: "five-hour",

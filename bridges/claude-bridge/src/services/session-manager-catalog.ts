@@ -17,6 +17,7 @@ import {
   claudeExecutableOptions,
   generateMessageId,
   getStructuredUsageWithTimeout,
+  PLAN_USAGE_PROBE_TIMEOUT_MS,
   persistSessionMetadata,
   rateLimitsFromStructuredUsage,
   sdkSessionIdFromBridgeId,
@@ -397,7 +398,11 @@ export async function readClaudePlanUsage(): Promise<NativeAgentAccountUsageWind
       // authoritative empty plan.
       throw new Error("Claude's plan usage API is unavailable in this CLI version");
     }
-    const structuredUsage = await getStructuredUsageWithTimeout(getStructuredUsage, control);
+    const structuredUsage = await getStructuredUsageWithTimeout(
+      getStructuredUsage,
+      control,
+      PLAN_USAGE_PROBE_TIMEOUT_MS,
+    );
     const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
     if (rateLimits === undefined) {
       throw new Error("Claude did not report plan usage");

@@ -180,6 +180,7 @@ import {
   ClaudeStructuredOutputError,
   PLAN_APPROVAL_TIMEOUT_MS,
   QUESTION_TIMEOUT_MS,
+  type RateLimitEventInfo,
   applySessionPlanMode,
   beginClaudeUsageQuery,
   buildClaudeUsageSnapshot,
@@ -193,7 +194,7 @@ import {
   persistSessionMetadata,
   planApprovalResolvers,
   questionResolvers,
-  rateLimitResetToIso,
+  rateLimitsFromEventInfo,
   recordStructuredOutput,
   sdkSessionIdFromBridgeId,
   sessionOperationError,
@@ -1858,31 +1859,18 @@ export async function sendPrompt(
           });
         }
       } else if (message.type === "rate_limit_event") {
-        const info = (
-          message as {
-            rate_limit_info?: {
-              rateLimitType?: string;
-              utilization?: number;
-              resetsAt?: number;
-            };
-          }
-        ).rate_limit_info;
+        const info = (message as { rate_limit_info?: RateLimitEventInfo }).rate_limit_info;
         if (info) {
-          const label = (info.rateLimitType ?? "usage")
-            .replaceAll("_", " ")
-            .replace(/\b\w/g, (letter) => letter.toUpperCase());
-          const nextWindow: SessionRateLimitWindow = {
-            label,
-            usedPercent: info.utilization,
-            resetsAt: rateLimitResetToIso(info.resetsAt),
-          };
+          const nextWindows = rateLimitsFromEventInfo(info);
+          const nextLabels = new Set(nextWindows.map((window) => window.label));
           // Held on the session, not inside `usage`. Rate-limit events arrive
           // mid-turn and `usage` only exists after the first `result`, so
           // gating on it discarded every window a first turn reported.
           const existing = session.rateLimits ?? session.usage?.rateLimits ?? [];
+          const existingByLabel = new Map(existing.map((window) => [window.label, window]));
           session.rateLimits = [
-            ...existing.filter((window: SessionRateLimitWindow) => window.label !== label),
-            nextWindow,
+            ...existing.filter((window: SessionRateLimitWindow) => !nextLabels.has(window.label)),
+            ...nextWindows.map((window) => ({ ...existingByLabel.get(window.label), ...window })),
           ];
           if (session.usage) {
             session.usage = {

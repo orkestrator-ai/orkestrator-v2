@@ -82,6 +82,8 @@ describe("multi review protocol", () => {
     expect(isLaunchMultiReviewActionInput({ ...input, autoFix: false })).toBe(true);
     expect(isLaunchMultiReviewActionInput({ ...input, autoFix: "true" })).toBe(false);
     expect(isLaunchMultiReviewActionInput({ ...input, autoFix: null })).toBe(false);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoPr: true })).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoPr: "true" })).toBe(false);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "" })).toBe(true);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "   " })).toBe(true);
     for (const override of [
@@ -111,6 +113,9 @@ describe("multi review protocol", () => {
     expect(isStartMultiReviewInput({ ...input, autoFix: false })).toBe(true);
     expect(isStartMultiReviewInput({ ...input, autoFix: "true" })).toBe(false);
     expect(isStartMultiReviewInput({ ...input, autoFix: null })).toBe(false);
+    expect(isStartMultiReviewInput({ ...input, autoPr: true })).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoPr: false })).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoPr: 1 })).toBe(false);
     expect(isStartMultiReviewInput({ ...input, reviewers: [] })).toBe(false);
     expect(
       isStartMultiReviewInput({
@@ -163,6 +168,27 @@ describe("multi review protocol", () => {
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: false })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: "true" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: null })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, autoPr: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, autoPr: "true" })).toBe(false);
+    for (const autoPrLaunch of [
+      { state: "pending", requestId: "multi-review-pr:1" },
+      { state: "pending", requestId: "multi-review-pr:1", attempts: 2, message: "tab limit" },
+      { state: "launched", requestId: "multi-review-pr:1", tabId: "agent-job-1" },
+      { state: "skipped", requestId: "multi-review-pr:1", message: "PR exists" },
+      { state: "failed", requestId: "multi-review-pr:1", attempts: 3, message: "boom" },
+    ]) {
+      expect(isMultiReviewWorkflow({ ...workflow, autoPrLaunch })).toBe(true);
+    }
+    for (const autoPrLaunch of [
+      { state: "unknown", requestId: "multi-review-pr:1" },
+      { state: "pending", requestId: "" },
+      { state: "pending", requestId: "multi-review-pr:1", attempts: -1 },
+      { state: "launched", requestId: "multi-review-pr:1", tabId: "" },
+      { state: "failed", requestId: "multi-review-pr:1", message: "x".repeat(4_097) },
+      { state: "pending", requestId: "multi-review-pr:1", extra: true },
+    ]) {
+      expect(isMultiReviewWorkflow({ ...workflow, autoPrLaunch })).toBe(false);
+    }
     expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: true })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: "yes" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "next-fix-session" })).toBe(true);

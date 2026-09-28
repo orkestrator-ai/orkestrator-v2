@@ -19,6 +19,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
   allowsReviewTileActivation,
+  autoPrLaunchNotice,
   consolidationStep,
   fixSessionRuntimeStep,
   fixSessionRuntimeSummary,
@@ -243,6 +244,50 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MultiReviewTab backend snapshot viewer", () => {
+  test("reports each auto-PR launch state after the Fix completes", () => {
+    const requestId = "multi-review-pr:multi-1";
+    expect(autoPrLaunchNotice({ state: "pending", requestId })).toMatchObject({ tone: "muted" });
+    expect(
+      autoPrLaunchNotice({ state: "launched", requestId, tabId: "agent-job-pr" }).text,
+    ).toContain("PR tab was launched");
+    expect(
+      autoPrLaunchNotice({
+        state: "skipped",
+        requestId,
+        message: "A pull request already exists.",
+      }),
+    ).toEqual({ text: "A pull request already exists.", tone: "muted" });
+    expect(
+      autoPrLaunchNotice({
+        state: "skipped",
+        requestId,
+        message: "Review the interactive Fix, then use the PR button to create a pull request.",
+      }).text,
+    ).toContain("use the PR button");
+    const failed = autoPrLaunchNotice({ state: "failed", requestId, message: "tab limit" });
+    expect(failed.tone).toBe("warning");
+    expect(failed.text).toContain(": tab limit");
+    expect(failed.text).toContain("Use the PR button");
+
+    const workflow: MultiReviewWorkflow = {
+      ...readyWorkflow(),
+      phase: "interactive",
+      autoPr: true,
+      autoPrLaunch: { state: "launched", requestId, tabId: "agent-job-pr" },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+    expect(screen.getByTestId("multi-review-auto-pr-notice").textContent).toContain(
+      "PR tab was launched",
+    );
+  });
+
   test("formats live reviewer elapsed time and token usage", () => {
     const reviewer = reviewingWorkflow().reviewers[0]!;
     reviewer.startedAt = "2026-08-14T00:00:00.000Z";

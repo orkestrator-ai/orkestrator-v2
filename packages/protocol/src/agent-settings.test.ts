@@ -245,6 +245,20 @@ describe("resolveMultiReviewSettings", () => {
     ).toBeUndefined();
   });
 
+  test("auto-PR defaults off, cascades by tier, and normalizes only booleans", () => {
+    expect(resolveMultiReviewSettings({}).autoPr).toBe(false);
+    const global = { multiReview: { autoPr: true } };
+    expect(resolveMultiReviewSettings({ global }).autoPr).toBe(true);
+    expect(
+      resolveMultiReviewSettings({ global, environment: { multiReview: { autoPr: false } } })
+        .autoPr,
+    ).toBe(false);
+    for (const autoPr of [true, false]) {
+      expect(normalizeAgentSettings({ multiReview: { autoPr } }).multiReview).toEqual({ autoPr });
+    }
+    expect(normalizeAgentSettings({ multiReview: { autoPr: "yes" } }).multiReview).toBeUndefined();
+  });
+
   test("resolves count and reviewer rows from the narrowest tier that sets each field", () => {
     expect(
       resolveMultiReviewSettings({
@@ -256,6 +270,7 @@ describe("resolveMultiReviewSettings", () => {
       }),
     ).toEqual({
       autoFix: false,
+      autoPr: false,
       reviewerCount: 3,
       additionalReviewers: [{ platform: "codex", model: "gpt-5.6" }],
     });

@@ -48,6 +48,7 @@ describe("Multi Review launch facts", () => {
       consolidationTurns: 1,
       validationRuns: 1,
       fixTurns: 0,
+      prTurns: 0,
     });
     const summary = multiReviewWorkSummary(estimate);
     expect(summary).toContain("3 reviewer turns");
@@ -56,5 +57,18 @@ describe("Multi Review launch facts", () => {
     expect(
       multiReviewWorkSummary(multiReviewWorkEstimate({ reviewerCount: 1, autoFix: true })),
     ).toContain("1 reviewer turn, and 1 consolidation turn, then 1 fix turn");
+  });
+
+  test("the work summary includes the pull request turn auto-PR adds", () => {
+    const estimate = multiReviewWorkEstimate({ reviewerCount: 2, autoFix: true, autoPr: true });
+    expect(estimate.prTurns).toBe(1);
+    expect(multiReviewWorkSummary(estimate)).toContain(
+      "then 1 fix turn and 1 pull request turn once it succeeds",
+    );
+    expect(
+      multiReviewWorkSummary(
+        multiReviewWorkEstimate({ reviewerCount: 2, autoFix: false, autoPr: true }),
+      ),
+    ).toContain("a successful fix is followed by 1 pull request turn");
   });
 });

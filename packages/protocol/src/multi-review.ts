@@ -348,9 +348,31 @@ export type MultiReviewFixSession = MultiReviewSession;
 /** Durable identity shared by every reviewer and the consolidation turn. */
 export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
 
+/**
+ * Durable intent to open the ordinary PR tab after a structured Fix proves completion.
+ *
+ * Recorded atomically with the Fix completion, so a restart cannot lose the
+ * handoff; the supervisor retries delivery under the same request id, which
+ * the native-agent layer deduplicates.
+ */
+export interface MultiReviewAutoPrLaunch {
+  state: "pending" | "launched" | "skipped" | "failed";
+  requestId: string;
+  /** Failed delivery attempts, persisted so a restart cannot reset the budget. */
+  attempts?: number;
+  /** Pane tab that hosts the PR agent once launched. */
+  tabId?: string;
+  /** Why the launch was skipped or failed, or the last retryable error. */
+  message?: string;
+}
+
 export interface MultiReviewWorkflow {
   /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
+  /** Launch the ordinary PR tab after a structured Fix proves completion; absent means off. */
+  autoPr?: boolean;
+  /** Delivery state of the automatic PR launch; absent until the Fix turn completes. */
+  autoPrLaunch?: MultiReviewAutoPrLaunch;
   version: typeof MULTI_REVIEW_WORKFLOW_VERSION;
   controller: "backend";
   /** Backend-only storage lease fence. Renderer responses omit it. */
@@ -448,6 +470,8 @@ export interface MultiReviewWorkflow {
 export interface StartMultiReviewInput {
   /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
+  /** Launch the ordinary PR tab after the Fix turn completes successfully; absent means off. */
+  autoPr?: boolean;
   environmentId: string;
   projectId: string;
   targetBranch: string;
@@ -462,6 +486,8 @@ export interface StartMultiReviewInput {
 export interface LaunchMultiReviewActionInput {
   /** Launch the ordinary Fix handoff after successful consolidation; omitted uses saved defaults. */
   autoFix?: boolean;
+  /** Launch the ordinary PR tab after the Fix turn completes; omitted uses saved defaults. */
+  autoPr?: boolean;
   requestId: string;
   environmentId: string;
   reviewers: MultiReviewModelSelection[];
@@ -502,6 +528,7 @@ export function isLaunchMultiReviewActionInput(
       "targetBranch",
       "reviewInstruction",
       "autoFix",
+      "autoPr",
     ]) &&
     nonBlank(value.requestId, 256) &&
     (!hasReviewInstruction ||
@@ -518,6 +545,7 @@ export function isLaunchMultiReviewActionInput(
       reviewModel: value.reviewModel,
       fixModel: value.fixModel,
       autoFix: value.autoFix,
+      autoPr: value.autoPr,
     })
   );
 }
@@ -566,6 +594,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
       "targetBranch",
       "reviewInstruction",
       "autoFix",
+      "autoPr",
       "reviewers",
       "reviewModel",
       "fixModel",
@@ -575,6 +604,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
     !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
     (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
+    (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
@@ -810,6 +840,26 @@ function isFixResult(value: unknown): boolean {
   );
 }
 
+const AUTO_PR_LAUNCH_STATES = new Set<MultiReviewAutoPrLaunch["state"]>([
+  "pending",
+  "launched",
+  "skipped",
+  "failed",
+]);
+
+function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["state", "requestId", "attempts", "tabId", "message"]) &&
+    AUTO_PR_LAUNCH_STATES.has(value.state as MultiReviewAutoPrLaunch["state"]) &&
+    nonBlank(value.requestId, 256) &&
+    (value.attempts === undefined ||
+      (Number.isSafeInteger(value.attempts) && (value.attempts as number) >= 0)) &&
+    (value.tabId === undefined || nonBlank(value.tabId)) &&
+    optionalString(value.message, 4_096)
+  );
+}
+
 export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkflow {
   if (
     !record(value) ||
@@ -823,6 +873,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "targetBranch",
       "reviewInstruction",
       "autoFix",
+      "autoPr",
+      "autoPrLaunch",
       "reviewers",
       "reviewModel",
       "consolidationModel",
@@ -869,6 +921,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
     (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
+    (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||
+    (value.autoPrLaunch !== undefined && !isAutoPrLaunch(value.autoPrLaunch)) ||
     !PHASES.has(value.phase as MultiReviewPhase) ||
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||

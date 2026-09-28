@@ -38,6 +38,14 @@ describe("multi review obligations", () => {
       fixSession: { status: "running" } as MultiReviewWorkflow["fixSession"],
     });
     expect(multiReviewObligation(pausedStop, true)).toBe("paused-stop");
+    // A successful Fix's PR launch is owed in any phase, until delivered.
+    const prLaunch = (state: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>["state"]) =>
+      workflow({ phase: "interactive", autoPrLaunch: { state, requestId: "pr" } });
+    expect(multiReviewObligation(prLaunch("pending"), true)).toBe("pr-handoff");
+    expect(multiReviewObligation(prLaunch("pending"), false)).toBe("pr-handoff");
+    for (const settled of ["launched", "skipped", "failed"] as const) {
+      expect(multiReviewObligation(prLaunch(settled), true)).toBeNull();
+    }
     expect(multiReviewObligation(workflow({ phase: "paused" }), true)).toBeNull();
     expect(multiReviewObligation(workflow({ phase: "ready" }), true)).toBeNull();
     expect(multiReviewObligation(workflow({ phase: "completed" }), true)).toBeNull();

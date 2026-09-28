@@ -116,3 +116,21 @@ test("saved auto-fix flows through launch and opens Fix after consolidation", as
   await page.getByRole("button", { name: "Complete consolidation" }).click();
   await expect(page.getByRole("tab", { name: "Fix" })).toBeVisible();
 });
+
+test("saved auto-PR leaves an interactive Fix for review before opening PR", async ({ page }) => {
+  await page.goto("/multi-review-auto-fix");
+
+  await page.getByRole("checkbox", { name: "Auto-fix", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Auto-PR", exact: true }).click();
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Configure Multi Review" }).click();
+
+  await expect(page.getByRole("checkbox", { name: "Auto-PR after fix" })).toBeChecked();
+  await page.getByRole("button", { name: "Start 2-model review" }).click();
+  await page.getByRole("button", { name: "Complete consolidation" }).click();
+  await expect(page.getByRole("tab", { name: "PR" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Complete fix" }).click();
+  await expect(page.getByRole("tab", { name: "PR" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Create PR" }).click();
+  await expect(page.getByRole("tab", { name: "PR" })).toBeVisible();
+});

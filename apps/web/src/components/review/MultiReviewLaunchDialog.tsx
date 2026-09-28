@@ -53,6 +53,7 @@ export interface MultiReviewRowDefaults {
 
 export interface MultiReviewLaunchSelection {
   autoFix: boolean;
+  autoPr: boolean;
   reviewers: MultiReviewModelSelection[];
   reviewModel: MultiReviewModelSelection;
   fixModel: MultiReviewModelSelection;
@@ -60,6 +61,7 @@ export interface MultiReviewLaunchSelection {
 
 export interface MultiReviewLaunchDefaults {
   defaultAutoFix?: boolean;
+  defaultAutoPr?: boolean;
   defaultAgent: LaunchAgent;
   catalog: AgentModelCatalog;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
@@ -233,6 +235,7 @@ export function defaultMultiReviewLaunchSelection(
   const rows = initialRows(defaults);
   return {
     autoFix: defaults.defaultAutoFix ?? false,
+    autoPr: defaults.defaultAutoPr ?? false,
     reviewers: rows.reviewers.map(cleanRow),
     reviewModel: cleanRow(rows.reviewModel),
     fixModel: cleanRow(rows.fixModel),
@@ -357,6 +360,7 @@ function ModelRow({
 
 export function MultiReviewLaunchDialog({
   defaultAutoFix = false,
+  defaultAutoPr = false,
   open,
   onOpenChange,
   defaultAgent,
@@ -396,6 +400,7 @@ export function MultiReviewLaunchDialog({
     initialConfiguredRow(reviewModelDefaults, fallbackDefaults, catalog),
   );
   const [autoFix, setAutoFix] = useState(defaultAutoFix);
+  const [autoPr, setAutoPr] = useState(defaultAutoPr);
   const wasOpen = useRef(false);
   // Normalized launch identity, not display labels. Joined into one string so
   // the live region's text — and so its announcement — changes only when the
@@ -408,7 +413,7 @@ export function MultiReviewLaunchDialog({
     [reviewers],
   );
   const workSummary = multiReviewWorkSummary(
-    multiReviewWorkEstimate({ reviewerCount: reviewers.length, autoFix }),
+    multiReviewWorkEstimate({ reviewerCount: reviewers.length, autoFix, autoPr }),
   );
 
   // Only the closed -> open edge reconfigures the rows, and it runs as a layout
@@ -433,8 +438,10 @@ export function MultiReviewLaunchDialog({
     setReviewModel(rows.reviewModel);
     setFixModel(rows.fixModel);
     setAutoFix(defaultAutoFix);
+    setAutoPr(defaultAutoPr);
   }, [
     defaultAutoFix,
+    defaultAutoPr,
     catalog,
     defaultAgent,
     fallbackDefaults,
@@ -473,6 +480,7 @@ export function MultiReviewLaunchDialog({
             if (busy) return;
             onConfirm({
               autoFix,
+              autoPr,
               reviewers: reviewers.map(cleanRow),
               reviewModel: cleanRow(reviewModel),
               fixModel: cleanRow(fixModel),
@@ -593,6 +601,15 @@ export function MultiReviewLaunchDialog({
                   onCheckedChange={(checked) => setAutoFix(checked === true)}
                 />
                 <Label htmlFor="multi-review-launch-auto-fix">Auto-fix after consolidation</Label>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Checkbox
+                  id="multi-review-launch-auto-pr"
+                  checked={autoPr}
+                  disabled={busy}
+                  onCheckedChange={(checked) => setAutoPr(checked === true)}
+                />
+                <Label htmlFor="multi-review-launch-auto-pr">Auto-PR after fix</Label>
               </div>
               <p
                 aria-live="polite"

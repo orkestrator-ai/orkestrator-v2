@@ -367,6 +367,54 @@ export function fixSessionRuntimeSummary(
 
 type FixSessionOpenOutcome = "opened" | "no-session" | "environment-unavailable" | "tab-rejected";
 
+/** Status copy for the backend-owned PR launch that follows a successful Fix. */
+export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>): {
+  text: string;
+  tone: "muted" | "success" | "warning";
+} {
+  if (launch.state === "launched") {
+    return {
+      text: "The fix completed, so a PR tab was launched to commit, push, and open the pull request.",
+      tone: "success",
+    };
+  }
+  if (launch.state === "skipped") {
+    return { text: launch.message ?? "The automatic pull request was skipped.", tone: "muted" };
+  }
+  if (launch.state === "failed") {
+    return {
+      text: `The pull request could not be started automatically${launch.message ? `: ${launch.message}` : "."} Use the PR button to create it.`,
+      tone: "warning",
+    };
+  }
+  return {
+    text: "The fix completed. The pull request agent is being launched in the background.",
+    tone: "muted",
+  };
+}
+
+const AUTO_PR_NOTICE_TONE_CLASS = {
+  muted: "border-border/60 bg-muted/30 text-muted-foreground",
+  success: "border-emerald-500/25 bg-emerald-500/5 text-foreground/85",
+  warning: "border-amber-500/30 bg-amber-500/8 text-amber-500",
+} as const;
+
+function AutoPrLaunchNotice({
+  launch,
+}: {
+  launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>;
+}) {
+  const notice = autoPrLaunchNotice(launch);
+  return (
+    <div
+      data-testid="multi-review-auto-pr-notice"
+      className={`rounded-lg border p-3 text-sm ${AUTO_PR_NOTICE_TONE_CLASS[notice.tone]}`}
+    >
+      {notice.text}
+    </div>
+  );
+}
+
 function openFixSessionError(
   outcome: Exclude<FixSessionOpenOutcome, "opened">,
   source: "automatic" | "manual",
@@ -1541,6 +1589,8 @@ function MultiReviewOverviewTab({
               The fix request was recorded and is being delivered in the background.
             </div>
           )}
+
+          {workflow.autoPrLaunch && <AutoPrLaunchNotice launch={workflow.autoPrLaunch} />}
         </div>
       </ScrollArea>
 

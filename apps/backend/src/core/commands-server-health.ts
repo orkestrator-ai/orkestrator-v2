@@ -4,6 +4,10 @@ import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   LOCAL_SERVER_HEALTH_ATTEMPTS,
   LOCAL_SERVER_HEALTH_INTERVAL_MS,
+  LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS,
+  LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS,
+  LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS,
+  LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS,
 } from "./commands-runtime-state.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 
@@ -30,6 +34,7 @@ export async function checkHttpHealth(
   port: number,
   pathName = "/global/health",
   headers?: Record<string, string>,
+  timeoutMs = 2_000,
 ): Promise<boolean> {
   const http = await import("node:http");
   return new Promise((resolve) => {
@@ -44,7 +49,7 @@ export async function checkHttpHealth(
         host: "127.0.0.1",
         port,
         path: pathName,
-        timeout: 2_000,
+        timeout: timeoutMs,
         headers,
       },
       (response) => {
@@ -126,6 +131,45 @@ export async function waitForHealth(
     await delay(LOCAL_SERVER_HEALTH_INTERVAL_MS);
   }
   throw new Error(`Server on port ${port} did not become healthy`);
+}
+
+/**
+ * Whether an already-running server still answers health, judged over several
+ * probes rather than one.
+ *
+ * A single missed probe is not evidence of a dead bridge: a host saturated by a
+ * test suite or container build can stall a healthy bridge's event loop for
+ * seconds. Replacing it kills its agent process tree mid-turn, so the server is
+ * unhealthy only after consecutive misses. `isAlive` ends the wait early once
+ * the process has exited, when there is nothing left to wait for.
+ */
+export async function confirmRunningServerHealth(
+  port: number,
+  headers: Record<string, string> | undefined,
+  isAlive: () => boolean,
+  dependencies: {
+    checkHealth?: typeof checkHttpHealth;
+    delay?: (milliseconds: number) => Promise<void>;
+  } = {},
+): Promise<{ healthy: boolean; failedProbes: number }> {
+  const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
+  const delay =
+    dependencies.delay ??
+    ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  let failedProbes = 0;
+  while (failedProbes < LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS) {
+    const timeoutMs =
+      failedProbes === 0
+        ? LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS
+        : LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS;
+    if (await checkHealth(port, "/global/health", headers, timeoutMs)) {
+      return { healthy: true, failedProbes };
+    }
+    failedProbes += 1;
+    if (!isAlive() || failedProbes >= LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS) break;
+    await delay(LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS);
+  }
+  return { healthy: false, failedProbes };
 }
 
 export async function waitForLocalServerHealth(

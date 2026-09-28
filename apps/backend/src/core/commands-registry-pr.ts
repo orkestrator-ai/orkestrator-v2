@@ -45,7 +45,7 @@ import {
   findEnvironmentByContainerId,
   deleteMergedEnvironmentRemoteBranch,
   asLocalServerKind,
-  peekLocalAgentBridge,
+  peekLocalAgentBridgeState,
   peekContainerAgentBridge,
   startLocalServer,
   stopLocalServer,
@@ -682,11 +682,18 @@ export function registerPullRequestCommands(
   // environment or keeping every bridge alive on a poll.
   register("peek_local_agent_bridge", (args, context) => {
     assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
-    return peekLocalAgentBridge(
+    return peekLocalAgentBridgeState(
       asNonBlankString(args.environmentId, "environmentId"),
       context,
       asLocalServerKind(args.agent, "agent"),
-    );
+    ).then((state) => {
+      // A live bridge that missed a probe is an unanswered read, not an absent
+      // bridge: reporting it absent would have the sweep mark its turns idle.
+      if (state.status === "unresponsive") {
+        throw new Error("Local agent bridge is running but not answering health checks");
+      }
+      return state.status === "running" ? { port: state.port, authToken: state.authToken } : null;
+    });
   });
   register("peek_container_agent_bridge", (args) => {
     assertOnlyKeys(args, ["containerId", "agent"], "arguments");

@@ -415,6 +415,9 @@ afterEach(() => {
   }));
   adoptNativeAgentSessionMock.mockClear();
   beginNativeAgentSignInMock.mockClear();
+  beginNativeAgentSignInMock.mockImplementation(async () => ({
+    url: "https://auth.example.test/login",
+  }));
   // Restored, not just cleared: a test that installs a failing adoption would
   // otherwise leave every later file-order-dependent test connecting to a
   // provider that refuses.
@@ -1160,7 +1163,13 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-codex-signed-out" data={identity("codex")} isActive />);
 
       expect(await screen.findByText(/signed out of Codex/)).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Open Codex settings" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
+      const send = screen.getByTitle("Sign in to Codex before sending") as HTMLButtonElement;
+      expect(send.disabled).toBe(true);
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Blocked prompt" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole("button", { name: "Sign in to Codex" }));
 
       await waitFor(() =>
@@ -1176,6 +1185,74 @@ describe("AgentNativeTab", () => {
         logicalSessionKey: createSessionKey("env-1", "tab-codex-signed-out"),
       });
       expect(mockToastInfo).toHaveBeenCalledWith("Finish signing in to Codex in your browser");
+      expect(screen.getByRole("link", { name: "Open sign-in link" }).getAttribute("href")).toBe(
+        "https://auth.example.test/login",
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("keeps a delayed Codex sign-in link available when the popup is blocked", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
+      auth: { state: "needs-auth" as const, signIn: { kind: "browser-url" as const } },
+    }));
+    let resolveSignIn!: (value: { url: string }) => void;
+    beginNativeAgentSignInMock.mockImplementation(
+      () => new Promise((resolve) => (resolveSignIn = resolve)),
+    );
+    const openSpy = spyOn(window, "open").mockImplementation(() => null);
+    try {
+      render(<AgentNativeTab tabId="tab-codex-delayed" data={identity("codex")} isActive />);
+      const button = await screen.findByRole("button", { name: "Sign in to Codex" });
+      fireEvent.click(button);
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
+      resolveSignIn({ url: "https://auth.example.test/login" });
+      const link = await screen.findByRole("link", { name: "Open sign-in link" });
+      expect(link.getAttribute("href")).toBe("https://auth.example.test/login");
+      expect(openSpy).toHaveBeenCalled();
+      await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("reports a device code and a sign-in startup failure", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
+      auth: { state: "needs-auth" as const, signIn: { kind: "device-code" as const } },
+    }));
+    beginNativeAgentSignInMock.mockImplementationOnce(async () => ({
+      url: "https://auth.example.test/device",
+      code: "ABCD-1234",
+    }));
+    beginNativeAgentSignInMock.mockImplementationOnce(async () => {
+      throw new Error("login unavailable");
+    });
+    const openSpy = spyOn(window, "open").mockImplementation(() => null);
+    try {
+      render(<AgentNativeTab tabId="tab-codex-device" data={identity("codex")} isActive />);
+      const button = await screen.findByRole("button", { name: "Sign in to Codex" });
+      fireEvent.click(button);
+      await waitFor(() =>
+        expect(mockToastInfo).toHaveBeenCalledWith(
+          "Enter code ABCD-1234 to finish signing in to Codex",
+        ),
+      );
+      expect(screen.getByRole("link", { name: "Open sign-in link" }).getAttribute("href")).toBe(
+        "https://auth.example.test/device",
+      );
+      fireEvent.click(button);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Could not start Codex sign-in: login unavailable",
+        ),
+      );
+      expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
     } finally {
       openSpy.mockRestore();
     }

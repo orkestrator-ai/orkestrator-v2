@@ -2285,4 +2285,31 @@ describe("HTTP bridge progressive transcript", () => {
       message: "You've been signed out of Codex. Sign in again to keep working.",
     });
   });
+
+  test("carries Codex readiness through the interactive snapshot only when reported", async () => {
+    let signedOut = true;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) return Response.json({ model: "gpt-5.5" });
+      return Response.json({
+        status: "idle",
+        messageRevision: 0,
+        ...(signedOut
+          ? {
+              readiness: {
+                state: "authentication-required",
+                message: "You've been signed out of Codex. Sign in again to keep working.",
+              },
+            }
+          : {}),
+      });
+    }, codexConnection);
+
+    expect((await provider.interactiveSnapshot!("session-1")).readiness).toEqual({
+      state: "authentication-required",
+      message: "You've been signed out of Codex. Sign in again to keep working.",
+    });
+    signedOut = false;
+    expect((await provider.interactiveSnapshot!("session-1")).readiness).toBeUndefined();
+  });
 });

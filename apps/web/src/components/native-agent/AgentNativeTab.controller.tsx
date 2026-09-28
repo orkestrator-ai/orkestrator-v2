@@ -793,17 +793,26 @@ export function SharedNativeAgentController({
     projection?.auth?.signIn?.kind === "browser-url" ||
     projection?.auth?.signIn?.kind === "device-code";
   const [signInPending, setSignInPending] = useState(false);
+  const [signInUrl, setSignInUrl] = useState<string | null>(null);
   const startSignIn = useCallback(() => {
     setSignInPending(true);
+    setSignInUrl(null);
     void beginNativeAgentSignIn({
       environmentId: data.environmentId,
       agent: platform,
       logicalSessionKey: sessionKey,
     })
       .then((result) => {
-        if (result.url) window.open(result.url, "_blank", "noopener,noreferrer");
+        if (result.url) {
+          const url = new URL(result.url);
+          if (url.protocol !== "https:" && url.protocol !== "http:") {
+            throw new Error("The sign-in URL is invalid");
+          }
+          setSignInUrl(url.href);
+          window.open(url.href, "_blank", "noopener,noreferrer");
+        }
         if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
-        else toast.info(`Finish signing in to ${label} in your browser`);
+        else if (result.url) toast.info(`Finish signing in to ${label} in your browser`);
       })
       .catch((error: unknown) => {
         toast.error(
@@ -2072,20 +2081,32 @@ export function SharedNativeAgentController({
       >
         <span>{authenticationReadiness.message}</span>
         {inlineSignInAvailable ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={signInPending}
-            onClick={startSignIn}
-          >
-            {signInPending ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <LogIn className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            Sign in to {label}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={signInPending}
+              onClick={startSignIn}
+            >
+              {signInPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <LogIn className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Sign in to {label}
+            </Button>
+            {signInUrl ? (
+              <a
+                href={signInUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2"
+              >
+                Open sign-in link
+              </a>
+            ) : null}
+          </div>
         ) : (
           <Button
             type="button"

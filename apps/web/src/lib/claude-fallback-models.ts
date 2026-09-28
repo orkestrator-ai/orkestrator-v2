@@ -27,7 +27,8 @@ export const FALLBACK_CLAUDE_MODELS: Array<ClaudeModel & { resolvedModel?: strin
  *
  * Configuration stores models in the resolved space, so a default saved while
  * 2.1.276 was current names `claude-fable-5[1m]` or `claude-opus-5[1m]`, and
- * 2.1.280's catalogue offers neither. Without this a saved choice silently
+ * 2.1.280's catalogue offers neither. 2.1.284 did the same to Sonnet: its
+ * `sonnet` alias resolves to `claude-sonnet-5-5`, not `claude-sonnet-5`. Without this a saved choice silently
  * became the first catalogue entry. Consulted only after an exact match fails,
  * so an environment still on an older CLI keeps the id it reports.
  */
@@ -36,4 +37,5 @@ export const SUPERSEDED_CLAUDE_MODEL_IDS: Readonly<Record<string, string>> = {
   "claude-fable-5[1m]": "claude-fable-5-1[1m]",
   "claude-opus-5": "claude-opus-5-5",
   "claude-opus-5[1m]": "claude-opus-5-5[1m]",
+  "claude-sonnet-5": "claude-sonnet-5-5",
 };

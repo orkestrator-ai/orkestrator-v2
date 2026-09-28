@@ -2371,7 +2371,10 @@ describe("NativeAgentService", () => {
   });
 
   test.each([
-    ["claude", ["parameter:audit", "parameter:variant", "parameter:summary"]],
+    [
+      "claude",
+      ["parameter:ultracode", "parameter:audit", "parameter:variant", "parameter:summary"],
+    ],
     [
       "codex",
       ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:variant"],
@@ -2411,6 +2414,17 @@ describe("NativeAgentService", () => {
                 defaultValue: false,
                 scope: "session",
               },
+              ...(agent === "claude"
+                ? [
+                    {
+                      id: "ultracode",
+                      label: "Ultracode",
+                      kind: "toggle",
+                      defaultValue: false,
+                      scope: "session",
+                    },
+                  ]
+                : []),
               {
                 id: "audit",
                 label: "Audit mode",
@@ -2457,6 +2471,20 @@ describe("NativeAgentService", () => {
               .map((control) => control.id)
               .filter((id) => id.startsWith("parameter:")),
           ).toEqual(Array.from(expectedParameterControls));
+          if (agent === "claude") {
+            await expect(
+              service.updateProjectionControls({
+                ...identity,
+                update: { parameterValues: { ultracode: true } },
+              }),
+            ).resolves.toBeDefined();
+            await expect(
+              service.updateProjectionControls({
+                ...identity,
+                update: { parameterValues: { ultracode: "true" } },
+              }),
+            ).rejects.toThrow("Native agent parameter ultracode is invalid");
+          }
 
           // The progressive read feeds the same rendered projection, so a
           // control suppressed above must not reappear here.

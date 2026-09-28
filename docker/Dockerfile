@@ -188,7 +188,7 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.283
+ARG CLAUDE_CLI_VERSION=2.1.284
 ARG CODEX_CLI_VERSION=0.158.0
 ARG OPENCODE_CLI_VERSION=1.18.33
 ARG GROK_BUILD_VERSION=1.0.41

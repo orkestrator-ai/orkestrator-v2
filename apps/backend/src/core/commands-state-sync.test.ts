@@ -26,8 +26,10 @@ import {
   FIRST_USE_CATALOG_BUDGET_MS,
   firstUseCatalogFetchTimeoutMs,
 } from "./commands-registry-projects.js";
+import { cachedLaunchModels } from "./control-shared-actions.js";
 import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
+import type { ClaudeModelCatalogEntry } from "./models.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub } from "./native-agent-service-projection-test-support.js";
@@ -1005,6 +1007,44 @@ describe("native agent model catalogue command", () => {
         const reasoning = model.reasoning as Array<{ id: string }> | undefined;
         if (!reasoning?.length) continue;
         expect(reasoning.map((option) => option.id)).toContain(model.defaultReasoningId as string);
+      }
+    });
+  });
+
+  test("exposes Claude parameters only on eligible catalogue rows in both reads", async () => {
+    const entries: ClaudeModelCatalogEntry[] = [
+      {
+        id: "sonnet",
+        name: "Sonnet",
+        resolvedModel: "claude-sonnet-5-5",
+        supportedEffortLevels: ["low", "xhigh"],
+      },
+      { id: "haiku", name: "Haiku" },
+    ];
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        claudeModelCatalog: {
+          environmentId: "e1",
+          models: entries,
+          source: "sdk",
+          fetchedAt: new Date(0).toISOString(),
+          stale: false,
+        },
+      });
+      await storage.cacheAgentModelCatalog("claude", entries);
+      const native = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<{ id: string; parameters?: Array<{ id: string }> }>;
+      const launch = await cachedLaunchModels(
+        <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
+          invoke(command, args ?? {}) as Promise<T>,
+        "proj-1",
+      );
+      for (const models of [native, launch]) {
+        const ids = (id: string) =>
+          models.find((model) => model.id === id)?.parameters?.map((parameter) => parameter.id);
+        expect(ids("sonnet")).toEqual(["thinking", "context1m", "ultracode"]);
+        expect(ids("haiku")).toEqual(["thinking"]);
       }
     });
   });

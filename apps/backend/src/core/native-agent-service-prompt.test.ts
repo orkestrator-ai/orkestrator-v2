@@ -467,6 +467,12 @@ describe("NativeAgentService", () => {
                   kind: "toggle",
                   scope: "session",
                 },
+                {
+                  id: "ultracode",
+                  label: "Ultracode",
+                  kind: "toggle",
+                  scope: "session",
+                },
               ],
             },
             { platform: "claude", id: "haiku", label: "Haiku" },
@@ -489,7 +495,7 @@ describe("NativeAgentService", () => {
           agent: "claude" as const,
           logicalSessionKey: "env-env-1:claude-session-defaults",
         };
-        const parameterValues = { thinking: "budget-16384", context1m: true };
+        const parameterValues = { thinking: "budget-16384", context1m: true, ultracode: true };
         await service.ensureSession({ ...identity, parameterValues });
 
         await service.updateProjectionControls({
@@ -504,7 +510,7 @@ describe("NativeAgentService", () => {
         );
         expect((await storage.getNativeAgentSession(key))?.controls).toMatchObject({
           modelId: "haiku",
-          parameterValues,
+          parameterValues: { thinking: "budget-16384", context1m: true },
         });
         await service.dispatchIntent({
           ...identity,
@@ -514,7 +520,9 @@ describe("NativeAgentService", () => {
         expect(stub.send).toHaveBeenCalledWith(
           "provider-session",
           "Keep the session defaults",
-          expect.objectContaining({ parameterValues }),
+          expect.objectContaining({
+            parameterValues: { thinking: "budget-16384", context1m: true },
+          }),
         );
       },
     );

@@ -38,6 +38,7 @@ import {
   pruneTerminalHistoryStorage,
 } from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
+import { claudeModelParameters } from "@orkestrator/protocol/claude-model-catalog";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./commands-runtime-state.js";
 import {
@@ -102,32 +103,7 @@ function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): Age
       providerLabel: "Claude",
       reasoning: reasoningOptions(efforts),
       defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
-      parameters: [
-        {
-          id: "thinking",
-          label: "Thinking",
-          kind: "select",
-          options: [
-            { id: "adaptive", label: "Adaptive" },
-            { id: "budget-8192", label: "8K budget" },
-            { id: "budget-16384", label: "16K budget" },
-            { id: "disabled", label: "Disabled" },
-          ],
-          defaultValue: "adaptive",
-          scope: "session",
-        },
-        ...(/opus|sonnet/i.test(`${model.id} ${model.resolvedModel ?? ""}`)
-          ? [
-              {
-                id: "context1m",
-                label: "1M context beta",
-                kind: "toggle" as const,
-                defaultValue: false,
-                scope: "session" as const,
-              },
-            ]
-          : []),
-      ],
+      parameters: claudeModelParameters(model),
       supportsSpeed: model.supportsFastMode !== false,
       supportsMode: true,
     };

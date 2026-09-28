@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
+import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -12,6 +13,35 @@ import {
   waitUntil,
   writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
+
+describe("session authentication readiness", () => {
+  test("reports confirmed sign-out and omits readiness after account recovery", async () => {
+    let signedIn = false;
+    const h = await harness({
+      "account/read": () => ({
+        account: signedIn ? { type: "chatgpt" } : null,
+        requiresOpenaiAuth: true,
+      }),
+      "config/mcpServer/reload": () => ({}),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(h.runtime.getStatus(sessionId)?.readiness).toBeUndefined();
+
+    h.child().notify("account/updated", {});
+    await h.drain();
+    await waitUntil(() => h.engine.isAccountSignInRequired(), "account sign-out was not recorded");
+    expect(h.runtime.getStatus(sessionId)?.readiness).toEqual({
+      state: "authentication-required",
+      message: CODEX_SIGN_IN_REQUIRED_MESSAGE,
+    });
+
+    signedIn = true;
+    h.child().notify("account/updated", {});
+    await h.drain();
+    await waitUntil(() => !h.engine.isAccountSignInRequired(), "account sign-in was not recorded");
+    expect(h.runtime.getStatus(sessionId)?.readiness).toBeUndefined();
+  });
+});
 
 describe("same thread in two tabs", () => {
   test("both tabs share one canonical transcript", async () => {

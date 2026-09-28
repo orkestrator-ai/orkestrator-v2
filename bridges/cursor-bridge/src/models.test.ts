@@ -329,6 +329,7 @@ describe("context windows", () => {
     expect(contextWindowForModelId("Claude-Opus-5")).toBe(1_000_000);
     expect(contextWindowForModelId("claude-opus-5.5")).toBe(1_000_000);
     expect(contextWindowForModelId("claude-opus-5-5-fast")).toBe(1_000_000);
+    expect(contextWindowForModelId("claude-sonnet-5-5")).toBe(1_000_000);
   });
 
   test("answers an inherited object key with no window", () => {

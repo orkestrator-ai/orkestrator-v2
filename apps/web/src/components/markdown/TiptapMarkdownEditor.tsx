@@ -88,6 +88,9 @@ export const TiptapMarkdownEditor = forwardRef<
     immediatelyRender: false,
     editorProps: {
       attributes: {
+        // `prose-code:` also matches the `code` inside fenced blocks, so the
+        // inline-chip padding would indent only the first line of every block.
+        // The trailing `[&_pre_code]` reset outranks it and must stay.
         class:
           "prose prose-invert max-w-none min-h-full px-8 py-6 text-foreground focus:outline-none " +
           "prose-headings:text-foreground prose-p:my-3 prose-headings:mt-6 prose-headings:mb-3 " +
@@ -98,7 +101,8 @@ export const TiptapMarkdownEditor = forwardRef<
           "[&_th]:bg-muted [&_th]:px-3 [&_th]:py-2 [&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-2 " +
           "[&_ul[data-type=taskList]]:list-none [&_ul[data-type=taskList]]:pl-0 " +
           "[&_ul[data-type=taskList]_li]:flex [&_ul[data-type=taskList]_li]:items-start [&_ul[data-type=taskList]_li]:gap-2 " +
-          "[&_ul[data-type=taskList]_li>label]:mt-1 [&_ul[data-type=taskList]_li>div]:flex-1",
+          "[&_ul[data-type=taskList]_li>label]:mt-1 [&_ul[data-type=taskList]_li>div]:flex-1 " +
+          "[&_pre_code]:bg-transparent [&_pre_code]:rounded-none [&_pre_code]:px-0 [&_pre_code]:py-0",
         "data-testid": "tiptap-markdown-editor",
       },
       handleKeyDown: (_view, event) => {

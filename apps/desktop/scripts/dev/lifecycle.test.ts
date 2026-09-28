@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -165,6 +165,35 @@ describe("development Electron compilation", () => {
       expect(status.status).toBe("failed");
       expect(status.error).toContain("build.log");
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("start excludes its own profile and continues when pruning fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-dev-prune-error-"));
+    const roots = {
+      developmentRoot: path.join(root, "dev"),
+      productionDataDir: path.join(root, "production"),
+      homeDir: root,
+    };
+    const args = parseDevArguments(["--profile", "starting"]);
+    const exclusions: string[][] = [];
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        startDevelopment(args, "development", {
+          roots,
+          prune: async (options) => {
+            exclusions.push([...(options?.exclude ?? [])]);
+            throw new Error("prune unavailable");
+          },
+          typecheck: () => ({ status: 2, stderr: "intentional compile stop" }),
+        }),
+      ).rejects.toThrow(/Electron compilation failed/);
+      expect(exclusions).toEqual([["starting"]]);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("prune unavailable"));
+    } finally {
+      warning.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

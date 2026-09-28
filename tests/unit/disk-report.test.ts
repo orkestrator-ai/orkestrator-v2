@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +23,46 @@ afterEach(async () => {
 });
 
 describe("disk report", () => {
+  test("reports an isolated checkout and only fixes named legacy Turbo artifacts", async () => {
+    const checkout = path.join(root, "checkout");
+    const turbo = path.join(checkout, ".turbo");
+    await mkdir(path.join(turbo, "cache"), { recursive: true });
+    const legacy = path.join(turbo, "0123456789abcdef.tar.zst");
+    const active = path.join(turbo, "cache", "active.tar.zst");
+    await writeFile(legacy, "obsolete\n");
+    await writeFile(active, "live\n");
+    const initialized = spawnSync("git", ["init", "-q", "-b", "main", checkout], {
+      encoding: "utf8",
+    });
+    expect(initialized.status).toBe(0);
+    const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
+    const invoke = (...args: string[]) =>
+      spawnSync(process.execPath, [script, ...args], {
+        cwd: checkout,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: root,
+          ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),
+        },
+      });
+
+    const report = invoke("--json");
+    expect(report.status).toBe(0);
+    const rows = JSON.parse(report.stdout) as Array<{ location: string; orphaned: string }>;
+    expect(rows.find((row) => row.location === `${turbo} legacy artifacts`)?.orphaned).toBe(
+      "1 files",
+    );
+    expect(rows.some((row) => row.location === `${checkout} environment branches`)).toBe(true);
+    expect(existsSync(legacy)).toBe(true);
+
+    const fixed = invoke("--fix", "legacy-turbo");
+    expect(fixed.status).toBe(0);
+    expect(fixed.stdout).toContain("Removed 1 legacy Turbo artifacts");
+    expect(existsSync(legacy)).toBe(false);
+    expect(existsSync(active)).toBe(true);
+  });
+
   test("names transcript directories the way Claude Code does", () => {
     expect(claudeProjectDirectoryName("/home/user/.config/orkestrator-v2-dev/profiles/qa")).toBe(
       "-home-user--config-orkestrator-v2-dev-profiles-qa",

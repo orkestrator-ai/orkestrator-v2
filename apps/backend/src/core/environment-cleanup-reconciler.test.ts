@@ -12,6 +12,7 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import {
   environmentCleanupLedger,
+  environmentCleanupSweepState,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
 import {
@@ -25,6 +26,7 @@ import {
   sweepAbandonedTempFiles,
   sweepOrphanedEnvironmentBranches,
   sweepOrphanedEnvironmentState,
+  sweepPreLedgerDiskState,
   sweepStrayWorkspaceDirectories,
 } from "./environment-cleanup-reconciler.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -393,7 +395,10 @@ async function commit(projectPath: string, file: string): Promise<string> {
 }
 
 /** A registered project with `main` published as `origin/main` and `origin/HEAD`. */
-async function addProject(storage: StorageService): Promise<{ projectPath: string; base: string }> {
+async function addProject(
+  storage: StorageService,
+  id = "p1",
+): Promise<{ projectPath: string; base: string }> {
   const projectPath = await tempDir("ork-reconcile-project-");
   await runCommand("git", ["init", "-q", "-b", "main", projectPath]);
   await git(projectPath, "config", "user.name", "Orkestrator Test");
@@ -402,9 +407,9 @@ async function addProject(storage: StorageService): Promise<{ projectPath: strin
   await git(projectPath, "update-ref", "refs/remotes/origin/main", base);
   await git(projectPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
   await storage.addProject({
-    id: "p1",
+    id,
     name: "project",
-    gitUrl: "",
+    gitUrl: projectPath,
     localPath: projectPath,
     addedAt: new Date(0).toISOString(),
     order: 0,
@@ -541,6 +546,93 @@ describe("stray workspace directory sweep", () => {
 });
 
 describe("orphaned environment branch sweep", () => {
+  test("a failed stray sweep does not stop branch or temp sweeps", async () => {
+    const { context, storage, dataDir, worktreeDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const branch = orphanBranch("merged");
+    await git(projectPath, "branch", branch, base);
+    const pid = await deadPid();
+    const abandoned = path.join(dataDir, `agent-platforms.json.${pid}.tmp`);
+    await fs.writeFile(abandoned, "{}\n");
+    await age(abandoned, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await fs.mkdir(path.join(worktreeDir, "stray"));
+    const original = storage.loadProjects.bind(storage);
+    let calls = 0;
+    storage.loadProjects = async () => {
+      if (++calls === 1) throw new Error("listing failed");
+      return original();
+    };
+
+    await sweepPreLedgerDiskState(context);
+
+    expect(await branchExists(projectPath, branch)).toBe(false);
+    expect(await exists(abandoned)).toBe(false);
+    expect(await exists(path.join(worktreeDir, "stray"))).toBe(true);
+  });
+
+  test("resumes past kept branches after a capped pass", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    for (const slug of ["aaa", "aab"]) {
+      await branchWithCommits(projectPath, orphanBranch(slug), base, [`${slug}.txt`]);
+    }
+    const merged = orphanBranch("zzz");
+    await git(projectPath, "branch", merged, base);
+    const start = Date.now();
+    const options = { maxOrphanedBranchesPerPass: 2 };
+
+    expect(
+      await sweepOrphanedEnvironmentBranches(context, { ...options, now: () => new Date(start) }),
+    ).toEqual({ deleted: 0, kept: 2 });
+    expect(await branchExists(projectPath, merged)).toBe(true);
+    expect(Object.values(await environmentCleanupSweepState(dataDir).branchCursors())).toHaveLength(
+      1,
+    );
+    expect(
+      await sweepOrphanedEnvironmentBranches(context, {
+        ...options,
+        now: () => new Date(start + ORPHANED_BRANCH_SWEEP_INTERVAL_MS + 1),
+      }),
+    ).toEqual({ deleted: 1, kept: 0 });
+    expect(await branchExists(projectPath, merged)).toBe(false);
+  });
+
+  test("a cancelled pass is not recorded and is retried", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const first = orphanBranch("aaa");
+    const second = orphanBranch("zzz");
+    await branchWithCommits(projectPath, first, base, ["work.txt"]);
+    await git(projectPath, "branch", second, base);
+    let checks = 0;
+    expect(
+      await sweepOrphanedEnvironmentBranches(context, { isCancelled: () => ++checks > 2 }),
+    ).toEqual({ deleted: 0, kept: 1 });
+    expect(await environmentCleanupSweepState(dataDir).branchSweeps()).toEqual({});
+    expect(await sweepOrphanedEnvironmentBranches(context)).toEqual({ deleted: 1, kept: 1 });
+    expect(await branchExists(projectPath, second)).toBe(false);
+  });
+
+  test("a failed project does not stop another project or record the failure", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const first = await addProject(storage, "p1");
+    const second = await addProject(storage, "p2");
+    const branch = orphanBranch("merged");
+    await git(second.projectPath, "branch", branch, second.base);
+    await expect(
+      sweepOrphanedEnvironmentBranches(context, {
+        run: async (command, args, options) => {
+          if (command === "git" && args[1] === first.projectPath && args[2] === "worktree")
+            throw new Error("listing failed");
+          return runCommand(command, args, options);
+        },
+      }),
+    ).rejects.toThrow("listing failed");
+    expect(await branchExists(second.projectPath, branch)).toBe(false);
+    const swept = await environmentCleanupSweepState(dataDir).branchSweeps();
+    expect(swept.p1).toBeUndefined();
+    expect(swept.p2).toBeDefined();
+  });
   test("recognises every branch name the environment scheme produces", () => {
     const id = "4d637502-8fc1-4165-8409-c61c97c3aa9f";
     expect(environmentBranchNamespace(id)).toBe("4d6375028fc1");

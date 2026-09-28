@@ -217,6 +217,40 @@ describe("pruneProfiles", () => {
     expect(branches).toContain("env-unmerged");
     expect(branches).not.toContain("env-merged");
   });
+
+  test("keeps the entire orphan profile when a linked worktree has tracked or untracked changes", async () => {
+    const repository = path.join(root, "repository");
+    await mkdir(repository);
+    git(repository, "init", "-q", "-b", "main");
+    await writeFile(path.join(repository, "README.md"), "hello\n");
+    git(repository, "add", ".");
+    git(repository, "commit", "-q", "-m", "initial");
+    const orphan = await createProfile("orphan", gone());
+    const tracked = path.join(orphan.worktreeDir, "tracked");
+    const untracked = path.join(orphan.worktreeDir, "untracked");
+    git(repository, "worktree", "add", "-q", "-b", "env-tracked", tracked, "main");
+    git(repository, "worktree", "add", "-q", "-b", "env-untracked", untracked, "main");
+    await writeFile(path.join(tracked, "README.md"), "edited\n");
+    await writeFile(path.join(untracked, "notes.txt"), "only copy\n");
+
+    expect(actions(await pruneProfiles({ roots, run, dryRun: true }))).toEqual({
+      orphan: "failed",
+    });
+
+    const outcomes = await pruneProfiles({ roots, run });
+
+    expect(outcomes[0]?.action).toBe("failed");
+    expect(outcomes[0]?.reason).toContain("uncommitted changes");
+    expect(existsSync(orphan.profileRoot)).toBe(true);
+    expect(existsSync(path.join(tracked, "README.md"))).toBe(true);
+    expect(existsSync(path.join(untracked, "notes.txt"))).toBe(true);
+    expect(dockerCalls).toEqual([]);
+    expect(git(repository, "worktree", "list", "--porcelain")).toContain(orphan.worktreeDir);
+
+    expect(actions(await pruneProfiles({ roots, run, force: true }))).toEqual({
+      orphan: "removed",
+    });
+  });
 });
 
 describe("Docker build cache warning", () => {
@@ -242,10 +276,12 @@ describe("dev:prune arguments", () => {
   test("parses its own options and rejects everything else", () => {
     expect(parsePruneArguments(["--dry-run", "--older-than", "14", "--json"])).toEqual({
       dryRun: true,
+      force: false,
       json: true,
       keepToolchains: false,
       olderThanDays: 14,
     });
+    expect(parsePruneArguments(["--force"]).force).toBe(true);
     expect(() => parsePruneArguments(["--older-than", "soon"])).toThrow(/whole number/);
     expect(() => parsePruneArguments(["--older-than"])).toThrow(/whole number/);
     expect(() => parsePruneArguments(["--profile", "x"])).toThrow(/Unknown prune option/);

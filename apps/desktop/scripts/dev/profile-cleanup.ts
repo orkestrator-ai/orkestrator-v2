@@ -72,6 +72,18 @@ function refExists(run: CommandRunner, gitDir: string, ref: string): boolean {
   return run("git", ["--git-dir", gitDir, "rev-parse", "--verify", "--quiet", ref]).status === 0;
 }
 
+function assertCleanWorktrees(worktrees: ProfileWorktree[], run: CommandRunner): void {
+  for (const { worktree } of worktrees) {
+    const status = run("git", ["-C", worktree, "status", "--porcelain", "--untracked-files=all"]);
+    if (status.status !== 0) {
+      throw new Error(`Could not inspect linked worktree ${worktree}; profile was kept`);
+    }
+    if (status.stdout.trim()) {
+      throw new Error(`Linked worktree ${worktree} has uncommitted changes; profile was kept`);
+    }
+  }
+}
+
 /**
  * The same no-data-loss rule environment deletion applies: a branch is only
  * disposable when its tip is already contained in the default branch. Anything
@@ -115,6 +127,8 @@ export type ProfileRemoval = {
 
 export type RemoveProfileOptions = {
   keepToolchains: boolean;
+  /** Explicit reset may discard uncommitted work in linked worktrees. */
+  force?: boolean;
   roots?: RuntimeProfileRoots;
   run?: CommandRunner;
 };
@@ -131,6 +145,8 @@ export async function removeProfile(
 ): Promise<ProfileRemoval> {
   const run = options.run ?? runCommand;
   await readAndValidateSentinel(profile, options.roots);
+  const worktrees = await externalProfileWorktrees(profile);
+  if (!options.force) assertCleanWorktrees(worktrees, run);
 
   let containersRemoved = 0;
   const listed = run("docker", [
@@ -152,10 +168,9 @@ export async function removeProfile(
     }
   }
 
-  const worktrees = await externalProfileWorktrees(profile);
   for (const { worktree, commonDir } of worktrees) {
-    // A failure here is recovered by the prune below once the directory is gone.
-    run("git", ["--git-dir", commonDir, "worktree", "remove", "--force", worktree]);
+    const removed = run("git", ["--git-dir", commonDir, "worktree", "remove", "--force", worktree]);
+    if (removed.status !== 0) throw new Error(`Could not release linked worktree ${worktree}`);
   }
 
   await removeProfileState(profile, options.keepToolchains);
@@ -192,6 +207,8 @@ export type PruneProfilesOptions = {
   olderThanDays?: number;
   dryRun?: boolean;
   keepToolchains?: boolean;
+  /** Required to discard uncommitted changes in linked worktrees. */
+  force?: boolean;
   /** Profile IDs never to touch, such as the one about to start. */
   exclude?: readonly string[];
   now?: () => number;
@@ -276,12 +293,23 @@ export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise
       continue;
     }
     if (options.dryRun) {
-      outcomes.push({ id, action: "would-remove", reason });
+      try {
+        if (!options.force) assertCleanWorktrees(await externalProfileWorktrees(profile), run);
+        outcomes.push({ id, action: "would-remove", reason });
+      } catch (error) {
+        keptImages.add(profile.dockerImage);
+        outcomes.push({
+          id,
+          action: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
       continue;
     }
     try {
       const removal = await removeProfile(profile, {
         keepToolchains: options.keepToolchains ?? false,
+        force: options.force,
         roots,
         run,
       });

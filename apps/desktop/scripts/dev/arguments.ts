@@ -122,16 +122,23 @@ export function parseAgentTestArguments(args: string[]): DevArguments {
 
 export type PruneArguments = {
   dryRun: boolean;
+  force: boolean;
   json: boolean;
   keepToolchains: boolean;
   olderThanDays?: number;
 };
 
 export function parsePruneArguments(args: string[]): PruneArguments {
-  const result: PruneArguments = { dryRun: false, json: false, keepToolchains: false };
+  const result: PruneArguments = {
+    dryRun: false,
+    force: false,
+    json: false,
+    keepToolchains: false,
+  };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
     if (argument === "--dry-run") result.dryRun = true;
+    else if (argument === "--force") result.force = true;
     else if (argument === "--json") result.json = true;
     else if (argument === "--keep-toolchains") result.keepToolchains = true;
     else if (argument === "--older-than") {

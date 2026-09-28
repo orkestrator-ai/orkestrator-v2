@@ -217,6 +217,8 @@ export type PreLedgerSweepOptions = {
   run?: CleanupCommandRunner;
   /** Checked between branches so shutdown is not held by a long pass. */
   isCancelled?: () => boolean;
+  /** Test-only lower budget for exercising continuation. */
+  maxOrphanedBranchesPerPass?: number;
 };
 
 async function canonicalForms(target: string): Promise<string[]> {
@@ -432,7 +434,9 @@ async function sweepProjectBranches(
   run: CleanupCommandRunner,
   isCancelled: () => boolean,
   now: Date,
-): Promise<(BranchSweepCounts & { complete: boolean }) | null> {
+  cursor: string | null,
+  limit: number,
+): Promise<(BranchSweepCounts & { complete: boolean; cursor: string | null }) | null> {
   if (!(await pathExists(path.join(projectPath, ".git")))) return null;
   const listing = await projectWorktreeListing(run, projectPath);
   const refs = await run(
@@ -454,10 +458,12 @@ async function sweepProjectBranches(
   // Checked-out branches, including the checkout's own, and the default branch
   // are never candidates; `cleanupEnvironmentBranch` re-checks the former.
   const refused = new Set([...listing.branches, defaultBranch, originHead]);
-  const counts = { deleted: 0, kept: 0, complete: true };
+  const counts = { deleted: 0, kept: 0, complete: true, cursor: null as string | null };
   let examined = 0;
+  let lastExamined = cursor;
   for (const line of refs.stdout.split("\n")) {
     if (!line.startsWith("refs/heads/")) continue;
+    if (cursor && line <= cursor) continue;
     const branch = line.slice("refs/heads/".length);
     const namespace = parseEnvironmentBranchNamespace(branch);
     if (!namespace || owners.namespaces.has(namespace) || owners.branches.has(branch)) continue;
@@ -466,7 +472,12 @@ async function sweepProjectBranches(
       counts.complete = false;
       break;
     }
-    if (++examined > MAX_ORPHANED_BRANCHES_PER_PASS) break;
+    if (examined >= limit) {
+      counts.cursor = lastExamined;
+      break;
+    }
+    examined += 1;
+    lastExamined = line;
     try {
       // A pre-ledger branch has no recorded PR state, so only the merge-target
       // and no-new-commits tests of the deletion policy can pass.
@@ -518,6 +529,7 @@ export async function sweepOrphanedEnvironmentBranches(
   const projects = await localProjects(context, allProjects);
   if (projects.length === 0) return totals;
   const lastRuns = await sweepState.branchSweeps();
+  const cursors = await sweepState.branchCursors();
   const knownProjectIds = allProjects.map((project) => project.id);
   let owners: BranchOwners | null = null;
   let firstError: unknown = null;
@@ -537,13 +549,20 @@ export async function sweepOrphanedEnvironmentBranches(
         run,
         isCancelled,
         now(),
+        cursors[project.id] ?? null,
+        options.maxOrphanedBranchesPerPass ?? MAX_ORPHANED_BRANCHES_PER_PASS,
       );
       if (counts) {
         totals.deleted += counts.deleted;
         totals.kept += counts.kept;
         if (!counts.complete) break;
       }
-      await sweepState.recordBranchSweep(project.id, now(), knownProjectIds);
+      await sweepState.recordBranchSweep(
+        project.id,
+        now(),
+        knownProjectIds,
+        counts?.cursor ?? null,
+      );
     } catch (error) {
       firstError ??= error;
     }

@@ -259,6 +259,8 @@ interface EnvironmentCleanupSweepFile {
   version: 1;
   /** Project id -> ISO time the orphaned-branch sweep last completed for it. */
   branchSweeps: Record<string, string>;
+  /** Last candidate examined in a capped pass, per project. */
+  branchCursors: Record<string, string>;
 }
 
 export const ENVIRONMENT_CLEANUP_SWEEPS_FILE = "environment-cleanup-sweeps.json";
@@ -280,17 +282,32 @@ export class EnvironmentCleanupSweepState {
     return (await this.load()).branchSweeps;
   }
 
+  async branchCursors(): Promise<Record<string, string>> {
+    await this.mutation.catch(() => undefined);
+    return (await this.load()).branchCursors;
+  }
+
   /**
    * Records a completed branch sweep. Projects outside `knownProjectIds` are
    * dropped, which bounds the file by the number of projects.
    */
-  async recordBranchSweep(projectId: string, at: Date, knownProjectIds: string[]): Promise<void> {
+  async recordBranchSweep(
+    projectId: string,
+    at: Date,
+    knownProjectIds: string[],
+    cursor: string | null = null,
+  ): Promise<void> {
     const known = new Set([...knownProjectIds, projectId]);
     const run = this.mutation.then(async () => {
       const state = await this.load();
       state.branchSweeps[projectId] = at.toISOString();
+      if (cursor) state.branchCursors[projectId] = cursor;
+      else delete state.branchCursors[projectId];
       for (const id of Object.keys(state.branchSweeps)) {
         if (!known.has(id)) delete state.branchSweeps[id];
+      }
+      for (const id of Object.keys(state.branchCursors)) {
+        if (!known.has(id)) delete state.branchCursors[id];
       }
       await writeJsonAtomically(this.filePath, state);
     });
@@ -299,8 +316,8 @@ export class EnvironmentCleanupSweepState {
   }
 
   private async load(): Promise<EnvironmentCleanupSweepFile> {
-    const empty: EnvironmentCleanupSweepFile = { version: 1, branchSweeps: {} };
-    let parsed: { version?: unknown; branchSweeps?: unknown };
+    const empty: EnvironmentCleanupSweepFile = { version: 1, branchSweeps: {}, branchCursors: {} };
+    let parsed: { version?: unknown; branchSweeps?: unknown; branchCursors?: unknown };
     try {
       parsed = JSON.parse(await readFile(this.filePath, "utf8"));
     } catch {
@@ -311,6 +328,13 @@ export class EnvironmentCleanupSweepState {
     }
     for (const [id, at] of Object.entries(parsed.branchSweeps as Record<string, unknown>)) {
       if (typeof at === "string" && Number.isFinite(Date.parse(at))) empty.branchSweeps[id] = at;
+    }
+    if (parsed.branchCursors && typeof parsed.branchCursors === "object") {
+      for (const [id, cursor] of Object.entries(parsed.branchCursors as Record<string, unknown>)) {
+        if (typeof cursor === "string" && cursor.startsWith("refs/heads/")) {
+          empty.branchCursors[id] = cursor;
+        }
+      }
     }
     return empty;
   }

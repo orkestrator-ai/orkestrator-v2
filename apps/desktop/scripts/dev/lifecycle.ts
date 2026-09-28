@@ -420,9 +420,10 @@ export async function compileElectronForDevelopment(
 async function pruneOrphanedProfiles(
   startingProfileId: string,
   roots: RuntimeProfileRoots | undefined,
+  prune: typeof pruneProfiles = pruneProfiles,
 ): Promise<void> {
   try {
-    const outcomes = await pruneProfiles({ roots, exclude: [startingProfileId] });
+    const outcomes = await prune({ roots, exclude: [startingProfileId] });
     for (const outcome of outcomes) {
       if (outcome.action === "removed") console.log(formatPruneOutcome(outcome));
       else if (outcome.action === "failed") console.warn(formatPruneOutcome(outcome));
@@ -437,7 +438,10 @@ async function pruneOrphanedProfiles(
 export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
-  dependencies: ElectronCompilationDependencies & { roots?: RuntimeProfileRoots } = {},
+  dependencies: ElectronCompilationDependencies & {
+    roots?: RuntimeProfileRoots;
+    prune?: typeof pruneProfiles;
+  } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
   const existingStatusPath = statusManifestPath(existingProfile);
@@ -454,7 +458,7 @@ export async function startDevelopment(
       `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run mise run dev:stop before restarting.`,
     );
   }
-  await pruneOrphanedProfiles(existingProfile.id, dependencies.roots);
+  await pruneOrphanedProfiles(existingProfile.id, dependencies.roots, dependencies.prune);
 
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
@@ -783,7 +787,10 @@ export async function resetProfile(args: DevArguments): Promise<number> {
     const stopped = await stopProfile(args);
     if (stopped !== 0) return stopped;
   }
-  const removal = await removeProfile(profile, { keepToolchains: args.keepToolchains });
+  const removal = await removeProfile(profile, {
+    keepToolchains: args.keepToolchains,
+    force: true,
+  });
   const kept = removal.branchesKept.length
     ? ` Kept unmerged branch(es): ${removal.branchesKept.join(", ")}.`
     : "";

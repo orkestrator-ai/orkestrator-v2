@@ -65,8 +65,12 @@ These belong to other tools. Orkestrator reports them and never deletes them.
 mise run dev:prune --dry-run            # list profiles that would be removed
 mise run dev:prune                      # remove stopped profiles whose checkout is gone
 mise run dev:prune --older-than 14      # ... and stopped profiles idle for 14 days
+mise run dev:prune --force              # explicitly discard changes in linked worktrees
 mise run dev:reset --profile <name>     # remove one stopped profile (--stop-first stops it)
 ```
 
 `dev:prune` never touches a running profile, a directory without a valid
 profile sentinel, or a `profile.json` that describes another directory.
+Automatic pruning and ordinary `dev:prune` keep a profile if a linked worktree
+has modified or untracked files. Inspect the reported path before using
+`dev:prune --force` or `dev:reset`, which can discard those files.

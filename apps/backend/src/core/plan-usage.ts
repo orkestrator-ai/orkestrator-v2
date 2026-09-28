@@ -549,6 +549,7 @@ export type PlanUsageReader = ((
    * so it both updates the card and defers the next HTTP read by a full TTL.
    */
   recordSessionWindows: (platform: AgentPlatform, windows: NativeAgentAccountUsageWindow[]) => void;
+  invalidate: (platform: PlanUsagePlatform) => void;
 };
 
 type CursorTokenCache = { entry?: { apiKey: string; token: string; expiresAt: number } };
@@ -897,6 +898,11 @@ export function createPlanUsageReader(
   }) as PlanUsageReader;
 
   reader.recordSessionWindows = cache.recordSessionWindows;
+  reader.invalidate = (platform) => {
+    readGenerations.set(platform, (readGenerations.get(platform) ?? 0) + 1);
+    flights.delete(platform);
+    cache.invalidate(platform);
+  };
 
   return reader;
 }

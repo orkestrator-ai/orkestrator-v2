@@ -5,11 +5,15 @@ import path from "node:path";
 
 import {
   activeAgentAccountShellEnvironment,
+  applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
   localBridgeIsOnActiveAccount,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
-import { localAgentAccountIds, localAgentAccountTokenExpiry } from "./commands-runtime-state.js";
+import {
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
+} from "./agent-account-bridge-state.js";
 import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
 import { StorageService } from "./storage.js";
 
@@ -99,7 +103,68 @@ describe("activeAgentAccountShellEnvironment", () => {
   });
 });
 
+test("an added account clears inherited API keys before launch", async () => {
+  await activate("claude");
+  const env: NodeJS.ProcessEnv = {
+    ANTHROPIC_API_KEY: "host",
+    ANTHROPIC_AUTH_TOKEN: "host",
+    CLAUDE_CODE_OAUTH_TOKEN: "host",
+    OPENAI_API_KEY: "host",
+    CODEX_API_KEY: "host",
+  };
+  await applyActiveAgentAccountEnvironment(context, "claude", env);
+  for (const key of [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+  ]) {
+    expect(env[key]).toBeUndefined();
+  }
+  expect(env.CLAUDE_CONFIG_DIR).toBe(accountHome("claude"));
+});
+
 describe("applyCoordinatorClaudeAccount", () => {
+  test("hands over only a Keychain-backed access token with enough lifetime", async () => {
+    await activate("claude");
+    const coordinatorHome = path.join(root, "coordinator", "keychain-only");
+    const expiresAt = Date.now() + 60 * 60_000;
+    const credentials = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "access-only",
+        refreshToken: "must-stay-private",
+        expiresAt,
+      },
+    });
+    const env: NodeJS.ProcessEnv = {};
+    const account = await applyCoordinatorClaudeAccount(
+      context,
+      coordinatorHome,
+      env,
+      prepareCoordinatorClaudeHome,
+      async () => credentials,
+    );
+    expect(account).toEqual({ accountId: ACCOUNT_IDS.claude, tokenExpiresAt: expiresAt });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("access-only");
+    expect(JSON.stringify(env)).not.toContain("must-stay-private");
+    await expect(fs.stat(path.join(coordinatorHome, ".credentials.json"))).rejects.toThrow();
+
+    const soon = await applyCoordinatorClaudeAccount(
+      context,
+      coordinatorHome,
+      {},
+      prepareCoordinatorClaudeHome,
+      async () =>
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "soon",
+            expiresAt: Date.now() + 2 * 60_000,
+          },
+        }),
+    );
+    expect(soon.tokenExpiresAt).toBeUndefined();
+  });
   test("copies the active account's credential file and replaces an earlier one", async () => {
     await activate("claude");
     await fs.mkdir(accountHome("claude"), { recursive: true });
@@ -161,14 +226,31 @@ describe("localBridgeIsOnActiveAccount", () => {
     expect(await localBridgeIsOnActiveAccount("pi:env-1", "pi", "env-1", context)).toBe(true);
   });
 
-  test("replaces an idle bridge whose handed-over token is about to lapse", async () => {
+  test("keeps a near-expiry token until a fresher one is available or it expires", async () => {
     const key = "claude:coordinator-1";
     localAgentAccountTokenExpiry.set(key, Date.now() + 60 * 60_000);
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
 
     localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
+    localAgentAccountTokenExpiry.set(key, Date.now() - 1);
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
     liveWork = true;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
+  });
+
+  test("replaces an idle coordinator once its account has a fresher token", async () => {
+    await activate("claude");
+    const key = "claude:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
+    localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+    await fs.mkdir(accountHome("claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome("claude"), ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "fresh-token", expiresAt: Date.now() + 60 * 60_000 },
+      }),
+    );
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
   });
 });

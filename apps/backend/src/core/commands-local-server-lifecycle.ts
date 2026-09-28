@@ -12,8 +12,6 @@ import {
   LOCAL_SERVER_SHUTDOWN_GRACE_MS,
   configuredOpenCodeAgentTools,
   environmentBaselineTasks,
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
   localClaudeBridgeTokens,
   localCodexBridgeTokens,
   localCursorBridgeTokens,
@@ -28,6 +26,10 @@ import {
   openCodeAgentToolsConfigurations,
   terminateProcessTreeImpl,
 } from "./commands-runtime-state.js";
+import {
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
+} from "./agent-account-bridge-state.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import {

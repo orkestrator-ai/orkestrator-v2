@@ -79,7 +79,7 @@ export async function ensureBrowserShim(directory: string): Promise<string> {
 }
 
 /** Credentials inherited from the backend would pre-empt the login being created. */
-const INHERITED_CREDENTIAL_ENV = [
+export const INHERITED_CREDENTIAL_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",

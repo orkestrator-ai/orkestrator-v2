@@ -176,6 +176,26 @@ describe("staging with an active account", () => {
     expect(new Set(targets).size).toBe(targets.length);
     expect(targets).toContain("/codex-home");
   });
+
+  test("credential opt-out never copies an added Claude login into a revision", async () => {
+    await addAccounts({ claude: CLAUDE_ID });
+    const result = await stagePortableInputs(
+      path.join(root, "data"),
+      environment.id,
+      new Set(["claude"]),
+      {
+        ...defaultInputSourceRoots("agent-test", AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+        ...(await activeAgentAccountInputRoots(context)),
+        includeClaudeCredentials: false,
+      },
+    );
+    await expect(
+      fs.stat(staged(result.revision, "claude-config/.credentials.json")),
+    ).rejects.toThrow();
+    expect(await fs.readFile(staged(result.revision, "claude-config/CLAUDE.md"), "utf8")).toBe(
+      "host memory",
+    );
+  });
 });
 
 describe("replaceStagedInputFile", () => {
@@ -257,6 +277,44 @@ describe("refreshStagedAgentAccountLogins", () => {
       await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8"),
     ).toContain("claude-host");
   });
+
+  test("revokes a previously staged login when Claude container credentials are disabled", async () => {
+    await addAccounts({ claude: CLAUDE_ID });
+    const revision = await stage();
+    const original = context.storage.loadConfig.bind(context.storage);
+    context.storage.loadConfig = async () =>
+      ({
+        ...(await original()),
+        global: {
+          ...(await original()).global,
+          enabledAgentPlatforms: ["claude"],
+          useHostClaudeCredentials: false,
+        },
+      }) as never;
+    await refreshStagedAgentAccountLogins(
+      context,
+      environment,
+      "container-1",
+      fakeRunners(revision).runners,
+    );
+    await expect(fs.stat(staged(revision, "claude-config/.credentials.json"))).rejects.toThrow();
+  });
+
+  test("removes the staged Claude login when the selected account signs out", async () => {
+    await addAccounts({ claude: CLAUDE_ID });
+    const revision = await stage();
+    expect(
+      await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8"),
+    ).toContain("claude-2");
+    await fs.rm(path.join(accountHome("claude", CLAUDE_ID), ".credentials.json"));
+    await refreshStagedAgentAccountLogins(
+      context,
+      environment,
+      "container-1",
+      fakeRunners(revision).runners,
+    );
+    await expect(fs.stat(staged(revision, "claude-config/.credentials.json"))).rejects.toThrow();
+  });
 });
 
 describe("syncContainerAgentAccountsOnStart", () => {
@@ -291,6 +349,26 @@ describe("syncContainerAgentAccountsOnStart", () => {
       fake.runners,
     );
     expect(fake.calls.some((call) => call.kind === "pipe")).toBe(false);
+    expect(
+      fake.calls.some((call) => call.command === "rm -f /home/node/.claude/.credentials.json"),
+    ).toBe(true);
+  });
+
+  test("removes the previous credential before marking a signed-out account current", async () => {
+    await addAccounts({ claude: CLAUDE_ID });
+    await fs.rm(path.join(accountHome("claude", CLAUDE_ID), ".credentials.json"));
+    const fake = fakeRunners(null);
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      { enabledAgentPlatforms: ["claude"] } as never,
+      fake.runners,
+    );
+    expect(
+      fake.calls.some((call) => call.command === "rm -f /home/node/.claude/.credentials.json"),
+    ).toBe(true);
+    expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe(CLAUDE_ID);
   });
 });
 
@@ -340,6 +418,19 @@ describe("reconcileContainerAgentAccount", () => {
     await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
 
     expect(fake.calls.some((call) => call.kind === "pipe")).toBe(false);
+    expect(state.stopped).toBe(0);
+  });
+
+  test("does not replace login when health is negative but work is observed", async () => {
+    const revision = await stage();
+    await addAccounts({ claude: CLAUDE_ID });
+    liveWork = true;
+    const fake = fakeRunners(revision);
+    const { state, control } = bridge(false);
+    await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
+    expect(fake.calls).toEqual([
+      { kind: "exec", command: "cat /tmp/orkestrator-claude-account 2>/dev/null || true" },
+    ]);
     expect(state.stopped).toBe(0);
   });
 

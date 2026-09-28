@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { MAX_TEXT_FILE_BYTES } from "../../../apps/backend/src/core/path-safety";
+import { terminalAccountHomes } from "../../../apps/backend/src/core/terminal-account-usage";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -2380,6 +2381,43 @@ exec sleep 30
       running: false,
       bootstrapped: false,
     });
+  });
+
+  test("launches a local terminal with the selected account home and no inherited API keys", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-account-");
+    const dataDir = await createTempDir("ork-electron-terminal-account-data-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment, { dataDir });
+    const accountId = "11111111-2222-4333-8444-555555555555";
+    const accountHome = path.join(dataDir, "agent-accounts", "codex", accountId);
+    context.storage.loadAgentAccounts = mock(async () => ({
+      version: 1,
+      accounts: [
+        { id: accountId, platform: "codex" as const, label: "Work", createdAt: "2026-09-28" },
+      ],
+      active: { codex: accountId },
+    }));
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "inherited-host-key";
+    try {
+      const commands = createCommandRegistry();
+      const sessionId = terminalSessionResult(
+        await commands.get("create_local_terminal_session")?.(
+          { environmentId: environment.id, cols: 80, rows: 24 },
+          context,
+        ),
+      ).sessionId;
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      const launchEnv = ptySpawn.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+      expect(launchEnv?.CODEX_HOME).toBe(accountHome);
+      expect(launchEnv?.OPENAI_API_KEY).toBeUndefined();
+      expect(terminalAccountHomes.get(`${sessionId}:${accountHome}`)).toBe(accountHome);
+      await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+      expect(terminalAccountHomes.has(`${sessionId}:${accountHome}`)).toBe(false);
+    } finally {
+      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalApiKey;
+    }
   });
 
   test("still resizes the PTY when terminal-history memory is saturated", async () => {

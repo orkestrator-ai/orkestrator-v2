@@ -36,6 +36,7 @@ import {
   tmuxSessionName,
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
+import { terminalAccountHomes } from "./terminal-account-usage.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
   TranscriptTail,
@@ -69,6 +70,12 @@ export function setLocalClaudeConfigDirectoryProvider(
   provider: LocalClaudeConfigDirectoryProvider,
 ): void {
   localClaudeConfigDirectory = provider;
+}
+
+export function localClaudeAccountPrefix(accountDirectory: string | undefined): string {
+  return accountDirectory
+    ? `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY; export CLAUDE_CONFIG_DIR=${shellArg(accountDirectory)}; `
+    : "";
 }
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -351,9 +358,7 @@ export class TmuxSession {
         // with, so the active Claude account is exported per session instead.
         const accountDirectory =
           this.backend.kind === "local" ? await localClaudeConfigDirectory(context) : undefined;
-        const accountPrefix = accountDirectory
-          ? `export CLAUDE_CONFIG_DIR=${shellArg(accountDirectory)}; `
-          : "";
+        const accountPrefix = localClaudeAccountPrefix(accountDirectory);
         const wrapped = `${runtimePrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
@@ -370,6 +375,9 @@ export class TmuxSession {
           wrapped,
         ]);
         if (out.status !== 0) throw new Error(`tmux new-session failed: ${out.stderr}`);
+        if (accountDirectory) {
+          terminalAccountHomes.set(`tmux:${this.environmentId}:${this.tabId}`, accountDirectory);
+        }
       } catch (error) {
         if (agentMcpConfigPath) {
           await this.backend.removeFile(agentMcpConfigPath).catch(() => undefined);
@@ -648,6 +656,7 @@ export class TmuxSession {
               if (await this.tmuxAlive().catch(() => false)) return;
               removed = tmuxManager.removeIfSame(this.environmentId, this.tabId, this);
               if (!removed) return;
+              terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
               this.setBusyState(false);
               await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
               if (tmuxManager.sessionsInEnvironment(this.environmentId) === 0) {
@@ -1232,6 +1241,7 @@ export class TmuxSession {
       result && (result.status === 0 || isMissingTmuxSessionError(result.stderr)),
     );
     if (!stopped) return false;
+    terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
     this.stopRequested = true;
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
     return true;

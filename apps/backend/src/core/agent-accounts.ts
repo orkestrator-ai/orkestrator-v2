@@ -43,8 +43,9 @@ import {
   type AgentAccountLoginHandle,
   type SpawnLike,
 } from "./agent-accounts-login.js";
-import { sharedPlanUsageCache } from "./plan-usage-cache.js";
-import { readAgentAccountPlanUsage, type PlanUsageReader } from "./plan-usage.js";
+import { setActivePlanUsageAccount } from "./plan-usage-cache.js";
+import { readAgentAccountPlanUsage, readPlanUsage, type PlanUsageReader } from "./plan-usage.js";
+import { terminalAccountHomes } from "./terminal-account-usage.js";
 
 /**
  * Added Claude and Codex logins: registry, switching, sign-in and per-account
@@ -54,6 +55,21 @@ import { readAgentAccountPlanUsage, type PlanUsageReader } from "./plan-usage.js
 const HOST_ACCOUNT_LABEL = "Host login";
 const USAGE_TTL_MS = 120_000;
 const USAGE_ERROR_TTL_MS = 10_000;
+let accountMutation = Promise.resolve();
+
+async function withAccountMutation<T>(run: () => Promise<T>): Promise<T> {
+  const previous = accountMutation;
+  let release: () => void = () => undefined;
+  accountMutation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
 
 function accountsRoot(context: CommandContext): string {
   return context.storage.agentAccountsDirectory();
@@ -159,21 +175,24 @@ export async function setActiveAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   assertKnownAccountId(accountId);
-  await context.storage.mutateAgentAccounts((store) => {
-    const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
-    if (current === accountId) return { store, result: undefined };
-    const active = { ...store.active };
-    if (accountId === DEFAULT_AGENT_ACCOUNT_ID) {
-      delete active[platform];
-    } else {
-      if (!store.accounts.some((a) => a.id === accountId && a.platform === platform)) {
-        throw new Error("Unknown agent account");
+  await withAccountMutation(() =>
+    context.storage.mutateAgentAccounts((store) => {
+      const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+      if (current === accountId) return { store, result: undefined };
+      const active = { ...store.active };
+      if (accountId === DEFAULT_AGENT_ACCOUNT_ID) {
+        delete active[platform];
+      } else {
+        if (!store.accounts.some((a) => a.id === accountId && a.platform === platform)) {
+          throw new Error("Unknown agent account");
+        }
+        active[platform] = accountId;
       }
-      active[platform] = accountId;
-    }
-    return { store: { ...store, active }, result: undefined };
-  });
-  sharedPlanUsageCache.invalidate(platform);
+      return { store: { ...store, active }, result: undefined };
+    }),
+  );
+  readPlanUsage.invalidate(platform);
+  setActivePlanUsageAccount(platform, accountId);
   return listAgentAccounts(context);
 }
 
@@ -229,17 +248,37 @@ export async function removeAgentAccount(
   if (isAgentAccountInUseByLocalBridge(platform, accountId)) {
     throw new Error("An agent is still running on this account. Try again once it is idle.");
   }
-  await context.storage.mutateAgentAccounts((store) => {
-    if (store.active[platform] === accountId) {
-      throw new Error("Switch to another account before removing this one.");
+  return withAccountMutation(async () => {
+    if (
+      Array.from(terminalAccountHomes.values()).some(
+        (home) => home === homeFor(context, platform, accountId),
+      )
+    ) {
+      throw new Error(
+        "A terminal is still running on this account. Close it before removing the account.",
+      );
     }
-    const accounts = store.accounts.filter((a) => !(a.id === accountId && a.platform === platform));
-    if (accounts.length === store.accounts.length) throw new Error("Unknown agent account");
-    return { store: { ...store, accounts }, result: undefined };
+    const store = await context.storage.loadAgentAccounts();
+    if (store.active[platform] === accountId)
+      throw new Error("Switch to another account before removing this one.");
+    if (
+      !store.accounts.some((account) => account.id === accountId && account.platform === platform)
+    )
+      throw new Error("Unknown agent account");
+    await deleteAccountDirectory(context, platform, accountId);
+    await context.storage.mutateAgentAccounts((store) => {
+      if (store.active[platform] === accountId) {
+        throw new Error("Switch to another account before removing this one.");
+      }
+      const accounts = store.accounts.filter(
+        (a) => !(a.id === accountId && a.platform === platform),
+      );
+      if (accounts.length === store.accounts.length) throw new Error("Unknown agent account");
+      return { store: { ...store, accounts }, result: undefined };
+    });
+    usageCache.delete(`${platform}:${accountId}`);
+    return listAgentAccounts(context);
   });
-  await deleteAccountDirectory(context, platform, accountId);
-  usageCache.delete(`${platform}:${accountId}`);
-  return listAgentAccounts(context);
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +334,8 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
     const state = await readLoginState(context, platform, homeFor(context, platform, accountId));
     if (!state.signedIn) throw new Error("The sign-in finished but no login was saved.");
+    if (!state.identityKey)
+      throw new Error("The sign-in finished without an account identity. Try signing in again.");
     const host = await readLoginState(context, platform, undefined);
     await context.storage.mutateAgentAccounts((store) => {
       const siblings = store.accounts.filter((a) => a.platform === platform);
@@ -324,7 +365,11 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
   } catch (error) {
     entry.state = "failed";
     entry.error = errorMessage(error);
-    await deleteAccountDirectory(context, platform, accountId);
+    try {
+      await deleteAccountDirectory(context, platform, accountId);
+    } catch {
+      entry.error = `${entry.error} Account cleanup failed; retry removing the account directory.`;
+    }
   }
 }
 
@@ -337,14 +382,21 @@ export async function startAgentAccountLogin(
     if (activeLogin.platform === platform) return loginProgress();
     throw new Error("Finish or cancel the other sign-in first.");
   }
-  const store = await context.storage.loadAgentAccounts();
-  if (
-    store.accounts.filter((a) => a.platform === platform).length >= MAX_AGENT_ACCOUNTS_PER_PLATFORM
-  ) {
-    throw new Error("No more accounts can be added for this platform.");
-  }
   const entry: ActiveLogin = { platform, accountId: randomUUID(), state: "pending" };
   activeLogin = entry;
+  try {
+    const store = await context.storage.loadAgentAccounts();
+    if (
+      store.accounts.filter((a) => a.platform === platform).length >=
+      MAX_AGENT_ACCOUNTS_PER_PLATFORM
+    ) {
+      throw new Error("No more accounts can be added for this platform.");
+    }
+  } catch (error) {
+    entry.state = "failed";
+    entry.error = errorMessage(error);
+    throw error;
+  }
   const home = homeFor(context, platform, entry.accountId);
   let handle: AgentAccountLoginHandle;
   try {
@@ -362,23 +414,41 @@ export async function startAgentAccountLogin(
   } catch (error) {
     entry.state = "failed";
     entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
-    await deleteAccountDirectory(context, platform, entry.accountId);
+    try {
+      await deleteAccountDirectory(context, platform, entry.accountId);
+    } catch {
+      entry.error = `${entry.error} Account cleanup failed.`;
+    }
     throw new Error(entry.error);
   }
   if (entry.cancelled) {
     handle.cancel();
-    await deleteAccountDirectory(context, platform, entry.accountId);
+    try {
+      await deleteAccountDirectory(context, platform, entry.accountId);
+    } catch {
+      entry.state = "failed";
+      entry.error = "The sign-in was cancelled; account cleanup failed.";
+    }
     throw new Error("The sign-in was cancelled");
   }
   entry.handle = handle;
-  void handle.completion.then(
-    () => finishLogin(context, entry),
-    async (error: unknown) => {
+  void handle.completion
+    .then(
+      () => finishLogin(context, entry),
+      async (error: unknown) => {
+        entry.state = "failed";
+        entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
+        try {
+          await deleteAccountDirectory(context, platform, entry.accountId);
+        } catch {
+          entry.error = `${entry.error} Account cleanup failed.`;
+        }
+      },
+    )
+    .catch((error: unknown) => {
       entry.state = "failed";
-      entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
-      await deleteAccountDirectory(context, platform, entry.accountId);
-    },
-  );
+      entry.error = errorMessage(error);
+    });
   return loginProgress();
 }
 

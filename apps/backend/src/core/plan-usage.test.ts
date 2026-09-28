@@ -769,6 +769,29 @@ describe("recordSessionWindows", () => {
 });
 
 describe("createPlanUsageReader refresh and cache lifetime", () => {
+  test("invalidating an account detaches an older in-flight read", async () => {
+    let releaseFirst!: (response: Response) => void;
+    const firstResponse = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return calls === 1
+        ? firstResponse
+        : jsonResponse({ usage: { rolling: { status: "ok", percent: 99 } } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+    const context = contextWithGlobal({ openCodeZenApiKey: "zen-key" });
+    const old = reader(context, "opencode");
+    reader.invalidate("opencode");
+    const fresh = await reader(context, "opencode");
+    expect(fresh.windows[0]?.usedPercent).toBe(99);
+    releaseFirst(jsonResponse({ usage: { rolling: { status: "ok", percent: 1 } } }));
+    await old;
+    expect((await reader(context, "opencode")).windows[0]?.usedPercent).toBe(99);
+    expect(calls).toBe(2);
+  });
   test("a forced read does not reuse an in-flight non-forced result", async () => {
     let releaseFirst!: (response: Response) => void;
     const firstResponse = new Promise<Response>((resolve) => {

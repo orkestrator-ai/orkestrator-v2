@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import {
   PROVIDER_RETIREMENT_GRACE_MS,
@@ -286,6 +287,8 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       .update(connection.baseUrl)
       .update("\0")
       .update(connection.authToken)
+      .update("\0")
+      .update(connection.accountId ?? "unknown")
       .digest("hex");
   }
 
@@ -804,6 +807,9 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
         agent,
         baseUrl: `http://127.0.0.1:${result.port}`,
         authToken: result.authToken,
+        ...(agent === "claude" || agent === "codex"
+          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          : {}),
         directory: environment.worktreePath,
         model,
         effort,
@@ -824,6 +830,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       agent,
       baseUrl: `http://127.0.0.1:${result.hostPort}`,
       authToken: result.authToken,
+      ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
       model,
       effort,
     };
@@ -851,6 +858,9 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
         agent,
         baseUrl: `http://127.0.0.1:${result.port}`,
         authToken: result.authToken,
+        ...(agent === "claude" || agent === "codex"
+          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          : {}),
         directory: environment.worktreePath,
       };
     }
@@ -868,6 +878,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       agent,
       baseUrl: `http://127.0.0.1:${result.hostPort}`,
       authToken: result.authToken,
+      ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
     };
   }
 }

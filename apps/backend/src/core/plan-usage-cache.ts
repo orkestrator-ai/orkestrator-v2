@@ -126,6 +126,18 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
 
 /** The cache the settings reader serves from, and sessions write through. */
 export const sharedPlanUsageCache = createPlanUsageCache();
+const activeAccountIds = new Map<"claude" | "codex", string>();
+
+export function setActivePlanUsageAccount(platform: "claude" | "codex", accountId: string): void {
+  activeAccountIds.set(platform, accountId);
+}
+
+export function initializeActivePlanUsageAccount(
+  platform: "claude" | "codex",
+  accountId: string,
+): void {
+  if (!activeAccountIds.has(platform)) activeAccountIds.set(platform, accountId);
+}
 
 /**
  * Claude reports its plan windows per session as rate limits, not as account
@@ -169,6 +181,7 @@ function sessionWindowId(label: string): string {
 export function contextUsageWithPlanUsage(
   agent: AgentPlatform,
   value: unknown,
+  reportingAccountId?: string,
 ): NativeAgentContextUsage | undefined {
   const usage = normalizeProviderContextUsage(value);
   const windows = usage?.account?.length
@@ -176,6 +189,12 @@ export function contextUsageWithPlanUsage(
     : usage?.rateLimits?.length
       ? accountWindowsFromRateLimits(usage.rateLimits, agent)
       : undefined;
-  if (windows) sharedPlanUsageCache.recordSessionWindows(agent, windows);
+  if (
+    windows &&
+    ((agent !== "claude" && agent !== "codex") ||
+      (reportingAccountId ?? "default") === (activeAccountIds.get(agent) ?? "default"))
+  ) {
+    sharedPlanUsageCache.recordSessionWindows(agent, windows);
+  }
   return usage;
 }

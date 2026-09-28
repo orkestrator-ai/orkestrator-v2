@@ -4,6 +4,7 @@ import {
   contextUsageWithPlanUsage,
   createPlanUsageCache,
   sharedPlanUsageCache,
+  setActivePlanUsageAccount,
 } from "./plan-usage-cache.js";
 
 // `contextUsageWithPlanUsage` always writes the process-wide singleton, which
@@ -11,6 +12,8 @@ import {
 // window from one test cannot be observed by another.
 beforeEach(() => {
   sharedPlanUsageCache.clear();
+  setActivePlanUsageAccount("claude", "default");
+  setActivePlanUsageAccount("codex", "default");
 });
 
 afterEach(() => {
@@ -75,6 +78,22 @@ describe("createPlanUsageCache", () => {
 });
 
 describe("contextUsageWithPlanUsage", () => {
+  test("an old bridge cannot report quota into the newly active account", () => {
+    setActivePlanUsageAccount("claude", "account-b");
+    contextUsageWithPlanUsage(
+      "claude",
+      { usedTokens: 1, account: [{ window: "five_hour", usedPercent: 95 }] },
+      "account-a",
+    );
+    expect(sharedPlanUsageCache.peek("claude")).toBeUndefined();
+    contextUsageWithPlanUsage(
+      "claude",
+      { usedTokens: 1, account: [{ window: "five_hour", usedPercent: 5 }] },
+      "account-b",
+    );
+    expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.usedPercent).toBe(5);
+    setActivePlanUsageAccount("claude", "default");
+  });
   test("keeps a Codex session's account rows and returns the usage unchanged", () => {
     const usage = contextUsageWithPlanUsage("codex", {
       usedTokens: 10,

@@ -61,8 +61,6 @@ import {
   localGrokBridgeTokens,
   localPiBridgeTokens,
   localCursorCredentialFingerprints,
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
   openCodeAgentToolsConfigurations,
   configuredOpenCodeAgentTools,
   BRIDGE_TOKEN_PATTERN,
@@ -87,6 +85,10 @@ import {
   diffStatsService,
   invalidatePendingDiffStatsSync,
 } from "./commands-runtime-state.js";
+import {
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
+} from "./agent-account-bridge-state.js";
 import {
   prMonitorService,
   invalidatePendingPrMonitorSync,
@@ -159,6 +161,7 @@ import {
   applyCoordinatorClaudeAccount,
   localBridgeIsOnActiveAccount,
   resolveActiveAgentAccount,
+  stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 
 /** Deletion drains briefly: the container is removed right after. */
@@ -1184,6 +1187,7 @@ export async function startLocalServerUnlocked(
       // Only the login is copied: from the active account's directory, or
       // the host's when no account was added.
       const account = await resolveActiveAgentAccount(context, "codex");
+      if (account.home) stripInheritedAgentCredentials(env);
       // The directory outlives a launch: drop an earlier account's login.
       await rm(path.join(coordinatorCodexHome, "auth.json"), { force: true });
       await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);

@@ -271,7 +271,11 @@ export async function readHttpBridgeSessionState(input: {
     ? asRecord(await boundedJson(queueResponse, "Pi queue state", { remaining: 256 * 1024 }))
     : undefined;
   const readiness = normalizeProviderReadiness(payload.readiness);
-  const contextUsage = contextUsageWithPlanUsage(input.agent, payload.contextUsage);
+  const contextUsage = contextUsageWithPlanUsage(
+    input.agent,
+    payload.contextUsage,
+    input.connection.accountId ?? "unknown",
+  );
   const runtime = normalizeProviderRuntimeSummary(payload.runtime);
   const policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
   const reportedKinds = asRecord(asRecord(payload.capabilities)?.interactions)?.kinds;

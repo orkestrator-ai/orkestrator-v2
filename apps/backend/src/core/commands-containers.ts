@@ -315,7 +315,8 @@ export async function createDockerContainer(
     config.global.enabledAgentPlatforms,
     environment.revokedInputProviders ?? [],
   );
-  const allowClaudeCredentials = inputProviders.has("claude");
+  const allowClaudeCredentials =
+    inputProviders.has("claude") && config.global.useHostClaudeCredentials !== false;
   const anthropicApiKey = allowClaudeCredentials
     ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
@@ -365,6 +366,7 @@ export async function createDockerContainer(
       ? await stagePortableInputs(context.storage.getDataDir(), environment.id, inputProviders, {
           ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
           ...(await activeAgentAccountInputRoots(context)),
+          includeClaudeCredentials: allowClaudeCredentials,
         })
       : null;
   if (anthropicApiKey && stagedInputs) {

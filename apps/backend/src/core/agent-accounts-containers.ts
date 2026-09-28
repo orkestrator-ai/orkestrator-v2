@@ -145,7 +145,12 @@ async function refreshStagedLogin(
   revision: string,
   platform: AgentAccountPlatform,
 ): Promise<void> {
-  if (!(await accountHasBeenUsed(context, platform))) return;
+  const { global } = await context.storage.loadConfig();
+  if (
+    !(await accountHasBeenUsed(context, platform)) &&
+    !(platform === "claude" && global.useHostClaudeCredentials === false)
+  )
+    return;
   const active = await resolveActiveAgentAccount(context, platform);
   const host = hostStagingSources(context);
   const dataDir = context.storage.getDataDir();
@@ -157,9 +162,12 @@ async function refreshStagedLogin(
   }
   if (active.home) await prepareAgentAccountHome("claude", active.home);
   const configDir = active.home ?? host.claudeConfigDir;
-  const credentials = configDir
-    ? await readLoginFile(path.join(configDir, ".credentials.json"))
-    : undefined;
+  const credentials =
+    global.useHostClaudeCredentials === false
+      ? undefined
+      : configDir
+        ? await readLoginFile(path.join(configDir, ".credentials.json"))
+        : undefined;
   await replaceStagedInputFile(
     dataDir,
     environment.id,
@@ -273,10 +281,14 @@ export async function syncContainerAgentAccountsOnStart(
 ): Promise<void> {
   if (providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "claude")) {
     try {
-      // An empty payload leaves the container's own credential alone.
       const credentials = await containerClaudeCredentials(context, global);
       if (credentials) {
         await runners.pipe(containerId, SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND, credentials);
+      } else if (
+        global.useHostClaudeCredentials === false ||
+        (await accountHasBeenUsed(context, "claude"))
+      ) {
+        await runners.exec(containerId, `rm -f ${CONTAINER_CLAUDE_CREDENTIAL_FILE}`);
       }
       if (await accountHasBeenUsed(context, "claude")) {
         await writeMarker(
@@ -309,7 +321,10 @@ async function pushContainerLogin(
   global: AppConfig["global"],
 ): Promise<void> {
   if (platform === "claude") {
-    if (global.useHostClaudeCredentials === false) return;
+    if (global.useHostClaudeCredentials === false) {
+      await runners.exec(containerId, `rm -f ${CONTAINER_CLAUDE_CREDENTIAL_FILE}`);
+      return;
+    }
     const credentials = await containerClaudeCredentials(context, global);
     if (credentials) {
       await runners.pipe(containerId, SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND, credentials);
@@ -361,18 +376,24 @@ export async function reconcileContainerAgentAccount(
     (candidate) => candidate.containerId && containerIdMatches(candidate.containerId, containerId),
   );
   if (!environment) return;
-  // Nothing to reconcile, and no container round trip, until an account exists.
-  if (!(await accountHasBeenUsed(context, platform))) return;
   const { global } = await context.storage.loadConfig();
+  // An opt-out must revoke a credential already placed in an older container.
+  if (
+    !(await accountHasBeenUsed(context, platform)) &&
+    !(platform === "claude" && global.useHostClaudeCredentials === false)
+  )
+    return;
   if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, platform)) {
     return;
   }
   const active = await resolveActiveAgentAccount(context, platform);
-  if ((await readMarker(runners, containerId, platform)) === active.accountId) return;
-  const running = await bridge.isRunning();
-  if (running && (await context.nativeAgents?.hasObservedLiveWork(environment.id, platform))) {
+  const markerMatches = (await readMarker(runners, containerId, platform)) === active.accountId;
+  if (markerMatches && !(platform === "claude" && global.useHostClaudeCredentials === false))
+    return;
+  if (await context.nativeAgents?.hasObservedLiveWork(environment.id, platform)) {
     return;
   }
+  const running = await bridge.isRunning();
   await pushContainerLogin(context, runners, containerId, platform, global);
   const revision = await runners.label(containerId, DOCKER_LABEL_INPUTS_REVISION);
   if (revision) {

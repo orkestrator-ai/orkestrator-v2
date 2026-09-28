@@ -129,7 +129,11 @@ import {
   resumeTerminalHistory,
   resizeTerminalHistory,
 } from "./terminal-history.js";
-import { activeAgentAccountShellEnvironment } from "./agent-accounts-active.js";
+import {
+  activeAgentAccountShellEnvironment,
+  stripInheritedAgentCredentials,
+} from "./agent-accounts-active.js";
+import { terminalAccountHomes } from "./terminal-account-usage.js";
 
 /**
  * Answers a file-list or tree read in the command's legacy shapes.
@@ -702,8 +706,13 @@ export function registerTerminalCommands(
     // A terminal keeps the account that was active when it started; a switch
     // applies to terminals opened after it.
     const accountEnvironment = await activeAgentAccountShellEnvironment(context);
+    const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
+    if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
+      stripInheritedAgentCredentials(launchEnvironment);
+    }
     await resumeTerminalHistory(id);
-    spawnTerminalProcess(
+    const alreadyRunning = terminalProcesses.has(id);
+    const terminalProcess = spawnTerminalProcess(
       id,
       resolveLocalShellPath(),
       ["-l"],
@@ -711,11 +720,16 @@ export function registerTerminalCommands(
         cwd: currentEnvironment.worktreePath,
         cols: config.cols,
         rows: config.rows,
-        env: { ...envWithManagedBinaries(context), ...accountEnvironment },
+        env: launchEnvironment,
       },
       emit,
       trackedTerminalActivityHooks(id, context),
     );
+    if (!alreadyRunning && terminalProcesses.get(id) === terminalProcess) {
+      for (const home of [accountEnvironment.CLAUDE_CONFIG_DIR, accountEnvironment.CODEX_HOME]) {
+        if (home) terminalAccountHomes.set(`${id}:${home}`, home);
+      }
+    }
   });
   register("local_terminal_write", ({ sessionId, data }, context) => {
     const id = asString(sessionId, "sessionId");

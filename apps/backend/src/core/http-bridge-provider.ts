@@ -132,6 +132,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
+  private contextUsage(value: unknown) {
+    return contextUsageWithPlanUsage(this.agent, value, this.connection.accountId ?? "unknown");
+  }
+
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.interactionAdapter.registerSession(sessionId, interaction);
   }
@@ -477,7 +481,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     if (response.status === 404 || response.status === 405) return undefined;
     assertOk(response, `${this.agent} usage read`);
     const body = asRecord(await boundedJson(response, `${this.agent} usage read`));
-    return contextUsageWithPlanUsage(this.agent, body?.contextUsage);
+    return this.contextUsage(body?.contextUsage);
   }
 
   async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
@@ -500,7 +504,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       body.status === "running" || body.status === "idle" || body.status === "error"
         ? body.status
         : "error";
-    const contextUsage = contextUsageWithPlanUsage(this.agent, body.contextUsage);
+    const contextUsage = this.contextUsage(body.contextUsage);
     return {
       status,
       // sessionTokens has explicit cumulative semantics. Do not expose an
@@ -679,7 +683,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           `${this.agent} returned a malformed interactive snapshot`,
         );
       }
-      const contextUsage = contextUsageWithPlanUsage(this.agent, payload?.contextUsage);
+      const contextUsage = this.contextUsage(payload?.contextUsage);
       const statusRuntime = normalizeProviderRuntimeSummary(payload?.runtime);
       const healthRuntime =
         health && Object.keys(health.summary).length > 0 ? health.summary : undefined;
@@ -820,7 +824,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           MAX_TRACKED_INTERACTION_SESSIONS,
         );
       }
-      const codexContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
+      const codexContextUsage = this.contextUsage(payload.contextUsage);
       const codexNotices = snapshotNotices({
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
@@ -938,7 +942,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         );
       }
     }
-    const claudeContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
+    const claudeContextUsage = this.contextUsage(payload.contextUsage);
     const claudeTurnActivity = claudeTurnActivityFromPayload(payload);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,

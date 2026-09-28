@@ -98,6 +98,8 @@ export interface InputSourceRoots {
    * follows links.
    */
   claudeAccountHome?: string;
+  /** An explicit container credential opt-out excludes both host and added logins. */
+  includeClaudeCredentials?: boolean;
   codexAccountHome?: string;
 }
 
@@ -144,7 +146,9 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           files: [
             "CLAUDE.md",
             "settings.local.json",
-            ...(claudeAccountHome ? [] : [".credentials.json"]),
+            ...(claudeAccountHome || roots.includeClaudeCredentials === false
+              ? []
+              : [".credentials.json"]),
           ],
           directories: [
             { path: "commands", mode: "entries" },
@@ -153,7 +157,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             { path: "plugins", mode: "entries" },
           ],
         },
-        ...(claudeAccountHome
+        ...(claudeAccountHome && roots.includeClaudeCredentials !== false
           ? [
               {
                 stage: "claude-config",

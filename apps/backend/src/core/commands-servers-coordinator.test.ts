@@ -11,6 +11,7 @@ import { CoordinatorService } from "./coordinator-service.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
+import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 
 describe("Coordinator Codex server", () => {
   let root: string;
@@ -360,6 +361,28 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
     });
 
+    const addedId = "11111111-2222-4333-8444-555555555555";
+    const addedHome = path.join(storage.agentAccountsDirectory(), "codex", addedId);
+    await fs.mkdir(addedHome, { recursive: true });
+    await fs.writeFile(path.join(addedHome, "auth.json"), '{"token":"replacement"}');
+    await storage.mutateAgentAccounts((store) => ({
+      store: {
+        ...store,
+        accounts: [
+          { id: addedId, platform: "codex", label: "Second", createdAt: "2026-09-28T00:00:00Z" },
+        ],
+        active: { codex: addedId },
+      },
+      result: undefined,
+    }));
+    const replacement = await startLocalServerUnlocked(runtimeId, context, "codex");
+    expect(replacement.wasRunning).toBe(false);
+    expect(replacement.pid).not.toBe(started.pid);
+    expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).toContain(
+      "replacement",
+    );
+    expect(localAgentAccountIds.get(`codex:${runtimeId}`)).toBe(addedId);
+
     revoke.mockClear();
     commandTesting.getLocalServerProcess(`codex:${runtimeId}`)!.kill("SIGTERM");
     for (let attempt = 0; attempt < 100 && revoke.mock.calls.length === 0; attempt += 1) {
@@ -586,6 +609,83 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(await fs.readFile(path.join(secondCheckout, "bridge-cwd.txt"), "utf8")).toBe(
       secondCheckout,
     );
+  });
+
+  test("restarts an idle worker on the selected account without inherited API keys", async () => {
+    const bridge = path.join(root, "bridges", "codex-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `
+await Bun.write(process.env.CWD + "/account-launch.json", JSON.stringify({
+  home: process.env.CODEX_HOME, openaiKey: process.env.OPENAI_API_KEY ?? null,
+  codexKey: process.env.CODEX_API_KEY ?? null,
+}));
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    const project = await storage.addProject(createProject("remote", checkout));
+    const environment = createEnvironment(project.id, {
+      name: "account worker",
+      environmentType: "local",
+    });
+    environment.status = "running";
+    environment.worktreePath = checkout;
+    await storage.addEnvironment(environment);
+    const context = {
+      storage,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      nativeAgents: { hasObservedLiveWork: async () => false },
+    } as unknown as CommandContext;
+    cleanupContext = context;
+    cleanupRuntimeId = environment.id;
+    const first = await startLocalServerUnlocked(environment.id, context, "codex");
+    const accountId = "11111111-2222-4333-8444-555555555555";
+    const home = path.join(storage.agentAccountsDirectory(), "codex", accountId);
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(path.join(home, "auth.json"), '{"account":"selected"}');
+    await storage.mutateAgentAccounts((store) => ({
+      store: {
+        ...store,
+        accounts: [
+          {
+            id: accountId,
+            platform: "codex",
+            label: "Selected",
+            createdAt: "2026-09-28T00:00:00Z",
+          },
+        ],
+        active: { codex: accountId },
+      },
+      result: undefined,
+    }));
+    const previousOpenaiKey = process.env.OPENAI_API_KEY;
+    const previousCodexKey = process.env.CODEX_API_KEY;
+    process.env.OPENAI_API_KEY = "inherited";
+    process.env.CODEX_API_KEY = "inherited";
+    try {
+      const second = await startLocalServerUnlocked(environment.id, context, "codex");
+      expect(second.wasRunning).toBe(false);
+      expect(second.pid).not.toBe(first.pid);
+      expect(
+        JSON.parse(await fs.readFile(path.join(checkout, "account-launch.json"), "utf8")),
+      ).toEqual({
+        home,
+        openaiKey: null,
+        codexKey: null,
+      });
+      expect(localAgentAccountIds.get(`codex:${environment.id}`)).toBe(accountId);
+    } finally {
+      if (previousOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousOpenaiKey;
+      if (previousCodexKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = previousCodexKey;
+    }
   });
 
   test("a worker bridge never inherits an attachment root from the backend's own environment", async () => {

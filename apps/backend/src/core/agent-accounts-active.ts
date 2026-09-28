@@ -13,17 +13,19 @@ import {
   getHostClaudeCredentials,
   readRuntimeHostClaudeCredentials,
 } from "./commands-files.js";
+import { localServerProcesses } from "./commands-runtime-state.js";
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
-  localServerProcesses,
-} from "./commands-runtime-state.js";
+} from "./agent-account-bridge-state.js";
 import {
   agentAccountHome,
   claudeKeychainService,
   prepareAgentAccountHome,
   readCodexAuthFile,
 } from "./agent-accounts-homes.js";
+import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts-login.js";
+import { initializeActivePlanUsageAccount } from "./plan-usage-cache.js";
 
 /** The account a platform's launches use: the host login, or an added account's directory. */
 export interface ResolvedAgentAccount {
@@ -32,12 +34,17 @@ export interface ResolvedAgentAccount {
   home?: string;
 }
 
+export function stripInheritedAgentCredentials(env: NodeJS.ProcessEnv): void {
+  for (const key of INHERITED_CREDENTIAL_ENV) delete env[key];
+}
+
 export async function resolveActiveAgentAccount(
   context: CommandContext,
   platform: AgentAccountPlatform,
 ): Promise<ResolvedAgentAccount> {
   const store = await context.storage.loadAgentAccounts();
   const accountId = store.active[platform];
+  initializeActivePlanUsageAccount(platform, accountId ?? DEFAULT_AGENT_ACCOUNT_ID);
   if (!accountId) return { accountId: DEFAULT_AGENT_ACCOUNT_ID };
   return {
     accountId,
@@ -63,10 +70,9 @@ export async function applyActiveAgentAccountEnvironment(
   const active = await resolveActiveAgentAccount(context, platform);
   if (!active.home) return active.accountId;
   await prepareAgentAccountHome(platform, active.home);
+  stripInheritedAgentCredentials(env);
   if (platform === "claude") {
     env.CLAUDE_CONFIG_DIR = active.home;
-    delete env.ANTHROPIC_AUTH_TOKEN;
-    delete env.CLAUDE_CODE_OAUTH_TOKEN;
   } else {
     env.CODEX_HOME = active.home;
   }
@@ -80,7 +86,8 @@ export async function applyActiveAgentAccountEnvironment(
  * what makes a switch take effect without killing anything up front. One with
  * observed live work is left alone: replacing it would kill a running turn or
  * its background work, so it moves over once idle. A coordinator bridge that
- * was handed a short-lived token is replaced the same way once it lapses.
+ * was handed a short-lived token is replaced once a fresher login is available
+ * or the token actually expires.
  */
 export async function localBridgeIsOnActiveAccount(
   key: string,
@@ -91,10 +98,27 @@ export async function localBridgeIsOnActiveAccount(
   if (kind !== "claude" && kind !== "codex") return true;
   const launchedWith = localAgentAccountIds.get(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   const active = await resolveActiveAgentAccount(context, kind);
-  const tokenExpiresAt = localAgentAccountTokenExpiry.get(key);
+  const tokenExpiresAt = kind === "claude" ? localAgentAccountTokenExpiry.get(key) : undefined;
   const tokenLapsed =
     tokenExpiresAt !== undefined && Date.now() >= tokenExpiresAt - TOKEN_REPLACEMENT_LEAD_MS;
-  if (launchedWith === active.accountId && !tokenLapsed) return true;
+  if (launchedWith === active.accountId) {
+    if (tokenExpiresAt === undefined || !tokenLapsed) return true;
+    const credentials = active.home
+      ? await readAddedClaudeCredentials(active.home)
+      : context.runtimeFlavor === "agent-test"
+        ? undefined
+        : await readRuntimeHostClaudeCredentials();
+    const freshExpiry = claudeCredentialExpiry(credentials);
+    // A lapsed lead window is only a reason to relaunch when there is a
+    // better token to hand over. Keep the existing bridge until actual expiry.
+    if (
+      !freshExpiry ||
+      freshExpiry <= tokenExpiresAt ||
+      !getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)
+    ) {
+      if (Date.now() < tokenExpiresAt) return true;
+    }
+  }
   return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
 }
 
@@ -197,11 +221,11 @@ export async function applyCoordinatorClaudeAccount(
   coordinatorHome: string,
   env: NodeJS.ProcessEnv,
   prepareHome: (destination: string, source?: string) => Promise<void>,
+  readCredentials: (home: string) => Promise<string | undefined> = readAddedClaudeCredentials,
 ): Promise<CoordinatorAgentAccount> {
   const active = await resolveActiveAgentAccount(context, "claude");
   if (active.home) {
-    delete env.ANTHROPIC_AUTH_TOKEN;
-    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    stripInheritedAgentCredentials(env);
   }
   // The directory outlives a launch; a login copied for an earlier account
   // must not outrank the active one.
@@ -224,11 +248,11 @@ export async function applyCoordinatorClaudeAccount(
   // An agent-test profile reads the host login only through its own grant,
   // which `applyClaudeHostCredentialEnvironment` has already applied.
   const credentials = active.home
-    ? await readAddedClaudeCredentials(active.home)
+    ? await readCredentials(active.home)
     : context.runtimeFlavor === "agent-test"
       ? undefined
       : await readRuntimeHostClaudeCredentials();
-  const token = getClaudeOAuthAccessToken(credentials);
+  const token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
   if (!token) return { accountId: active.accountId };
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const tokenExpiresAt = claudeCredentialExpiry(credentials);

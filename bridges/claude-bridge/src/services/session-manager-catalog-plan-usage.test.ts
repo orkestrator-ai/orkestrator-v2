@@ -28,16 +28,17 @@ describe("readClaudePlanUsage", () => {
   });
 
   test("maps the structured windows to slugged account windows", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
-      async () => ({
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 31, resets_at: "2026-09-11T18:32:00.000Z" },
-          seven_day: { utilization: 12 },
-        },
-      }),
-    );
+    const getStructuredUsage = mock(async () => ({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 31, resets_at: "2026-09-11T18:32:00.000Z" },
+        seven_day: { utilization: 12 },
+      },
+    }));
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
     const windows = await readClaudePlanUsage();
+    expect(getStructuredUsage).toHaveBeenCalledWith({ skipBehaviors: true });
     expect(windows).toEqual([
       {
         window: "five-hour",

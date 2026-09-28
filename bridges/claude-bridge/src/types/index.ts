@@ -401,7 +401,9 @@ export interface ClaudeQueryControl {
    * The Agent SDK deliberately marks this control request experimental, so the
    * bridge feature-detects it and validates the unknown response at runtime.
    */
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (options?: {
+    skipBehaviors?: boolean;
+  }) => Promise<unknown>;
   rewindFiles?: (userMessageId: string, options?: { dryRun?: boolean }) => Promise<unknown>;
   close?: () => void | Promise<void>;
 }

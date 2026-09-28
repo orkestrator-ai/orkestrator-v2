@@ -123,12 +123,15 @@ export const IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  * and bound the one final await when the endpoint stops responding.
  */
 export const STRUCTURED_USAGE_REQUEST_TIMEOUT_MS = 1_000;
+/**
+ * The session-less plan probe spawns a whole CLI before it can answer, and no
+ * turn is waiting on it, so it gets a longer bound than the in-turn refresh.
+ */
+export const PLAN_USAGE_PROBE_TIMEOUT_MS = 10_000;
 
 export class StructuredUsageRequestTimeoutError extends Error {
-  constructor() {
-    super(
-      `Structured usage control request timed out after ${STRUCTURED_USAGE_REQUEST_TIMEOUT_MS}ms`,
-    );
+  constructor(timeoutMs = STRUCTURED_USAGE_REQUEST_TIMEOUT_MS) {
+    super(`Structured usage control request timed out after ${timeoutMs}ms`);
     this.name = "StructuredUsageRequestTimeoutError";
   }
 }
@@ -477,6 +480,102 @@ export const STRUCTURED_RATE_LIMIT_WINDOWS = [
   ["seven_day_sonnet", "Weekly (Sonnet)"],
 ] as const;
 
+const STRUCTURED_RATE_LIMIT_LABELS: Record<string, string> = Object.fromEntries(
+  STRUCTURED_RATE_LIMIT_WINDOWS,
+);
+
+/**
+ * `unifiedWindows` buckets that correspond to a structured `/usage` window.
+ * `seven_day_overage_included` has no structured twin, so a row made from it
+ * would only flicker until the next `/usage` snapshot removed it.
+ */
+const UNIFIED_RATE_LIMIT_WINDOW_KEYS = ["five_hour", "seven_day"] as const;
+
+/** The `rate_limit_info` fields the bridge reads from a `rate_limit_event`. */
+export interface RateLimitEventInfo {
+  rateLimitType?: string;
+  utilization?: number;
+  resetsAt?: number;
+  /**
+   * Per-window snapshot the CLI attaches to the event. Marked `@internal` in
+   * the CLI's schema and absent from the SDK's public types, so it is parsed
+   * defensively and used only to fill in windows the event itself omits.
+   */
+  unifiedWindows?: unknown;
+}
+
+/**
+ * Label a rate-limit bucket with the name structured `/usage` gives it, so an
+ * event window and the snapshot that later replaces it share one identity.
+ */
+export function rateLimitEventLabel(rateLimitType: string | undefined): string {
+  if (rateLimitType && Object.hasOwn(STRUCTURED_RATE_LIMIT_LABELS, rateLimitType)) {
+    return STRUCTURED_RATE_LIMIT_LABELS[rateLimitType]!;
+  }
+  return (rateLimitType ?? "usage")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/**
+ * `rate_limit_info.utilization` is a 0–1 fraction — Claude Code renders it as
+ * `utilization * 100` — whereas structured `/usage` already reports percent.
+ * Storing the fraction as a percent drew an 89% weekly window as 0.9%. A value
+ * above 1 cannot be a fraction, so it is read as a percent should a future CLI
+ * switch units.
+ */
+export function rateLimitUtilizationToPercent(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  const percent = value <= 1 ? value * 100 : value;
+  // Round away float noise such as 0.29 * 100 = 28.999999999999996.
+  return percent <= 100 ? Math.round(percent * 100) / 100 : undefined;
+}
+
+function unifiedRateLimitWindow(value: unknown, label: string): SessionRateLimitWindow | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const window = value as Record<string, unknown>;
+  const usedPercent = rateLimitUtilizationToPercent(window.utilization);
+  const resetsAt = rateLimitResetToIso(window.resetsAt);
+  if (usedPercent === undefined && resetsAt === undefined) return undefined;
+  return {
+    label,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+  };
+}
+
+/**
+ * The windows one `rate_limit_event` reports.
+ *
+ * The event names a single bucket — whichever limit is currently binding — so
+ * a quiet five-hour window never appears in it. The CLI's `unifiedWindows`
+ * snapshot, when present, supplies the others; the named bucket's own fields
+ * win over the snapshot's for that window.
+ */
+export function rateLimitsFromEventInfo(info: RateLimitEventInfo): SessionRateLimitWindow[] {
+  const windows = new Map<string, SessionRateLimitWindow>();
+  const unified = info.unifiedWindows;
+  if (unified && typeof unified === "object" && !Array.isArray(unified)) {
+    for (const key of UNIFIED_RATE_LIMIT_WINDOW_KEYS) {
+      const label = rateLimitEventLabel(key);
+      const window = unifiedRateLimitWindow((unified as Record<string, unknown>)[key], label);
+      if (window) windows.set(label, window);
+    }
+  }
+
+  const label = rateLimitEventLabel(info.rateLimitType);
+  const usedPercent = rateLimitUtilizationToPercent(info.utilization);
+  const resetsAt = rateLimitResetToIso(info.resetsAt);
+  const primary: SessionRateLimitWindow = {
+    ...windows.get(label),
+    label,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+  };
+  windows.delete(label);
+  return [primary, ...windows.values()];
+}
+
 export function structuredRateLimitReset(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0) return undefined;
   const timestamp = Date.parse(value);
@@ -579,13 +678,18 @@ export function rateLimitsFromStructuredUsage(
 }
 
 export async function getStructuredUsageWithTimeout(
-  getStructuredUsage: () => Promise<unknown>,
+  getStructuredUsage: (options?: { skipBehaviors?: boolean }) => Promise<unknown>,
   queryControl: NonNullable<SessionState["queryControl"]>,
+  timeoutMs = STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
 ): Promise<unknown> {
   return withControlRequestTimeout(
-    getStructuredUsage.call(queryControl),
-    STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
-    () => new StructuredUsageRequestTimeoutError(),
+    // Only the plan windows are read. Without `skipBehaviors` the CLI first
+    // scans every local transcript for the "what's contributing" section, which
+    // takes seconds on a busy machine — past the timeout, so the refresh never
+    // landed and only the sparse threshold event was ever shown.
+    getStructuredUsage.call(queryControl, { skipBehaviors: true }),
+    timeoutMs,
+    () => new StructuredUsageRequestTimeoutError(timeoutMs),
   );
 }
 

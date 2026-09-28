@@ -348,7 +348,8 @@ describe("rate_limit_event", () => {
     type: "rate_limit_event",
     rate_limit_info: {
       rateLimitType: "five_hour",
-      utilization: 42,
+      // A 0–1 fraction, as the CLI reports it.
+      utilization: 0.42,
       resetsAt: Date.parse("2026-07-28T22:30:00.000Z") / 1000,
     },
   };
@@ -387,6 +388,9 @@ describe("rate_limit_event", () => {
       expect(running.status).toBe("running");
       expect(running.usage).toBeUndefined();
       expect(getStructuredUsage).toHaveBeenCalledTimes(1);
+      // Without it the CLI scans every local transcript first, which outlasts
+      // the request timeout on a busy machine.
+      expect(getStructuredUsage).toHaveBeenCalledWith({ skipBehaviors: true });
       expect(events).toContainEqual({
         type: "session.updated",
         sessionId: created.id,
@@ -486,7 +490,7 @@ describe("rate_limit_event", () => {
 
       call.push({
         type: "rate_limit_event",
-        rate_limit_info: { rateLimitType: "five_hour", utilization: 47 },
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 0.47 },
       });
       await waitFor(() => created.inProgressUsage?.rateLimits?.[0]?.usedPercent === 47);
       expect(created.inProgressUsage).toMatchObject({
@@ -570,7 +574,7 @@ describe("rate_limit_event", () => {
 
     try {
       await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveFirst !== undefined);
-      for (const utilization of [11, 22, 33]) {
+      for (const utilization of [0.11, 0.22, 0.33]) {
         call.push({
           type: "rate_limit_event",
           rate_limit_info: { rateLimitType: "five_hour", utilization },
@@ -1119,7 +1123,7 @@ describe("rate_limit_event", () => {
           type: "rate_limit_event",
           rate_limit_info: {
             rateLimitType: "five_hour",
-            utilization: 42,
+            utilization: 0.42,
             // Epoch SECONDS, as the CLI reports them.
             resetsAt: Date.parse("2026-07-26T18:00:00.000Z") / 1000,
           },
@@ -1153,7 +1157,7 @@ describe("rate_limit_event", () => {
         type: "rate_limit_event",
         rate_limit_info: {
           rateLimitType: "seven_day",
-          utilization: 12,
+          utilization: 0.12,
           resetsAt: Date.parse("2026-07-26T18:00:00.000Z"),
         },
       },
@@ -1162,7 +1166,7 @@ describe("rate_limit_event", () => {
     // Above the 1e12 threshold no real reset instant is ambiguous, so a future
     // SDK that switches units does not silently produce year-33658 timestamps.
     expect(session.rateLimits).toEqual([
-      { label: "Seven Day", usedPercent: 12, resetsAt: "2026-07-26T18:00:00.000Z" },
+      { label: "Weekly", usedPercent: 12, resetsAt: "2026-07-26T18:00:00.000Z" },
     ]);
   });
 
@@ -1173,38 +1177,145 @@ describe("rate_limit_event", () => {
         rate_limit_info: { rateLimitType: "five_hour", resetsAt: Number.MAX_SAFE_INTEGER },
       },
     ]);
-    expect(session.rateLimits).toEqual([
-      { label: "Five Hour", usedPercent: undefined, resetsAt: undefined },
-    ]);
+    expect(session.rateLimits).toEqual([{ label: "Five Hour" }]);
   });
 
   test("deduplicates by label and keeps distinct windows", async () => {
     const { session } = await runPromptWithMessages([
       {
         type: "rate_limit_event",
-        rate_limit_info: { rateLimitType: "five_hour", utilization: 10 },
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 0.1 },
       },
       {
         type: "rate_limit_event",
-        rate_limit_info: { rateLimitType: "seven_day", utilization: 20 },
+        rate_limit_info: { rateLimitType: "seven_day", utilization: 0.2 },
       },
       {
         type: "rate_limit_event",
-        rate_limit_info: { rateLimitType: "five_hour", utilization: 55 },
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 0.55 },
       },
     ]);
 
     expect(session.rateLimits).toEqual([
-      { label: "Seven Day", usedPercent: 20, resetsAt: undefined },
-      { label: "Five Hour", usedPercent: 55, resetsAt: undefined },
+      { label: "Weekly", usedPercent: 20 },
+      { label: "Five Hour", usedPercent: 55 },
     ]);
+  });
+
+  test("reads the event's fractional utilization as a percent", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        // The shape behind the reported bug: an 89% weekly window drawn as 0.9%.
+        rate_limit_info: { rateLimitType: "seven_day", utilization: 0.89 },
+      },
+      {
+        type: "rate_limit_event",
+        // 0.29 * 100 is 28.999999999999996 in floating point.
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 0.29 },
+      },
+      {
+        type: "rate_limit_event",
+        // Above 1 cannot be a fraction, so a future percent-valued CLI still works.
+        rate_limit_info: { rateLimitType: "seven_day_opus", utilization: 47 },
+      },
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "seven_day_sonnet", utilization: 101 },
+      },
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "overage", utilization: -0.5 },
+      },
+    ]);
+
+    expect(session.rateLimits).toEqual([
+      { label: "Weekly", usedPercent: 89 },
+      { label: "Five Hour", usedPercent: 29 },
+      { label: "Weekly (Opus)", usedPercent: 47 },
+      { label: "Weekly (Sonnet)" },
+      { label: "Overage" },
+    ]);
+  });
+
+  test("fills windows the event omits from its unified snapshot", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        // The event names only the binding bucket; a quiet five-hour window is
+        // reported solely through `unifiedWindows`.
+        rate_limit_info: {
+          rateLimitType: "seven_day",
+          utilization: 0.89,
+          resetsAt: Date.parse("2026-09-28T21:00:00.000Z") / 1000,
+          unifiedWindows: {
+            five_hour: {
+              utilization: 0.1,
+              resetsAt: Date.parse("2026-09-28T17:10:00.000Z") / 1000,
+            },
+            seven_day: {
+              utilization: 0.5,
+              resetsAt: Date.parse("2026-09-27T21:00:00.000Z") / 1000,
+            },
+            seven_day_overage_included: {
+              utilization: 0.2,
+              resetsAt: Date.parse("2026-09-28T21:00:00.000Z") / 1000,
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(session.rateLimits).toEqual([
+      { label: "Weekly", usedPercent: 89, resetsAt: "2026-09-28T21:00:00.000Z" },
+      { label: "Five Hour", usedPercent: 10, resetsAt: "2026-09-28T17:10:00.000Z" },
+    ]);
+  });
+
+  test("takes fields the event omits from the unified snapshot of the same window", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          rateLimitType: "seven_day",
+          unifiedWindows: {
+            seven_day: {
+              utilization: 0.89,
+              resetsAt: Date.parse("2026-09-28T21:00:00.000Z") / 1000,
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(session.rateLimits).toEqual([
+      { label: "Weekly", usedPercent: 89, resetsAt: "2026-09-28T21:00:00.000Z" },
+    ]);
+  });
+
+  test("ignores malformed unified snapshots", async () => {
+    for (const unifiedWindows of [
+      null,
+      [],
+      "five_hour",
+      { five_hour: "full", seven_day: [] },
+      { five_hour: { utilization: "0.1", resetsAt: "tomorrow" } },
+    ]) {
+      const { session } = await runPromptWithMessages([
+        {
+          type: "rate_limit_event",
+          rate_limit_info: { rateLimitType: "seven_day", utilization: 0.89, unifiedWindows },
+        },
+      ]);
+      expect(session.rateLimits).toEqual([{ label: "Weekly", usedPercent: 89 }]);
+    }
   });
 
   test("defaults the label and omits an absent reset time", async () => {
     const { session } = await runPromptWithMessages([
-      { type: "rate_limit_event", rate_limit_info: { utilization: 5 } },
+      { type: "rate_limit_event", rate_limit_info: { utilization: 0.05 } },
     ]);
-    expect(session.rateLimits).toEqual([{ label: "Usage", usedPercent: 5, resetsAt: undefined }]);
+    expect(session.rateLimits).toEqual([{ label: "Usage", usedPercent: 5 }]);
   });
 
   test("ignores an event with no rate limit payload", async () => {
@@ -1216,7 +1327,7 @@ describe("rate_limit_event", () => {
     const { session } = await runPromptWithMessages([
       {
         type: "rate_limit_event",
-        rate_limit_info: { rateLimitType: "five_hour", utilization: 42 },
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 0.42 },
       },
       {
         type: "result",
@@ -1225,9 +1336,7 @@ describe("rate_limit_event", () => {
       },
     ]);
 
-    expect(session.usage?.rateLimits).toEqual([
-      { label: "Five Hour", usedPercent: 42, resetsAt: undefined },
-    ]);
+    expect(session.usage?.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
   });
 
   test("merges a window into an existing snapshot without dropping it", async () => {
@@ -1249,11 +1358,11 @@ describe("rate_limit_event", () => {
     const secondCall = await nextQueryCall();
     secondCall.push({
       type: "rate_limit_event",
-      rate_limit_info: { rateLimitType: "five_hour", utilization: 88 },
+      rate_limit_info: { rateLimitType: "five_hour", utilization: 0.88 },
     });
     await waitFor(() => (getSession(session.id)?.rateLimits?.length ?? 0) > 0);
     expect(getSession(session.id)?.usage?.rateLimits).toEqual([
-      { label: "Five Hour", usedPercent: 88, resetsAt: undefined },
+      { label: "Five Hour", usedPercent: 88 },
     ]);
     secondCall.finish();
     await second;

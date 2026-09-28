@@ -1867,9 +1867,10 @@ export async function sendPrompt(
           // mid-turn and `usage` only exists after the first `result`, so
           // gating on it discarded every window a first turn reported.
           const existing = session.rateLimits ?? session.usage?.rateLimits ?? [];
+          const existingByLabel = new Map(existing.map((window) => [window.label, window]));
           session.rateLimits = [
             ...existing.filter((window: SessionRateLimitWindow) => !nextLabels.has(window.label)),
-            ...nextWindows,
+            ...nextWindows.map((window) => ({ ...existingByLabel.get(window.label), ...window })),
           ];
           if (session.usage) {
             session.usage = {

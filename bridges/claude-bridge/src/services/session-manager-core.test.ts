@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rateLimitUtilizationToPercent } from "./session-manager-core.js";
 
 import {
   CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
@@ -541,6 +542,51 @@ describe("rate_limit_event", () => {
       expect(getSession(created.id)?.usage).toBeUndefined();
       expect(getStructuredUsage).toHaveBeenCalledTimes(2);
     } finally {
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  test("keeps a known weekly percentage when a reset-only event arrives", async () => {
+    let resolveRefresh: ((value: unknown) => void) | undefined;
+    let requestCount = 0;
+    const getStructuredUsage = mock(() => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return Promise.resolve({
+          rate_limits_available: true,
+          rate_limits: {
+            seven_day: { utilization: 13, resets_at: "2026-08-04T10:00:00.000Z" },
+          },
+        });
+      }
+      return new Promise<unknown>((resolve) => {
+        resolveRefresh = resolve;
+      });
+    });
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("weekly reset-only event");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    try {
+      await waitFor(() => created.rateLimits?.[0]?.usedPercent === 13);
+      call.push({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          rateLimitType: "seven_day",
+          resetsAt: Date.parse("2026-08-05T10:00:00.000Z") / 1000,
+        },
+      });
+      await waitFor(() => created.rateLimits?.[0]?.resetsAt === "2026-08-05T10:00:00.000Z");
+      expect(created.rateLimits).toEqual([
+        { label: "Weekly", usedPercent: 13, resetsAt: "2026-08-05T10:00:00.000Z" },
+      ]);
+      await waitFor(() => getStructuredUsage.mock.calls.length === 2);
+    } finally {
+      resolveRefresh?.({ rate_limits_available: true, rate_limits: null });
       call.finish();
       await promptPromise;
     }
@@ -1216,7 +1262,7 @@ describe("rate_limit_event", () => {
       },
       {
         type: "rate_limit_event",
-        // Above 1 cannot be a fraction, so a future percent-valued CLI still works.
+        // Event utilization is always a fraction, including exceeded windows.
         rate_limit_info: { rateLimitType: "seven_day_opus", utilization: 47 },
       },
       {
@@ -1232,10 +1278,32 @@ describe("rate_limit_event", () => {
     expect(session.rateLimits).toEqual([
       { label: "Weekly", usedPercent: 89 },
       { label: "Five Hour", usedPercent: 29 },
-      { label: "Weekly (Opus)", usedPercent: 47 },
-      { label: "Weekly (Sonnet)" },
+      { label: "Weekly (Opus)", usedPercent: 100 },
+      { label: "Weekly (Sonnet)", usedPercent: 100 },
       { label: "Overage" },
     ]);
+  });
+
+  test("shows a rejected over-limit event as exhausted", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "seven_day", status: "rejected", utilization: 1.03 },
+      },
+    ]);
+    expect(session.rateLimits).toEqual([{ label: "Weekly", usedPercent: 100 }]);
+  });
+
+  test.each([
+    [0, 0],
+    [1, 100],
+    [1.03, 100],
+    [100, 100],
+    [NaN, undefined],
+    ["1", undefined],
+    [-0.5, undefined],
+  ])("converts event utilization %p to %p percent", (value, expected) => {
+    expect(rateLimitUtilizationToPercent(value)).toBe(expected);
   });
 
   test("fills windows the event omits from its unified snapshot", async () => {

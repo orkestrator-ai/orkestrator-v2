@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { queryControlOverrides } from "./session-manager-test-harness.js";
 import { readClaudePlanUsage } from "./session-manager.js";
 
@@ -37,7 +37,14 @@ describe("readClaudePlanUsage", () => {
     }));
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       getStructuredUsage;
-    const windows = await readClaudePlanUsage();
+    const timeoutSpy = spyOn(globalThis, "setTimeout");
+    let windows: Awaited<ReturnType<typeof readClaudePlanUsage>>;
+    try {
+      windows = await readClaudePlanUsage();
+      expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 10_000)).toBe(true);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
     expect(getStructuredUsage).toHaveBeenCalledWith({ skipBehaviors: true });
     expect(windows).toEqual([
       {

@@ -520,15 +520,14 @@ export function rateLimitEventLabel(rateLimitType: string | undefined): string {
 /**
  * `rate_limit_info.utilization` is a 0–1 fraction — Claude Code renders it as
  * `utilization * 100` — whereas structured `/usage` already reports percent.
- * Storing the fraction as a percent drew an 89% weekly window as 0.9%. A value
- * above 1 cannot be a fraction, so it is read as a percent should a future CLI
- * switch units.
+ * Storing the fraction as a percent drew an 89% weekly window as 0.9%.
+ * Exceeded windows may report a fraction above 1; cap those at 100% for display.
  */
 export function rateLimitUtilizationToPercent(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
-  const percent = value <= 1 ? value * 100 : value;
+  const percent = value * 100;
   // Round away float noise such as 0.29 * 100 = 28.999999999999996.
-  return percent <= 100 ? Math.round(percent * 100) / 100 : undefined;
+  return Math.min(100, Math.round(percent * 100) / 100);
 }
 
 function unifiedRateLimitWindow(value: unknown, label: string): SessionRateLimitWindow | undefined {

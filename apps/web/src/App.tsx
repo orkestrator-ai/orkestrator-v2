@@ -29,6 +29,7 @@ import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistenc
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
+import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
 import {
   checkDocker,
   checkClaudeCli,
@@ -1123,6 +1124,7 @@ function App() {
         </DockerAvailabilityProvider>
         <Toaster />
         <ErrorDetailsDialog />
+        <ContainerHostReachabilityNotice />
 
         {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
           <div

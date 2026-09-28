@@ -1,5 +1,6 @@
 import { invoke } from "@/lib/native/backend";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
+import type { ContainerHostReachability } from "@orkestrator/protocol/container-host-reachability";
 import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
 import type {
   CleanupExecuteResult,
@@ -21,6 +22,16 @@ import type {
 
 export async function checkDocker(): Promise<DockerAvailability> {
   return invoke<DockerAvailability>("check_docker");
+}
+
+/** The latest "can containers reach the agent tools server?" result. */
+export async function getContainerHostReachability(): Promise<ContainerHostReachability> {
+  return invoke<ContainerHostReachability>("get_container_host_reachability");
+}
+
+/** Runs the container connectivity check now and returns its result. */
+export async function checkContainerHostReachability(): Promise<ContainerHostReachability> {
+  return invoke<ContainerHostReachability>("check_container_host_reachability");
 }
 
 export async function dockerVersion(): Promise<string> {

@@ -377,6 +377,8 @@ export interface LoopedReviewServiceOptions extends KeyedWorkflowServiceOptions 
     resultKey: string,
     provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
+  /** Rejects when the environment's container cannot reach the agent tools server. */
+  assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
   onInteractionObservation?: (
     event: ProviderInteractionObservationEvent & {
       environmentId: string;
@@ -944,7 +946,12 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
       const resultKind = this.workflowResultKind(dispatch.kind);
       const agentMcp =
         dispatch.resultTransport === "tool-v1"
-          ? await this.workflowAgentMcp(workflow, dispatch.requestId, workflow.agent)
+          ? await this.workflowAgentMcp(
+              workflow,
+              dispatch.requestId,
+              workflow.agent,
+              `Looped Review ${dispatch.kind} step`,
+            )
           : undefined;
       if (dispatch.resultTransport === "tool-v1" && this.options.workflowResults) {
         const reconciliationReport =
@@ -1424,11 +1431,15 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
   private async workflowAgentMcp(
     workflow: LoopedReviewWorkflow,
     resultKey: string,
-    provider?: StructuredOutputProvider,
+    provider: StructuredOutputProvider | undefined,
+    stage: string,
   ): Promise<AgentToolConnection | undefined> {
     if (!this.options.resolveAgentToolConnection) return undefined;
     const environment = await this.storage.getEnvironment(workflow.environmentId);
     if (!environment) return undefined;
+    if (environment.environmentType !== "local") {
+      await this.options.assertAgentToolsReachable?.(workflow.environmentId, stage);
+    }
     return this.options.resolveAgentToolConnection?.(
       workflow.environmentId,
       workflow.projectId,

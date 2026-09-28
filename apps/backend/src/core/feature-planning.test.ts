@@ -510,6 +510,71 @@ describe("FeaturePlanningService", () => {
     }
   });
 
+  test("fails a container turn before dispatch when its agent tools are unreachable", async () => {
+    const unreachable =
+      "Orkestrator did not start the stage: the container can't reach the agent tools server.";
+    for (const [kind, stage] of [
+      ["feature", "feature planning step"],
+      ["story", "story refinement step"],
+    ] as const) {
+      const preflights: Array<{ environmentId: string; stage: string }> = [];
+      const context = await harness({
+        withStory: true,
+        toolMode: true,
+        serviceOptions: {
+          assertAgentToolsReachable: async (environmentId, stage) => {
+            preflights.push({ environmentId, stage });
+            throw new Error(unreachable);
+          },
+        },
+      });
+      try {
+        await context.storage.updateEnvironment("env-1", {
+          environmentType: "containerized",
+          containerId: "container-1",
+          worktreePath: null,
+        });
+        await context.start({
+          kind,
+          ...(kind === "story" ? { storyId: "story-1" } : {}),
+          userMessage: "Let me export reports",
+        });
+
+        const record = (await context.record())!;
+        expect(record.phase).toBe("failed");
+        expect(record.failure?.message).toContain(unreachable);
+        // Nothing was sent to an agent that could never report its result.
+        expect(context.provider.sends).toHaveLength(0);
+        expect(preflights).toEqual([{ environmentId: "env-1", stage }]);
+      } finally {
+        await context.dispose();
+      }
+    }
+  });
+
+  test("skips the agent tools preflight for local planning environments", async () => {
+    let preflights = 0;
+    const context = await harness({
+      toolMode: true,
+      serviceOptions: {
+        assertAgentToolsReachable: async () => {
+          preflights += 1;
+        },
+      },
+    });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      expect((await context.record())?.resultTransport).toBe("tool-v1");
+      expect(context.provider.sends[0]?.agentMcp).toEqual({
+        url: "http://127.0.0.1:1234/mcp",
+        token: "test-token",
+      });
+      expect(preflights).toBe(0);
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("carries a feature turn from dispatch to an applied state block", async () => {
     const context = await harness();
     try {

@@ -17,6 +17,7 @@ import {
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import {
@@ -320,6 +321,11 @@ async function withPipeline(
   options: {
     transcriptPersistIntervalMs?: number;
     toolMode?: boolean;
+    /** Result kinds admitted to tool mode; defaults to consolidation only. */
+    toolKinds?: WorkflowResultKind[];
+    /** Defaults to a local worktree environment. */
+    environmentType?: "local" | "containerized";
+    assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     efficiency?: RecordingEfficiencyObserver;
   } = {},
 ): Promise<void> {
@@ -331,7 +337,7 @@ async function withPipeline(
     projectId: "project-1",
     name: "build",
     branch: "build",
-    containerId: null,
+    containerId: options.environmentType === "containerized" ? "container-1" : null,
     status: "running",
     prUrl: null,
     prState: null,
@@ -339,7 +345,7 @@ async function withPipeline(
     createdAt: new Date(0).toISOString(),
     networkAccessMode: "full",
     order: 0,
-    environmentType: "local",
+    environmentType: options.environmentType ?? "local",
     worktreePath: "/tmp/build",
     setupScriptsComplete: true,
   });
@@ -415,9 +421,12 @@ async function withPipeline(
           workflowResultRollout: new WorkflowResultRollout(async () => ({
             enabled: true,
             providers: ["claude"],
-            kinds: ["consolidated-review"],
+            kinds: options.toolKinds ?? ["consolidated-review"],
           })),
         }
+      : {}),
+    ...(options.assertAgentToolsReachable
+      ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
   });
   const read = async (id: string): Promise<BuildPipeline> => {
@@ -1703,6 +1712,124 @@ describe("build pipeline multi-model review", () => {
         ).toHaveLength(2);
       },
       { toolMode: true },
+    );
+  });
+
+  test("a container reviewer whose agent tools are unreachable fails instead of dispatching", async () => {
+    const unreachable = "The container can't reach the agent tools server.";
+    const preflights: Array<{ environmentId: string; stage: string }> = [];
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        const failed = await advanceUntil(service, read, started.id, "failed");
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain(unreachable);
+        expect(
+          failed.reviewFanout?.reviewers.map((reviewer) => [reviewer.status, reviewer.error]),
+        ).toEqual([
+          ["failed", unreachable],
+          ["failed", unreachable],
+        ]);
+        // Reviewer sessions were opened but no reviewer prompt was ever sent.
+        expect(reviewerSessionCreates(provider)).toHaveLength(2);
+        expect(provider.sent.filter((entry) => /^review-\d+-/.test(entry.sessionId))).toEqual([]);
+        expect(preflights.filter((entry) => entry.stage === "build pipeline reviewer")).toEqual([
+          { environmentId: "env-1", stage: "build pipeline reviewer" },
+          { environmentId: "env-1", stage: "build pipeline reviewer" },
+        ]);
+        expect(preflights.every((entry) => entry.stage === "build pipeline reviewer")).toBe(true);
+      },
+      {
+        toolMode: true,
+        toolKinds: ["review-report"],
+        environmentType: "containerized",
+        assertAgentToolsReachable: async (environmentId, stage) => {
+          preflights.push({ environmentId, stage });
+          throw new Error(unreachable);
+        },
+      },
+    );
+  });
+
+  test("a container consolidation whose agent tools are unreachable fails before dispatch", async () => {
+    const unreachable = "The container can't reach the agent tools server.";
+    const preflights: Array<{ environmentId: string; stage: string }> = [];
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        const failed = await advanceUntil(service, read, started.id, "failed");
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain(unreachable);
+        // Both reviewers ran on structured output; only consolidation needed tools.
+        expect(
+          provider.sent.filter(
+            (entry) =>
+              entry.sessionId.includes("review-") && !entry.sessionId.includes("consolidation"),
+          ),
+        ).toHaveLength(2);
+        expect(provider.sent.filter((entry) => entry.sessionId.includes("consolidation"))).toEqual(
+          [],
+        );
+        expect(failed.reviewFanout?.consolidation?.resultTransport).toBe("tool-v1");
+        expect(preflights).toEqual([
+          { environmentId: "env-1", stage: "build pipeline consolidation step" },
+        ]);
+      },
+      {
+        toolMode: true,
+        environmentType: "containerized",
+        assertAgentToolsReachable: async (environmentId, stage) => {
+          preflights.push({ environmentId, stage });
+          throw new Error(unreachable);
+        },
+      },
+    );
+  });
+
+  test("a local review panel never runs the agent tools preflight", async () => {
+    let preflights = 0;
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        const reviewerPrompts = () =>
+          provider.sent.filter((entry) => /^review-\d+-/.test(entry.sessionId));
+        for (let pass = 0; pass < 10 && reviewerPrompts().length < 2; pass += 1) {
+          await service.advanceNow(started.id);
+        }
+        const reviewing = await read(started.id);
+        expect(reviewing.error ?? reviewing.phase).toBe("reviewing");
+        // Both tool-mode reviewers were dispatched with their agent tools.
+        expect(reviewerPrompts()).toHaveLength(2);
+        expect(
+          reviewing.reviewFanout?.reviewers.map((reviewer) => reviewer.resultTransport),
+        ).toEqual(["tool-v1", "tool-v1"]);
+        expect(preflights).toBe(0);
+      },
+      {
+        toolMode: true,
+        toolKinds: ["review-report"],
+        assertAgentToolsReachable: async () => {
+          preflights += 1;
+        },
+      },
     );
   });
 

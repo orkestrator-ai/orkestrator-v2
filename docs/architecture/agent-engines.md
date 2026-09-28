@@ -406,11 +406,15 @@ backend-owned execution policy. Its SDK and native runtime closure are vendored
 into the packaged bridge; see `docs/development/upgrade-agents.md` for the build and upgrade
 checks.
 
-The backend exports `ORKESTRATOR_AGENT_MCP_URL` and
-`ORKESTRATOR_AGENT_MCP_TOKEN` on the bridge process. `src/mcp.ts` turns those
-into `AgentOptions.mcpServers.orkestrator` (HTTP, bearer header). A per-tab
-`agentMcp` on create/prompt/attach wins over the process env; the token is
-never persisted. Project `.cursor/mcp.json` is read only when the execution
+On the host the backend exports `ORKESTRATOR_AGENT_MCP_URL` and
+`ORKESTRATOR_AGENT_MCP_TOKEN` on the bridge process; container Cursor bridges
+get no process-level connection and rely on the per-tab `agentMcp` sent on
+create/prompt/attach, which wins over the process env either way. `src/mcp.ts`
+turns it into `AgentOptions.mcpServers.orkestrator` (HTTP, bearer header); the
+token is never persisted. When the container cannot reach that URL, the
+Cursor SDK only reports "Tool call ended without a result"; see
+[agent tools reachability](container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)
+for the checks that surface the cause. Project `.cursor/mcp.json` is read only when the execution
 policy opts into project settings (containers). Native Cursor mail is on:
 `agentMailCapabilities("agent-native", "cursor")` is
 `{canPull,canSend,canInject}=true`.

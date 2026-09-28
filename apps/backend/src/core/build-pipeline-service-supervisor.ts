@@ -139,8 +139,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         workflowResults: this.options.workflowResults,
         workflowToolEnabled: (agent, kind) =>
           this.workflowToolEnabled(agent as BuildPipelineAgent, kind),
-        agentMcp: (pipeline, resultKey, provider) =>
-          this.workflowAgentMcp(pipeline, resultKey, provider),
+        agentMcp: (pipeline, resultKey, provider, stage) =>
+          this.workflowAgentMcp(pipeline, resultKey, provider, stage),
         concurrency: this.options.reviewFanoutConcurrency,
         efficiency: this.options.efficiency,
         pollGate: (pipeline) => ({
@@ -1280,7 +1280,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       });
     }
     const agentMcp =
-      resultTransport === "tool-v1" ? this.workflowAgentMcp(pipeline, requestId, agent) : undefined;
+      resultTransport === "tool-v1"
+        ? await this.workflowAgentMcp(pipeline, requestId, agent, `build pipeline ${phase} step`)
+        : undefined;
     await attachBeforeDispatch(
       provider,
       sessionId,
@@ -1392,7 +1394,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
     const agentMcp =
       attempt.resultTransport === "tool-v1"
-        ? this.workflowAgentMcp(pipeline, attempt.requestId, step?.agent)
+        ? await this.workflowAgentMcp(
+            pipeline,
+            attempt.requestId,
+            step?.agent,
+            `build pipeline ${attempt.phase} step`,
+          )
         : undefined;
     await attachBeforeDispatch(
       provider,

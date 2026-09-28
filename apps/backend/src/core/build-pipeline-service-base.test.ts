@@ -205,7 +205,12 @@ async function withService(
       >;
     },
   ) => Promise<void>,
-  options: { toolMode?: boolean } = {},
+  options: {
+    toolMode?: boolean;
+    /** Defaults to a local worktree environment. */
+    environmentType?: "local" | "containerized";
+    assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+  } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
   const storage = new StorageService(dataDir);
@@ -215,7 +220,7 @@ async function withService(
     projectId: "project-1",
     name: "build",
     branch: "build",
-    containerId: null,
+    containerId: options.environmentType === "containerized" ? "container-1" : null,
     status: "running",
     prUrl: null,
     prState: null,
@@ -223,7 +228,7 @@ async function withService(
     createdAt: new Date(0).toISOString(),
     networkAccessMode: "full",
     order: 0,
-    environmentType: "local",
+    environmentType: options.environmentType ?? "local",
     worktreePath: "/tmp/build",
     setupScriptsComplete: true,
   });
@@ -348,6 +353,9 @@ async function withService(
             token: "test-token",
           }),
         }
+      : {}),
+    ...(options.assertAgentToolsReachable
+      ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
   });
   try {
@@ -1022,6 +1030,99 @@ describe("BuildPipelineService", () => {
         ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
       },
       { toolMode: true },
+    );
+  });
+
+  test("fails a container stage before dispatch when its agent tools are unreachable", async () => {
+    const unreachable =
+      "Orkestrator did not start the stage: the container can't reach the agent tools server.";
+    const preflights: Array<{ environmentId: string; stage: string }> = [];
+    await withService(
+      async (service, storage, provider) => {
+        const started = await service.start(startInput());
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+
+        const failed = await pipeline(storage, started.id);
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain(unreachable);
+        expect(failed.pendingPromptAttempt).toBeUndefined();
+        // Nothing was sent to an agent that could never report its result.
+        expect(provider.sent).toHaveLength(0);
+        expect(preflights).toEqual([
+          { environmentId: "env-1", stage: "build pipeline building step" },
+        ]);
+      },
+      {
+        toolMode: true,
+        environmentType: "containerized",
+        assertAgentToolsReachable: async (environmentId, stage) => {
+          preflights.push({ environmentId, stage });
+          throw new Error(unreachable);
+        },
+      },
+    );
+  });
+
+  test("redispatching a pending container prompt re-checks agent tools reachability", async () => {
+    const unreachable = "The container can't reach the agent tools server.";
+    const preflights: Array<{ environmentId: string; stage: string }> = [];
+    let reachable = true;
+    await withService(
+      async (service, storage, provider) => {
+        const { started } = await startBuilding(service, storage, {
+          environmentType: "containerized",
+        });
+        expect(provider.sent).toHaveLength(1);
+        expect(preflights).toEqual([
+          { environmentId: "env-1", stage: "build pipeline building step" },
+        ]);
+
+        await service.pause(started.id);
+        reachable = false;
+        // Resume journals a continuation prompt; its dispatch goes through the
+        // pending-attempt path, which must check reachability again.
+        await service.resume(started.id);
+        await service.advanceNow(started.id);
+
+        const failed = await pipeline(storage, started.id);
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain(unreachable);
+        expect(failed.pendingPromptAttempt).toBeUndefined();
+        // The failure came from redispatching the existing session, not a new stage.
+        expect(provider.created).toHaveLength(1);
+        expect(provider.sent).toHaveLength(1);
+        expect(preflights).toHaveLength(2);
+        expect(preflights[1]).toEqual({
+          environmentId: "env-1",
+          stage: "build pipeline building step",
+        });
+      },
+      {
+        toolMode: true,
+        environmentType: "containerized",
+        assertAgentToolsReachable: async (environmentId, stage) => {
+          preflights.push({ environmentId, stage });
+          if (!reachable) throw new Error(unreachable);
+        },
+      },
+    );
+  });
+
+  test("skips the agent tools preflight for a local worktree pipeline", async () => {
+    let preflights = 0;
+    await withService(
+      async (service, storage, provider) => {
+        await startBuilding(service, storage);
+        expect(provider.sent).toHaveLength(1);
+        expect(preflights).toBe(0);
+      },
+      {
+        toolMode: true,
+        assertAgentToolsReachable: async () => {
+          preflights += 1;
+        },
+      },
     );
   });
 

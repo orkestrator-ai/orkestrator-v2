@@ -315,6 +315,7 @@ async function harness(
     bridgeAuthToken?: string;
     reviewPackageVerificationFailures?: number;
     toolMode?: boolean;
+    assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-looped-review-"));
@@ -677,6 +678,81 @@ describe("LoopedReviewService", () => {
       },
       "claude",
       { toolMode: true },
+    );
+  });
+
+  test("fails a container workflow before dispatch when its agent tools are unreachable", async () => {
+    const unreachable =
+      "Orkestrator did not start the stage: the container can't reach the agent tools server.";
+    const preflights: Array<{ environmentId: string; stage: string }> = [];
+    await harness(
+      async (service, storage, provider) => {
+        await storage.updateEnvironment("env-1", {
+          environmentType: "containerized",
+          containerId: "container-1",
+          worktreePath: null,
+        });
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        await waitFor(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(storage, started.id)).phase === "failed";
+        });
+        const failed = await snapshot(storage, started.id);
+        expect(failed.failure?.message).toContain(unreachable);
+        // Nothing was sent to an agent that could never report its result.
+        expect(provider.sent).toHaveLength(0);
+        expect(preflights[0]).toEqual({
+          environmentId: "env-1",
+          stage: "Looped Review prepare step",
+        });
+      },
+      "claude",
+      {
+        toolMode: true,
+        assertAgentToolsReachable: async (environmentId, stage) => {
+          preflights.push({ environmentId, stage });
+          throw new Error(unreachable);
+        },
+      },
+    );
+  });
+
+  test("skips the agent tools preflight for local worktrees", async () => {
+    let preflights = 0;
+    await harness(
+      async (service, _storage, provider) => {
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        await waitFor(async () => {
+          await service.advanceNow(started.id);
+          return provider.sent.length > 0;
+        });
+        expect(provider.sent[0]?.agentMcp).toEqual({
+          url: "http://127.0.0.1:1234/mcp",
+          token: "test-token",
+        });
+        expect(preflights).toBe(0);
+      },
+      "claude",
+      {
+        toolMode: true,
+        assertAgentToolsReachable: async () => {
+          preflights += 1;
+        },
+      },
     );
   });
 

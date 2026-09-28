@@ -19,6 +19,7 @@
     "./claude-model-catalog": "./src/claude-model-catalog.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",
+    "./container-host-reachability": "./src/container-host-reachability.ts",
     "./container-lifecycle": "./src/container-lifecycle.ts",
     "./container-recovery": "./src/container-recovery.ts",
     "./container-resources": "./src/container-resources.ts",

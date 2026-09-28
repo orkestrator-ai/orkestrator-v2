@@ -56,6 +56,8 @@ export type CommandContext = {
     /** Port containers call back to; the network policy allows exactly it. */
     servicePort?(): number | null;
   };
+  /** Container → host agent tools reachability checks (startup, bridges, preflight). */
+  containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
   loopedReviews?: LoopedReviewService;

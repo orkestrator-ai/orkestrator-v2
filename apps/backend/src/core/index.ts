@@ -55,6 +55,12 @@ import {
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { AgentToolsServer } from "./agent-tools.js";
+import { ContainerHostReachabilityService } from "./container-host-reachability.js";
+import {
+  ensureContainerAgentToolsHost,
+  ensureContainerHostServicePorts,
+} from "./commands-environment.js";
+import { DOCKER_IMAGE } from "./constants.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
@@ -127,6 +133,8 @@ export class OrkestratorBackend {
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
+  /** Absent in `bun test` backends unless injected: probing runs real Docker commands. */
+  private readonly containerHostReachability: ContainerHostReachabilityService | undefined;
   private readonly workflowResultRollout: WorkflowResultRollout;
   /**
    * Bounded `workflow-provider` admission shared by every keyed workflow
@@ -208,6 +216,8 @@ export class OrkestratorBackend {
       now: () => number;
       timers: import("./recurring-scheduler.js").RecurringTimerFactory;
     };
+    /** Test seam; defaults to a Docker-backed checker outside `bun test`. */
+    containerHostReachability?: ContainerHostReachabilityService;
   }) {
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
@@ -225,6 +235,29 @@ export class OrkestratorBackend {
     });
     this.agentTools =
       options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults, design);
+    this.containerHostReachability =
+      options.containerHostReachability ??
+      (process.env.NODE_ENV === "test"
+        ? undefined
+        : new ContainerHostReachabilityService({
+            servicePort: () => this.agentTools.servicePort?.() ?? null,
+            ownerNamespace: dockerOwnerNamespace(options.dataDir),
+            fallbackImage: () => options.dockerImage ?? DOCKER_IMAGE,
+            // Read lazily: the gateway that receives events is created after init.
+            emit: (event, payload) => options.emit(event, payload),
+            prepareContainer: async (containerId) => {
+              await ensureContainerAgentToolsHost(containerId);
+              await ensureContainerHostServicePorts(
+                containerId,
+                this.agentTools.servicePort?.() ?? null,
+              );
+            },
+            loadEnvironment: (environmentId) => storage.getEnvironment(environmentId),
+          }));
+    const assertAgentToolsReachable = this.containerHostReachability
+      ? (environmentId: string, stage: string) =>
+          this.containerHostReachability!.assertEnvironmentReachable(environmentId, stage)
+      : undefined;
     const resolveAgentToolConnection = this.agentTools.workflowResultConnection
       ? (
           environmentId: string,
@@ -272,6 +305,7 @@ export class OrkestratorBackend {
       credentialSources: new Set(options.credentialSources ?? []),
       emit: options.emit,
       agentTools: this.agentTools,
+      containerHostReachability: this.containerHostReachability,
       controlMcp: this.controlMcp,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
     } as CommandContext;
@@ -522,6 +556,7 @@ export class OrkestratorBackend {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
+        assertAgentToolsReachable,
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
@@ -540,6 +575,7 @@ export class OrkestratorBackend {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
+        assertAgentToolsReachable,
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
@@ -558,6 +594,7 @@ export class OrkestratorBackend {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
+        assertAgentToolsReachable,
         dispatchAddressPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressPrompt(
             this.nativeAgents,
@@ -588,6 +625,7 @@ export class OrkestratorBackend {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
+        assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
       },
     );
@@ -1279,6 +1317,10 @@ export class OrkestratorBackend {
     });
     this.reserveOwnedPreviewPorts();
     reconcileCoordinatorWorkflows();
+    // Tell the user now, not when a review stage silently fails to submit its
+    // result: can agents in containers reach the agent tools server? Runs in
+    // the background (a blocked probe takes seconds) and never rejects.
+    void this.containerHostReachability?.check("boot");
   }
 
   /**

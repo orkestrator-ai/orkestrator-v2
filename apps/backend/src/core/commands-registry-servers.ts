@@ -1,3 +1,4 @@
+import type { CommandContext } from "./commands-context.js";
 import {
   boundedBackgroundLaunch,
   boundedTailCommand,
@@ -429,6 +430,7 @@ export function registerServerCommands(
         : "[a]cp-bridge/dist/index.js --provider=grok";
     register(`start_${provider}_server`, ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
+      probeContainerAgentTools(context, id);
       return enqueueContainerBridgeOperation(provider, id, async () => {
         const bridgeConfig = await context.storage.loadConfig();
         const cursorApiKey =
@@ -551,6 +553,19 @@ export function registerServerCommands(
 }
 
 /**
+ * Cursor, Grok and Pi receive the agent tools connection per session rather
+ * than at bridge start, so nothing on their start path repairs the container's
+ * host alias or network policy or proves the tools server reachable. Do both
+ * in the background: a blocked path is logged and raised in the app (the probe
+ * re-runs the host check) without delaying or failing the bridge start.
+ */
+function probeContainerAgentTools(context: CommandContext, containerId: string): void {
+  void context.containerHostReachability
+    ?.checkEnvironmentContainer(containerId, { prepare: true, reason: "bridge-start" })
+    .catch(() => undefined);
+}
+
+/**
  * The container-side Pi bridge.
  *
  * Structurally the same as the ACP bridges above — one prebuilt bridge under
@@ -567,6 +582,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
 
   register("start_pi_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
+    probeContainerAgentTools(context, id);
     return enqueueContainerBridgeOperation("pi", id, async () => {
       const config = await context.storage.loadConfig();
       const hostPort = await getHostPort(id, PI_BRIDGE_PORT);

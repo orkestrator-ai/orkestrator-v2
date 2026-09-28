@@ -3520,6 +3520,8 @@ async function withService(
     /** Backend command runner; defaults to a stable clean review snapshot. */
     invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
     toolMode?: boolean;
+    /** Defaults to a local worktree environment. */
+    environmentType?: "local" | "containerized";
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), `ork-multi-review-${environmentId}-`));
@@ -3530,7 +3532,7 @@ async function withService(
     projectId: "project-1",
     name: "review",
     branch: "change",
-    containerId: null,
+    containerId: options.environmentType === "containerized" ? "container-1" : null,
     status: "running",
     prUrl: null,
     prState: null,
@@ -3538,7 +3540,7 @@ async function withService(
     createdAt: new Date(0).toISOString(),
     networkAccessMode: "full",
     order: 0,
-    environmentType: "local",
+    environmentType: options.environmentType ?? "local",
     worktreePath: "/tmp/review",
     setupScriptsComplete: true,
   });
@@ -3746,6 +3748,76 @@ test("MultiReviewService sends OpenCode the stable broker capability and exact t
       });
     },
     { toolMode: true },
+  );
+});
+
+test("MultiReviewService fails a container stage at once when its agent tools are unreachable", async () => {
+  const unreachable =
+    "Orkestrator did not start the stage: the container can't reach the agent tools server.";
+  const preflights: Array<{ environmentId: string; stage: string }> = [];
+  for (const packageFlow of [false, true]) {
+    const provider = new Provider(false);
+    preflights.length = 0;
+    await withService(
+      `env-unreachable-tools-${packageFlow ? "package" : "legacy"}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          const current = await snapshot(started.id);
+          return (
+            current?.phase === "failed" ||
+            current?.reviewers.some((reviewer) => reviewer.status === "failed") === true
+          );
+        });
+        const current = (await snapshot(started.id))!;
+        const failure =
+          current.error ?? current.reviewers.find((reviewer) => reviewer.error)?.error;
+        expect(failure).toContain(unreachable);
+        // Nothing was dispatched to an agent that could never report back.
+        expect(provider.sends.size).toBe(0);
+        expect(preflights[0]?.stage).toBe(
+          packageFlow ? "Multi Review preparation step" : "Multi Review reviewer",
+        );
+      },
+      {
+        toolMode: true,
+        packageFlow,
+        environmentType: "containerized",
+        serviceOptions: {
+          assertAgentToolsReachable: async (environmentId, stage) => {
+            preflights.push({ environmentId, stage });
+            throw new Error(unreachable);
+          },
+        },
+      },
+    );
+  }
+});
+
+test("MultiReviewService skips the agent tools preflight for local worktrees", async () => {
+  const provider = new Provider(false);
+  let preflights = 0;
+  await withService(
+    "env-local-tools",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
+      });
+      expect(preflights).toBe(0);
+    },
+    {
+      toolMode: true,
+      serviceOptions: {
+        assertAgentToolsReachable: async () => {
+          preflights += 1;
+        },
+      },
+    },
   );
 });
 

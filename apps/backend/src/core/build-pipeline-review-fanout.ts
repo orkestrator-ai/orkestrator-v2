@@ -141,8 +141,9 @@ export interface BuildPipelineReviewFanoutDeps {
   agentMcp?(
     pipeline: BuildPipeline,
     resultKey: string,
-    provider?: BuildPipelineAgent,
-  ): AgentToolConnection | undefined;
+    provider: BuildPipelineAgent | undefined,
+    stage: string,
+  ): Promise<AgentToolConnection | undefined>;
   /** Bounded reviewer concurrency shared with standalone Multi Review. */
   concurrency?: Partial<ReviewFanoutConcurrency>;
   /** Content-free measurement sink. */
@@ -301,7 +302,7 @@ export class BuildPipelineReviewFanout {
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
       executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (selection, resultKey) =>
-        this.deps.agentMcp?.(pipeline, resultKey, selection.agent),
+        this.deps.agentMcp?.(pipeline, resultKey, selection.agent, "build pipeline reviewer"),
       ...(this.deps.workflowResults && this.deps.agentMcp
         ? {
             supportsToolResult: (selection: ReviewerRecord) =>
@@ -682,7 +683,12 @@ export class BuildPipelineReviewFanout {
       }
       const agentMcp =
         consolidation.resultTransport === "tool-v1"
-          ? this.deps.agentMcp?.(pipeline, consolidation.requestId, consolidation.agent)
+          ? await this.deps.agentMcp?.(
+              pipeline,
+              consolidation.requestId,
+              consolidation.agent,
+              "build pipeline consolidation step",
+            )
           : undefined;
       if (consolidation.resultTransport === "tool-v1" && this.deps.workflowResults) {
         await this.deps.workflowResults.prepare({

@@ -1035,6 +1035,65 @@ describe("process and platform command behavior", () => {
     }
   });
 
+  test("fires a background reachability probe when resolving the container agent-tools connection", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    process.env.FAKE_DOCKER_HOST_RESOLVES = "1";
+    process.env.FAKE_CODEX_BRIDGE_TOKEN = "e".repeat(43);
+    const connection = {
+      url: "http://host.docker.internal:45678/mcp",
+      token: "probe-project-token",
+    };
+    process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT =
+      __testing.agentToolConnectionFingerprint(connection);
+    const agentTools = {
+      connection: mock(() => connection),
+      revokeEnvironment: mock(() => undefined),
+    };
+    // The probe is evidence, not a gate: a rejecting or hung probe must leave
+    // the resolved connection, and the bridge reuse built on it, untouched.
+    const probes: Array<"reject" | "hang"> = ["reject", "hang"];
+    const checkEnvironmentContainer = mock((_containerId: string, _options: unknown) =>
+      probes.shift() === "hang"
+        ? new Promise<never>(() => undefined)
+        : Promise.reject(new Error("container cannot reach the agent tools server")),
+    );
+    const context = {
+      ...fixture.context,
+      agentTools,
+      containerHostReachability: {
+        checkEnvironmentContainer,
+      } as unknown as CommandContext["containerHostReachability"],
+    } as CommandContext;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          invoke("get_codex_server_status", { containerId: "container-existing" }, context),
+        ).resolves.toEqual({
+          running: true,
+          hostPort: healthy.port,
+          authToken: "e".repeat(43),
+        });
+      }
+      expect(agentTools.connection).toHaveBeenCalledTimes(2);
+      expect(agentTools.connection).toHaveBeenCalledWith("environment-1", "project-1", "container");
+      expect(checkEnvironmentContainer.mock.calls).toEqual([
+        ["container-existing", { reason: "bridge-start", environmentName: "feature-environment" }],
+        ["container-existing", { reason: "bridge-start", environmentName: "feature-environment" }],
+      ]);
+      const log = await readCommandLog();
+      expect(log).not.toContain("pkill -f");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await healthy.close();
+    }
+  });
+
   test("loads and validates the durable OpenCode model catalogue", async () => {
     const cached = {
       schemaVersion: 2 as const,

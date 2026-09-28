@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { networkInterfaces } from "node:os";
 import {
   CONTAINER_HOST_REACHABILITY_CHANGED_EVENT,
   initialContainerHostReachability,
@@ -184,28 +185,62 @@ function cidrContains(outer: Ipv4Cidr, inner: Ipv4Cidr): boolean {
   return (outer.address & mask) === (inner.address & mask);
 }
 
-/** Docker's default address pools, widest first. */
-const PRIVATE_RANGES = ["172.16.0.0/12", "192.168.0.0/16", "10.0.0.0/8"] as const;
+/**
+ * Docker's primary default address pool (172.17.0.0/16 … 172.31.0.0/16).
+ * Home and office networks rarely use it, unlike 192.168.0.0/16 and
+ * 10.0.0.0/8, which are never widened to: a rule for those would also admit
+ * every machine on such a network.
+ */
+export const DOCKER_DEFAULT_POOL = "172.16.0.0/12";
+/** Docker's default bridge subnet, used when nothing better is known. */
+const DOCKER_DEFAULT_BRIDGE_SUBNET = "172.17.0.0/16";
 
 /**
- * The source ranges a firewall rule should allow. Subnets inside one of the
- * RFC 1918 ranges Docker allocates from are widened to that range, so a rule
- * keeps working for environment networks Docker has not created yet; an
- * unusual subnet is kept as is. With no subnets known, Docker's default
- * bridge pool is assumed.
+ * The source ranges a firewall rule should allow. Subnets inside Docker's
+ * primary pool are widened to it, so a rule keeps working for environment
+ * networks Docker has not created yet, unless one of this computer's own
+ * (non-Docker) addresses is in that pool: then the local network uses it and
+ * the exact subnets are kept. Every other subnet is kept as is. With no
+ * subnets known, the pool (or the default bridge subnet) is assumed.
  */
-export function coveringCidrs(subnets: readonly string[]): string[] {
+export function coveringCidrs(
+  subnets: readonly string[],
+  hostAddresses: readonly string[] = [],
+): string[] {
+  const pool = parseIpv4Cidr(DOCKER_DEFAULT_POOL)!;
+  const poolUsedLocally = hostAddresses.some((address) => {
+    const parsed = parseIpv4Cidr(`${address.trim()}/32`);
+    return parsed !== null && cidrContains(pool, parsed);
+  });
   const covers = new Set<string>();
   for (const subnet of subnets) {
     const parsed = parseIpv4Cidr(subnet);
     if (!parsed) continue;
-    const range = PRIVATE_RANGES.find((candidate) =>
-      cidrContains(parseIpv4Cidr(candidate)!, parsed),
+    covers.add(
+      !poolUsedLocally && cidrContains(pool, parsed) ? DOCKER_DEFAULT_POOL : subnet.trim(),
     );
-    covers.add(range ?? subnet.trim());
   }
-  if (covers.size === 0) covers.add(PRIVATE_RANGES[0]);
+  if (covers.size === 0) {
+    covers.add(poolUsedLocally ? DOCKER_DEFAULT_BRIDGE_SUBNET : DOCKER_DEFAULT_POOL);
+  }
   return [...covers];
+}
+
+/**
+ * This computer's IPv4 addresses outside Docker (not loopback, `docker0`,
+ * `br-*` or `veth*`): the local networks a firewall rule must not open to.
+ */
+export function hostNetworkAddresses(
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+): string[] {
+  const addresses: string[] = [];
+  for (const [name, entries] of Object.entries(interfaces)) {
+    if (/^(?:docker\d*|br-|veth)/.test(name)) continue;
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) addresses.push(entry.address);
+    }
+  }
+  return addresses;
 }
 
 export function firewallDisplayName(kind: HostFirewallKind): string {
@@ -228,6 +263,8 @@ export function buildContainerHostRemediation(input: {
   port: number;
   subnets: readonly string[];
   outcomes: readonly ContainerHostProbeOutcome[];
+  /** This computer's non-Docker IPv4 addresses; see {@link coveringCidrs}. */
+  hostAddresses?: readonly string[];
 }): ContainerHostRemediation {
   const { firewall, port } = input;
   const blocking = input.outcomes.filter(isBlockingOutcome);
@@ -241,10 +278,22 @@ export function buildContainerHostRemediation(input: {
       commands: ["docker version --format '{{.Server.Version}}'"],
     };
   }
-  const cidrs = coveringCidrs(input.subnets);
+  const cidrs = coveringCidrs(input.subnets, input.hostAddresses);
   const name = firewallDisplayName(firewall);
   const intro = `${firewall === "unknown" ? "A firewall on this computer" : `The host firewall (${name})`} is blocking Docker containers from connecting to port ${port}, where Orkestrator's agent tools server listens. Container agents use it to submit review results, send mail and update tickets.`;
-  const scope = `Allow connections to port ${port} from Docker's networks (${cidrs.join(", ")}) only. The port stays closed to other machines.`;
+  const scope = [
+    `Allow connections to port ${port} only from Docker's networks (${cidrs.join(", ")}), none of which this computer's local network uses, so other machines on it still can't connect.`,
+    ...(cidrs.includes(DOCKER_DEFAULT_POOL)
+      ? [
+          `${DOCKER_DEFAULT_POOL} also covers networks Docker creates for new environments. If this computer later joins a network with ${DOCKER_DEFAULT_POOL} addresses, replace that rule with Docker's exact subnets.`,
+        ]
+      : []),
+    ...(cidrs.some((cidr) => cidr !== DOCKER_DEFAULT_POOL)
+      ? [
+          "A Docker network created later outside these subnets needs its own rule; this check warns you when one is blocked.",
+        ]
+      : []),
+  ].join(" ");
   const after =
     "Then press “Check again”. Orkestrator reuses the same port across restarts; if it ever has to change port, this check will warn you again.";
   switch (firewall) {
@@ -365,6 +414,8 @@ export type ContainerHostReachabilityDependencies = {
   run?: typeof runCommand;
   detectTopology?: () => Promise<Pick<DockerTopology, "kind">>;
   readTextFile?: (path: string) => Promise<string | null>;
+  /** This computer's non-Docker IPv4 addresses; defaults to its interfaces. */
+  hostAddresses?: () => string[];
   /** Repairs host alias and in-container firewall before an environment probe. */
   prepareContainer?: (containerId: string) => Promise<void>;
   loadEnvironment?: (environmentId: string) => Promise<ReachabilityEnvironment | null>;
@@ -694,6 +745,7 @@ export class ContainerHostReachabilityService {
         port,
         subnets: allSubnets,
         outcomes: blocking.map((probe) => probe.outcome),
+        hostAddresses: this.hostAddresses(),
       });
       const first = blocking[0]!;
       const partial =
@@ -757,6 +809,15 @@ export class ContainerHostReachabilityService {
       }
     }
     return this.snapshot();
+  }
+
+  private hostAddresses(): string[] {
+    try {
+      return (this.deps.hostAddresses ?? hostNetworkAddresses)();
+    } catch (error) {
+      this.log.warn(`${LOG_PREFIX} host address listing failed error=${boundedError(error)}`);
+      return [];
+    }
   }
 
   private async ensureProbeImage(): Promise<string | null> {

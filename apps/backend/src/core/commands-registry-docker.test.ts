@@ -1,6 +1,16 @@
 import { describe, expect, mock, test } from "bun:test";
+import {
+  initialContainerHostReachability,
+  type ContainerHostReachability,
+} from "@orkestrator/protocol/container-host-reachability";
 import { CommandFailedError } from "./shell.js";
-import { checkDockerAvailability, dockerUnavailableReason } from "./commands-registry-docker.js";
+import type { CommandContext, CommandHandler } from "./commands-context.js";
+import type { RegistryDependencies } from "./commands-registry-types.js";
+import {
+  checkDockerAvailability,
+  dockerUnavailableReason,
+  registerDockerCommands,
+} from "./commands-registry-docker.js";
 
 describe("Docker availability classification", () => {
   test("reports a missing Docker command", async () => {
@@ -112,5 +122,82 @@ describe("Docker availability classification", () => {
         ),
       ),
     ).toBe("permission-denied");
+  });
+});
+
+describe("container host reachability commands", () => {
+  function dockerCommands(): Map<string, CommandHandler> {
+    const commands = new Map<string, CommandHandler>();
+    registerDockerCommands(
+      (name, handler) => commands.set(name, handler),
+      {} as RegistryDependencies,
+    );
+    return commands;
+  }
+
+  function reachability(
+    overrides: Partial<ContainerHostReachability> = {},
+  ): ContainerHostReachability {
+    return {
+      ...initialContainerHostReachability(),
+      status: "blocked",
+      reason: null,
+      summary: "Containers cannot reach Orkestrator's agent tools server.",
+      checkedAt: "2026-09-28T12:00:00.000Z",
+      trigger: "boot",
+      port: 43_123,
+      url: "http://host.docker.internal:43123/mcp",
+      ...overrides,
+    };
+  }
+
+  function contextWith(service?: {
+    snapshot?: () => ContainerHostReachability;
+    check?: (trigger: string) => Promise<ContainerHostReachability>;
+  }): CommandContext {
+    return (
+      service
+        ? {
+            containerHostReachability:
+              service as unknown as CommandContext["containerHostReachability"],
+          }
+        : {}
+    ) as CommandContext;
+  }
+
+  test("returns the service's current snapshot without running a check", async () => {
+    const snapshot = reachability();
+    const check = mock(async (_trigger: string) => reachability({ trigger: "manual" }));
+    const handler = dockerCommands().get("get_container_host_reachability");
+
+    await expect(
+      Promise.resolve(handler?.({}, contextWith({ snapshot: () => snapshot, check }))),
+    ).resolves.toBe(snapshot);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  test("runs a manual check and returns its result", async () => {
+    const result = reachability({ status: "reachable", trigger: "manual" });
+    const check = mock(async (_trigger: string) => result);
+    const snapshot = mock(() => reachability());
+    const handler = dockerCommands().get("check_container_host_reachability");
+
+    await expect(Promise.resolve(handler?.({}, contextWith({ snapshot, check })))).resolves.toBe(
+      result,
+    );
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledWith("manual");
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
+  test("reports the not-checked state when no reachability service is wired", async () => {
+    const commands = dockerCommands();
+    const context = contextWith();
+
+    for (const name of ["get_container_host_reachability", "check_container_host_reachability"]) {
+      const result = await commands.get(name)?.({}, context);
+      expect(result).toEqual(initialContainerHostReachability());
+      expect(result).toMatchObject({ status: "unverified", reason: "not-checked" });
+    }
   });
 });

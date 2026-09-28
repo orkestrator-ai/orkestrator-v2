@@ -1556,4 +1556,173 @@ exit 0
       else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
     }
   });
+
+  // Cursor, Grok and Pi get the agent tools connection per session, so their
+  // bridge start fires a background container → host reachability probe. The
+  // probe is evidence only: a rejecting or hung probe must neither fail nor
+  // delay the start. The bridge is modelled as already running with a valid
+  // token, so the start takes its short reuse path.
+  for (const provider of ["cursor", "grok", "pi"] as const) {
+    test(`fires a background agent tools probe without blocking the ${provider} bridge start`, async () => {
+      const containerId = `container-${provider}-reachability`;
+      const hostPort = await reserveFreePort();
+      const bridge = await startControllableHealthServer(hostPort, () => true);
+      const token = "t".repeat(43);
+      const environment = createEnvironment({
+        id: `env-${provider}-reachability`,
+        environmentType: "containerized",
+        containerId,
+        status: "running",
+      });
+      const { context } = createContext(environment, {
+        globalConfig: {},
+        dataDir: await createTempDir(`ork-${provider}-reachability-data-`),
+      });
+      const probes: Array<"reject" | "hang"> = [];
+      const checkEnvironmentContainer = mock((_containerId: string, _options: unknown) => {
+        const behaviour = probes.shift();
+        return behaviour === "hang"
+          ? new Promise<never>(() => undefined)
+          : Promise.reject(new Error("container cannot reach the agent tools server"));
+      });
+      context.containerHostReachability = {
+        checkEnvironmentContainer,
+      } as unknown as CommandContext["containerHostReachability"];
+      const commands = createCommandRegistry();
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+
+      const previous = {
+        hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
+        token: process.env.FAKE_BRIDGE_TOKEN,
+        fingerprint: process.env.FAKE_CURSOR_FINGERPRINT,
+      };
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      process.env.FAKE_BRIDGE_TOKEN = token;
+      // No Cursor key is configured, so the expected fingerprint is sha256("").
+      process.env.FAKE_CURSOR_FINGERPRINT = `sdk:${createHash("sha256").update("").digest("hex")}`;
+
+      const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/cursor-bridge-token"*|*"cat /tmp/grok-acp-bridge-token"*|*"cat /tmp/pi-bridge-token"*)
+        printf '%s' "$FAKE_BRIDGE_TOKEN"; exit 0 ;;
+      *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
+        printf '%s' "$FAKE_CURSOR_FINGERPRINT"; exit 0 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          const start = async () => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              return await Promise.race([
+                commands.get(`start_${provider}_server`)?.({ containerId }, context),
+                new Promise((_, reject) => {
+                  timer = setTimeout(
+                    () => reject(new Error(`start_${provider}_server waited on the probe`)),
+                    ASYNC_TEST_WAIT_TIMEOUT_MS,
+                  );
+                }),
+              ]);
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+
+          probes.push("reject");
+          await expect(start()).resolves.toEqual({
+            hostPort,
+            wasRunning: true,
+            authToken: token,
+          });
+
+          probes.push("hang");
+          await expect(start()).resolves.toEqual({
+            hostPort,
+            wasRunning: true,
+            authToken: token,
+          });
+
+          expect(checkEnvironmentContainer).toHaveBeenCalledTimes(2);
+          for (const call of checkEnvironmentContainer.mock.calls) {
+            expect(call).toEqual([containerId, { prepare: true, reason: "bridge-start" }]);
+          }
+          // The reuse path never relaunches the bridge.
+          const execLog = await fs.readFile(logs.exec, "utf8").catch(() => "");
+          expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(0);
+        });
+        // Let a rejection that escaped the probe's catch surface.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        await bridge.close();
+        for (const [name, value] of [
+          ["FAKE_BRIDGE_HOST_PORT", previous.hostPort],
+          ["FAKE_BRIDGE_TOKEN", previous.token],
+          ["FAKE_CURSOR_FINGERPRINT", previous.fingerprint],
+        ] as const) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    });
+  }
+
+  test("starts a container bridge without a reachability service", async () => {
+    // The service is optional on the command context; its absence must not
+    // turn the fire-and-forget probe into a TypeError.
+    const hostPort = await reserveFreePort();
+    const bridge = await startControllableHealthServer(hostPort, () => true);
+    const environment = createEnvironment({
+      id: "env-pi-no-reachability",
+      environmentType: "containerized",
+      containerId: "container-pi-no-reachability",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    expect(context.containerHostReachability).toBeUndefined();
+    const commands = createCommandRegistry();
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    const token = "p".repeat(43);
+
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    case "$*" in
+      *"cat /tmp/pi-bridge-token"*) printf '%s' '${token}'; exit 0 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async () => {
+        await expect(
+          commands.get("start_pi_server")?.(
+            { containerId: "container-pi-no-reachability" },
+            context,
+          ),
+        ).resolves.toEqual({ hostPort, wasRunning: true, authToken: token });
+      });
+    } finally {
+      await bridge.close();
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+    }
+  });
 });

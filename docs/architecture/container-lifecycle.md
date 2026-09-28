@@ -558,9 +558,13 @@ The startup check pulls busybox once (`--pull never` on every run afterwards)
 and falls back to the environment image; with neither it reports
 `unverified`, never a pass. It detects ufw (`/etc/ufw/ufw.conf`), firewalld,
 nftables or iptables and builds fix commands for the actual port, scoped to
-the private ranges covering Docker's subnets (for example
-`sudo ufw allow proto tcp from 172.16.0.0/12 to any port <port>`), so the port
-stays closed to other machines. Probe containers and the temporary network
+Docker's source addresses so the port stays closed to the local network.
+Subnets in Docker's primary pool widen to it (for example
+`sudo ufw allow proto tcp from 172.16.0.0/12 to any port <port>`) so new
+environment networks are covered, unless one of the host's own non-Docker
+interface addresses is in that pool; then, and for subnets in `192.168.0.0/16`
+or `10.0.0.0/8` (common LAN ranges, never widened to), the rules name Docker's
+exact subnets. Probe containers and the temporary network
 carry the owner and `host-reachability-probe` role labels (not the `app`
 label, so cleanup inventories never see them) and are removed after each
 check; leftovers are reaped by the next one. Every step is logged with the

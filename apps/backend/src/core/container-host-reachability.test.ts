@@ -11,6 +11,7 @@ import {
   buildContainerHostRemediation,
   classifyProbeOutput,
   coveringCidrs,
+  hostNetworkAddresses,
   type ContainerHostReachabilityDependencies,
 } from "./container-host-reachability.js";
 import { CommandFailedError } from "./shell.js";
@@ -88,17 +89,58 @@ describe("classifyProbeOutput", () => {
 });
 
 describe("remediation", () => {
-  test("Docker subnets widen to the private range Docker allocates from", () => {
+  test("only Docker's own pool is widened; LAN-style ranges keep their exact subnets", () => {
     expect(coveringCidrs(["172.17.0.0/16", "172.18.0.0/16", "172.30.4.0/24"])).toEqual([
       "172.16.0.0/12",
     ]);
+    // 192.168.0.0/16 and 10.0.0.0/8 are common home and office networks: a
+    // rule for the whole range would admit every machine on them.
     expect(coveringCidrs(["192.168.64.0/20", "10.200.0.0/24"])).toEqual([
-      "192.168.0.0/16",
-      "10.0.0.0/8",
+      "192.168.64.0/20",
+      "10.200.0.0/24",
+    ]);
+    expect(coveringCidrs(["172.17.0.0/16", "192.168.64.0/20"])).toEqual([
+      "172.16.0.0/12",
+      "192.168.64.0/20",
     ]);
     expect(coveringCidrs(["100.90.0.0/16"])).toEqual(["100.90.0.0/16"]);
     expect(coveringCidrs(["fd00::/64", "garbage"])).toEqual(["172.16.0.0/12"]);
     expect(coveringCidrs([])).toEqual(["172.16.0.0/12"]);
+  });
+
+  test("the pool is not widened to when this computer's local network uses it", () => {
+    const lan = ["172.20.5.10"];
+    expect(coveringCidrs(["172.17.0.0/16", "172.18.0.0/16"], lan)).toEqual([
+      "172.17.0.0/16",
+      "172.18.0.0/16",
+    ]);
+    expect(coveringCidrs([], lan)).toEqual(["172.17.0.0/16"]);
+    // An address outside the pool leaves the widening alone.
+    expect(coveringCidrs(["172.17.0.0/16"], ["192.168.1.20", "not-an-ip"])).toEqual([
+      "172.16.0.0/12",
+    ]);
+  });
+
+  test("host network addresses skip loopback, IPv6 and Docker's own interfaces", () => {
+    const entry = (address: string, family: "IPv4" | "IPv6" = "IPv4", internal = false) => ({
+      address,
+      family,
+      internal,
+      netmask: "255.255.0.0",
+      mac: "00:00:00:00:00:00",
+      cidr: null,
+      ...(family === "IPv6" ? { scopeid: 0 } : {}),
+    });
+    expect(
+      hostNetworkAddresses({
+        lo: [entry("127.0.0.1", "IPv4", true)],
+        docker0: [entry("172.17.0.1")],
+        "br-0123456789ab": [entry("172.18.0.1")],
+        veth12345: [entry("169.254.1.1")],
+        wlan0: [entry("192.168.1.20"), entry("fe80::1", "IPv6")],
+        enp3s0: [entry("172.20.5.10")],
+      } as Parameters<typeof hostNetworkAddresses>[0]),
+    ).toEqual(["192.168.1.20", "172.20.5.10"]);
   });
 
   test("ufw gets source-scoped allow rules for the actual port", () => {
@@ -111,8 +153,27 @@ describe("remediation", () => {
     expect(remediation.commands).toEqual([
       "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
     ]);
-    expect(remediation.steps.join(" ")).toContain("ufw");
-    expect(remediation.steps.join(" ")).toContain("stays closed to other machines");
+    const steps = remediation.steps.join(" ");
+    expect(steps).toContain("ufw");
+    expect(steps).toContain("other machines on it still can't connect");
+    expect(steps).toContain("replace that rule with Docker's exact subnets");
+  });
+
+  test("a local network in Docker's pool gets exact-subnet rules and no widening note", () => {
+    const remediation = buildContainerHostRemediation({
+      firewall: "ufw",
+      port: 38179,
+      subnets: ["172.17.0.0/16", "192.168.64.0/20"],
+      outcomes: ["timeout"],
+      hostAddresses: ["172.20.5.10"],
+    });
+    expect(remediation.commands).toEqual([
+      "sudo ufw allow proto tcp from 172.17.0.0/16 to any port 38179 comment 'Orkestrator agent tools'",
+      "sudo ufw allow proto tcp from 192.168.64.0/20 to any port 38179 comment 'Orkestrator agent tools'",
+    ]);
+    const steps = remediation.steps.join(" ");
+    expect(steps).not.toContain("172.16.0.0/12");
+    expect(steps).toContain("needs its own rule");
   });
 
   test("firewalld gets rich rules and a reload; others get iptables with a persistence note", () => {
@@ -228,6 +289,8 @@ function service(
     ownerNamespace: "owner",
     fallbackImage: () => "orkestrator-v2:latest",
     platform: "linux",
+    // Deterministic: the real interfaces of the machine running the suite vary.
+    hostAddresses: () => ["192.168.1.20"],
     detectTopology: async () => ({ kind: "local-engine" }),
     readTextFile: async (path) =>
       path === "/etc/ufw/ufw.conf"
@@ -298,6 +361,17 @@ describe("ContainerHostReachabilityService.check", () => {
     expect(logText).toContain("status=blocked");
     expect(logText).toContain("outcome=timeout");
     expect(logText).toContain("fix: sudo ufw allow");
+  });
+
+  test("the fix never widens to a range this computer's local network uses", async () => {
+    const { svc } = service({
+      runner: fakeRunner({ probeOutput: () => BUSYBOX_TIMEOUT }),
+      hostAddresses: () => ["172.20.5.10"],
+    });
+    const result = await svc.check("boot");
+    expect(result.status).toBe("blocked");
+    expect(result.remediation?.commands.join("\n")).not.toContain("172.16.0.0/12");
+    expect(result.remediation?.commands.length).toBeGreaterThan(0);
   });
 
   test("a reachable host passes quietly", async () => {

@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/container-host-reachability";
 import * as realBackend from "@/lib/backend";
 import * as realNativeEvents from "@/lib/native/events";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const realBackendSnapshot = { ...realBackend };
 const realNativeEventsSnapshot = { ...realNativeEvents };
@@ -98,12 +99,18 @@ describe("ContainerHostReachabilityNotice", () => {
     current = initialContainerHostReachability();
     render(<ContainerHostReachabilityNotice />);
     await waitFor(() => expect(getContainerHostReachability).toHaveBeenCalled());
-    expect(screen.queryByTestId("container-host-reachability-banner")).toBeNull();
+    expectDomAbsent(
+      screen.queryByTestId("container-host-reachability-banner"),
+      "reachability banner",
+    );
 
     await act(async () => {
       handlers.get(CONTAINER_HOST_REACHABILITY_CHANGED_EVENT)?.({ payload: reachable });
     });
-    expect(screen.queryByTestId("container-host-reachability-banner")).toBeNull();
+    expectDomAbsent(
+      screen.queryByTestId("container-host-reachability-banner"),
+      "reachability banner",
+    );
   });
 
   test("a blocked startup check opens the fix dialog once and keeps a banner", async () => {
@@ -114,11 +121,17 @@ describe("ContainerHostReachabilityNotice", () => {
     expect(screen.getByTestId("container-host-reachability-commands").textContent).toBe(FIX);
     expect(screen.getByText("Allow Docker containers through ufw")).toBeTruthy();
     // The banner would cover the dialog's footer, so it waits for the dialog.
-    expect(screen.queryByTestId("container-host-reachability-banner")).toBeNull();
+    expectDomAbsent(
+      screen.queryByTestId("container-host-reachability-banner"),
+      "reachability banner",
+    );
 
     fireEvent.click(screen.getAllByRole("button", { name: "Close" }).at(-1)!);
     await waitFor(() =>
-      expect(screen.queryByText("Docker containers can't reach Orkestrator")).toBeNull(),
+      expectDomAbsent(
+        screen.queryByText("Docker containers can't reach Orkestrator"),
+        "reachability dialog",
+      ),
     );
     expect(screen.getByTestId("container-host-reachability-banner")).toBeTruthy();
 
@@ -126,7 +139,10 @@ describe("ContainerHostReachabilityNotice", () => {
     cleanup();
     render(<ContainerHostReachabilityNotice />);
     await screen.findByTestId("container-host-reachability-banner");
-    expect(screen.queryByText("Docker containers can't reach Orkestrator")).toBeNull();
+    expectDomAbsent(
+      screen.queryByText("Docker containers can't reach Orkestrator"),
+      "reachability dialog",
+    );
   });
 
   test("a live change event raises the warning without a refetch", async () => {
@@ -149,7 +165,10 @@ describe("ContainerHostReachabilityNotice", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
     await waitFor(() => expect(checkContainerHostReachability).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.queryByTestId("container-host-reachability-banner")).toBeNull(),
+      expectDomAbsent(
+        screen.queryByTestId("container-host-reachability-banner"),
+        "reachability banner",
+      ),
     );
   });
 
@@ -161,7 +180,10 @@ describe("ContainerHostReachabilityNotice", () => {
     );
     render(<ContainerHostReachabilityNotice />);
     fireEvent.click(await screen.findByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("container-host-reachability-banner")).toBeNull();
+    expectDomAbsent(
+      screen.queryByTestId("container-host-reachability-banner"),
+      "reachability banner",
+    );
 
     // A different problem (the port moved) is raised again.
     await act(async () => {

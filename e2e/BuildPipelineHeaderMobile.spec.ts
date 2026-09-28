@@ -9,7 +9,7 @@ test("the build pipeline header keeps every control inside a phone viewport", as
   const header = page.getByTestId("build-pipeline-header");
   const summary = page.getByTestId("build-pipeline-header-summary");
   const controls = page.getByTestId("build-pipeline-header-controls");
-  const buttons = ["Retry Review", "Pause", "Cancel"].map((name) =>
+  const buttons = ["Restart Build Stage", "Pause", "Cancel"].map((name) =>
     controls.getByRole("button", { name }),
   );
 

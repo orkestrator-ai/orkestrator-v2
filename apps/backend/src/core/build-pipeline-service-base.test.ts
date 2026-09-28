@@ -1108,6 +1108,100 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  describe("restarting the current stage", () => {
+    const reviewSessionCount = (snapshot: BuildPipeline) =>
+      snapshot.sessions.filter((session) => session.phase === "review").length;
+
+    test("restarts the verification it is on without re-running the review", async () => {
+      await withService(async (service, storage, provider) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        let completed = await pipeline(storage, started.id);
+        const verificationIndex = completed.sessions.findIndex(
+          (session) => session.phase === "verify",
+        );
+        completed = await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.phase = "verifying";
+          snapshot.currentSessionIndex = verificationIndex;
+          snapshot.sessions[verificationIndex]!.status = "running";
+          delete snapshot.sessions[verificationIndex]!.completedAt;
+        });
+        const verification = completed.sessions[verificationIndex]!;
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(provider.aborted).toContain(verification.sdkSessionId);
+        expect(restarted.phase).toBe("verifying");
+        expect(restarted.structuredReview).toEqual(completed.structuredReview);
+        expect(reviewSessionCount(restarted)).toBe(reviewSessionCount(completed));
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(verification.sdkSessionId);
+      });
+    });
+
+    test("restarts the stage a paused pipeline paused in", async () => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        let completed = await pipeline(storage, started.id);
+        const verificationIndex = completed.sessions.findIndex(
+          (session) => session.phase === "verify",
+        );
+        completed = await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.phase = "paused";
+          snapshot.pausedFromPhase = "verifying";
+          snapshot.currentSessionIndex = verificationIndex;
+        });
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(restarted.phase).toBe("verifying");
+        expect(restarted.pausedFromPhase).toBeUndefined();
+        expect(reviewSessionCount(restarted)).toBe(reviewSessionCount(completed));
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+      });
+    });
+
+    test("restarts the phase it has entered before that stage's session exists", async () => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        const completed = await mutateStored(storage, started.id, (snapshot) => {
+          // The previous stage's session is still current until the next tick
+          // opens the verification; restarting it would rewind the pipeline.
+          snapshot.phase = "verifying";
+          snapshot.currentSessionIndex =
+            snapshot.sessions.findIndex((session) => session.phase === "verify") - 1;
+        });
+        const previous = completed.sessions[completed.currentSessionIndex]!;
+        expect(previous.phase).not.toBe("verify");
+        const previousCount = completed.sessions.filter(
+          (session) => session.phase === previous.phase,
+        ).length;
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(restarted.phase).toBe("verifying");
+        expect(
+          restarted.sessions.filter((session) => session.phase === previous.phase),
+        ).toHaveLength(previousCount);
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+      });
+    });
+
+    test("refuses a build with no running stage", async () => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("complete");
+
+        await expect(service.restartCurrentStep(started.id)).rejects.toThrow(
+          "This build has no running stage to restart",
+        );
+      });
+    });
+  });
+
   test("restarts review-package preparation as a first-class stage", async () => {
     await withService(async (service, storage) => {
       const started = await service.start(startInput());

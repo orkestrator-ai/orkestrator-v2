@@ -126,6 +126,22 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
     expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(false);
   });
 
+  test("toggles auto-PR and retains it when changing the reviewer count", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness canInherit={false} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-PR" });
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(checkbox);
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoPr).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Use one more reviewer" }));
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview).toEqual({
+      autoPr: true,
+      reviewerCount: 3,
+    });
+    fireEvent.click(checkbox);
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoPr).toBe(false);
+  });
+
   test("shows the edited tier instead of an inherited auto-fix value", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(

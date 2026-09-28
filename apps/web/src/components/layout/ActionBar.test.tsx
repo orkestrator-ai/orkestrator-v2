@@ -4305,6 +4305,27 @@ describe("ActionBar workflow tabs", () => {
     expect(currentMultiReviewSettings.autoFix).toBe(true);
   });
 
+  test("Multi Review launches carry the saved auto-PR default and a one-launch override", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentMultiReviewSettings = { autoPr: true };
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix" });
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    await waitFor(() =>
+      expect(startMultiReviewMock).toHaveBeenCalledWith(expect.objectContaining({ autoPr: false })),
+    );
+    expect(currentMultiReviewSettings.autoPr).toBe(true);
+  });
+
   test("opens Multi Review settings on mobile long press without launching defaults", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

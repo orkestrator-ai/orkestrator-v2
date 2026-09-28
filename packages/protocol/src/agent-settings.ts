@@ -59,6 +59,8 @@ export const DEFAULT_MULTI_REVIEW_REVIEWER_COUNT = 2;
 export interface MultiReviewAgentSettings {
   /** Automatically launch Fix after a manual Multi Review consolidates. */
   autoFix?: boolean;
+  /** Automatically launch the PR tab after a Multi Review Fix turn completes. */
+  autoPr?: boolean;
   /** Number of reviewer sessions Multi Review, feature builds, and ticket builds start. */
   reviewerCount?: number;
   /** Reviewer 3 onward. Null means use the first reviewer's resolved default. */
@@ -67,6 +69,7 @@ export interface MultiReviewAgentSettings {
 
 export interface ResolvedMultiReviewAgentSettings {
   autoFix: boolean;
+  autoPr: boolean;
   reviewerCount: number;
   additionalReviewers: Array<AgentActionDefault | null>;
 }
@@ -250,6 +253,11 @@ export function resolveMultiReviewSettings(
       tiers.repository?.multiReview?.autoFix ??
       tiers.global?.multiReview?.autoFix ??
       false,
+    autoPr:
+      tiers.environment?.multiReview?.autoPr ??
+      tiers.repository?.multiReview?.autoPr ??
+      tiers.global?.multiReview?.autoPr ??
+      false,
     reviewerCount,
     additionalReviewers: additionalReviewers.slice(
       0,
@@ -324,6 +332,7 @@ function normalizeMultiReviewSettings(value: unknown): MultiReviewAgentSettings 
 
   const normalized: MultiReviewAgentSettings = {
     ...(typeof record.autoFix === "boolean" ? { autoFix: record.autoFix } : {}),
+    ...(typeof record.autoPr === "boolean" ? { autoPr: record.autoPr } : {}),
     ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
   };

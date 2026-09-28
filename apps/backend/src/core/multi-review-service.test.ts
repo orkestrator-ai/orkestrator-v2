@@ -856,6 +856,351 @@ test.each(["keyed", "adaptive"] as const)(
   },
 );
 
+/** Records auto-PR launches; the first `failures` launches throw, as a full tab strip does. */
+function autoPrInvoker(options: { failures?: number; status?: "accepted" | "rejected" } = {}) {
+  const launches: Record<string, unknown>[] = [];
+  const watches: Record<string, unknown>[] = [];
+  let failures = options.failures ?? 0;
+  const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    if (command === "launch_native_agent_job") {
+      launches.push(args!);
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("Environment already has the maximum of 12 tabs");
+      }
+      return (
+        options.status === "rejected"
+          ? { status: "rejected", tabId: "agent-job-pr", error: "provider refused" }
+          : { status: "accepted", tabId: "agent-job-pr" }
+      ) as T;
+    }
+    if (command === "pr_monitor_watch") {
+      watches.push(args!);
+      return undefined as T;
+    }
+    return stableReviewInvoker<T>(command, args);
+  };
+  return { invoke, launches, watches };
+}
+
+const autoPrFixDispatch: NonNullable<MultiReviewServiceOptions["dispatchAddressPrompt"]> = async (
+  workflow,
+) => ({
+  tabId: workflow.addressTabId!,
+  fixSession: {
+    ...workflow.fixModel,
+    sessionKey: workflow.addressSessionKey!,
+    providerSessionId: `provider-auto-pr-${workflow.id}`,
+    requestIds: [workflow.addressRequestId!],
+    status: "running",
+    startedAt: new Date().toISOString(),
+  },
+});
+
+/** Consolidate, hand off Fix, and observe it run to `finalStatus`. */
+async function runInteractiveFix(
+  service: MultiReviewService,
+  provider: Provider,
+  snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>,
+  workflowId: string,
+  finalStatus: ProviderStatus = "idle",
+): Promise<MultiReviewWorkflow> {
+  await waitUntil(async () => {
+    await service.advanceNow(workflowId);
+    return (await snapshot(workflowId))?.phase === "ready";
+  });
+  await service.address(workflowId);
+  await waitUntil(async () => {
+    await service.advanceNow(workflowId);
+    return (await snapshot(workflowId))?.addressPromptPending !== true;
+  });
+  provider.statusValue = "running";
+  await service.advanceNow(workflowId);
+  provider.statusValue = finalStatus;
+  await service.advanceNow(workflowId);
+  const settled = (await snapshot(workflowId))!;
+  expect(settled.stepRuntimes?.fix?.completedAt).toEqual(expect.any(String));
+  return settled;
+}
+
+test("MultiReviewService launches the PR tab once after a successful Fix when auto-PR is on", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-auto-pr-launch",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      expect(started.autoPr).toBe(true);
+      const settled = await runInteractiveFix(service, provider, snapshot, started.id);
+      // Recorded in the settlement save, before any launch I/O.
+      expect(settled.autoPrLaunch).toEqual({
+        state: "pending",
+        requestId: `multi-review-pr:${started.id}`,
+      });
+      expect(pr.launches).toHaveLength(0);
+
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toEqual({
+        state: "launched",
+        requestId: `multi-review-pr:${started.id}`,
+        tabId: "agent-job-pr",
+      });
+      expect(pr.launches).toHaveLength(1);
+      expect(pr.launches[0]).toMatchObject({
+        requestId: `multi-review-pr:${started.id}`,
+        environmentId: "env-auto-pr-launch",
+        agent: "claude",
+        title: "PR",
+        conversationMode: "build",
+        activateTab: false,
+      });
+      expect(String(pr.launches[0]!.prompt)).toContain("gh pr create --base main");
+      expect(pr.watches).toEqual([{ environmentId: "env-auto-pr-launch", mode: "create-pending" }]);
+
+      // A delivered launch owes nothing more and is never repeated.
+      await service.advanceNow(started.id);
+      expect(pr.launches).toHaveLength(1);
+      const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+      expect(claimed.granted).toBe(true);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+test.each(["keyed", "adaptive"] as const)(
+  "MultiReviewService delivers auto-PR in the background with no renderer (%s driver)",
+  async (driver) => {
+    const provider = new Provider();
+    const pr = autoPrInvoker();
+    await withService(
+      `env-auto-pr-${driver}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        await service.init();
+        const started = await start();
+        await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+        provider.statusValue = "running";
+        await service.address(started.id);
+        await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "running");
+        provider.statusValue = "idle";
+        await waitUntil(
+          async () => (await snapshot(started.id))?.autoPrLaunch?.state === "launched",
+        );
+        expect(pr.launches).toHaveLength(1);
+      },
+      {
+        autoPr: true,
+        invoke: pr.invoke,
+        serviceOptions: {
+          autoAdvance: true,
+          keyedScheduling: driver === "keyed",
+          pollIntervalMs: 5,
+          dispatchAddressPrompt: autoPrFixDispatch,
+        },
+      },
+    );
+  },
+);
+
+test("MultiReviewService uses the pull request action default for the auto-PR agent", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-auto-pr-action-default",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["claude", "codex"],
+          agentSettings: {
+            actionDefaults: {
+              pr: { platform: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+            },
+          },
+        },
+      });
+      const started = await start();
+      await runInteractiveFix(service, provider, snapshot, started.id);
+      await service.advanceNow(started.id);
+      expect(pr.launches[0]).toMatchObject({
+        agent: "codex",
+        modelId: "gpt-5.6",
+        reasoningId: "high",
+      });
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+test.each([
+  ["auto-PR is off", undefined, "idle" as const],
+  ["the Fix failed", true, "error" as const],
+])("MultiReviewService does not launch a PR when %s", async (_label, autoPr, finalStatus) => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    `env-auto-pr-none-${finalStatus}`,
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      const settled = await runInteractiveFix(service, provider, snapshot, started.id, finalStatus);
+      expect(settled.autoPrLaunch).toBeUndefined();
+      await service.advanceNow(started.id);
+      expect(pr.launches).toHaveLength(0);
+    },
+    {
+      ...(autoPr !== undefined ? { autoPr } : {}),
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+test("MultiReviewService skips auto-PR when the environment already has a pull request", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-auto-pr-existing",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await runInteractiveFix(service, provider, snapshot, started.id);
+      await storage.updateEnvironment("env-auto-pr-existing", {
+        prUrl: "https://github.com/acme/app/pull/7",
+        prState: "open",
+      });
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+        state: "skipped",
+        message: expect.stringContaining("already exists"),
+      });
+      expect(pr.launches).toHaveLength(0);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+test("MultiReviewService keeps the review intact when auto-PR cannot read its settings", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-auto-pr-config-error",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await runInteractiveFix(service, provider, snapshot, started.id);
+      const loadConfig = storage.loadConfig.bind(storage);
+      storage.loadConfig = async () => {
+        throw new Error("config unreadable");
+      };
+      try {
+        await service.advanceNow(started.id);
+      } finally {
+        storage.loadConfig = loadConfig;
+      }
+      const retried = (await snapshot(started.id))!;
+      expect(retried.phase).toBe("interactive");
+      expect(retried.error).toBeUndefined();
+      expect(retried.autoPrLaunch).toMatchObject({
+        state: "pending",
+        attempts: 1,
+        message: "config unreadable",
+      });
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch?.state).toBe("launched");
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch, addressDispatchRetryMs: 0 },
+    },
+  );
+});
+
+test("MultiReviewService retries a failed auto-PR launch under one request id", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker({ failures: 2 });
+  await withService(
+    "env-auto-pr-retry",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await runInteractiveFix(service, provider, snapshot, started.id);
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+        state: "pending",
+        attempts: 1,
+        message: expect.stringContaining("maximum"),
+      });
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+        state: "launched",
+        tabId: "agent-job-pr",
+      });
+      expect(pr.launches).toHaveLength(3);
+      expect(new Set(pr.launches.map((launch) => launch.requestId))).toEqual(
+        new Set([`multi-review-pr:${started.id}`]),
+      );
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch, addressDispatchRetryMs: 0 },
+    },
+  );
+});
+
+test.each([
+  ["exhausts its retry budget", { failures: 10 }, 3, "maximum"],
+  ["is rejected", { status: "rejected" as const }, 1, "provider refused"],
+])(
+  "MultiReviewService marks auto-PR failed when the launch %s",
+  async (_label, invokerOptions, expectedLaunches, message) => {
+    const provider = new Provider();
+    const pr = autoPrInvoker(invokerOptions);
+    await withService(
+      `env-auto-pr-failed-${expectedLaunches}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        await runInteractiveFix(service, provider, snapshot, started.id);
+        for (let pass = 0; pass < 5; pass += 1) await service.advanceNow(started.id);
+        const failed = (await snapshot(started.id))!;
+        expect(failed.autoPrLaunch).toMatchObject({
+          state: "failed",
+          message: expect.stringContaining(message),
+        });
+        // The review itself stays usable; only the follow-up failed.
+        expect(failed.phase).toBe("interactive");
+        expect(failed.error).toBeUndefined();
+        expect(pr.launches).toHaveLength(expectedLaunches);
+      },
+      {
+        autoPr: true,
+        invoke: pr.invoke,
+        serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch, addressDispatchRetryMs: 0 },
+      },
+    );
+  },
+);
+
 test("MultiReviewService bounds delayed interactive Fix usage finalization", async () => {
   const provider = new Provider();
   provider.usagePending = true;
@@ -2889,6 +3234,7 @@ async function withService(
   options: {
     packageFlow?: boolean;
     autoFix?: boolean;
+    autoPr?: boolean;
     createProvider?: NonNullable<MultiReviewServiceOptions["provider"]>;
     serviceOptions?: Partial<MultiReviewServiceOptions>;
     /** Backend command runner; defaults to a stable clean review snapshot. */
@@ -2951,6 +3297,7 @@ async function withService(
           projectId: "project-1",
           targetBranch: "main",
           autoFix: options.autoFix,
+          ...(options.autoPr !== undefined ? { autoPr: options.autoPr } : {}),
           reviewers,
           fixModel,
         }),

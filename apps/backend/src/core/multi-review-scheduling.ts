@@ -56,6 +56,7 @@ export function supervisionDemand(
   if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
     return dispatchesAddressPrompts ? "fast" : "none";
   }
+  if (needsAutoPrLaunch(workflow)) return "fast";
   if (needsPausedStopReconciliation(workflow)) return "observe";
   if (needsInteractiveFixObservation(workflow)) return "observe";
   if (!isSupervisedPhase(workflow.phase)) return "none";
@@ -84,6 +85,11 @@ export function needsInteractiveFixObservation(workflow: MultiReviewWorkflow): b
   );
 }
 
+/** A successful Fix recorded an automatic PR launch the supervisor has not delivered yet. */
+export function needsAutoPrLaunch(workflow: MultiReviewWorkflow): boolean {
+  return workflow.autoPrLaunch?.state === "pending";
+}
+
 /**
  * What a Multi Review still owes the backend (step 08, task 1).
  *
@@ -92,6 +98,7 @@ export function needsInteractiveFixObservation(workflow: MultiReviewWorkflow): b
  * | `result-consumption` | `pendingResultConsumptions` non-empty, any phase | Durable consumption outbox. |
  * | `cancelling` | `cancelling` | Abort every running session and settle within the cancellation deadline. |
  * | `address-handoff` | `interactive` with `addressPromptPending` (and a dispatcher) | Durable interactive Fix handoff; retried with backoff until acknowledged. |
+ * | `pr-handoff` | `autoPrLaunch.state` is `pending`, any phase | Durable auto-PR launch after a successful Fix; retried with backoff until acknowledged. |
  * | `paused-stop` | `paused` whose validation or session stop is not yet confirmed | Retry the stop. |
  * | `interactive-fix` | `interactive` Fix turn running/idle before its runtime settles | Observe interactive Fix completion and final usage. |
  * | `reviewers` | `reviewing` | Reviewer fan-out (its own concurrency budget), idle-result grace and final-usage probes. |
@@ -104,6 +111,7 @@ export type MultiReviewObligation =
   | "result-consumption"
   | "cancelling"
   | "address-handoff"
+  | "pr-handoff"
   | "paused-stop"
   | "interactive-fix"
   | "reviewers"
@@ -119,6 +127,7 @@ export function multiReviewObligation(
   if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
     return "address-handoff";
   }
+  if (needsAutoPrLaunch(workflow)) return "pr-handoff";
   if (needsPausedStopReconciliation(workflow)) return "paused-stop";
   if (needsInteractiveFixObservation(workflow)) return "interactive-fix";
   return workflow.phase === "reviewing" ? "reviewers" : "step";

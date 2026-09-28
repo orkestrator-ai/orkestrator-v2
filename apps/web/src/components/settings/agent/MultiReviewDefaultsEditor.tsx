@@ -90,6 +90,7 @@ function withReviewerCount(tier: AgentSettingsTier, reviewerCount: number): Agen
   );
   const multiReview = {
     ...(tier.multiReview?.autoFix !== undefined ? { autoFix: tier.multiReview.autoFix } : {}),
+    ...(tier.multiReview?.autoPr !== undefined ? { autoPr: tier.multiReview.autoPr } : {}),
     ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
   };
@@ -364,6 +365,25 @@ export function MultiReviewDefaultsEditor({
         <p id="multi-review-auto-fix-description" className="text-xs text-muted-foreground">
           Automatically start Fix after a manual Multi Review consolidates, addressing the report’s
           issues and coverage gaps.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="multi-review-auto-pr"
+            checked={tier.multiReview?.autoPr ?? false}
+            disabled={disabled}
+            onCheckedChange={(checked) =>
+              onChange({ ...tier, multiReview: { ...tier.multiReview, autoPr: checked === true } })
+            }
+            aria-describedby="multi-review-auto-pr-description"
+          />
+          <Label htmlFor="multi-review-auto-pr">Auto-PR</Label>
+        </div>
+        <p id="multi-review-auto-pr-description" className="text-xs text-muted-foreground">
+          Automatically launch the PR tab once a Multi Review Fix completes successfully, using the
+          pull request default. Skipped when the environment already has a pull request.
         </p>
       </div>
 

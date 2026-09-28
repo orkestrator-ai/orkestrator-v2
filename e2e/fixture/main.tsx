@@ -470,6 +470,7 @@ function MultiReviewAutoFixFixture() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selection, setSelection] = useState<MultiReviewLaunchSelection>();
   const [consolidated, setConsolidated] = useState(false);
+  const [fixed, setFixed] = useState(false);
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
@@ -492,6 +493,7 @@ function MultiReviewAutoFixFixture() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         defaultAutoFix={saved.multiReview?.autoFix}
+        defaultAutoPr={saved.multiReview?.autoPr}
         defaultAgent="claude"
         catalog={reviewModelCatalog}
         onConfirm={(nextSelection) => {
@@ -505,6 +507,12 @@ function MultiReviewAutoFixFixture() {
         </button>
       )}
       {consolidated && selection?.autoFix && <div role="tab">Fix</div>}
+      {consolidated && selection?.autoFix && (
+        <button type="button" onClick={() => setFixed(true)}>
+          Complete fix
+        </button>
+      )}
+      {fixed && selection?.autoPr && <div role="tab">PR</div>}
     </main>
   );
 }

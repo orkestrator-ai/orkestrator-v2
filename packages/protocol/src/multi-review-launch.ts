@@ -84,6 +84,8 @@ export interface MultiReviewWorkEstimate {
   validationRuns: number;
   /** Fix turns included in this launch (auto-fix only). */
   fixTurns: number;
+  /** Pull request turns that follow a successful fix (auto-PR only). */
+  prTurns: number;
   /** Structured-output repairs each model step may add, at most. */
   maxRepairTurnsPerStep: number;
 }
@@ -91,6 +93,7 @@ export interface MultiReviewWorkEstimate {
 export function multiReviewWorkEstimate(input: {
   reviewerCount: number;
   autoFix: boolean;
+  autoPr?: boolean;
 }): MultiReviewWorkEstimate {
   return {
     reviewerTurns: Math.max(0, Math.floor(input.reviewerCount)),
@@ -98,6 +101,7 @@ export function multiReviewWorkEstimate(input: {
     consolidationTurns: 1,
     validationRuns: 1,
     fixTurns: input.autoFix ? 1 : 0,
+    prTurns: input.autoPr ? 1 : 0,
     maxRepairTurnsPerStep: REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS,
   };
 }
@@ -105,9 +109,12 @@ export function multiReviewWorkEstimate(input: {
 /** One-sentence summary of {@link multiReviewWorkEstimate} for the launcher. */
 export function multiReviewWorkSummary(estimate: MultiReviewWorkEstimate): string {
   const reviewers = `${estimate.reviewerTurns} reviewer turn${estimate.reviewerTurns === 1 ? "" : "s"}`;
+  const pr = estimate.prTurns > 0 ? " and 1 pull request turn once it succeeds" : "";
   const fix =
     estimate.fixTurns > 0
-      ? ", then 1 fix turn"
-      : "; a fix is launched separately and is not included";
+      ? `, then 1 fix turn${pr}`
+      : estimate.prTurns > 0
+        ? "; a fix is launched separately and is not included, but a successful fix is followed by 1 pull request turn"
+        : "; a fix is launched separately and is not included";
   return `Expected work: 1 preparation turn, validation run once and shared, ${reviewers}, and 1 consolidation turn${fix}. Each model step may add up to ${estimate.maxRepairTurnsPerStep} repair turns if its structured output is invalid.`;
 }

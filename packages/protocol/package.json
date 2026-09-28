@@ -58,6 +58,7 @@
     "./fake-intervals": "./src/fake-intervals.ts",
     "./reconnect-backoff": "./src/reconnect-backoff.ts",
     "./plan-usage": "./src/plan-usage.ts",
+    "./pr-prompt": "./src/pr-prompt.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./preview-access": "./src/preview-access.ts",
     "./preview-contract-fixtures": "./src/preview-contract-fixtures.ts",

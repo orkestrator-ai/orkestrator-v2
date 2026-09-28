@@ -215,6 +215,7 @@ function createProbe(): Query {
     options: {
       maxTurns: 0,
       cwd: process.env.CWD || process.cwd(),
+      env: { ...process.env },
       ...claudeExecutableOptions(),
     },
   });

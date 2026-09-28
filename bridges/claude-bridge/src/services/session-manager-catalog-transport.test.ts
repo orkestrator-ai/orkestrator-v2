@@ -382,29 +382,40 @@ describe("Claude command catalogue", () => {
   });
 
   test("a cold read runs one probe configured like the session's turns", async () => {
-    queryControlOverrides.supportedCommands = mock(async () => [
-      { name: "review", description: "Review", argumentHint: "" },
-    ]);
-    const session = idleSession("cold probe");
-    session.executionPolicy = {
-      id: "interactive-host",
-      sandbox: "provider",
-      approvals: "ask",
-      projectResources: false,
-      networkAccess: "restricted",
-    };
-    const [first, second] = await Promise.all([
-      readClaudeCommandCatalogue(session.id),
-      readClaudeCommandCatalogue(session.id),
-    ]);
-    // Single flight: both readers share one CLI.
-    expect(mockQuery).toHaveBeenCalledTimes(1);
-    const probe = await nextQueryCall();
-    expect(probe.options).toMatchObject({ maxTurns: 0, settingSources: ["user"] });
-    expect(probe.isClosed()).toBe(true);
-    // A probe cannot see everything a real turn can: provisional, not ready.
-    expect(first.status).toBe("stale");
-    expect(second.commands.map((command) => command.name)).toEqual(["/review"]);
+    const previousBridgeMarker = process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+    process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = "claude";
+    try {
+      queryControlOverrides.supportedCommands = mock(async () => [
+        { name: "review", description: "Review", argumentHint: "" },
+      ]);
+      const session = idleSession("cold probe");
+      session.executionPolicy = {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: false,
+        networkAccess: "restricted",
+      };
+      const [first, second] = await Promise.all([
+        readClaudeCommandCatalogue(session.id),
+        readClaudeCommandCatalogue(session.id),
+      ]);
+      // Single flight: both readers share one CLI.
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const probe = await nextQueryCall();
+      expect(probe.options).toMatchObject({
+        maxTurns: 0,
+        settingSources: ["user"],
+        env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
+      });
+      expect(probe.isClosed()).toBe(true);
+      // A probe cannot see everything a real turn can: provisional, not ready.
+      expect(first.status).toBe("stale");
+      expect(second.commands.map((command) => command.name)).toEqual(["/review"]);
+    } finally {
+      if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+      else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
+    }
   });
 });
 

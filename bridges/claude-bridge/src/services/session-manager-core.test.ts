@@ -29,6 +29,27 @@ import {
   withControlRequestTimeout,
 } from "./session-manager-test-harness.js";
 
+test("passes the bridge marker to a native turn's Claude CLI environment", async () => {
+  const previousBridgeMarker = process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+  process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = "claude";
+  try {
+    const session = createSession("bridge environment");
+    track(session.id);
+    const turn = sendPrompt(session.id, "check bridge environment");
+    const call = await nextQueryCall();
+    try {
+      expect(call.options.env).toMatchObject({ ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" });
+    } finally {
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await turn;
+    }
+  } finally {
+    if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+    else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // getAvailableModels
 // ---------------------------------------------------------------------------
@@ -49,7 +70,9 @@ describe("getAvailableModels", () => {
 
   test("discovers models with the exact managed Claude executable", async () => {
     const previousClaudeCliPath = process.env.CLAUDE_CLI_PATH;
+    const previousBridgeMarker = process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
     process.env.CLAUDE_CLI_PATH = "/managed/toolchain/claude";
+    process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = "claude";
     try {
       await expect(getAvailableModelCatalog()).resolves.toMatchObject({
         source: "sdk",
@@ -57,10 +80,13 @@ describe("getAvailableModels", () => {
       });
       expect(mockQuery.mock.calls.at(-1)?.[0]?.options).toMatchObject({
         pathToClaudeCodeExecutable: "/managed/toolchain/claude",
+        env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
       });
     } finally {
       if (previousClaudeCliPath === undefined) delete process.env.CLAUDE_CLI_PATH;
       else process.env.CLAUDE_CLI_PATH = previousClaudeCliPath;
+      if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+      else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
     }
   });
 

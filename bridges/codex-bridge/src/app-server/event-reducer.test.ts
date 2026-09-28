@@ -805,7 +805,7 @@ describe("unknown and ignored notifications", () => {
   });
 
   test("known-but-irrelevant methods are silently ignored", () => {
-    for (const method of ["account/updated", "warning"]) {
+    for (const method of ["account/updated", "account/gatewayOAuth/changed", "warning"]) {
       const result = reduceNotification(notify(method, {}), 1);
       expect(result.events).toEqual([]);
       expect(result.unknownMethod).toBeUndefined();

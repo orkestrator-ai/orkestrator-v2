@@ -31,14 +31,28 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/**
- * Whether an error names this row. `plugin_errors` identifies a plugin as
- * `name@marketplace` while `plugins[]` carries the bare name, so both forms
- * match; a positional tag names a directory entry that failed before it had a
- * name and never matches a row.
- */
-function errorNamesRow(pluginId: string, rowName: string): boolean {
-  return pluginId === rowName || pluginId.startsWith(`${rowName}@`);
+/** Match a loaded row only when its path identifies the failing installation. */
+function errorNamesRow(
+  pluginId: string,
+  errorPath: string | undefined,
+  row: PluginRuntimeStatus,
+): boolean {
+  const rowPath = row.path?.replaceAll("\\", "/").replace(/\/$/, "");
+  const failurePath = errorPath?.replaceAll("\\", "/");
+  if (
+    rowPath &&
+    failurePath &&
+    (failurePath === rowPath || failurePath.startsWith(`${rowPath}/`))
+  ) {
+    return true;
+  }
+  const separator = pluginId.lastIndexOf("@");
+  if (separator < 1) return pluginId === row.name;
+  const name = pluginId.slice(0, separator);
+  const marketplace = pluginId.slice(separator + 1);
+  if (name !== row.name || !marketplace || !rowPath) return false;
+  const segments = rowPath.split("/").filter(Boolean);
+  return segments.some((segment, index) => segment === marketplace && segments[index + 1] === name);
 }
 
 /**
@@ -94,7 +108,7 @@ export function pluginStatusesFromInit(init: {
     const message = text(entry?.message, MAX_PLUGIN_ERROR_LENGTH) ?? "Plugin failed to load";
     const type = text(entry?.type, 128) ?? "generic-error";
     const path = text(entry?.path, 4_096);
-    const row = loadedRows.find((candidateRow) => errorNamesRow(pluginId, candidateRow.name));
+    const row = loadedRows.find((candidateRow) => errorNamesRow(pluginId, path, candidateRow));
     if (row) {
       // Several errors against one partially loaded plugin: keep the first as
       // the row's summary; each still becomes its own error entry.

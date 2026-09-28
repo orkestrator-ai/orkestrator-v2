@@ -1687,12 +1687,44 @@ describe("runtime health", () => {
         method: "skill/load",
         message: "Codex skill broken failed to load",
         severity: "error",
-        id: "skill:broken",
+        id: expect.stringMatching(/^skill:broken:[a-z0-9]+$/),
         subject: "broken",
       }),
     );
     const notice = health.notices.find((entry) => entry.method === "skill/load");
     expect(String(notice?.detail)).not.toContain("/private/workspace");
+  });
+
+  test("bounds skill notices and keeps namesakes and pathless errors distinct", async () => {
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "skills/list": () => ({
+        data: [
+          {
+            errors: [
+              { path: "/root/a/shared/SKILL.md", message: "first" },
+              { path: "/root/b/shared/SKILL.md", message: "second" },
+              { message: "pathless" },
+              ...Array.from({ length: 20 }, (_, index) => ({
+                path: `/root/skill-${index}/SKILL.md`,
+                message: "bad",
+              })),
+            ],
+          },
+        ],
+      }),
+    });
+    await h.engine.start();
+    const health = (await h.engine.getRuntimeHealth("t1")) as {
+      notices: Array<{ method: string; id?: string }>;
+    };
+    const notices = health.notices.filter((notice) => notice.method === "skill/load");
+    expect(notices).toHaveLength(16);
+    expect(new Set(notices.map((notice) => notice.id)).size).toBe(16);
+    expect(notices[0]?.id).toMatch(/^skill:shared:/);
+    expect(notices[1]?.id).toMatch(/^skill:shared:/);
+    expect(notices[0]?.id).not.toBe(notices[1]?.id);
+    expect(notices[2]?.id).toBe("skill:2");
   });
 
   test("reports no skill notice once skills/list is clean", async () => {

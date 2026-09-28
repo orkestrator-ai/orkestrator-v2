@@ -532,6 +532,15 @@ function mcpFailureReason(notice: RuntimeNotice): string | undefined {
 /** Most skill load failures one health snapshot reports. */
 const MAX_SKILL_LOAD_NOTICES = 16;
 
+/** Stable, path-free identity for skills sharing a directory name. */
+function skillPathFingerprint(path: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < path.length; index += 1) {
+    hash = Math.imul(hash ^ path.charCodeAt(index), 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /**
  * Skill load failures from a `skills/list` response, as runtime notices.
  *
@@ -545,6 +554,7 @@ function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthN
   const data = objectRecord(response).data;
   if (!Array.isArray(data)) return [];
   const notices: RuntimeHealthNotice[] = [];
+  const seen = new Set<string>();
   for (const candidate of data) {
     const errors = objectRecord(candidate).errors;
     if (!Array.isArray(errors)) continue;
@@ -555,6 +565,11 @@ function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthN
       const segments = path.split(/[\\/]/).filter(Boolean);
       const file = segments.at(-1);
       const subject = (/^skill\.md$/i.test(file ?? "") ? segments.at(-2) : file)?.slice(0, 128);
+      const id = path
+        ? `skill:${subject ?? "unknown"}:${skillPathFingerprint(path)}`
+        : `skill:${notices.length}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
       const detail =
         typeof error.message === "string" && error.message.trim()
           ? redactRuntimeNoticeDetail(error.message)
@@ -563,7 +578,7 @@ function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthN
         method: "skill/load",
         message: subject ? `Codex skill ${subject} failed to load` : "A Codex skill failed to load",
         severity: "error",
-        id: `skill:${subject ?? notices.length}`,
+        id,
         ...(subject ? { subject } : {}),
         ...(detail ? { detail } : {}),
         receivedAt,

@@ -1792,7 +1792,15 @@ export async function sendPrompt(
         );
 
         const { statuses: pluginStatuses, errors: pluginErrors } = pluginStatusesFromInit(initMsg);
-        for (const pluginError of pluginErrors) {
+        const previousPluginErrors = new Set(session.pluginErrorSignatures);
+        session.pluginErrorSignatures = pluginErrors.map(
+          ({ plugin, type, message, path, loaded }) =>
+            JSON.stringify([plugin, type, message, path, loaded]),
+        );
+        for (const [index, pluginError] of pluginErrors.entries()) {
+          const signature = session.pluginErrorSignatures[index]!;
+          if (previousPluginErrors.has(signature)) continue;
+          previousPluginErrors.add(signature);
           sessionHealth(session).recordNotice({
             message: pluginError.loaded
               ? `Claude plugin ${pluginError.plugin} loaded with errors`

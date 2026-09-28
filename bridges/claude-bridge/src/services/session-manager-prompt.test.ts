@@ -4679,6 +4679,36 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("records repeated plugin load errors only when the failing set changes", async () => {
+    const session = createSession("plugin-errors-repeat");
+    track(session.id);
+    const init = (message: string) => ({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-plugin-errors-repeat",
+      mcp_servers: [],
+      plugins: [{ name: "partial", path: "/plugins/cache/market/partial/1.0" }],
+      plugin_errors: [
+        { plugin: "broken@market", type: "manifest-validation-error", message },
+        { plugin: "partial@market", type: "hook-load-failed", message: "bad hook" },
+      ],
+    });
+    for (const message of ["bad manifest", "bad manifest", "new manifest error"]) {
+      const prompt = sendPrompt(session.id, "Continue");
+      const call = await nextQueryCall();
+      call.push(init(message));
+      call.push({ type: "result", subtype: "success", result: "done" });
+      call.finish();
+      await prompt;
+      const notices =
+        session.health?.listNotices().filter((notice) => notice.method === "plugin/load") ?? [];
+      expect(notices.find((notice) => notice.severity === "error")?.count).toBe(
+        message === "new manifest error" ? 2 : 1,
+      );
+      expect(notices.find((notice) => notice.severity === "warning")?.count).toBe(1);
+    }
+  });
+
   test("excludes project MCP and plugin sources when project resources are disabled", async () => {
     const session = createSession("restricted resources");
     track(session.id);

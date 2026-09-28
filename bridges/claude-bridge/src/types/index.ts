@@ -451,6 +451,8 @@ export interface SessionState {
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */
   initData?: SessionInitData;
+  /** Last init's plugin errors, so unchanged load failures do not reissue advisories each turn. */
+  pluginErrorSignatures?: string[];
   /** Last bounded MCP inventory, retained while no turn query is attached. */
   mcpInventory?: import("@orkestrator/protocol/native-agent").NativeAgentMcpServer[];
   /**

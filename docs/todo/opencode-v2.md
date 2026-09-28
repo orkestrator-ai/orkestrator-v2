@@ -12,7 +12,7 @@ separate major product, **OpenCode 2.0** (2.0.0 on 2026-09-11, 2.0.18 on
 2026-09-25), which deletes the legacy HTTP API entirely.
 
 - The 1.x line lives on upstream `dev` and still ships as `opencode-ai` /
-  `@opencode-ai/sdk` (latest `1.18.32`, 2026-09-21). Our pin is current for
+  `@opencode-ai/sdk` (latest at this checkpoint: `1.18.33`). Our pin is current for
   1.x, which is why the version check looked clean.
 - The 2.x line lives on upstream branch `v2` and ships under a **new npm
   scope**: `@opencode/cli`, `@opencode/client`, `@opencode/sdk`,
@@ -173,7 +173,7 @@ Consequences:
 
 ## Recommendation
 
-Stay on `1.18.32` for production. 1.x is still receiving releases and fixes
+Stay on `1.18.33` for production. 1.x is still receiving releases and fixes
 on `dev`; no end-of-life notice for 1.x was found.
 
 When picking this up, treat it as a new provider rather than an upgrade:

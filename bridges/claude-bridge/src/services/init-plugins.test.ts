@@ -62,14 +62,19 @@ describe("pluginStatusesFromInit", () => {
 
   test("keeps a partially loaded plugin loaded and attaches its first error", () => {
     const { statuses, errors } = pluginStatusesFromInit({
-      plugins: [{ name: "gamma", path: "/plugins/gamma" }],
+      plugins: [{ name: "gamma", path: "/plugins/cache/market/gamma/1.0" }],
       plugin_errors: [
         { plugin: "gamma@market", type: "hook-load-failed", message: "hooks.json invalid" },
         { plugin: "gamma@market", type: "generic-error", message: "second" },
       ],
     });
     expect(statuses).toEqual([
-      { name: "gamma", path: "/plugins/gamma", status: "loaded", error: "hooks.json invalid" },
+      {
+        name: "gamma",
+        path: "/plugins/cache/market/gamma/1.0",
+        status: "loaded",
+        error: "hooks.json invalid",
+      },
     ]);
     expect(errors.map((error) => error.loaded)).toEqual([true, true]);
   });
@@ -82,6 +87,20 @@ describe("pluginStatusesFromInit", () => {
     expect(statuses).toEqual([
       { name: "gam", path: "/plugins/gam", status: "loaded" },
       { name: "gamma@market", status: "failed", error: "boom" },
+    ]);
+  });
+
+  test("keeps a failed marketplace plugin separate from a loaded namesake", () => {
+    const { statuses, errors } = pluginStatusesFromInit({
+      plugins: [{ name: "helper", path: "/plugins/cache/marketA/helper/1.0" }],
+      plugin_errors: [{ plugin: "helper@marketB", type: "generic-error", message: "bad manifest" }],
+    });
+    expect(statuses).toEqual([
+      { name: "helper", path: "/plugins/cache/marketA/helper/1.0", status: "loaded" },
+      { name: "helper@marketB", status: "failed", error: "bad manifest" },
+    ]);
+    expect(errors).toEqual([
+      { plugin: "helper@marketB", type: "generic-error", message: "bad manifest", loaded: false },
     ]);
   });
 

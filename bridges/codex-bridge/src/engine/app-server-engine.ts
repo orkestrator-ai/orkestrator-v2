@@ -91,6 +91,12 @@ import {
  */
 export const ROOT_THREAD_SOURCE_KINDS = ["cli", "vscode", "exec", "appServer", "unknown"] as const;
 
+/** Runtime notice shown when Codex's own connector is refused the account token. */
+export const CODEX_SIGN_IN_EXPIRED_NOTICE = "Codex sign-in expired. Sign in again to continue.";
+/** Prompt-admission message once app-server confirms the account is signed out. */
+export const CODEX_SIGN_IN_REQUIRED_MESSAGE =
+  "You've been signed out of Codex. Sign in again to keep working.";
+
 function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -588,11 +594,35 @@ function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthN
   return notices;
 }
 
+/**
+ * Codex's built-in ChatGPT connector. It authenticates with the Codex account's
+ * own token rather than a credential the user configured for it.
+ */
+const CODEX_ACCOUNT_MCP_SERVER = "codex_apps";
+
+/**
+ * Whether a startup failure is the Codex account's sign-in lapsing.
+ *
+ * A 401 from `codex_apps` warrants an account check. The account may still be
+ * signed in after its token refreshes. Other servers have their own credentials.
+ */
+function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
+  return (
+    notice.method === "mcpServer/startupStatus/updated" &&
+    notice.subject === CODEX_ACCOUNT_MCP_SERVER &&
+    notice.severity === "error" &&
+    /\bHTTP 401\b|\b401 Unauthorized\b|"token_expired"/.test(notice.detail ?? "")
+  );
+}
+
 function mcpRuntimeNoticeMessage(
   notice: RuntimeNotice,
   inventoryStatus: string | null | undefined,
+  accountSignInRequired: boolean,
 ): string {
   if (!notice.subject) return `Codex reported ${notice.method.replaceAll("/", " ")}`;
+  if (accountSignInRequired && isCodexAccountAuthFailure(notice))
+    return CODEX_SIGN_IN_EXPIRED_NOTICE;
   if (
     inventoryStatus === "authenticationRequired" ||
     notice.detail?.split("\n").includes("reauthenticationRequired")
@@ -633,6 +663,18 @@ export class AppServerEngine implements CodexEngine {
   private readonly unknownNotificationMethods = new Set<string>();
   private unsupportedItemCount = 0;
   private readonly runtimeNotices: RuntimeNotice[] = [];
+  /**
+   * Set only once `account/read` confirms the account needs signing in again.
+   * An auth failure alone is a reason to ask, not proof: a connector can start
+   * with a stale token that the normal refresh would have replaced.
+   */
+  private accountSignInRequired = false;
+  /** Orders overlapping account reads by request and successful response. */
+  private accountCheckSequence = 0;
+  private accountAppliedSequence = 0;
+  /** The generation whose `codex_apps` failure already got one automatic retry. */
+  private accountConnectorRetryGeneration?: EngineGeneration;
+  private accountConnectorRetrySequence?: number;
   private approvalHandler?: (request: ApprovalRequest) => boolean;
   private approvalResolvedHandler?: (
     request: ApprovalRequest,
@@ -916,7 +958,18 @@ export class AppServerEngine implements CodexEngine {
         }
         this.runtimeNotices.push(runtimeNotice);
         if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
+        if (isCodexAccountAuthFailure(runtimeNotice)) this.checkAccountSignIn(false);
       }
+    }
+
+    // Signing in (here or through another client of this app-server) replaces
+    // the token the account connector was refused with.
+    if (
+      (notification.method === "account/login/completed" &&
+        objectRecord(notification.params).success === true) ||
+      notification.method === "account/updated"
+    ) {
+      this.checkAccountSignIn(true);
     }
 
     const result = reduceNotification(notification, generation);
@@ -938,8 +991,79 @@ export class AppServerEngine implements CodexEngine {
       if (event.kind === "turn.completed") {
         this.resolveTerminalWaiters(event.threadId, event.turnId, event.status);
       }
+      if (
+        (event.kind === "turn.completed" || (event.kind === "error" && !event.willRetry)) &&
+        event.error?.code === "unauthorized"
+      ) {
+        this.checkAccountSignIn(false);
+      }
       this.emit(event);
     }
+  }
+
+  /** Whether app-server confirmed the account must be signed in again. */
+  isAccountSignInRequired(): boolean {
+    return this.accountSignInRequired;
+  }
+
+  /**
+   * Ask app-server whether the account is still signed in, refreshing its token.
+   *
+   * A signed-in answer means any `codex_apps` failure was a stale token, so the
+   * connector is reloaded to pick up the fresh one. A successful reload happens
+   * at most once per generation for an unprompted failure; a rejected reload
+   * remains eligible on the next failure. An account change always retries.
+   */
+  private checkAccountSignIn(accountChanged: boolean): void {
+    const sequence = ++this.accountCheckSequence;
+    const generation = this.supervisor.getGeneration();
+    void this.supervisor
+      .request("account/read", { refreshToken: true })
+      .then((response) => this.applyAccountRead(response, sequence, generation, accountChanged))
+      .catch((error: unknown) => {
+        // Unconfirmed either way: leave admission alone. The notice still says
+        // what Codex reported.
+        console.warn(
+          "[codex-bridge] Account sign-in check failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+  }
+
+  private async applyAccountRead(
+    response: unknown,
+    sequence: number,
+    generation: EngineGeneration,
+    accountChanged: boolean,
+  ): Promise<void> {
+    if (sequence < this.accountAppliedSequence || generation !== this.supervisor.getGeneration())
+      return;
+    this.accountAppliedSequence = sequence;
+    const signedIn = this.recordAccount(response);
+    if (!signedIn || !this.runtimeNotices.some(isCodexAccountAuthFailure)) return;
+    if (!accountChanged && this.accountConnectorRetryGeneration === generation) return;
+    this.accountConnectorRetryGeneration = generation;
+    this.accountConnectorRetrySequence = sequence;
+    try {
+      await this.reconnectMcpServers();
+    } catch (error) {
+      // A rejected reload did not repair the connector. Allow the next failure
+      // in this generation to retry without letting an older attempt erase a
+      // newer retry's marker.
+      if (this.accountConnectorRetrySequence === sequence) {
+        this.accountConnectorRetryGeneration = undefined;
+        this.accountConnectorRetrySequence = undefined;
+      }
+      throw error;
+    }
+  }
+
+  /** Record an `account/read` answer; true when an account is signed in. */
+  private recordAccount(response: unknown): boolean {
+    const root = objectRecord(response);
+    const signedIn = Boolean(root.account);
+    this.accountSignInRequired = !signedIn && root.requiresOpenaiAuth === true;
+    return signedIn;
   }
 
   /**
@@ -963,6 +1087,9 @@ export class AppServerEngine implements CodexEngine {
       }
     }
     for (const binding of this.bindings.values()) binding.generation = previous;
+    // Credentials live on disk, not in the child, so a confirmed sign-out
+    // stands, but the replacement may have loaded a login made meanwhile.
+    if (this.accountSignInRequired) this.checkAccountSignIn(true);
     this.emit({ kind: "engine.generation", generation, previous, engineGeneration: generation });
   }
 
@@ -1336,7 +1463,11 @@ export class AppServerEngine implements CodexEngine {
             method: notice.method,
             message:
               notice.method === "mcpServer/startupStatus/updated" && notice.subject
-                ? mcpRuntimeNoticeMessage(notice, mcpStatuses?.get(notice.subject))
+                ? mcpRuntimeNoticeMessage(
+                    notice,
+                    mcpStatuses?.get(notice.subject),
+                    this.accountSignInRequired,
+                  )
                 : `Codex reported ${notice.method.replaceAll("/", " ")}`,
             severity: notice.severity,
             ...(notice.id ? { id: notice.id } : {}),
@@ -1440,7 +1571,20 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async readAccount(): Promise<unknown> {
-    return this.supervisor.request("account/read", { refreshToken: true });
+    // Order by request, but only a successful response supersedes an older
+    // one. A failed routine read leaves a pending failure check free to land.
+    const sequence = ++this.accountCheckSequence;
+    const generation = this.supervisor.getGeneration();
+    const response = await this.supervisor.request("account/read", { refreshToken: true });
+    // Auth-status reads answer from account/read itself. A connector reload is
+    // independent work and must not turn a valid account answer into an error.
+    void this.applyAccountRead(response, sequence, generation, false).catch((error: unknown) => {
+      console.warn(
+        "[codex-bridge] Account connector recovery failed:",
+        error instanceof Error ? error.message : error,
+      );
+    });
+    return response;
   }
 
   async readAccountUsage(): Promise<EngineAccountUsageWindow[]> {

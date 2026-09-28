@@ -1,6 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { EventEmitter } from "node:events";
-import { AppServerEngine, ROOT_THREAD_SOURCE_KINDS } from "./app-server-engine.js";
+import {
+  AppServerEngine,
+  CODEX_SIGN_IN_EXPIRED_NOTICE,
+  ROOT_THREAD_SOURCE_KINDS,
+} from "./app-server-engine.js";
 import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
 import type { EngineEvent, EngineTurnConfig } from "./types.js";
@@ -55,13 +59,7 @@ class ScriptedChild extends EventEmitter {
       });
       return;
     }
-    try {
-      this.stdout.pushMessage({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: handler((message.params ?? {}) as Record<string, unknown>),
-      });
-    } catch (error) {
+    const respondWithError = (error: unknown) => {
       this.stdout.pushMessage({
         jsonrpc: "2.0",
         id: message.id,
@@ -70,6 +68,19 @@ class ScriptedChild extends EventEmitter {
           message: error instanceof Error ? error.message : String(error),
         },
       });
+    };
+    try {
+      const result = handler((message.params ?? {}) as Record<string, unknown>);
+      if (result instanceof Promise) {
+        void result.then(
+          (value) => this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result: value }),
+          respondWithError,
+        );
+      } else {
+        this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result });
+      }
+    } catch (error) {
+      respondWithError(error);
     }
   }
 
@@ -2569,5 +2580,361 @@ describe("runtime notices", () => {
     expect(captured[0]?.detail).toBe(
       "The /compact command is deprecated\nUse /new instead; codex 0.145.0 / app-server 2 mismatch",
     );
+  });
+});
+
+describe("account sign-in", () => {
+  /** What app-server reports when `codex_apps` is refused the account token. */
+  const EXPIRED_ACCOUNT_TOKEN =
+    "MCP startup failed: handshaking with MCP server failed: unexpected server response: " +
+    'HTTP 401: {"error":{"message":"Provided authentication token is expired.","code":"token_expired"}}';
+  const SIGNED_OUT = { account: null, requiresOpenaiAuth: true };
+  const SIGNED_IN = { account: { type: "chatgpt", email: null, planType: "plus" } };
+
+  async function flush(h: Harness): Promise<void> {
+    for (let index = 0; index < 5; index += 1) {
+      await settle();
+      await h.engine.getSupervisor().notificationQueue.drainAll();
+    }
+  }
+
+  function requestCount(h: Harness, method: string): number {
+    return h.child().requests.filter((request) => request.method === method).length;
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => (resolve = done));
+    return { promise, resolve };
+  }
+
+  test("an expired account token on codex_apps asks for sign-in, and signing in clears it", async () => {
+    let account: unknown = SIGNED_OUT;
+    const h = harness({
+      "account/read": () => account,
+      "config/mcpServer/reload": () => ({}),
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "codex_apps", runtimeStatus: "failed", tools: {} }],
+      }),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(0);
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({
+        subject: "codex_apps",
+        message: CODEX_SIGN_IN_EXPIRED_NOTICE,
+        severity: "error",
+      }),
+    ]);
+
+    account = SIGNED_IN;
+    h.child().notify("account/login/completed", { loginId: "l1", success: true, error: null });
+    await flush(h);
+
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    // The connector reconnects with the new token, retiring the stale failure.
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([]);
+  });
+
+  test("a refreshable token retries the connector once instead of asking for sign-in", async () => {
+    const h = harness({
+      "account/read": () => SIGNED_IN,
+      "config/mcpServer/reload": () => ({}),
+    });
+    await h.engine.start();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      h.child().notify("mcpServer/startupStatus/updated", {
+        name: "codex_apps",
+        status: "failed",
+        error: EXPIRED_ACCOUNT_TOKEN,
+      });
+      await flush(h);
+    }
+
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+  });
+
+  test("a refreshable account is not called signed out while its connector reloads", async () => {
+    const reload = deferred<unknown>();
+    const h = harness({
+      "account/read": () => SIGNED_IN,
+      "config/mcpServer/reload": () => reload.promise,
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "codex_apps", runtimeStatus: "failed", tools: {} }],
+      }),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({ subject: "codex_apps", message: "codex_apps MCP failed to start" }),
+    ]);
+    reload.resolve({});
+    await flush(h);
+  });
+
+  test("a routine account read that supersedes the failure check still reloads the connector", async () => {
+    const first = deferred<unknown>();
+    let reads = 0;
+    const h = harness({
+      "account/read": () => (++reads === 1 ? first.promise : SIGNED_IN),
+      "config/mcpServer/reload": () => ({}),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    expect(requestCount(h, "account/read")).toBe(1);
+
+    await h.engine.readAccount();
+    first.resolve(SIGNED_IN);
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+  });
+
+  test("a failed routine account read does not cancel a pending connector recovery", async () => {
+    const first = deferred<unknown>();
+    let reads = 0;
+    const h = harness({
+      "account/read": () => {
+        if (++reads === 1) return first.promise;
+        throw new Error("routine read unavailable");
+      },
+      "config/mcpServer/reload": () => ({}),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    await expect(h.engine.readAccount()).rejects.toThrow("routine read unavailable");
+    first.resolve(SIGNED_IN);
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+  });
+
+  test("an older routine read cannot overwrite a newer account change", async () => {
+    const first = deferred<unknown>();
+    let reads = 0;
+    const h = harness({ "account/read": () => (++reads === 1 ? first.promise : SIGNED_IN) });
+    await h.engine.start();
+    const routine = h.engine.readAccount();
+    await settle();
+    h.child().notify("account/updated", {});
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    first.resolve(SIGNED_OUT);
+    await routine;
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+  });
+
+  test("a rejected connector reload leaves the next failure eligible to retry", async () => {
+    let reloads = 0;
+    const h = harness({
+      "account/read": () => SIGNED_IN,
+      "config/mcpServer/reload": () => {
+        if (++reloads === 1) throw new Error("reload unavailable");
+        return {};
+      },
+    });
+    await h.engine.start();
+    const fail = () =>
+      h.child().notify("mcpServer/startupStatus/updated", {
+        name: "codex_apps",
+        status: "failed",
+        error: EXPIRED_ACCOUNT_TOKEN,
+      });
+    fail();
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({ message: "codex_apps MCP failed to start" }),
+    ]);
+    fail();
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(2);
+  });
+
+  test("a routine account read succeeds even when its connector reload fails", async () => {
+    const first = deferred<unknown>();
+    let reads = 0;
+    const h = harness({
+      "account/read": () => (++reads === 1 ? first.promise : SIGNED_IN),
+      "config/mcpServer/reload": () => {
+        throw new Error("reload unavailable");
+      },
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    await expect(h.engine.readAccount()).resolves.toEqual(SIGNED_IN);
+    first.resolve(SIGNED_IN);
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+  });
+
+  test("account/updated retries a failed connector after sign-in", async () => {
+    let account: unknown = SIGNED_OUT;
+    const h = harness({
+      "account/read": () => account,
+      "config/mcpServer/reload": () => ({}),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+    account = SIGNED_IN;
+    h.child().notify("account/updated", {});
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+  });
+
+  test("a replacement generation rechecks a confirmed sign-out", async () => {
+    let account: unknown = SIGNED_OUT;
+    const h = harness({ "account/read": () => account });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+
+    account = SIGNED_IN;
+    const dead = h.child();
+    dead.exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    expect(requestCount(h, "account/read")).toBe(1);
+  });
+
+  test("a new generation can retry while the previous generation's reload was pending", async () => {
+    const oldReload = deferred<unknown>();
+    let reloads = 0;
+    const h = harness({
+      "account/read": () => SIGNED_IN,
+      "config/mcpServer/reload": () => (++reloads === 1 ? oldReload.promise : {}),
+    });
+    await h.engine.start();
+    const fail = () =>
+      h.child().notify("mcpServer/startupStatus/updated", {
+        name: "codex_apps",
+        status: "failed",
+        error: EXPIRED_ACCOUNT_TOKEN,
+      });
+    fail();
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    fail();
+    await flush(h);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    oldReload.resolve({});
+  });
+
+  test("a result from a dead generation cannot restore stale sign-out state", async () => {
+    const first = deferred<unknown>();
+    let reads = 0;
+    const h = harness({ "account/read": () => (++reads === 1 ? first.promise : SIGNED_IN) });
+    await h.engine.start();
+    h.child().notify("account/updated", {});
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    const dead = h.child();
+    dead.exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.engine.readAccount();
+    first.resolve(SIGNED_OUT);
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+  });
+
+  test("an unauthorized turn asks app-server whether the account is signed out", async () => {
+    const h = harness({ "account/read": () => SIGNED_OUT });
+    await h.engine.start();
+    h.child().notify("error", {
+      threadId: "t1",
+      turnId: "turn-1",
+      error: {
+        message: "Your access token could not be refreshed.",
+        codexErrorInfo: "unauthorized",
+      },
+      willRetry: false,
+    });
+    await flush(h);
+
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+  });
+
+  test("a third-party server's 401 stays an MCP failure", async () => {
+    const h = harness({ "account/read": () => SIGNED_OUT });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "github",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+
+    expect(requestCount(h, "account/read")).toBe(0);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({ message: "github MCP failed to start" }),
+    ]);
+  });
+
+  test("an unconfirmed check leaves prompt admission alone", async () => {
+    const h = harness({
+      "account/read": () => {
+        throw new Error("account unavailable");
+      },
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+
+    expect(requestCount(h, "account/read")).toBe(1);
+    expect(h.engine.isAccountSignInRequired()).toBe(false);
   });
 });

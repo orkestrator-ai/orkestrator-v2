@@ -884,10 +884,10 @@ export async function sendBuildPipelineMessage(
   });
 }
 
-export async function retryBuildPipelineReview(pipelineId: string): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("retry_build_pipeline_review", {
-    pipelineId,
-  });
+export async function restartBuildPipelineCurrentStep(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("restart_build_pipeline_current_step", { pipelineId });
 }
 
 export async function retryBuildPipelineStage(pipelineId: string): Promise<BackendBuildPipeline> {

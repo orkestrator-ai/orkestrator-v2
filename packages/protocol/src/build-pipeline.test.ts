@@ -19,6 +19,7 @@ import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
   isReviewPackagePreparationSession,
+  reviewValidationStage,
   isVerificationVerdict,
   VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
@@ -2007,6 +2008,30 @@ describe("execution mode policy", () => {
 });
 
 describe("review package preparation session", () => {
+  test("routes validation and preparation using the same state as the supervisor", () => {
+    const validationRun = {
+      id: "run-1",
+      status: "running" as const,
+      startedAt: new Date().toISOString(),
+      plan: { headRef: "a".repeat(40), commands: [], limitations: ["No commands"] },
+      results: [],
+    };
+    expect(reviewValidationStage({ validationRun }, "fixing")).toBe("validation");
+    expect(
+      reviewValidationStage({ validationRun: { ...validationRun, status: "cancelled" } }, "fixing"),
+    ).toBe("review-package");
+    expect(reviewValidationStage({ validationRun, reviewRetryRequested: true }, "building")).toBe(
+      "review-package",
+    );
+    expect(
+      reviewValidationStage(
+        { validationRun, reviewPackage: {} as BuildPipeline["reviewPackage"] },
+        "fixing",
+      ),
+    ).toBeNull();
+    expect(reviewValidationStage({ validationRun }, "reviewing")).toBeNull();
+  });
+
   test("publishes the dedicated session label the backend writes", () => {
     expect(REVIEW_PACKAGE_SESSION_LABEL).toBe("Package Preparation Session");
   });

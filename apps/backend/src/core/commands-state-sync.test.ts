@@ -5224,6 +5224,10 @@ describe("build pipeline commands", () => {
       id,
       stageId,
     }));
+    const restartCurrentStep = mock(async (id: string) => ({
+      operation: "restart-current-step",
+      id,
+    }));
     const retryInteractionFailure = mock(async (id: string) => ({
       operation: "retry-interaction",
       id,
@@ -5239,6 +5243,7 @@ describe("build pipeline commands", () => {
       retryReview,
       retryStage,
       restartStep,
+      restartCurrentStep,
       retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
@@ -5292,6 +5297,11 @@ describe("build pipeline commands", () => {
           stageId: "review-session",
         });
         await expect(
+          invoke("restart_build_pipeline_current_step", {
+            pipelineId: "pipeline-1",
+          }),
+        ).resolves.toEqual({ operation: "restart-current-step", id: "pipeline-1" });
+        await expect(
           invoke("retry_build_pipeline_interaction_failure", {
             pipelineId: "pipeline-1",
           }),
@@ -5315,6 +5325,7 @@ describe("build pipeline commands", () => {
         expect(retryReview).toHaveBeenCalledWith("pipeline-1");
         expect(retryStage).toHaveBeenCalledWith("pipeline-1");
         expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session");
+        expect(restartCurrentStep).toHaveBeenCalledWith("pipeline-1");
         expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
       },
       { buildPipelines: supervisor },
@@ -5438,6 +5449,7 @@ describe("build pipeline commands", () => {
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
+        ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
         [
           "retry_build_pipeline_interaction_failure",
           {

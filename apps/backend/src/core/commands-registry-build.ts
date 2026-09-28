@@ -54,6 +54,8 @@ export function registerBuildPipelineCommands(
       asString(text, "text"),
     );
   });
+  // Retained for existing command clients that explicitly re-review a working
+  // tree, including from a failed pipeline. The header uses current-step restart.
   register("retry_build_pipeline_review", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryReview(asNonBlankString(pipelineId, "pipelineId"));
@@ -68,6 +70,10 @@ export function registerBuildPipelineCommands(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(stageId, "stageId"),
     );
+  });
+  register("restart_build_pipeline_current_step", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.restartCurrentStep(asNonBlankString(pipelineId, "pipelineId"));
   });
   register("retry_build_pipeline_interaction_failure", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");

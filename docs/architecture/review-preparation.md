@@ -100,6 +100,16 @@ they are not a security sandbox against a malicious project command.
 
 ## Lifecycle and visibility
 
+The header's restart control selects the work currently in progress. During a
+build or fix it restarts the implementation turn, during validation it restarts
+the test run, and during a dedicated package-preparation turn it rediscovers the
+validation plan. A cancelled validation run or pending review retry also routes
+to preparation. The older backend command `retry_build_pipeline_review` remains
+available to existing command clients: it explicitly discards the current review
+package and report and starts a fresh review attempt, even when the pipeline is
+paused or failed. The renderer does not call that command, and the public
+`orkestrator` CLI does not expose it.
+
 Authoritative worker state lives in an atomically replaced, size-bounded state
 file with a heartbeat. Workflow snapshots project that state to both review UIs.
 Switching tabs/environments or unmounting a component does not cancel validation.

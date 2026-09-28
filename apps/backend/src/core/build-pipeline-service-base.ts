@@ -14,6 +14,8 @@ import {
   isActiveBuildPhase,
   isStartBuildPipelineInput,
   isReviewPackagePreparationSession,
+  reviewValidationStage,
+  REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
@@ -1000,16 +1002,72 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
    * session, so an unmounted renderer or backend restart cannot lose the run.
    */
   async restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
-    let rejection: Error | undefined;
-    await this.mutate(pipelineId, async (candidate) => {
-      const validationId = candidate.validationRun
-        ? `validation:${candidate.validationRun.id}`
-        : undefined;
-      const target = candidate.sessions.find(
+    return this.restartLocatedStage(pipelineId, (candidate) => {
+      if (candidate.validationRun && stageId === `validation:${candidate.validationRun.id}`) {
+        return { kind: "validation" };
+      }
+      const session = candidate.sessions.find(
         (session) => session.sdkSessionId === stageId || session.sessionKey === stageId,
       );
-      if (!target && stageId !== validationId) {
-        rejection = new Error("This pipeline stage is no longer available");
+      return session
+        ? { kind: "session", session, phase: session.phase }
+        : new Error("This pipeline stage is no longer available");
+    });
+  }
+
+  /**
+   * Restarts whichever stage the pipeline is on, resolved inside the lock so a
+   * renderer that has not yet seen the latest transition cannot restart the
+   * stage the pipeline has already left.
+   */
+  async restartCurrentStep(pipelineId: string): Promise<BuildPipeline> {
+    return this.restartLocatedStage(pipelineId, (candidate) => {
+      const phase =
+        candidate.phase === "paused" ? candidate.pausedFromPhase : resumablePhase(candidate.phase);
+      const stagePhase = phase ? sessionPhaseFor(phase) : null;
+      if (!phase || !stagePhase) {
+        return new Error("This build has no running stage to restart");
+      }
+      const validationTarget = reviewValidationStage(candidate, phase);
+      if (validationTarget === "validation") return { kind: "validation" };
+      if (validationTarget === "review-package") {
+        return {
+          kind: "review-package",
+          implementationPhase: phase === "fixing" ? "fix" : "build",
+        };
+      }
+      // Between a transition and the next tick the current session can still be
+      // the previous stage's, so it only stands for this stage when it matches.
+      const session = sessionForCurrentPhase(candidate);
+      return session?.phase === stagePhase
+        ? {
+            kind: "session",
+            session,
+            phase: stagePhase,
+            forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+          }
+        : { kind: "session", phase: stagePhase };
+    });
+  }
+
+  private async restartLocatedStage(
+    pipelineId: string,
+    locate: (candidate: BuildPipeline) =>
+      | { kind: "validation" }
+      | { kind: "review-package"; implementationPhase: "build" | "fix" }
+      | {
+          kind: "session";
+          session?: PipelineSession;
+          phase: PipelineSessionPhase;
+          forceStage?: boolean;
+        }
+      | Error,
+  ): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.mutate(pipelineId, async (candidate) => {
+      const target = locate(candidate);
+      if (target instanceof Error) {
+        rejection = target;
         return;
       }
 
@@ -1066,20 +1124,25 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         return currentIterationImplementation?.phase === "fix" ? "fix" : "build";
       };
 
-      if (stageId === validationId) {
+      if (target.kind === "validation") {
         const plan = candidate.validationRun!.plan;
         candidate.validationRun = newReviewValidationRun(`review-validation-${randomUUID()}`, plan);
         candidate.restartRequest = {
           kind: "validation",
           implementationPhase: implementationPhase(),
         };
-      } else if (isReviewPackagePreparationSession(target, candidate)) {
+      } else if (target.kind === "review-package") {
+        candidate.restartRequest = target;
+      } else if (
+        !target.forceStage &&
+        isReviewPackagePreparationSession(target.session, candidate)
+      ) {
         candidate.restartRequest = {
           kind: "review-package",
-          implementationPhase: target!.phase === "fix" ? "fix" : "build",
+          implementationPhase: target.phase === "fix" ? "fix" : "build",
         };
       } else {
-        const requestedPhase = target!.phase;
+        const requestedPhase = target.phase;
         if (requestedPhase === "review" && !candidate.reviewPackage) {
           candidate.restartRequest = {
             kind: "review-package",

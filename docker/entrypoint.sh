@@ -653,6 +653,10 @@ chmod 700 "$HOME/.claude"
 # Hooks write state to /tmp/.claude-state for the host to poll
 # - UserPromptSubmit: fires when user sends a prompt (better than PreToolUse which fires on startup)
 # - Stop: fires when Claude finishes responding
+# These describe terminal Claude only. The native claude-bridge sets
+# ORKESTRATOR_NATIVE_AGENT_BRIDGE for every CLI it spawns; those processes
+# load these user settings too, and a zero-turn probe fires UserPromptSubmit
+# without a matching Stop, so they must not write the state file.
 # env section sets BASH_MAX_OUTPUT_LENGTH to increase output limit for code reviews
 cat > "$HOME/.claude/settings.json" << 'EOF'
 {
@@ -667,12 +671,12 @@ cat > "$HOME/.claude/settings.json" << 'EOF'
   "hooks": {
     "UserPromptSubmit": [
       {
-        "hooks": [{ "type": "command", "command": "echo working > /tmp/.claude-state" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || echo working > /tmp/.claude-state" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "echo waiting > /tmp/.claude-state" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || echo waiting > /tmp/.claude-state" }]
       }
     ]
   }

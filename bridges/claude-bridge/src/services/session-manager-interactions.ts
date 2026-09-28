@@ -244,6 +244,7 @@ export async function getAvailableModelCatalog(): Promise<{
       options: {
         maxTurns: 0,
         cwd,
+        env: { ...process.env },
         ...claudeExecutableOptions(),
       },
     });

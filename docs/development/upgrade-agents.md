@@ -7,7 +7,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.283`, Anthropic SDK `0.128.0`, CLI `2.1.283` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.284`, Anthropic SDK `0.129.0`, CLI `2.1.284` |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.158.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.33` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.32` (latest stable, verified 2026-09-28) |
@@ -341,6 +341,18 @@ under `bypassPermissions`.
    session adoption (`listSessions` options), background task controls,
    checkpoint/rewind behavior, partial messages, structured output, and model
    catalog calls.
+
+   Re-check Ultracode against the new CLI too. It reaches the bridge as the
+   provider-neutral model parameter `ultracode` (`claudeModelParameters()` in
+   `packages/protocol/src/claude-model-catalog.ts`), and
+   `bridges/claude-bridge/src/services/ultracode.ts` owns three CLI rules that
+   no type captures: it is a flag-layer setting each turn's query must be
+   started with; since 2.1.284 an `applyFlagSettings` effort change without an
+   `ultracode` key turns it off; and the runtime truth is `getSettings()`'s
+   `applied.ultracode` / `ultracodeRequested` / `ultracodeAvailable`, which the
+   SDK does not declare. `sdk-compatibility.test.ts` probes that
+   `getSettings` still exists; if `ModelInfo` ever gains an Ultracode flag,
+   gate the toggle on it instead of on `xhigh` support.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash

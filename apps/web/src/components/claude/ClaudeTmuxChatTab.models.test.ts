@@ -22,6 +22,11 @@ describe("tmux Claude model preferences", () => {
     expect(tmuxModelIsAvailable("claude-opus-5-5[1m]", TMUX_FALLBACK_MODELS)).toBe(true);
   });
 
+  test("maps Sonnet 5.5 and the previous Sonnet onto the catalogue's alias", () => {
+    expect(resolveTmuxModelPreference("claude-sonnet-5-5", TMUX_FALLBACK_MODELS)).toBe("sonnet");
+    expect(resolveTmuxModelPreference("claude-sonnet-5", TMUX_FALLBACK_MODELS)).toBe("sonnet");
+  });
+
   test("still maps the previous Opus ids", () => {
     expect(resolveTmuxModelPreference("claude-opus-5", TMUX_FALLBACK_MODELS)).toBe(DEFAULT_MODEL);
     expect(resolveTmuxModelPreference("claude-opus-5[1m]", TMUX_FALLBACK_MODELS)).toBe("opus[1m]");

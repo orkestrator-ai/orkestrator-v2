@@ -97,7 +97,7 @@ const DEFAULT_CONFIG: AppConfig = {
       platforms: {
         claude: {
           mode: DEFAULT_CLAUDE_MODE,
-          model: "claude-sonnet-5",
+          model: "claude-sonnet-5-5",
           claudeNativeBackend: "sdk",
         },
         codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },

@@ -11,6 +11,7 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
+import { claudeModelParameters } from "@orkestrator/protocol/claude-model-catalog";
 
 export type ControlMcpInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Invokes a registered backend command. */
@@ -234,21 +235,13 @@ export async function cachedLaunchModels(
         providerLabel: "Claude",
         reasoning,
         defaultReasoningId: reasoning.some(({ id }) => id === "high") ? "high" : reasoning[0]?.id,
-        parameters: [
-          {
-            id: "thinking",
-            label: "Thinking",
-            kind: "select",
-            options: [
-              { id: "adaptive", label: "Adaptive" },
-              { id: "budget-8192", label: "8K budget" },
-              { id: "budget-16384", label: "16K budget" },
-              { id: "disabled", label: "Disabled" },
-            ],
-            defaultValue: "adaptive",
-            scope: "session",
-          },
-        ],
+        parameters: claudeModelParameters({
+          id: model.id,
+          ...(typeof model.resolvedModel === "string"
+            ? { resolvedModel: model.resolvedModel }
+            : {}),
+          supportedEffortLevels: reasoning.map(({ id }) => id),
+        }),
         supportsSpeed: model.supportsFastMode !== false,
         supportsMode: true,
       },

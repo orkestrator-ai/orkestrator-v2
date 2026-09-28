@@ -55,7 +55,7 @@ describe("defaultConfig", () => {
   test("returns the current default model selection", () => {
     const platforms = defaultConfig().global.agentSettings?.platforms;
     expect(platforms?.opencode?.model).toBe("opencode/claude-sonnet-5");
-    expect(platforms?.claude?.model).toBe("claude-sonnet-5");
+    expect(platforms?.claude?.model).toBe("claude-sonnet-5-5");
     expect(platforms?.codex?.model).toBe("gpt-5.4");
     expect(platforms?.codex?.reasoningEffort).toBe("high");
   });

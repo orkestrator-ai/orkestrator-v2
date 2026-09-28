@@ -471,7 +471,10 @@ describe("plan approval flow", () => {
     const session = createSession("plan-reject-without-feedback");
     track(session.id);
 
-    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const promptPromise = sendPrompt(session.id, "make a plan", {
+      permissionMode: "plan",
+      parameterValues: { ultracode: true, context1m: true, thinking: "budget-8192" },
+    });
     const call = await nextQueryCall();
     const toolPromise = call.options.canUseTool!("ExitPlanMode", { plan: "do stuff" });
     await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
@@ -487,6 +490,9 @@ describe("plan approval flow", () => {
 
     const repromptCall = await nextQueryCall();
     expect(repromptCall.options.permissionMode).toBe("plan");
+    expect(repromptCall.options.settings).toMatchObject({ ultracode: true });
+    expect(repromptCall.options.betas).toContain("context-1m-2025-08-07");
+    expect(repromptCall.options.thinking).toMatchObject({ budgetTokens: 8192 });
     repromptCall.push({ type: "result", subtype: "success" });
     repromptCall.finish();
     await promptPromise;
@@ -572,7 +578,10 @@ describe("plan approval flow", () => {
     const session = createSession("plan-approve-but-fail");
     track(session.id);
 
-    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const promptPromise = sendPrompt(session.id, "make a plan", {
+      permissionMode: "plan",
+      parameterValues: { ultracode: true, context1m: true, thinking: "budget-8192" },
+    });
     const call = await nextQueryCall();
 
     call.push({
@@ -626,6 +635,9 @@ describe("plan approval flow", () => {
     const repromptCall = await nextQueryCall();
     // The re-prompt should NOT be in plan mode (user has approved; Claude needs full tools)
     expect(repromptCall.options.permissionMode).not.toBe("plan");
+    expect(repromptCall.options.settings).toMatchObject({ ultracode: true });
+    expect(repromptCall.options.betas).toContain("context-1m-2025-08-07");
+    expect(repromptCall.options.thinking).toMatchObject({ budgetTokens: 8192 });
     repromptCall.push({
       type: "system",
       subtype: "init",

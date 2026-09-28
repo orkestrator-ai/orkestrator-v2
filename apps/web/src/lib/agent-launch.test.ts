@@ -126,6 +126,20 @@ describe("defaultEffortFor", () => {
     expect(firstModelFor("claude", upgraded, { claude: "claude-opus-5[1m]" })).toBe("default");
   });
 
+  test("carries the previous Sonnet default to Sonnet 5.5's alias", () => {
+    // Claude Code 2.1.284's `sonnet` alias resolves to Sonnet 5.5, so a default
+    // stored as `claude-sonnet-5` matches no row's `resolvedModel` any more.
+    const upgraded: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        { id: "default", name: "Default", reasoningEfforts: [] },
+        { id: "sonnet", name: "Sonnet", reasoningEfforts: [], resolvedModel: "claude-sonnet-5-5" },
+      ],
+    };
+    expect(firstModelFor("claude", upgraded, { claude: "claude-sonnet-5" })).toBe("sonnet");
+    expect(firstModelFor("claude", upgraded, { claude: "claude-sonnet-5-5" })).toBe("sonnet");
+  });
+
   test("keeps a superseded id an older CLI still offers", () => {
     const older: AgentModelCatalog = {
       ...catalog,

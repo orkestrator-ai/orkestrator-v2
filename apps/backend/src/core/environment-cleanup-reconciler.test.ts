@@ -1,25 +1,38 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  environmentBranchBase,
+  environmentBranchNamespace,
+  parseEnvironmentBranchNamespace,
+} from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   environmentCleanupLedger,
+  environmentCleanupSweepState,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
 import {
   MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
+  ORPHANED_BRANCH_SWEEP_INTERVAL_MS,
   ORPHANED_STATE_MIN_AGE_MS,
   cancelScheduledEnvironmentCleanup,
   reconcileEnvironmentCleanup,
   runStartupEnvironmentCleanup,
   scheduleEnvironmentCleanupReconcile,
+  sweepAbandonedTempFiles,
+  sweepOrphanedEnvironmentBranches,
   sweepOrphanedEnvironmentState,
+  sweepPreLedgerDiskState,
+  sweepStrayWorkspaceDirectories,
 } from "./environment-cleanup-reconciler.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
+import { runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
 const tempDirectories: string[] = [];
@@ -359,5 +372,409 @@ describe("scheduled environment cleanup", () => {
     expect(calls).toBeGreaterThanOrEqual(1);
     expect((await environmentCleanupLedger(dataDir).get("gone"))?.attempts).toBe(2);
     cancelScheduledEnvironmentCleanup(dataDir);
+  });
+});
+
+/** Backdates `root` and everything under it, deepest first. */
+async function age(root: string, ageMs: number): Promise<void> {
+  const when = new Date(Date.now() - ageMs);
+  const stats = await fs.lstat(root);
+  if (stats.isDirectory()) {
+    for (const name of await fs.readdir(root)) await age(path.join(root, name), ageMs);
+  }
+  if (!stats.isSymbolicLink()) await fs.utimes(root, when, when);
+}
+
+async function git(projectPath: string, ...args: string[]): Promise<string> {
+  return (await runCommand("git", ["-C", projectPath, ...args])).stdout.trim();
+}
+
+async function commit(projectPath: string, file: string): Promise<string> {
+  await fs.writeFile(path.join(projectPath, file), `${file}\n`);
+  await git(projectPath, "add", file);
+  await git(projectPath, "commit", "-m", file);
+  return git(projectPath, "rev-parse", "HEAD");
+}
+
+/** A registered project with `main` published as `origin/main` and `origin/HEAD`. */
+async function addProject(
+  storage: StorageService,
+  id = "p1",
+): Promise<{ projectPath: string; base: string }> {
+  const projectPath = await tempDir("ork-reconcile-project-");
+  await runCommand("git", ["init", "-q", "-b", "main", projectPath]);
+  await git(projectPath, "config", "user.name", "Orkestrator Test");
+  await git(projectPath, "config", "user.email", "test@example.invalid");
+  const base = await commit(projectPath, "README.md");
+  await git(projectPath, "update-ref", "refs/remotes/origin/main", base);
+  await git(projectPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  await storage.addProject({
+    id,
+    name: "project",
+    gitUrl: projectPath,
+    localPath: projectPath,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  });
+  return { projectPath, base };
+}
+
+/** Creates `branch` from `from` with one commit per file, without leaving it checked out. */
+async function branchWithCommits(
+  projectPath: string,
+  branch: string,
+  from: string,
+  files: string[],
+): Promise<string> {
+  await git(projectPath, "checkout", "-q", "-b", branch, from);
+  let tip = from;
+  for (const file of files) tip = await commit(projectPath, file);
+  await git(projectPath, "checkout", "-q", "main");
+  return tip;
+}
+
+async function branchExists(projectPath: string, branch: string): Promise<boolean> {
+  return runCommand("git", [
+    "-C",
+    projectPath,
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/heads/${branch}`,
+  ]).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** A branch name in the environment scheme for an environment that never existed here. */
+function orphanBranch(slug: string): string {
+  return `${slug}-${randomUUID().replace(/-/g, "").slice(0, 12)}-r1`;
+}
+
+async function deadPid(): Promise<number> {
+  const child = Bun.spawn(["true"]);
+  await child.exited;
+  return child.pid;
+}
+
+describe("stray workspace directory sweep", () => {
+  test("removes an unowned directory that holds only build logs", async () => {
+    const { context, worktreeDir } = await reconcileContext();
+    const stray = path.join(worktreeDir, "project-gone");
+    await fs.mkdir(path.join(stray, "bridges", "cursor-bridge", ".turbo"), { recursive: true });
+    await fs.mkdir(path.join(stray, "empty"), { recursive: true });
+    await fs.writeFile(
+      path.join(stray, "bridges", "cursor-bridge", ".turbo", "turbo-build.log"),
+      "",
+    );
+    await age(stray, ORPHANED_STATE_MIN_AGE_MS * 2);
+
+    expect(await sweepStrayWorkspaceDirectories(context)).toEqual({
+      removed: 1,
+      keptWithContent: 0,
+    });
+    expect(await exists(stray)).toBe(false);
+  });
+
+  test("keeps and counts an unowned directory with any other file or a symlink", async () => {
+    const { context, worktreeDir } = await reconcileContext();
+    const withFile = path.join(worktreeDir, "hand-made");
+    await fs.mkdir(path.join(withFile, ".turbo"), { recursive: true });
+    await fs.writeFile(path.join(withFile, ".turbo", "turbo-build.log"), "");
+    await fs.writeFile(path.join(withFile, ".turbo", "notes.txt"), "keep me\n");
+    const withLink = path.join(worktreeDir, "linked");
+    await fs.mkdir(withLink);
+    await fs.symlink(os.tmpdir(), path.join(withLink, "link"));
+    await age(withFile, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await age(withLink, ORPHANED_STATE_MIN_AGE_MS * 2);
+
+    expect(await sweepStrayWorkspaceDirectories(context)).toEqual({
+      removed: 0,
+      keptWithContent: 2,
+    });
+    expect(await exists(path.join(withFile, ".turbo", "notes.txt"))).toBe(true);
+    expect(await exists(withLink)).toBe(true);
+  });
+
+  test("keeps a directory an environment references or git registers", async () => {
+    const { context, storage, worktreeDir } = await reconcileContext();
+    const { projectPath } = await addProject(storage);
+    const referenced = path.join(worktreeDir, "project-live");
+    await fs.mkdir(referenced);
+    await storage.addEnvironment({ ...environment(randomUUID()), worktreePath: referenced });
+    const registered = path.join(worktreeDir, "project-registered");
+    await git(projectPath, "worktree", "add", "-q", "--detach", registered, "main");
+    // Emptied by hand, so only git's registration says it is owned.
+    for (const name of await fs.readdir(registered)) {
+      await fs.rm(path.join(registered, name), { recursive: true, force: true });
+    }
+    await age(referenced, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await age(registered, ORPHANED_STATE_MIN_AGE_MS * 2);
+
+    expect(await sweepStrayWorkspaceDirectories(context)).toEqual({
+      removed: 0,
+      keptWithContent: 0,
+    });
+    expect(await exists(referenced)).toBe(true);
+    expect(await exists(registered)).toBe(true);
+  });
+
+  test("keeps a directory modified within the last hour", async () => {
+    const { context, worktreeDir } = await reconcileContext();
+    const stray = path.join(worktreeDir, "project-new");
+    await fs.mkdir(path.join(stray, ".turbo"), { recursive: true });
+    await age(stray, ORPHANED_STATE_MIN_AGE_MS * 2);
+    // A build still running inside the tree keeps the whole directory.
+    await fs.writeFile(path.join(stray, ".turbo", "turbo-build.log"), "");
+
+    expect(await sweepStrayWorkspaceDirectories(context)).toEqual({
+      removed: 0,
+      keptWithContent: 0,
+    });
+    expect(await exists(stray)).toBe(true);
+  });
+
+  test("startup removes a build-log-only directory", async () => {
+    const { context, dataDir, worktreeDir } = await reconcileContext();
+    const stray = path.join(worktreeDir, "bridges");
+    await fs.mkdir(path.join(stray, "pi-bridge", ".turbo"), { recursive: true });
+    await fs.writeFile(path.join(stray, "pi-bridge", ".turbo", "turbo-build.log"), "");
+    await age(stray, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await runStartupEnvironmentCleanup(context);
+    expect(await exists(stray)).toBe(false);
+    cancelScheduledEnvironmentCleanup(dataDir);
+  });
+});
+
+describe("orphaned environment branch sweep", () => {
+  test("a failed stray sweep does not stop branch or temp sweeps", async () => {
+    const { context, storage, dataDir, worktreeDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const branch = orphanBranch("merged");
+    await git(projectPath, "branch", branch, base);
+    const pid = await deadPid();
+    const abandoned = path.join(dataDir, `agent-platforms.json.${pid}.tmp`);
+    await fs.writeFile(abandoned, "{}\n");
+    await age(abandoned, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await fs.mkdir(path.join(worktreeDir, "stray"));
+    const original = storage.loadProjects.bind(storage);
+    let calls = 0;
+    storage.loadProjects = async () => {
+      if (++calls === 1) throw new Error("listing failed");
+      return original();
+    };
+
+    await sweepPreLedgerDiskState(context);
+
+    expect(await branchExists(projectPath, branch)).toBe(false);
+    expect(await exists(abandoned)).toBe(false);
+    expect(await exists(path.join(worktreeDir, "stray"))).toBe(true);
+  });
+
+  test("resumes past kept branches after a capped pass", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    for (const slug of ["aaa", "aab"]) {
+      await branchWithCommits(projectPath, orphanBranch(slug), base, [`${slug}.txt`]);
+    }
+    const merged = orphanBranch("zzz");
+    await git(projectPath, "branch", merged, base);
+    const start = Date.now();
+    const options = { maxOrphanedBranchesPerPass: 2 };
+
+    expect(
+      await sweepOrphanedEnvironmentBranches(context, { ...options, now: () => new Date(start) }),
+    ).toEqual({ deleted: 0, kept: 2 });
+    expect(await branchExists(projectPath, merged)).toBe(true);
+    expect(Object.values(await environmentCleanupSweepState(dataDir).branchCursors())).toHaveLength(
+      1,
+    );
+    expect(
+      await sweepOrphanedEnvironmentBranches(context, {
+        ...options,
+        now: () => new Date(start + ORPHANED_BRANCH_SWEEP_INTERVAL_MS + 1),
+      }),
+    ).toEqual({ deleted: 1, kept: 0 });
+    expect(await branchExists(projectPath, merged)).toBe(false);
+  });
+
+  test("a cancelled pass is not recorded and is retried", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const first = orphanBranch("aaa");
+    const second = orphanBranch("zzz");
+    await branchWithCommits(projectPath, first, base, ["work.txt"]);
+    await git(projectPath, "branch", second, base);
+    let checks = 0;
+    expect(
+      await sweepOrphanedEnvironmentBranches(context, { isCancelled: () => ++checks > 2 }),
+    ).toEqual({ deleted: 0, kept: 1 });
+    expect(await environmentCleanupSweepState(dataDir).branchSweeps()).toEqual({});
+    expect(await sweepOrphanedEnvironmentBranches(context)).toEqual({ deleted: 1, kept: 1 });
+    expect(await branchExists(projectPath, second)).toBe(false);
+  });
+
+  test("a failed project does not stop another project or record the failure", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const first = await addProject(storage, "p1");
+    const second = await addProject(storage, "p2");
+    const branch = orphanBranch("merged");
+    await git(second.projectPath, "branch", branch, second.base);
+    await expect(
+      sweepOrphanedEnvironmentBranches(context, {
+        run: async (command, args, options) => {
+          if (command === "git" && args[1] === first.projectPath && args[2] === "worktree")
+            throw new Error("listing failed");
+          return runCommand(command, args, options);
+        },
+      }),
+    ).rejects.toThrow("listing failed");
+    expect(await branchExists(second.projectPath, branch)).toBe(false);
+    const swept = await environmentCleanupSweepState(dataDir).branchSweeps();
+    expect(swept.p1).toBeUndefined();
+    expect(swept.p2).toBeDefined();
+  });
+  test("recognises every branch name the environment scheme produces", () => {
+    const id = "4d637502-8fc1-4165-8409-c61c97c3aa9f";
+    expect(environmentBranchNamespace(id)).toBe("4d6375028fc1");
+    for (const branch of [
+      environmentBranchBase("Disk space usage", id),
+      environmentBranchBase("Disk space usage", id, 3),
+      `${environmentBranchBase("fix", id, 1)}-2`,
+    ]) {
+      expect(parseEnvironmentBranchNamespace(branch)).toBe("4d6375028fc1");
+    }
+    for (const branch of ["main", "feature/4d6375028fc1", "4d6375028fc1", "x-4d6375028fc"]) {
+      expect(parseEnvironmentBranchNamespace(branch)).toBeNull();
+    }
+  });
+
+  test("deletes a merged orphan branch and keeps an unmerged one", async () => {
+    const { context, storage } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const merged = orphanBranch("merged");
+    const unmerged = orphanBranch("unmerged");
+    const mergedTip = await branchWithCommits(projectPath, merged, base, ["merged.txt"]);
+    await git(projectPath, "update-ref", "refs/remotes/origin/main", mergedTip);
+    await branchWithCommits(projectPath, unmerged, base, ["unmerged.txt"]);
+    const unrelated = "feature-without-namespace";
+    await branchWithCommits(projectPath, unrelated, base, []);
+
+    expect(await sweepOrphanedEnvironmentBranches(context)).toEqual({ deleted: 1, kept: 1 });
+    expect(await branchExists(projectPath, merged)).toBe(false);
+    expect(await branchExists(projectPath, unmerged)).toBe(true);
+    expect(await branchExists(projectPath, unrelated)).toBe(true);
+  });
+
+  test("deletes an orphan with no commits beyond its reflog start point", async () => {
+    const { context, storage } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    // Created from an unmerged base, so only the start-point test can pass.
+    const baseTip = await branchWithCommits(projectPath, "delegation-base", base, ["base.txt"]);
+    const orphan = orphanBranch("delegated");
+    await git(projectPath, "branch", orphan, baseTip);
+
+    expect(await sweepOrphanedEnvironmentBranches(context)).toEqual({ deleted: 1, kept: 0 });
+    expect(await branchExists(projectPath, orphan)).toBe(false);
+    expect(await branchExists(projectPath, "delegation-base")).toBe(true);
+  });
+
+  test("keeps a branch whose namespace belongs to a live environment", async () => {
+    const { context, storage } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const id = randomUUID();
+    const branch = `live-${id.replace(/-/g, "").slice(0, 12)}-r1`;
+    await branchWithCommits(projectPath, branch, base, []);
+    // The environment's recorded branch is a later rename, so only the
+    // namespace ties the old branch to it.
+    await storage.addEnvironment({ ...environment(id), branch: "renamed" });
+
+    expect(await sweepOrphanedEnvironmentBranches(context)).toEqual({ deleted: 0, kept: 0 });
+    expect(await branchExists(projectPath, branch)).toBe(true);
+  });
+
+  test("keeps an orphan branch that is checked out in a worktree", async () => {
+    const { context, storage, worktreeDir } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const orphan = orphanBranch("checked-out");
+    await branchWithCommits(projectPath, orphan, base, []);
+    await git(projectPath, "worktree", "add", "-q", path.join(worktreeDir, "wt"), orphan);
+
+    expect(await sweepOrphanedEnvironmentBranches(context)).toEqual({ deleted: 0, kept: 0 });
+    expect(await branchExists(projectPath, orphan)).toBe(true);
+  });
+
+  test("sweeps each project at most once per interval", async () => {
+    const { context, storage } = await reconcileContext();
+    const { projectPath, base } = await addProject(storage);
+    const start = Date.now();
+    expect(await sweepOrphanedEnvironmentBranches(context, { now: () => new Date(start) })).toEqual(
+      { deleted: 0, kept: 0 },
+    );
+    const orphan = orphanBranch("late");
+    await branchWithCommits(projectPath, orphan, base, []);
+
+    const soon = new Date(start + ORPHANED_BRANCH_SWEEP_INTERVAL_MS - 60_000);
+    expect(await sweepOrphanedEnvironmentBranches(context, { now: () => soon })).toEqual({
+      deleted: 0,
+      kept: 0,
+    });
+    expect(await branchExists(projectPath, orphan)).toBe(true);
+
+    const later = new Date(start + ORPHANED_BRANCH_SWEEP_INTERVAL_MS + 60_000);
+    expect(await sweepOrphanedEnvironmentBranches(context, { now: () => later })).toEqual({
+      deleted: 1,
+      kept: 0,
+    });
+    expect(await branchExists(projectPath, orphan)).toBe(false);
+  });
+});
+
+describe("abandoned temp file sweep", () => {
+  async function tempFile(dataDir: string, name: string, ageMs: number): Promise<string> {
+    const file = path.join(dataDir, name);
+    await fs.writeFile(file, "{}\n");
+    await age(file, ageMs);
+    return file;
+  }
+
+  test("removes an old temp file whose writer is gone", async () => {
+    const { context, dataDir } = await reconcileContext();
+    const pid = await deadPid();
+    const abandoned = await tempFile(
+      dataDir,
+      `agent-platforms.json.${pid}.tmp`,
+      ORPHANED_STATE_MIN_AGE_MS * 2,
+    );
+    const otherShape = await tempFile(
+      dataDir,
+      `.coordinators.json.${randomUUID()}.tmp`,
+      ORPHANED_STATE_MIN_AGE_MS * 2,
+    );
+
+    expect(await sweepAbandonedTempFiles(context)).toBe(1);
+    expect(await exists(abandoned)).toBe(false);
+    expect(await exists(otherShape)).toBe(true);
+  });
+
+  test("keeps a temp file whose writer is still running", async () => {
+    const { context, dataDir } = await reconcileContext();
+    const live = await tempFile(
+      dataDir,
+      `agent-platforms.json.${process.pid}.tmp`,
+      ORPHANED_STATE_MIN_AGE_MS * 2,
+    );
+
+    expect(await sweepAbandonedTempFiles(context)).toBe(0);
+    expect(await exists(live)).toBe(true);
+  });
+
+  test("keeps a fresh temp file even when its writer is gone", async () => {
+    const { context, dataDir } = await reconcileContext();
+    const fresh = await tempFile(dataDir, `agent-platforms.json.${await deadPid()}.tmp`, 0);
+
+    expect(await sweepAbandonedTempFiles(context)).toBe(0);
+    expect(await exists(fresh)).toBe(true);
   });
 });

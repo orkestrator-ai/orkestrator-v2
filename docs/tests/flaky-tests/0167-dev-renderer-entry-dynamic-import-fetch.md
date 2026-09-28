@@ -40,4 +40,3 @@ fetches are shown to fail for another reason.
 - **Change:** both container specs now load through
   `e2e/agent-testing/dev-startup-retry.ts`, the same single, annotated retry
   the draft spec uses, limited to the dev server's module-fetch failure.
-

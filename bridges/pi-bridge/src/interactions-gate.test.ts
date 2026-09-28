@@ -113,7 +113,7 @@ test("read-only reviews deny commands, writes and unknown tools even with approv
 
 test("coordinator read-only allows Orkestrator MCP tools and still denies the rest", async () => {
   const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
-  const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "pi-mcp-coord-"));
@@ -156,12 +156,13 @@ test("coordinator read-only allows Orkestrator MCP tools and still denies the re
     // Process-global transport. Cleared in a `finally` so a failing assertion
     // cannot leave it installed for every later file in the run.
     setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
 test("a colliding Orkestrator tool name does not unlock a Pi built-in", async () => {
   const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
-  const { mkdtemp } = await import("node:fs/promises");
+  const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "pi-mcp-coord-collide-"));
@@ -196,5 +197,6 @@ test("a colliding Orkestrator tool name does not unlock a Pi built-in", async ()
     ).toMatchObject({ block: true });
   } finally {
     setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
   }
 });

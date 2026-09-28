@@ -1420,8 +1420,6 @@ esac
       const { worktree, remote } = await createGitWorktreeWithOrigin();
       const projectName = "rollback-repo";
       const branch = `worktree-rollback-${randomUUID().slice(0, 8)}`;
-      const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
-      await fs.rm(expectedWorktreePath, { recursive: true, force: true });
 
       const environment = createEnvironment({
         id: "env-worktree-persist-compensation",
@@ -1440,6 +1438,7 @@ esac
           order: 0,
         },
       });
+      const expectedWorktreePath = expectedManagedWorktreePath(context, projectName, branch);
       const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
       const originalImplementation = updateEnvironment.getMockImplementation();
       updateEnvironment.mockImplementation(
@@ -2819,8 +2818,6 @@ exit 0
     const suffix = randomUUID().slice(0, 8);
     const projectName = `copy-missing-${suffix}`;
     const branch = `copy-missing-${suffix}`;
-    const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
-    await fs.rm(expectedWorktreePath, { recursive: true, force: true });
 
     const environment = createEnvironment({
       status: "stopped",
@@ -2843,6 +2840,7 @@ exit 0
         filesToCopy: ["missing.json"],
       },
     });
+    const expectedWorktreePath = expectedManagedWorktreePath(context, projectName, branch);
     const commands = createCommandRegistry();
 
     try {
@@ -2866,8 +2864,6 @@ exit 0
     const suffix = randomUUID().slice(0, 8);
     const projectName = `copy-directory-${suffix}`;
     const branch = `copy-directory-${suffix}`;
-    const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
-    await fs.rm(expectedWorktreePath, { recursive: true, force: true });
 
     const environment = createEnvironment({
       status: "stopped",
@@ -2890,6 +2886,7 @@ exit 0
         filesToCopy: ["nested-dir"],
       },
     });
+    const expectedWorktreePath = expectedManagedWorktreePath(context, projectName, branch);
     const commands = createCommandRegistry();
 
     try {

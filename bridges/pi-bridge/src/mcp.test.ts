@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSessionState } from "./agent-session.js";
@@ -20,10 +20,19 @@ import {
   type PiMcpTransport,
 } from "./mcp.js";
 
-afterEach(() => {
+const roots: string[] = [];
+
+afterEach(async () => {
   setPiMcpTransportForTests();
   setPiMcpTimeoutsForTests();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+
+async function tempRoot(prefix: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
 
 interface RegisteredTool {
   name: string;
@@ -76,7 +85,7 @@ function fakeTransport(options?: {
 
 describe("Pi MCP client", () => {
   test("registers Orkestrator tools under their real names and prefixes the rest", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-"));
+    const root = await tempRoot("pi-mcp-");
     const agentDir = join(root, "agent");
     await mkdir(agentDir, { recursive: true });
     await writeFile(
@@ -124,7 +133,7 @@ describe("Pi MCP client", () => {
   });
 
   test("fails open when a server is down and redacts bearer tokens", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-fail-"));
+    const root = await tempRoot("pi-mcp-fail-");
     setPiMcpTransportForTests(fakeTransport({ fail: new Set(["orkestrator"]) }));
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
@@ -142,7 +151,7 @@ describe("Pi MCP client", () => {
   });
 
   test("does not read project MCP on the host", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-host-"));
+    const root = await tempRoot("pi-mcp-host-");
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(
       join(root, ".pi", "mcp.json"),
@@ -168,7 +177,7 @@ describe("Pi MCP client", () => {
   });
 
   test("the real transport fails open against a closed local port", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-real-"));
+    const root = await tempRoot("pi-mcp-real-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:1/mcp", token: "tab-token" };
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -194,7 +203,7 @@ describe("Pi MCP client", () => {
         });
       },
     });
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-timeout-"));
+    const root = await tempRoot("pi-mcp-timeout-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
 
@@ -234,7 +243,7 @@ describe("Pi MCP client", () => {
         });
       },
     });
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-detach-race-"));
+    const root = await tempRoot("pi-mcp-detach-race-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     const preparing = preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -253,7 +262,7 @@ describe("Pi MCP client", () => {
 
   test("reports a credential change on the live runtime and not without one", async () => {
     setPiMcpTransportForTests(fakeTransport());
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-key-"));
+    const root = await tempRoot("pi-mcp-key-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "token-a" };
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -268,7 +277,7 @@ describe("Pi MCP client", () => {
 
   test("reports a saved configuration change, ignoring excluded project files", async () => {
     setPiMcpTransportForTests(fakeTransport());
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-key-"));
+    const root = await tempRoot("pi-mcp-config-key-");
     const state = newSessionState();
     await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -294,7 +303,7 @@ describe("Pi MCP client", () => {
 
   test("exposes the digests of the files the attached generation was built from", async () => {
     setPiMcpTransportForTests(fakeTransport());
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-evidence-"));
+    const root = await tempRoot("pi-mcp-config-evidence-");
     const state = newSessionState();
     await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
     const before = Date.now();
@@ -328,7 +337,7 @@ describe("Pi MCP client", () => {
 
   test("reports the project file when the session loads project resources", async () => {
     setPiMcpTransportForTests(fakeTransport());
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-project-"));
+    const root = await tempRoot("pi-mcp-config-project-");
     const state = newSessionState();
     state.policy = { projectResources: true } as never;
     await mkdir(join(root, ".pi"), { recursive: true });
@@ -350,7 +359,7 @@ describe("Pi MCP client", () => {
         },
       }),
     );
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-cap-"));
+    const root = await tempRoot("pi-mcp-cap-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -396,7 +405,7 @@ describe("Pi MCP client", () => {
         ]);
       },
     });
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-bounds-"));
+    const root = await tempRoot("pi-mcp-bounds-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -428,7 +437,7 @@ describe("Pi MCP client", () => {
         );
       },
     });
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-exec-"));
+    const root = await tempRoot("pi-mcp-exec-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
@@ -458,7 +467,7 @@ describe("Pi MCP client", () => {
         });
       },
     });
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-hang-"));
+    const root = await tempRoot("pi-mcp-hang-");
     const state = newSessionState();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });

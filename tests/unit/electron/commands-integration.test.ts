@@ -3578,95 +3578,103 @@ printf '%s' ${JSON.stringify(
       });
       const { context } = createContext(environment);
       const commands = createCommandRegistry();
-      const local = terminalSessionResult(
-        await commands.get("create_local_terminal_session")?.(
-          {
-            environmentId: environment.id,
-            terminalKey: "local-tab",
-            cols: 80,
-            rows: 24,
-          },
+      await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+        const local = terminalSessionResult(
+          await commands.get("create_local_terminal_session")?.(
+            {
+              environmentId: environment.id,
+              terminalKey: "local-tab",
+              cols: 80,
+              rows: 24,
+            },
+            context,
+          ),
+        );
+        const container = terminalSessionResult(
+          await commands.get("create_terminal_session")?.(
+            {
+              containerId: environment.containerId,
+              environmentId: environment.id,
+              terminalKey: "container-tab",
+              cols: 80,
+              rows: 24,
+            },
+            context,
+          ),
+        );
+        await commands.get("start_local_terminal_session")?.(
+          { sessionId: local.sessionId },
           context,
-        ),
-      );
-      const container = terminalSessionResult(
-        await commands.get("create_terminal_session")?.(
-          {
-            containerId: environment.containerId,
-            environmentId: environment.id,
-            terminalKey: "container-tab",
-            cols: 80,
-            rows: 24,
-          },
-          context,
-        ),
-      );
-      await commands.get("start_local_terminal_session")?.({ sessionId: local.sessionId }, context);
-      await commands.get("start_terminal_session")?.({ sessionId: container.sessionId }, context);
+        );
+        await commands.get("start_terminal_session")?.({ sessionId: container.sessionId }, context);
 
-      const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
-      let releaseDeletionMarker!: () => void;
-      const deletionMarkerGate = new Promise<void>((resolve) => {
-        releaseDeletionMarker = resolve;
+        const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+        let releaseDeletionMarker!: () => void;
+        const deletionMarkerGate = new Promise<void>((resolve) => {
+          releaseDeletionMarker = resolve;
+        });
+        let markerWriteStarted = false;
+        context.storage.updateEnvironment = mock(async (environmentId, update) => {
+          if ("deletionRequestedAt" in update) {
+            markerWriteStarted = true;
+            await deletionMarkerGate;
+          }
+          return originalUpdateEnvironment(environmentId, update);
+        });
+
+        const deletePromise = commands.get("delete_environment")?.(
+          { environmentId: environment.id },
+          context,
+        ) as Promise<void>;
+        await waitForCondition(() => markerWriteStarted, "the deletion marker write");
+
+        // Destructive cleanup waits for the durable marker.
+        expect(ptyProcesses[0]?.kill).not.toHaveBeenCalled();
+        expect(ptyProcesses[1]?.kill).not.toHaveBeenCalled();
+        await expect(
+          commands.get("create_local_terminal_session")?.(
+            {
+              environmentId: environment.id,
+              terminalKey: "raced-local-tab",
+              cols: 80,
+              rows: 24,
+            },
+            context,
+          ),
+        ).rejects.toThrow("Environment is being deleted");
+        await expect(
+          commands.get("create_terminal_session")?.(
+            {
+              containerId: environment.containerId,
+              environmentId: environment.id,
+              terminalKey: "raced-container-tab",
+              cols: 80,
+              rows: 24,
+            },
+            context,
+          ),
+        ).rejects.toThrow("Environment is being deleted");
+        await expect(
+          commands.get("start_local_terminal_session")?.({ sessionId: local.sessionId }, context),
+        ).rejects.toThrow("Environment is being deleted");
+        await expect(
+          commands.get("start_terminal_session")?.({ sessionId: container.sessionId }, context),
+        ).rejects.toThrow("Environment is being deleted");
+
+        releaseDeletionMarker();
+        await deletePromise;
+        expect(ptyProcesses[0]?.kill).toHaveBeenCalledTimes(1);
+        expect(ptyProcesses[1]?.kill).toHaveBeenCalledTimes(1);
+        expect(
+          commands.get("get_terminal_output_snapshot")?.({ sessionId: local.sessionId }, context),
+        ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+        expect(
+          commands.get("get_terminal_output_snapshot")?.(
+            { sessionId: container.sessionId },
+            context,
+          ),
+        ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
       });
-      let markerWriteStarted = false;
-      context.storage.updateEnvironment = mock(async (environmentId, update) => {
-        if ("deletionRequestedAt" in update) {
-          markerWriteStarted = true;
-          await deletionMarkerGate;
-        }
-        return originalUpdateEnvironment(environmentId, update);
-      });
-
-      const deletePromise = commands.get("delete_environment")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<void>;
-      await waitForCondition(() => markerWriteStarted, "the deletion marker write");
-
-      // Destructive cleanup waits for the durable marker.
-      expect(ptyProcesses[0]?.kill).not.toHaveBeenCalled();
-      expect(ptyProcesses[1]?.kill).not.toHaveBeenCalled();
-      await expect(
-        commands.get("create_local_terminal_session")?.(
-          {
-            environmentId: environment.id,
-            terminalKey: "raced-local-tab",
-            cols: 80,
-            rows: 24,
-          },
-          context,
-        ),
-      ).rejects.toThrow("Environment is being deleted");
-      await expect(
-        commands.get("create_terminal_session")?.(
-          {
-            containerId: environment.containerId,
-            environmentId: environment.id,
-            terminalKey: "raced-container-tab",
-            cols: 80,
-            rows: 24,
-          },
-          context,
-        ),
-      ).rejects.toThrow("Environment is being deleted");
-      await expect(
-        commands.get("start_local_terminal_session")?.({ sessionId: local.sessionId }, context),
-      ).rejects.toThrow("Environment is being deleted");
-      await expect(
-        commands.get("start_terminal_session")?.({ sessionId: container.sessionId }, context),
-      ).rejects.toThrow("Environment is being deleted");
-
-      releaseDeletionMarker();
-      await deletePromise;
-      expect(ptyProcesses[0]?.kill).toHaveBeenCalledTimes(1);
-      expect(ptyProcesses[1]?.kill).toHaveBeenCalledTimes(1);
-      expect(
-        commands.get("get_terminal_output_snapshot")?.({ sessionId: local.sessionId }, context),
-      ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
-      expect(
-        commands.get("get_terminal_output_snapshot")?.({ sessionId: container.sessionId }, context),
-      ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -3723,79 +3731,81 @@ printf '%s' ${JSON.stringify(
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const local = terminalSessionResult(
-      await commands.get("create_local_terminal_session")?.(
-        {
-          environmentId: environment.id,
-          terminalKey: "local-before-delete",
-          cols: 80,
-          rows: 24,
-        },
-        context,
-      ),
-    );
-    const container = terminalSessionResult(
-      await commands.get("create_terminal_session")?.(
-        {
-          containerId: environment.containerId,
-          environmentId: environment.id,
-          terminalKey: "container-before-delete",
-          cols: 80,
-          rows: 24,
-        },
-        context,
-      ),
-    );
-    const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
-    context.storage.updateEnvironment = mock(async (environmentId, update) => {
-      const updated = await originalUpdateEnvironment(environmentId, update);
-      if ("deletionRequestedAt" in update) {
-        // Model an acknowledged durable write whose caller subsequently sees a
-        // transport/storage failure. The in-memory tombstone is cleared, but the
-        // stored deletion intent must continue blocking terminal operations.
-        throw new Error("deletion failed after marker persistence");
-      }
-      return updated;
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const local = terminalSessionResult(
+        await commands.get("create_local_terminal_session")?.(
+          {
+            environmentId: environment.id,
+            terminalKey: "local-before-delete",
+            cols: 80,
+            rows: 24,
+          },
+          context,
+        ),
+      );
+      const container = terminalSessionResult(
+        await commands.get("create_terminal_session")?.(
+          {
+            containerId: environment.containerId,
+            environmentId: environment.id,
+            terminalKey: "container-before-delete",
+            cols: 80,
+            rows: 24,
+          },
+          context,
+        ),
+      );
+      const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+      context.storage.updateEnvironment = mock(async (environmentId, update) => {
+        const updated = await originalUpdateEnvironment(environmentId, update);
+        if ("deletionRequestedAt" in update) {
+          // Model an acknowledged durable write whose caller subsequently sees a
+          // transport/storage failure. The in-memory tombstone is cleared, but the
+          // stored deletion intent must continue blocking terminal operations.
+          throw new Error("deletion failed after marker persistence");
+        }
+        return updated;
+      });
+
+      await expect(
+        commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+      ).rejects.toThrow("deletion failed after marker persistence");
+      expect(environment.deletionRequestedAt).toBeString();
+
+      await expect(
+        commands.get("create_local_terminal_session")?.(
+          {
+            environmentId: environment.id,
+            terminalKey: "local-after-delete",
+            cols: 80,
+            rows: 24,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Environment is being deleted");
+      await expect(
+        commands.get("create_terminal_session")?.(
+          {
+            containerId: environment.containerId,
+            environmentId: environment.id,
+            terminalKey: "container-after-delete",
+            cols: 80,
+            rows: 24,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Environment is being deleted");
+      await expect(
+        commands.get("start_local_terminal_session")?.({ sessionId: local.sessionId }, context),
+      ).rejects.toThrow("Environment is being deleted");
+      await expect(
+        commands.get("start_terminal_session")?.({ sessionId: container.sessionId }, context),
+      ).rejects.toThrow("Environment is being deleted");
+      expect(ptySpawn).not.toHaveBeenCalled();
+
+      commands.get("close_local_terminal_session")?.({ sessionId: local.sessionId }, context);
+      commands.get("detach_terminal")?.({ sessionId: container.sessionId }, context);
     });
-
-    await expect(
-      commands.get("delete_environment")?.({ environmentId: environment.id }, context),
-    ).rejects.toThrow("deletion failed after marker persistence");
-    expect(environment.deletionRequestedAt).toBeString();
-
-    await expect(
-      commands.get("create_local_terminal_session")?.(
-        {
-          environmentId: environment.id,
-          terminalKey: "local-after-delete",
-          cols: 80,
-          rows: 24,
-        },
-        context,
-      ),
-    ).rejects.toThrow("Environment is being deleted");
-    await expect(
-      commands.get("create_terminal_session")?.(
-        {
-          containerId: environment.containerId,
-          environmentId: environment.id,
-          terminalKey: "container-after-delete",
-          cols: 80,
-          rows: 24,
-        },
-        context,
-      ),
-    ).rejects.toThrow("Environment is being deleted");
-    await expect(
-      commands.get("start_local_terminal_session")?.({ sessionId: local.sessionId }, context),
-    ).rejects.toThrow("Environment is being deleted");
-    await expect(
-      commands.get("start_terminal_session")?.({ sessionId: container.sessionId }, context),
-    ).rejects.toThrow("Environment is being deleted");
-    expect(ptySpawn).not.toHaveBeenCalled();
-
-    commands.get("close_local_terminal_session")?.({ sessionId: local.sessionId }, context);
-    commands.get("detach_terminal")?.({ sessionId: container.sessionId }, context);
   });
 
   test(

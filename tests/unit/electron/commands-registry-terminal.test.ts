@@ -2469,21 +2469,23 @@ exec sleep 30
     expect(created.created).toBe(true);
     expect(created.sessionId).toBeString();
     expect(await getTerminalStateSnapshot(created.sessionId)).toBeNull();
-    const containerCreated = terminalSessionResult(
-      await commands.get("create_terminal_session")?.(
-        { containerId: "container-created-without-history", cols: 80, rows: 24 },
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const containerCreated = terminalSessionResult(
+        await commands.get("create_terminal_session")?.(
+          { containerId: "container-created-without-history", cols: 80, rows: 24 },
+          context,
+        ),
+      );
+      expect(containerCreated.created).toBe(true);
+      expect(containerCreated.sessionId).toBeString();
+      expect(await getTerminalStateSnapshot(containerCreated.sessionId)).toBeNull();
+      const attached = await commands.get("attach_terminal")?.(
+        { containerId: "container-without-history", cols: 80, rows: 24 },
         context,
-      ),
-    );
-    expect(containerCreated.created).toBe(true);
-    expect(containerCreated.sessionId).toBeString();
-    expect(await getTerminalStateSnapshot(containerCreated.sessionId)).toBeNull();
-    const attached = await commands.get("attach_terminal")?.(
-      { containerId: "container-without-history", cols: 80, rows: 24 },
-      context,
-    );
-    expect(attached).toBeString();
-    expect(await getTerminalStateSnapshot(String(attached))).toBeNull();
+      );
+      expect(attached).toBeString();
+      expect(await getTerminalStateSnapshot(String(attached))).toBeNull();
+    });
     const setupSessionId = beginSetupPreparationSession(environment, context);
     expect(setupSessionId).toBe(`${environment.id}:setup`);
     expect(await getTerminalStateSnapshot(setupSessionId)).toBeNull();
@@ -3261,30 +3263,32 @@ exec sleep 30
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(
-      commands.get("create_terminal_session")?.(
-        {
-          containerId: "container-unrelated",
-          cols: 80,
-          rows: 24,
-          trackEnvironmentActivity: true,
-        },
-        context,
-      ),
-    ).rejects.toThrow("Tracked terminal container is not associated with an environment");
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      await expect(
+        commands.get("create_terminal_session")?.(
+          {
+            containerId: "container-unrelated",
+            cols: 80,
+            rows: 24,
+            trackEnvironmentActivity: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Tracked terminal container is not associated with an environment");
 
-    await expect(
-      commands.get("create_terminal_session")?.(
-        {
-          containerId: "container-unrelated",
-          environmentId: environment.id,
-          terminalKey: "plain-tab",
-          cols: 80,
-          rows: 24,
-        },
-        context,
-      ),
-    ).rejects.toThrow("Terminal container is not associated with the requested environment");
+      await expect(
+        commands.get("create_terminal_session")?.(
+          {
+            containerId: "container-unrelated",
+            environmentId: environment.id,
+            terminalKey: "plain-tab",
+            cols: 80,
+            rows: 24,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Terminal container is not associated with the requested environment");
+    });
   });
 
   test("does not record shell activity for untracked terminal tabs", async () => {

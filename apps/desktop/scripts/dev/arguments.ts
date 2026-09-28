@@ -119,3 +119,40 @@ export function applyAgentTestDefaults(args: DevArguments): DevArguments {
 export function parseAgentTestArguments(args: string[]): DevArguments {
   return applyAgentTestDefaults(parseArguments(args, { agentPlatformsAllowed: true }));
 }
+
+export type PruneArguments = {
+  dryRun: boolean;
+  force: boolean;
+  json: boolean;
+  keepToolchains: boolean;
+  olderThanDays?: number;
+};
+
+export function parsePruneArguments(args: string[]): PruneArguments {
+  const result: PruneArguments = {
+    dryRun: false,
+    force: false,
+    json: false,
+    keepToolchains: false,
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "--dry-run") result.dryRun = true;
+    else if (argument === "--force") result.force = true;
+    else if (argument === "--json") result.json = true;
+    else if (argument === "--keep-toolchains") result.keepToolchains = true;
+    else if (argument === "--older-than") {
+      const value = args[++index];
+      const days = value === undefined ? Number.NaN : Number(value);
+      if (!Number.isInteger(days) || days < 0) {
+        throw new Error("--older-than takes a whole number of days");
+      }
+      result.olderThanDays = days;
+    } else if (argument === "--") {
+      continue;
+    } else {
+      throw new Error(`Unknown prune option: ${argument}`);
+    }
+  }
+  return result;
+}

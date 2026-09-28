@@ -51,6 +51,7 @@ Refreshed 2026-09-17 against the current tree.
 | [upgrade-agents.md](development/upgrade-agents.md) | Living | SDK/CLI bump runbook. Pins are test-enforced. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Living | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Living | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
+| [disk-usage.md](development/disk-usage.md) | Living | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [linting.md](development/linting.md) | Living | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 
 ## Tests
@@ -90,6 +91,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | [mcp/plan/00-index.md](improvements/mcp/plan/00-index.md) | Active | MCP server management plan. Steps 02–12 implemented; container-private writes (13) and live-probe/real-stack evidence (01, 14) outstanding. Findings: [mcp.md](improvements/mcp.md). |
 | [slash-commands/plan/00-index.md](improvements/slash-commands/plan/00-index.md) | Active | Slash-command correctness plan. Code landed; live provider probes and isolated browser QA are the open items. Findings: [slash-commands.md](improvements/slash-commands.md). |
 | [environment-deletion-cleanup.md](plans/environment-deletion-cleanup.md) | Active | Implemented with automated verification: environment deletion now removes bridge state, merged local branches and late worktree writes, and a cleanup ledger plus reconciler retries failed steps. The isolated real-stack deletion run is outstanding. |
+| [orphaned-disk-state-cleanup.md](plans/orphaned-disk-state-cleanup.md) | Active | Disk state outside environment deletion: Turbo and Docker cache caps, dev-profile pruning, test temp leaks, pre-ledger workspace/branch sweeps, `disk:report`. Isolated real-stack pass outstanding. |
 | [recurring-processes/plan/00-index.md](improvements/recurring-processes/plan/00-index.md) | Active | Recurring-process efficiency plan. Steps 01–11 implemented; step 12 qualified on Linux with a live isolated-profile A/B. Open: live-provider/GitHub/macOS/iOS evidence and the deferred data-saving preference. Findings: [recurring-processes.md](imrovements/recurring-processes.md); baseline artifacts in [baseline/](improvements/recurring-processes/baseline/README.md). |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |

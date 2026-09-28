@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,18 @@ import {
   parseAgentMcpConnection,
   resolvePiMcpServers,
 } from "./mcp-config.js";
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function tempRoot(prefix: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
 
 describe("Pi MCP config", () => {
   test("accepts the same Orkestrator hosts Claude does and rejects the rest", () => {
@@ -70,7 +82,7 @@ describe("Pi MCP config", () => {
   });
 
   test("loads user and project files, gates project scope, and reserves orkestrator", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-"));
+    const root = await tempRoot("pi-mcp-config-");
     const agentDir = join(root, "agent");
     const cwd = join(root, "project");
     await mkdir(agentDir, { recursive: true });
@@ -129,7 +141,7 @@ describe("Pi MCP config", () => {
   });
 
   test("keeps the reserved Orkestrator server when the cap is full", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-mcp-cap-"));
+    const root = await tempRoot("pi-mcp-cap-");
     const agentDir = join(root, "agent");
     await mkdir(agentDir, { recursive: true });
     const servers: Record<string, unknown> = {};

@@ -147,6 +147,7 @@ describe("TiptapMarkdownEditor", () => {
     expect(editor.className).toContain("[&_pre_code]:px-0");
     expect(editor.className).toContain("[&_pre_code]:py-0");
     expect(editor.className).toContain("[&_pre_code]:bg-transparent");
+    expect(editor.className).toContain("[&_pre_code]:rounded-none");
   });
 
   test("debounces rich-editor changes into Markdown", async () => {

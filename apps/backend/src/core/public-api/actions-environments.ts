@@ -3,7 +3,15 @@ import type { Environment } from "../models.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
 import { runWithContinuation } from "./background.js";
 import { PublicActionError } from "./errors.js";
-import { invalid, onlyKeys, optionalString, oneOf, requiredId, requiredOneOf } from "./input.js";
+import {
+  invalid,
+  onlyKeys,
+  optionalBoolean,
+  optionalString,
+  oneOf,
+  requiredId,
+  requiredOneOf,
+} from "./input.js";
 import { publicEnvironmentSummary } from "./summaries.js";
 import type {
   ExecuteOutcome,
@@ -216,14 +224,24 @@ const LIFECYCLE_COMMANDS: Record<LifecycleVerb, string> = {
   delete: "delete_environment",
 };
 
-function lifecycleHandler(verb: LifecycleVerb): MutationActionHandler<{ environmentId: string }> {
+function lifecycleHandler(
+  verb: LifecycleVerb,
+): MutationActionHandler<{ environmentId: string; discard?: boolean }> {
   return {
     kind: "mutation",
     action: `environment.${verb}`,
     parse(input) {
-      onlyKeys(input, ["environmentId"]);
+      onlyKeys(input, verb === "recreate" ? ["environmentId", "discard"] : ["environmentId"]);
       const environmentId = requiredId(input, "environmentId");
-      return { value: { environmentId }, scope: `environment:${environmentId}`, intent: {} };
+      if (verb !== "recreate") {
+        return { value: { environmentId }, scope: `environment:${environmentId}`, intent: {} };
+      }
+      const discard = optionalBoolean(input, "discard") === true;
+      return {
+        value: { environmentId, discard },
+        scope: `environment:${environmentId}`,
+        intent: { discard },
+      };
     },
     async prepare(input, context) {
       const environment = await requireEnvironment(context, input.environmentId);
@@ -234,13 +252,29 @@ function lifecycleHandler(verb: LifecycleVerb): MutationActionHandler<{ environm
           "Local worktree environments cannot be recreated",
         );
       }
+      // Without `discard` the command performs a preserving rebuild: the
+      // workspace and provider state are copied and verified before the new
+      // runtime is committed, and it is refused (nothing changed) where the
+      // image or engine cannot preserve them. Both forms are bound to the
+      // runtime seen at admission: a replacement that appears before
+      // execution is not what the caller reviewed.
+      const reviewedContainerId = environment.containerId;
       return {
         resources: { environmentId: environment.id, projectId: environment.projectId },
         async execute(operation) {
           await operation.update({
             stage: verb === "delete" ? "deleting" : `${verb === "stop" ? "stopping" : "starting"}`,
           });
-          const task = context.invoke(LIFECYCLE_COMMANDS[verb], { environmentId: environment.id });
+          const task = context.invoke(
+            LIFECYCLE_COMMANDS[verb],
+            verb === "recreate"
+              ? {
+                  environmentId: environment.id,
+                  intent: input.discard ? "discard" : "preserve",
+                  expectedContainerId: reviewedContainerId,
+                }
+              : { environmentId: environment.id },
+          );
           return runWithContinuation(operation, task, {
             runningStage:
               verb === "delete" ? "deleting" : verb === "stop" ? "stopping" : "starting",

@@ -46,6 +46,7 @@ coverage/
 .nyc_output/
 /output/playwright/
 /output/agent-testing/
+/output/benchmarks/
 /output/efficiency/
 
 # TypeScript

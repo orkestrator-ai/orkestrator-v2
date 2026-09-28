@@ -17,6 +17,7 @@ import {
   dockerBuildCacheWarning,
   parseDockerSize,
   pruneProfiles,
+  removeProfile,
   type CommandRunner,
 } from "./profile-cleanup.js";
 import { atomicWriteJson, initializeProfile } from "./profile-io.js";
@@ -91,6 +92,67 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
+});
+
+describe("removeProfile", () => {
+  test("removes exact-owner containers, volumes, and networks before profile state", async () => {
+    const profile = await createProfile("resources");
+    const owner = `label=orkestrator-owner=${profile.dockerOwner}`;
+    const recorded: string[][] = [];
+    const resourceRun: CommandRunner = (command, args) => {
+      if (command !== "docker") return run(command, args);
+      recorded.push(args);
+      const output =
+        args[0] === "ps"
+          ? "container-one\n"
+          : args[0] === "volume" && args[1] === "ls"
+            ? "volume-one\nvolume-two\n"
+            : args[0] === "network" && args[1] === "ls"
+              ? "network-one\n"
+              : "";
+      return { status: 0, stdout: output, stderr: "" };
+    };
+
+    const result = await removeProfile(profile, {
+      keepToolchains: false,
+      roots,
+      run: resourceRun,
+    });
+
+    expect(result).toMatchObject({
+      containersRemoved: 1,
+      volumesRemoved: 2,
+      networksRemoved: 1,
+    });
+    expect(recorded).toEqual([
+      ["ps", "-aq", "--filter", owner],
+      ["rm", "-f", "container-one"],
+      ["volume", "ls", "-q", "--filter", owner],
+      ["volume", "rm", "volume-one", "volume-two"],
+      ["network", "ls", "-q", "--filter", owner],
+      ["network", "rm", "network-one"],
+    ]);
+    expect(existsSync(profile.profileRoot)).toBe(false);
+  });
+
+  test("keeps profile state when an owned volume cannot be removed", async () => {
+    const profile = await createProfile("volume-failure");
+    const resourceRun: CommandRunner = (command, args) => {
+      if (command !== "docker") return run(command, args);
+      if (args[0] === "volume" && args[1] === "ls") {
+        return { status: 0, stdout: "volume-one\n", stderr: "" };
+      }
+      if (args[0] === "volume" && args[1] === "rm") {
+        return { status: 1, stdout: "", stderr: "volume is in use" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+
+    await expect(
+      removeProfile(profile, { keepToolchains: false, roots, run: resourceRun }),
+    ).rejects.toThrow("volume is in use");
+    expect(existsSync(profile.profileRoot)).toBe(true);
+  });
 });
 
 describe("pruneProfiles", () => {

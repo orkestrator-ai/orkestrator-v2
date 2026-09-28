@@ -1667,8 +1667,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               needed.
               {cleanupTargetIsMerged
                 ? " The PR's remote branch will also be deleted if it still exists."
-                : ""}
-              This action cannot be undone.
+                : ""}{" "}
+              Its container, persistent storage and any recovery copies kept from earlier rebuilds
+              are deleted with it. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {cleanupError && (

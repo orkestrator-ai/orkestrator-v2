@@ -1,6 +1,6 @@
 # 12 — Image build and release delivery
 
-Status: Not started. Dependency:
+Status: Implemented on branch; awaiting review. Dependency:
 [03](03-image-contracts-and-daemon-preflight.md).
 Return to [index](00-index.md).
 
@@ -103,3 +103,47 @@ Exit when the final image contains complete runtime artifacts, excludes bridge
 build-only layers, preserves both architectures and has a reproducible
 manifest/digest path. Per-agent image variants and removing Chromium remain
 out of scope until measurements show a worthwhile benefit.
+
+## Implementation record
+
+- **Baseline** (Engine 29.7.2, amd64, `docker image inspect .Size`, containerd
+  store): 2,071,124,785 bytes. The bridge section contributed a 792 MB
+  workspace-install layer, 239/189/52 MB per-bridge build layers and a 494 MB
+  `mv` copy of the output — about 1.77 GB of layers for about 473 MB of runtime
+  output (`du -sm /opt/*-bridge`: claude 231, pi 182, cursor 51, codex 7, acp 2).
+- **After**: 1,649,596,512 bytes (−421 MB, −20%). The bridge layers in the final
+  image are exactly the five `COPY --from=bridge-build` layers (241, 190, 53,
+  6.8 and 2 MB). Build context: 118 kB after the `.dockerignore` tightening.
+- **Build design.** `bridge-build` stage on the same digest-pinned base:
+  every workspace manifest, the lockfile and `patches/` first; `bun install
+  --frozen-lockfile --filter …` (proved to resolve with the pinned Bun); then
+  sources and one build per bridge, dropping build-only `node_modules` and the
+  Claude SDK's musl variant. The final stage copies each bridge directory to its
+  existing `/opt/<name>-bridge` path and fails the build if an entrypoint or a
+  vendored runtime tree is missing or the musl variant reappears. A source or
+  Dockerfile edit after the install step reused the cached install layer.
+- **Pins and release.** Both `FROM` lines pin
+  `oven/bun:1.4.2-debian@sha256:4f6e…bc73` (multi-arch index); the drift test
+  requires tag = mise Bun and one shared digest; the refresh procedure is in
+  AGENTS.md. The publish workflow already built per architecture by digest and
+  refused a manifest missing an architecture; it now also records
+  `image-release.json` (image, digest, ref, commit, platforms) and the digest in
+  the job summary.
+- **Capabilities.** The manifest now reflects the implementations of steps
+  04–11: `boot-status`, `workspace-prepare`, `graceful-shutdown`,
+  `persistent-workspace`, `staged-inputs`, `network-policy=2`, `bounded-logs`.
+- **Verification.** Final image: all five bridges answer `/global/health`
+  with no module-resolution errors; the full live qualification set (C09, C11,
+  C12, C14–C16, C17/C18, C20, C22, C24, C26 — 16 scenarios) passes against it;
+  the build-time Playwright checks for `node` and uid 0 still run in the final
+  stage.
+- **Limitations.** arm64 was not built on this host (CI covers it natively);
+  registry compressed size and cold pull time were not measured here. Cache
+  mounts for Bun's download cache were not added.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 29, 30, 32);
+what could not be done on this host is listed there as environment-limited.

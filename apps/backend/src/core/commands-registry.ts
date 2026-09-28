@@ -22,6 +22,7 @@ import {
   syncPrMonitorTracking,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
+import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type {
   CommandRegistrar,
@@ -59,13 +60,37 @@ export function createCommandRegistry(
   options: CommandRegistryOptions = {},
 ): Map<string, CommandHandler> {
   const commands = new Map<string, CommandHandler>();
+  // Commands that resolve container ownership themselves because their rule
+  // differs from the generic one (adoption accepts a reviewed pre-label
+  // container that no environment references yet).
+  const selfVerifyingContainerCommands = new Set(["reattach_container"]);
   const register: CommandRegistrar = (name, handler) => {
+    if (selfVerifyingContainerCommands.has(name)) {
+      commands.set(name, handler);
+      return;
+    }
     commands.set(name, (args, context) => {
       const containerId = args.containerId;
-      if (context.strictDockerOwner && typeof containerId === "string" && containerId.trim()) {
-        return assertDockerContainerOwned(containerId, context).then(() => handler(args, context));
-      }
-      return handler(args, context);
+      const namesContainer = typeof containerId === "string" && containerId.trim().length > 0;
+      const bindsGeneration = args.expectedRuntimeGeneration !== undefined;
+      // Commands that name no container stay synchronous.
+      if (!namesContainer && !bindsGeneration) return handler(args, context);
+      return (async () => {
+        // A handle minted for one runtime generation must not be connected to
+        // a replacement: callers that bind to a generation send it back and
+        // get a `runtime-changed` conflict instead of the new container.
+        if (bindsGeneration) await assertRuntimeGeneration(args, context);
+        // A supplied container id is not proof of ownership, in any profile.
+        // It must be this registry's persisted association (exact id) or carry
+        // this registry's labels; strict profiles always verify the labels.
+        // Lifecycle mutations verify labels again at their own entry points.
+        if (namesContainer) {
+          await assertDockerContainerOwned(containerId, context, {
+            trustExactAssociation: true,
+          });
+        }
+        return handler(args, context);
+      })();
     });
   };
 

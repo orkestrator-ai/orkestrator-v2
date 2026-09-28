@@ -4,6 +4,7 @@ import process from "node:process";
 import { resolveRuntimeProfile } from "../electron/runtime-profile.js";
 import { parseDevArguments } from "./dev/arguments.js";
 import { dockerBuildCacheWarning } from "./dev/profile-cleanup.js";
+import { dockerImageBuildArgs } from "../../../scripts/docker-image-build-args.js";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../..");
 
@@ -20,6 +21,7 @@ try {
     "docker",
     [
       "build",
+      ...dockerImageBuildArgs(repositoryRoot),
       "-t",
       profile.dockerImage,
       "-f",

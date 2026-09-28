@@ -54,6 +54,7 @@ async function lifecycle(
   parsed: ParsedCommand,
   action: PublicActionName,
   conditions: EnvironmentCondition[],
+  extraInput: Record<string, unknown> = {},
 ): Promise<CommandOutcome> {
   const environmentId = String(parsed.positionals.environment);
   const wait =
@@ -66,7 +67,7 @@ async function lifecycle(
   const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
     context,
     action,
-    { environmentId },
+    { environmentId, ...extraInput },
     parsed.options,
   );
   let finalReceipt: PublicReceipt | undefined = receipt;
@@ -267,14 +268,30 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "recreate"],
-    summary: "DESTRUCTIVE: remove and recreate the container (container environments only).",
+    summary:
+      "Rebuild the container, keeping its files; with --discard, DESTRUCTIVELY reset it (container environments only).",
     description:
-      "The container filesystem outside the mounted workspace is discarded. Local worktree environments cannot be recreated.",
+      "Without --discard the workspace (tracked, untracked and ignored files, unpushed commits) and the preserved agent session state are copied to a new container and verified before it replaces the old one, which is kept stopped as a recovery copy. The rebuild is refused, with nothing changed, when the image or Docker engine cannot preserve them. --discard instead deletes the container's local files, installed tools and container-local agent sessions. Local worktree environments cannot be recreated.",
     positionals: [{ name: "environment", required: true }],
-    options: [waitOption(["running", "ready"]), TIMEOUT_OPTION, REQUEST_ID_OPTION],
+    options: [
+      {
+        name: "discard",
+        kind: "boolean",
+        description: "Reset instead of rebuilding: the container's local files are deleted.",
+      },
+      waitOption(["running", "ready"]),
+      TIMEOUT_OPTION,
+      REQUEST_ID_OPTION,
+    ],
     idOutput: "operation ID",
     run: (context, parsed) =>
-      lifecycle(context, parsed, "environment.recreate", ["running", "ready"]),
+      lifecycle(
+        context,
+        parsed,
+        "environment.recreate",
+        ["running", "ready"],
+        optionalBoolean(parsed.options, "discard") ? { discard: true } : {},
+      ),
   },
   {
     path: ["environment", "delete"],

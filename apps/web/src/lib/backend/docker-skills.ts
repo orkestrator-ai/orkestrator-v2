@@ -1,5 +1,15 @@
 import { invoke } from "@/lib/native/backend";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
+import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
+import type {
+  CleanupExecuteResult,
+  CleanupPreview,
+} from "@orkestrator/protocol/container-recovery";
+import type {
+  ContainerResourceLimits,
+  ContainerUsageSnapshot,
+  DockerCapacity,
+} from "@orkestrator/protocol/container-resources";
 import type {
   Environment,
   EnvironmentStatus,
@@ -46,25 +56,33 @@ export async function checkBaseImage(): Promise<boolean> {
 }
 
 /** Docker system statistics */
+/** Every figure Docker would not report is `null`, never zero. */
 export interface DockerSystemStats {
-  /** Memory currently used by containers (bytes) */
-  memoryUsed: number;
-  /** Total memory allocated to Docker (bytes) */
-  memoryTotal: number;
-  /** Number of CPUs available to Docker */
-  cpus: number;
-  /** Total CPU usage percentage across all running containers */
-  cpuUsagePercent: number;
-  /** Total disk space used by Docker (bytes) */
-  diskUsed: number;
-  /** Total disk space allocated to Docker (bytes) */
-  diskTotal: number;
+  /** Memory used by this installation's running containers (bytes). */
+  memoryUsed: number | null;
+  /** Memory available to Docker (bytes; on Docker Desktop, its VM). */
+  memoryTotal: number | null;
+  /** CPUs available to Docker. */
+  cpus: number | null;
+  /** This installation's CPU use as a share of Docker's CPUs (0–100). */
+  cpuUsagePercent: number | null;
+  /** Disk used by all of Docker (bytes). */
+  diskUsed: number | null;
+  /** Docker does not report a disk limit; always null. */
+  diskTotal: number | null;
   /** Number of running containers */
   containersRunning: number;
   /** Total number of containers */
   containersTotal: number;
   /** Total number of images */
-  imagesTotal: number;
+  imagesTotal: number | null;
+  /** When the usage figures were sampled; absent from older backends. */
+  sampledAt?: string | null;
+  stale?: boolean;
+  /** Cores in use by this installation's containers (unnormalized). */
+  cpuCoresUsed?: number | null;
+  memoryTotalKnown?: boolean;
+  diskKnown?: boolean;
 }
 
 /** Container info for display */
@@ -79,15 +97,27 @@ export interface ContainerInfo {
   state: string;
   /** Image name */
   image: string;
-  /** Creation timestamp (Unix seconds) */
-  created: number;
+  /** Creation timestamp (Unix seconds), when Docker reported it. */
+  created: number | null;
   /** Environment ID label (if set) */
   environmentId: string | null;
   /** Project ID label (if set) */
   projectId: string | null;
   /** Whether this container is assigned to a known environment */
   isAssigned: boolean;
-  /** CPU usage percentage (0-100), null if container is not running */
+  /**
+   * Why cleanup would refuse to remove this container (for example
+   * `live-environment-label` for an interrupted create of a live environment).
+   * `null` means nothing claims it. Absent from older backends.
+   */
+  cleanupExclusion?: string | null;
+  /** Memory in use, when measured. */
+  memoryBytes?: number | null;
+  /** The last exit was an out-of-memory kill, when known. */
+  oomKilled?: boolean | null;
+  /** Out-of-memory kills of any process in it since the backend started following. */
+  oomEvents?: number | null;
+  /** CPU usage percentage (per core, may exceed 100), null if not measured */
   cpuPercent: number | null;
 }
 
@@ -101,11 +131,6 @@ export async function getOrkestratorContainers(): Promise<ContainerInfo[]> {
   return invoke<ContainerInfo[]>("get_orkestrator_containers");
 }
 
-/** Remove orphaned containers (not assigned to any environment) */
-export async function cleanupOrphanedContainers(): Promise<number> {
-  return invoke<number>("cleanup_orphaned_containers");
-}
-
 /** Reattach an orphaned container to a project by creating a new environment entry */
 export async function reattachContainer(
   projectId: string,
@@ -115,38 +140,57 @@ export async function reattachContainer(
   return invoke<Environment>("reattach_container", { projectId, containerId, name });
 }
 
-/** Result of a Docker prune operation */
-export interface SystemPruneResult {
-  /** Number of containers deleted */
-  containersDeleted: number;
-  /** Number of images deleted. Always 0: images are shared, so none are pruned. */
-  imagesDeleted: number;
-  /** Number of networks deleted. Always 0: this app creates no networks. */
-  networksDeleted: number;
-  /** Number of volumes deleted. Always 0: this app creates no volumes. */
-  volumesDeleted: number;
-  /** Total space reclaimed in bytes */
-  spaceReclaimed: number;
-}
-
-/**
- * Remove this instance's stopped containers.
- *
- * Scoped to containers labelled with this backend registry's owner, plus legacy
- * Orkestrator containers created before owner labels existed. Images, networks
- * and volumes are deliberately left alone because they cannot be limited safely
- * to resources this instance created.
- */
-export async function dockerSystemPrune(): Promise<SystemPruneResult> {
-  return invoke<SystemPruneResult>("docker_system_prune", {});
-}
-
 /** Get container logs (non-streaming, returns last N lines) */
 export async function getContainerLogs(containerId: string, tail?: string): Promise<string> {
   return invoke<string>("get_container_logs", { containerId, tail });
 }
 
-/** Start streaming container logs to the frontend via "container-log" events */
+export interface ContainerLogRecord {
+  seq: number;
+  text: string;
+}
+
+export type ContainerLogRead =
+  | {
+      kind: "records";
+      sourceId: string;
+      records: ContainerLogRecord[];
+      cursor: number;
+      ended: boolean;
+    }
+  | {
+      kind: "gap";
+      sourceId: string;
+      records: ContainerLogRecord[];
+      cursor: number;
+      ended: boolean;
+    };
+
+/** Follows a container's log: one shared backend follower, a leased subscription. */
+export async function openContainerLogs(
+  containerId: string,
+): Promise<{ subscriptionId: string; sourceId: string; cursor: number }> {
+  return invoke("open_container_logs", { containerId });
+}
+
+/** Records after `cursor`; renews the subscription's lease. */
+export async function readContainerLogs(
+  subscriptionId: string,
+  sourceId: string,
+  cursor: number,
+): Promise<ContainerLogRead> {
+  return invoke<ContainerLogRead>("read_container_logs", { subscriptionId, sourceId, cursor });
+}
+
+/** Releases the subscription; the container and its processes are untouched. */
+export async function closeContainerLogs(subscriptionId: string): Promise<void> {
+  return invoke("close_container_logs", { subscriptionId });
+}
+
+/**
+ * Legacy: opens a leased log subscription. Log lines are not pushed as events;
+ * read them with `readContainerLogs`.
+ */
 export async function streamContainerLogs(containerId: string): Promise<void> {
   return invoke("stream_container_logs", { containerId });
 }
@@ -518,3 +562,48 @@ export async function openLocalInEditor(path: string, editor: PreferredEditor): 
 // --- File Commands ---
 
 /** Represents a file changed in git */
+
+/** Configured environment image: identity and container-contract compatibility. */
+export async function getDockerImageStatus(): Promise<ImageStatus> {
+  return invoke<ImageStatus>("get_docker_image_status");
+}
+
+/** Effective Docker daemon topology (endpoint kind, rootless, versions). */
+export async function getDockerTopology(refresh = false): Promise<DockerTopology> {
+  return invoke<DockerTopology>("get_docker_topology", { refresh });
+}
+
+/**
+ * Reviewed cleanup: lists this installation's containers and volumes with why
+ * each is kept, and binds the removable ones to a short-lived token.
+ */
+export async function previewDockerCleanup(): Promise<CleanupPreview> {
+  return invoke<CleanupPreview>("docker_cleanup_preview");
+}
+
+/** Removes only the selected resources of one preview; the token is consumed. */
+export async function executeDockerCleanup(selection: {
+  selectionToken: string;
+  containerIds: string[];
+  volumeNames: string[];
+  networkNames?: string[];
+}): Promise<CleanupExecuteResult> {
+  return invoke<CleanupExecuteResult>("docker_cleanup_execute", selection);
+}
+
+/** The Docker daemon's capacity (on Docker Desktop, its VM) and disk use. */
+export async function getDockerCapacity(refresh = false): Promise<DockerCapacity> {
+  return invoke<DockerCapacity>("get_docker_capacity", { refresh });
+}
+
+/** One shared, bounded usage sample of this installation's containers. */
+export async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
+  return invoke<ContainerUsageSnapshot>("get_container_usage");
+}
+
+/** Default budget for new containers; `null` means unrestricted. */
+export async function setContainerResourceLimits(
+  limits: ContainerResourceLimits | null,
+): Promise<{ limits: ContainerResourceLimits | null }> {
+  return invoke("set_container_resource_limits", { limits });
+}

@@ -157,6 +157,28 @@ export const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 export const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
 export const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
 /**
+ * Reusing a running bridge re-checks its health first. The first probe keeps
+ * the historical 2s budget so a healthy bridge costs nothing extra; only a miss
+ * pays for the slower retries. Worst case before replacement is about 13s.
+ */
+export const LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS = 3;
+export const LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS = 2_000;
+export const LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS = 5_000;
+export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
+/**
+ * How long an unresponsive bridge with a turn or background work in progress is
+ * left alone before it is replaced anyway. Replacing it kills that work, so a
+ * stall this long is treated as a hang rather than load.
+ */
+export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
+/** A gap this long starts a new run of failed health checks. */
+export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
+/** When each owned bridge process was first seen failing its reuse health check. */
+export const localServerUnresponsiveSince = new Map<
+  string,
+  { child: ChildProcessWithoutNullStreams; since: number; lastFailureAt: number }
+>();
+/**
  * Grok, Cursor, and Pi may need longer to initialize their agent runtime before
  * binding than the lightweight HTTP bridges.
  */

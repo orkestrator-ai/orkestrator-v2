@@ -90,6 +90,11 @@ function createContext(
     emit: mock(() => undefined),
     storage: {
       getEnvironment: mock(async () => environment),
+      // Every command names a container this registry created, which is what
+      // the ownership wrapper accepts without a label probe.
+      loadEnvironments: mock(async () =>
+        ["container-1", "container-tree-cap"].map((containerId) => ({ containerId })),
+      ),
       getDataDir: () => path.join(os.tmpdir(), `ork-commands-io-history-${process.pid}`),
     },
   } as unknown as CommandContext;
@@ -159,17 +164,19 @@ afterAll(() => {
 });
 
 describe("backend command I/O coverage", () => {
-  test("attaches, drives, lists, and detaches a container terminal", () => {
+  test("attaches, drives, lists, and detaches a container terminal", async () => {
     const context = createContext();
     const emitted: Array<{ event: string; payload: unknown }> = [];
     context.emit = (event, payload) => emitted.push({ event, payload });
     const commands = createCommandRegistry();
     const sessionsBeforeAttach = commands.get("list_terminal_sessions")?.({}, context) as string[];
 
-    const sessionId = commands.get("attach_terminal")?.(
+    // Resolves after the ownership check the registry applies to every
+    // command naming a container.
+    const sessionId = (await commands.get("attach_terminal")?.(
       { containerId: "container-1", cols: 0, rows: Number.NaN, user: "node" },
       context,
-    ) as string;
+    )) as string;
 
     expect(sessionId).toStartWith("container-1:");
     expect(spawnPty).toHaveBeenCalledWith(

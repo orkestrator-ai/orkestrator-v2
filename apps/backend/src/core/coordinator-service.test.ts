@@ -1070,6 +1070,7 @@ describe("project coordinator", () => {
         expect(current.createdFromCommit).toBe("a".repeat(40));
         return { ...current, createdFromCommit: current.delegationBaseCommit };
       },
+      async () => null,
     );
 
     expect(order).toEqual(["prepare", "reconcile"]);

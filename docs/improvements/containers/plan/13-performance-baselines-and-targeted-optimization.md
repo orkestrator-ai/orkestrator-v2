@@ -1,6 +1,6 @@
 # 13 — Performance baselines and targeted optimization
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [06](06-migration-and-transactional-replacement.md),
 [08](08-portable-inputs-and-credential-lifecycle.md),
 [09](09-environment-networks-and-egress-policy.md),
@@ -120,3 +120,33 @@ Exit with a committed small benchmark report and a decision table: implemented,
 deferred with evidence, or rejected with reason. Do not leave this step open
 indefinitely because speculative optimizations are possible. Rollback disables
 an optimization while preserving the authoritative storage/lifecycle contract.
+
+## Implementation record
+
+- **Measurement.** Durable operations record monotonic `durationMs` and
+  per-phase durations in their outcome (bounded to 16 phases, durations only);
+  `runCommand` counts subprocesses by program name for benchmarks. The opt-in
+  harness `tests/unit/electron/container-benchmarks.test.ts` covers fresh
+  restricted environments (5), warm stop/start (10), preserving rebuilds at
+  two sizes (5 and 3), sampler cost (10) and observer churn (200 cycles), and
+  records incomplete runs instead of retrying them.
+- **Report.** [`../benchmarks.md`](../benchmarks.md): conditions, results,
+  dominant costs and the decision table (implemented, deferred with evidence,
+  rejected with reason).
+- **Implemented optimizations.** (1) A backend-owned hourly seed of GitHub's
+  published ranges plus API-free reachability verification: restricted boots
+  had been failing closed once GitHub's 60-per-hour unauthenticated budget
+  ran out; 17 → 1 API calls per benchmark run and no incomplete boots.
+  (2) Batched destination hashing in the copy verifier: the 5,000-file / 102 MB
+  rebuild fell from 29.5 s to 18.4 s with every verification check intact.
+- **Tests.** Phase timing (`container-lifecycle-service.test.ts`), the seed
+  cache (`github-ranges-cache.test.ts`), the firewall's seed → live → cache →
+  fail-closed order (`firewall-policy.test.ts`); live replacement and network
+  scenarios re-run on the rebuilt image.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 33);
+what could not be done on this host is listed there as environment-limited.

@@ -13,6 +13,8 @@ set -e
 # with CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER in apps/backend/src/core/commands.ts.
 ORKESTRATOR_SETUP_CAPABILITIES=prepare-only
 export ORKESTRATOR_SETUP_CAPABILITIES
+# Image manifest contract (docker/image-manifest.ts):
+# ORKESTRATOR_CAPABILITY workspace-prepare=1
 
 PREPARE_ONLY=false
 if [ "${1:-}" = "--prepare-only" ]; then
@@ -69,22 +71,21 @@ capture_runtime_env_snapshot() {
     fi
 }
 
-# Wait for entrypoint to complete (config files to be set up)
-# This prevents race conditions where Claude is launched before config is ready
-WAIT_COUNT=0
+# Wait for this boot's initialization (config files, firewall) to finish.
+# This prevents race conditions where Claude is launched before config is ready.
+# A boot status record counts only when it names the current PID 1 start time:
+# a record or marker left by an earlier start of this container must never
+# release setup. On timeout or failure setup stops with a retryable error; it
+# never proceeds on an unfinished container.
 PROGRESS_FILE="/tmp/.entrypoint-progress"
+BOOT_STATUS_FILE=/run/orkestrator/boot-status.json
+BOOT_WAIT_SECONDS="${ORKESTRATOR_BOOT_WAIT_SECONDS:-120}"
 LAST_LINE_COUNT=0
 
-# Show what the entrypoint is doing in real-time
-echo -e "${BLUE}=== Container Initialization ===${NC}"
-echo ""
-
-while [ ! -f /tmp/.entrypoint-complete ] && [ $WAIT_COUNT -lt 100 ]; do
-    # Check for new progress lines and display them
+show_new_progress() {
     if [ -f "$PROGRESS_FILE" ]; then
         CURRENT_LINE_COUNT=$(wc -l < "$PROGRESS_FILE" 2>/dev/null || echo "0")
         if [ "$CURRENT_LINE_COUNT" -gt "$LAST_LINE_COUNT" ]; then
-            # Show new lines (skip empty lines)
             tail -n +$((LAST_LINE_COUNT + 1)) "$PROGRESS_FILE" | while IFS= read -r line; do
                 if [ -n "$line" ]; then
                     echo -e "  $line"
@@ -93,29 +94,47 @@ while [ ! -f /tmp/.entrypoint-complete ] && [ $WAIT_COUNT -lt 100 ]; do
             LAST_LINE_COUNT=$CURRENT_LINE_COUNT
         fi
     fi
+}
 
-    sleep 0.2
-    WAIT_COUNT=$((WAIT_COUNT + 1))
-done
+# Prints the current boot's phase, or nothing when no current record exists.
+current_boot_phase() {
+    [ -f "$BOOT_STATUS_FILE" ] || return 0
+    local pid1_start
+    pid1_start="$(awk '{print $22}' /proc/1/stat 2>/dev/null)"
+    jq -r --arg start "$pid1_start" 'select(.pid1Start == $start) | .phase' "$BOOT_STATUS_FILE" 2>/dev/null || true
+}
 
-# Show any remaining progress lines
-if [ -f "$PROGRESS_FILE" ]; then
-    CURRENT_LINE_COUNT=$(wc -l < "$PROGRESS_FILE" 2>/dev/null || echo "0")
-    if [ "$CURRENT_LINE_COUNT" -gt "$LAST_LINE_COUNT" ]; then
-        tail -n +$((LAST_LINE_COUNT + 1)) "$PROGRESS_FILE" | while IFS= read -r line; do
-            if [ -n "$line" ]; then
-                echo -e "  $line"
-            fi
-        done
+echo -e "${BLUE}=== Container Initialization ===${NC}"
+echo ""
+
+BOOT_READY=false
+BOOT_FAILED=false
+DEADLINE=$(( $(date +%s) + BOOT_WAIT_SECONDS ))
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+    show_new_progress
+    if [ -d /run/orkestrator ]; then
+        phase="$(current_boot_phase)"
+        if [ "$phase" = "ready" ]; then BOOT_READY=true; break; fi
+        if [ "$phase" = "failed" ]; then BOOT_FAILED=true; break; fi
+    elif [ -f /tmp/.entrypoint-complete ]; then
+        # An image that predates boot status records.
+        BOOT_READY=true
+        break
     fi
-fi
+    sleep 0.2
+done
+show_new_progress
 
 echo ""
-if [ ! -f /tmp/.entrypoint-complete ]; then
-    echo -e "${YELLOW}Container initialization timed out, proceeding anyway${NC}"
-else
-    echo -e "${GREEN}Container initialization complete${NC}"
+if [ "$BOOT_FAILED" = true ]; then
+    echo -e "${RED}Container initialization failed. Check the container logs, then retry setup.${NC}"
+    exit 1
 fi
+if [ "$BOOT_READY" != true ]; then
+    echo -e "${RED}Container initialization did not complete within ${BOOT_WAIT_SECONDS}s. Retry setup once the container is ready.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Container initialization complete${NC}"
 
 # Display network access mode for user awareness
 if [ "${NETWORK_MODE:-restricted}" = "full" ]; then
@@ -370,8 +389,10 @@ if [ -f /tmp/.workspace-setup-complete ]; then
     exit 0
 fi
 
-# Clone repository if GIT_URL is set and /workspace/.git doesn't exist
-if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
+# A clone interrupted while copying may already have a partial .git directory.
+if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] || \
+   { [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ] && \
+     [ -f /workspace/.orkestrator/.clone-copy-in-progress ]; }; }; then
     echo ""
     echo -e "${BLUE}>>> Cloning Repository <<<${NC}"
     echo -e "URL: ${GREEN}$GIT_URL${NC}"
@@ -384,12 +405,42 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
     BRANCH="${GIT_BRANCH:-main}"
     BASE_BRANCH="${GIT_BASE_BRANCH:-}"
 
+    # A persistent workspace volume is cloned into only when it is verifiably
+    # this environment's freshly initialized volume. A volume that failed to
+    # mount must not be replaced by a clone into the container layer that
+    # would later be reported as persistent, and unknown content in a
+    # persistent volume is refused rather than erased.
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        if ! mountpoint -q /workspace; then
+            echo -e "${RED}The persistent workspace volume is not mounted; refusing to clone into the container layer.${NC}"
+            exit 1
+        fi
+        STORAGE_MARKER=/workspace/.orkestrator/storage-marker.json
+        if [ -L /workspace/.orkestrator ] || [ ! -f "$STORAGE_MARKER" ] || [ -L "$STORAGE_MARKER" ] || \
+           [ "$(jq -r '.environmentId // empty' "$STORAGE_MARKER" 2>/dev/null)" != "${ORKESTRATOR_ENVIRONMENT_ID:-}" ]; then
+            echo -e "${RED}The workspace volume has no valid storage marker for this environment; refusing to initialize it.${NC}"
+            exit 1
+        fi
+        if [ -n "$(find /workspace -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -print -quit 2>/dev/null)" ] && \
+           [ ! -f /workspace/.orkestrator/.clone-copy-in-progress ]; then
+            echo -e "${RED}The workspace volume holds files but no repository; refusing to overwrite them.${NC}"
+            exit 1
+        fi
+    fi
+
     # Clean /workspace
     echo "Preparing workspace..."
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        rm -rf /workspace/.orkestrator/.clone-in-progress
+    fi
     preserve_orkestrator_workspace_state
-    rm -rf /workspace/* 2>/dev/null || true
-    rm -rf /workspace/.* 2>/dev/null || true
-    find /workspace -mindepth 1 -delete 2>/dev/null || true
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        find /workspace -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -exec rm -rf -- {} +
+    else
+        rm -rf /workspace/* 2>/dev/null || true
+        rm -rf /workspace/.* 2>/dev/null || true
+        find /workspace -mindepth 1 -delete 2>/dev/null || true
+    fi
     print_workspace_disk_status
 
     # Prepare clone URL - inject token directly for more reliable auth
@@ -403,9 +454,19 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
         echo -e "${BLUE}Using token-authenticated URL${NC}"
     fi
 
-    # Clone directly into /workspace
+    # Keep the volume's storage marker in place throughout the clone. A
+    # partial clone is discarded on the next start without losing the marker.
+    CLONE_DEST=/workspace
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        CLONE_DEST=/workspace/.orkestrator/.clone-in-progress
+    fi
     echo "Cloning..."
-    if clone_repository "$CLONE_URL" /workspace; then
+    if clone_repository "$CLONE_URL" "$CLONE_DEST"; then
+        if [ "$CLONE_DEST" != /workspace ]; then
+            touch /workspace/.orkestrator/.clone-copy-in-progress || exit 1
+            cp -a -n "$CLONE_DEST"/. /workspace/ || exit 1
+            rm -rf "$CLONE_DEST"
+        fi
         echo -e "${GREEN}Clone successful!${NC}"
         cd /workspace
 
@@ -468,6 +529,9 @@ else
 fi
 
 restore_orkestrator_workspace_state
+if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ] && [ ! -L /workspace/.orkestrator ]; then
+    rm -f /workspace/.orkestrator/.clone-copy-in-progress
+fi
 add_workspace_artifacts_to_git_exclude
 enable_git_scan_caches
 

@@ -53,8 +53,9 @@ mise install
 # Install dependencies with the repository-pinned Bun
 mise exec -- bun install
 
-# Build the Docker base image (required for container functionality)
-docker build -t orkestrator-v2:latest -f docker/Dockerfile .
+# Build the Docker base image (required for container functionality). The task
+# passes the build arguments that stamp the image's capability manifest.
+mise run docker:build
 
 # Run the application
 mise run dev
@@ -113,7 +114,16 @@ docker tag ghcr.io/orkestrator-ai/orkestrator-v2:latest orkestrator-v2:latest
 Versioned images are also available, for example
 `ghcr.io/orkestrator-ai/orkestrator-v2:2.15.4`. Pin a version or digest when a
 reproducible environment is more important than automatically receiving the
-latest release.
+latest release. Each release run records its manifest digest in the job
+summary and an `image-release` artifact.
+
+Orkestrator reads the image's capability manifest (Settings → Docker) and
+enables persistent workspaces, staged agent inputs, per-environment networks
+and bounded logs only for images that declare them; an older image keeps
+working with the earlier behaviour. Existing environments keep the container
+they were created with — pulling a new image never changes one silently.
+Rebuild an environment (Settings → Container → Rebuild) to move it to the new
+image while keeping its files and agent session files.
 
 #### Publishing a release
 

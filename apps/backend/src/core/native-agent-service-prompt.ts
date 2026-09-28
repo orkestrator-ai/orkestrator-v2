@@ -142,6 +142,7 @@ import {
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { assertEnvironmentAcceptsAgentWork } from "./environment-replacement-fence.js";
 import {
   MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
   nativeAgentObservationGroupKey,
@@ -187,6 +188,26 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     return observed.state === "working" && observed.readyForInput === true
       ? "idle"
       : observed.state;
+  }
+
+  /**
+   * Whether one environment's bridge has an in-flight dispatch or a session
+   * last observed working, waiting, or running background tasks.
+   *
+   * Uses the raw state, not the turn view: replacing the bridge kills its whole
+   * process tree, so a backgrounded test run or dev server is lost just like a
+   * turn. Purely in-memory apart from the session list; never reads a bridge.
+   */
+  async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
+    const provider = this.providers.get(`${environmentId}\0${agent}`);
+    if (provider && this.providerDispatchCounts.has(provider)) return true;
+    const sessions = await this.storage.listNativeAgentSessions();
+    return sessions.some((session) => {
+      if (session.environmentId !== environmentId || session.agent !== agent) return false;
+      const observed = this.observedSessionActivity.get(session.key);
+      if (!observed || observed.providerSessionId !== session.providerSessionId) return false;
+      return observed.state === "working" || observed.state === "waiting";
+    });
   }
 
   sessionPresentationSnapshot(
@@ -576,6 +597,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         : undefined;
     try {
       this.assertAcceptingWork();
+      // A rebuild or reset of this environment's runtime is in progress.
+      assertEnvironmentAcceptsAgentWork(input.environmentId);
       const hasAttachments =
         (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {

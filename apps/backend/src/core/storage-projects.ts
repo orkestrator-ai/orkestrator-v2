@@ -1,3 +1,5 @@
+import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
+import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import * as shared from "./storage-shared.js";
 import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
@@ -532,6 +534,19 @@ export abstract class StorageProjects extends StorageBase {
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
       const beforeJson = JSON.stringify(environment);
 
+      if ("containerResourceLimits" in updates) {
+        const value = updates.containerResourceLimits;
+        if (value === null || value === undefined) {
+          environment.containerResourceLimits = undefined;
+        } else {
+          if (!isRecord(value)) throw new Error("Invalid container resource limits");
+          const parsed = parseResourceLimits(value);
+          if (!parsed.ok)
+            throw new Error(`Invalid container resource limit: ${parsed.field} ${parsed.reason}`);
+          environment.containerResourceLimits = parsed.limits;
+        }
+      }
+
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
       if (
@@ -620,6 +635,19 @@ export abstract class StorageProjects extends StorageBase {
         }
       }
 
+      if ("containerLifecycle" in updates) {
+        const value = updates.containerLifecycle;
+        if (value == null) {
+          environment.containerLifecycle = undefined;
+        } else if (isRecord(value)) {
+          if (JSON.stringify(value).length > MAX_LIFECYCLE_RECORD_BYTES) {
+            throw new Error("Container lifecycle record exceeds its size bound");
+          }
+          environment.containerLifecycle = value as unknown as Environment["containerLifecycle"];
+        } else {
+          throw new Error("Container lifecycle record is malformed");
+        }
+      }
       if (
         "containerId" in updates &&
         (updates.containerId == null || typeof updates.containerId === "string")
@@ -638,6 +666,12 @@ export abstract class StorageProjects extends StorageBase {
         if (updates.hasMergeConflicts == null) environment.hasMergeConflicts = null;
         else if (typeof updates.hasMergeConflicts === "boolean")
           environment.hasMergeConflicts = updates.hasMergeConflicts;
+      }
+      if ("revokedInputProviders" in updates) {
+        const revoked = Array.isArray(updates.revokedInputProviders)
+          ? [...new Set(updates.revokedInputProviders.filter(isAgentPlatform))]
+          : [];
+        environment.revokedInputProviders = revoked.length > 0 ? revoked : undefined;
       }
       if ("allowedDomains" in updates)
         environment.allowedDomains = Array.isArray(updates.allowedDomains)

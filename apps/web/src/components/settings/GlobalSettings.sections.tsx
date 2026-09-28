@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -217,10 +218,6 @@ function CredentialClearButton({
 export function GlobalSettingsSections({ activeSection, settings }: GlobalSettingsSectionsProps) {
   const {
     global,
-    cpuCores,
-    setCpuCores,
-    memoryGb,
-    setMemoryGb,
     envPatterns,
     setEnvPatterns,
     anthropicApiKey,
@@ -1574,36 +1571,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   );
 
   const renderContainer = () => (
-    <div className="max-w-2xl space-y-8">
-      <div className="space-y-3">
-        <div className="flex justify-between max-w-xs">
-          <Label className="text-sm">CPU Cores</Label>
-          <span className="text-sm font-medium">{cpuCores}</span>
-        </div>
-        <Slider
-          value={[cpuCores]}
-          onValueChange={([v]) => v !== undefined && setCpuCores(v)}
-          min={1}
-          max={16}
-          step={1}
-          className="max-w-xs"
-        />
-      </div>
-      <div className="space-y-3">
-        <div className="flex justify-between max-w-xs">
-          <Label className="text-sm">Memory (GB)</Label>
-          <span className="text-sm font-medium">{memoryGb} GB</span>
-        </div>
-        <Slider
-          value={[memoryGb]}
-          onValueChange={([v]) => v !== undefined && setMemoryGb(v)}
-          min={1}
-          max={64}
-          step={1}
-          className="max-w-xs"
-        />
-      </div>
-    </div>
+    <ContainerResourceLimitsSettings initial={global.containerResourceLimits} />
   );
 
   const gatewayTokenValidationError = gatewayTokenSettings?.editable

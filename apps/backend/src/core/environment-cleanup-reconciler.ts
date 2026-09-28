@@ -493,6 +493,8 @@ async function sweepProjectBranches(
           createdFromCommit: await branchStartPoint(run, projectPath, branch),
           baseBranches: defaultBranch ? [defaultBranch] : [],
           containerId: null,
+          retainedContainers: [],
+          volumes: [],
           stateDirectories: [],
           pending: ["branch"],
           attempts: 0,

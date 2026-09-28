@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +20,6 @@ import {
   CheckCircle2,
   XCircle,
   Square,
-  X,
   Link2,
 } from "lucide-react";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
@@ -29,7 +28,7 @@ import {
   FullscreenSettingsLayout,
   type SettingsMenuItem,
 } from "@/components/settings/FullscreenSettingsLayout";
-import type { DockerSystemStats, ContainerInfo, SystemPruneResult } from "@/lib/backend";
+import type { DockerSystemStats, ContainerInfo } from "@/lib/backend";
 import { useProjectStore, useEnvironmentStore } from "@/stores";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -41,10 +40,27 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatBytes, formatRelativeTime } from "./docker-stats-format";
+import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
+import { DockerCleanupReview } from "./DockerCleanupReview";
 
 interface DockerStatsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+/** Refresh interval while the dialog is open. */
+const STATS_REFRESH_MS = 5_000;
+/** A sample older than this is shown as stale. */
+const STATS_STALE_MS = 15_000;
+
+/** A container nothing claims; older backends omit `cleanupExclusion`. */
+function isUnclaimedContainer(container: ContainerInfo): boolean {
+  if (container.isAssigned) return false;
+  return (
+    container.cleanupExclusion === undefined ||
+    container.cleanupExclusion === null ||
+    container.cleanupExclusion === "legacy-unadopted"
+  );
 }
 
 export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps) {
@@ -52,16 +68,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<DockerSystemStats | null>(null);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [showCleanupConfirm, setShowCleanupConfirm] = useState(false);
-  const [isCleaningUp, setIsCleaningUp] = useState(false);
-  const [cleanupResult, setCleanupResult] = useState<number | null>(null);
+  const [showCleanupReview, setShowCleanupReview] = useState(false);
   // Track individual container operations
   const [stoppingContainerId, setStoppingContainerId] = useState<string | null>(null);
   const [deletingContainerId, setDeletingContainerId] = useState<string | null>(null);
-  // System prune state
-  const [showPruneConfirm, setShowPruneConfirm] = useState(false);
-  const [isPruning, setIsPruning] = useState(false);
-  const [pruneResult, setPruneResult] = useState<SystemPruneResult | null>(null);
 
   // Get project lookup function and projects list
   const getProjectById = useProjectStore((state) => state.getProjectById);
@@ -78,13 +88,17 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const [isReattaching, setIsReattaching] = useState(false);
 
   // Count orphaned containers
-  const orphanedCount = containers.filter((c) => !c.isAssigned).length;
+  const orphanedCount = containers.filter(isUnclaimedContainer).length;
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    setCleanupResult(null);
-
+  const loading = useRef(false);
+  const loadData = useCallback(async (background = false) => {
+    // A background refresh never overlaps another load or shows a spinner.
+    if (loading.current) return;
+    loading.current = true;
+    if (!background) {
+      setIsLoading(true);
+      setError(null);
+    }
     try {
       const [statsData, containersData] = await Promise.all([
         backend.getDockerSystemStats(),
@@ -92,44 +106,31 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       ]);
       setStats(statsData);
       setContainers(containersData);
+      if (background) setError(null);
     } catch (err) {
       console.error("[DockerStatsDialog] Failed to load data:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsLoading(false);
+      loading.current = false;
+      if (!background) setIsLoading(false);
     }
   }, []);
 
-  // Load data when dialog opens
+  // Load data when dialog opens, then refresh while it stays open. The
+  // backend shares one sample between callers, so this costs no extra
+  // Docker calls within its interval.
   useEffect(() => {
     if (open) {
-      loadData();
+      void loadData();
+      const timer = setInterval(() => void loadData(true), STATS_REFRESH_MS);
+      return () => clearInterval(timer);
     } else {
       // Reset state when closing
       setStats(null);
       setContainers([]);
       setError(null);
-      setCleanupResult(null);
-      setPruneResult(null);
     }
   }, [open, loadData]);
-
-  const handleCleanup = async () => {
-    setIsCleaningUp(true);
-    try {
-      const removed = await backend.cleanupOrphanedContainers();
-      setCleanupResult(removed);
-      // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
-      setContainers(containersData);
-    } catch (err) {
-      console.error("[DockerStatsDialog] Cleanup failed:", err);
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsCleaningUp(false);
-      setShowCleanupConfirm(false);
-    }
-  };
 
   const handleStopContainer = async (containerId: string) => {
     setStoppingContainerId(containerId);
@@ -160,27 +161,6 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeletingContainerId(null);
-    }
-  };
-
-  const handleSystemPrune = async () => {
-    setIsPruning(true);
-    setError(null);
-    try {
-      const result = await backend.dockerSystemPrune();
-      setPruneResult(result);
-      // Refresh stats after prune
-      const statsData = await backend.getDockerSystemStats();
-      setStats(statsData);
-      // Also refresh containers list
-      const containersData = await backend.getOrkestratorContainers();
-      setContainers(containersData);
-    } catch (err) {
-      console.error("[DockerStatsDialog] System prune failed:", err);
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsPruning(false);
-      setShowPruneConfirm(false);
     }
   };
 
@@ -245,31 +225,23 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
     return (
       <div className="max-w-3xl space-y-6">
+        <DockerImageStatusPanel />
         {/* System Resources */}
         {stats && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">System Resources</h3>
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowPruneConfirm(true)}
-                  disabled={isPruning}
-                >
-                  {isPruning ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                      Pruning...
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="h-4 w-4 mr-1" />
-                      Clean Up
-                    </>
-                  )}
+                <Button variant="outline" size="sm" onClick={() => setShowCleanupReview(true)}>
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Review cleanup…
                 </Button>
-                <Button variant="ghost" size="sm" onClick={loadData} disabled={isLoading}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void loadData()}
+                  disabled={isLoading}
+                >
                   <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
                   Refresh
                 </Button>
@@ -279,36 +251,48 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">CPU</div>
                 <div className="text-lg font-semibold mt-1">
-                  {stats.cpuUsagePercent}%{" "}
+                  {stats.cpuCoresUsed != null ? `${stats.cpuCoresUsed} cores` : "unknown"}{" "}
                   <span className="text-xs font-normal text-muted-foreground">
-                    ({stats.cpus} cores)
+                    of {stats.cpus ?? "unknown"} Docker CPUs
                   </span>
                 </div>
-                <Progress value={Math.min(stats.cpuUsagePercent, 100)} className="mt-2 h-1" />
+                {stats.cpuUsagePercent != null ? (
+                  <Progress value={Math.min(stats.cpuUsagePercent, 100)} className="mt-2 h-1" />
+                ) : null}
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">MEMORY</div>
                 <div className="text-lg font-semibold mt-1">
-                  {formatBytes(stats.memoryUsed)} / {formatBytes(stats.memoryTotal)}
+                  {stats.memoryUsed != null ? formatBytes(stats.memoryUsed) : "unknown"} /{" "}
+                  {stats.memoryTotal != null ? formatBytes(stats.memoryTotal) : "unknown"}
                 </div>
-                <Progress
-                  value={stats.memoryTotal > 0 ? (stats.memoryUsed / stats.memoryTotal) * 100 : 0}
-                  className="mt-2 h-1"
-                />
+                {stats.memoryUsed != null && stats.memoryTotal ? (
+                  <Progress
+                    value={(stats.memoryUsed / stats.memoryTotal) * 100}
+                    className="mt-2 h-1"
+                  />
+                ) : null}
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">DISK</div>
-                <div className="text-lg font-semibold mt-1">
-                  {stats.diskTotal > 0
-                    ? `${formatBytes(stats.diskUsed)} / ${formatBytes(stats.diskTotal)}`
-                    : formatBytes(stats.diskUsed)}
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                  DISK (ALL OF DOCKER)
                 </div>
-                <Progress
-                  value={stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : 0}
-                  className="mt-2 h-1"
-                />
+                <div className="text-lg font-semibold mt-1">
+                  {stats.diskUsed != null ? formatBytes(stats.diskUsed) : "unknown"}
+                </div>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              CPU and memory in use are this installation&apos;s containers; totals are what Docker
+              reports (on Docker Desktop, its virtual machine).
+              {stats.sampledAt
+                ? ` Measured ${new Date(stats.sampledAt).toLocaleTimeString()}${
+                    stats.stale || Date.now() - Date.parse(stats.sampledAt) > STATS_STALE_MS
+                      ? " (stale — Docker has not answered since)"
+                      : ""
+                  }.`
+                : " Not measured: Docker did not answer."}
+            </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-lg font-semibold">{stats.containersRunning}</div>
@@ -319,63 +303,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 <div className="text-xs text-muted-foreground">Containers</div>
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
-                <div className="text-lg font-semibold">{stats.imagesTotal}</div>
+                <div className="text-lg font-semibold">{stats.imagesTotal ?? "unknown"}</div>
                 <div className="text-xs text-muted-foreground">Images</div>
               </div>
             </div>
-            {pruneResult !== null && (
-              <div className="flex items-start gap-2 p-3 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
-                <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  {pruneResult.containersDeleted === 0 &&
-                  pruneResult.imagesDeleted === 0 &&
-                  pruneResult.networksDeleted === 0 &&
-                  pruneResult.volumesDeleted === 0 ? (
-                    <div className="font-medium">Nothing to clean up</div>
-                  ) : (
-                    <>
-                      <div className="font-medium">Docker cleanup completed</div>
-                      <div className="text-xs mt-1 space-y-0.5 opacity-80">
-                        {pruneResult.containersDeleted > 0 && (
-                          <div>
-                            {pruneResult.containersDeleted} container
-                            {pruneResult.containersDeleted > 1 ? "s" : ""} removed
-                          </div>
-                        )}
-                        {pruneResult.imagesDeleted > 0 && (
-                          <div>
-                            {pruneResult.imagesDeleted} image
-                            {pruneResult.imagesDeleted > 1 ? "s" : ""} removed
-                          </div>
-                        )}
-                        {pruneResult.networksDeleted > 0 && (
-                          <div>
-                            {pruneResult.networksDeleted} network
-                            {pruneResult.networksDeleted > 1 ? "s" : ""} removed
-                          </div>
-                        )}
-                        {pruneResult.volumesDeleted > 0 && (
-                          <div>
-                            {pruneResult.volumesDeleted} volume
-                            {pruneResult.volumesDeleted > 1 ? "s" : ""} removed
-                          </div>
-                        )}
-                        <div className="font-medium mt-1">
-                          {formatBytes(pruneResult.spaceReclaimed)} reclaimed
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <button
-                  onClick={() => setPruneResult(null)}
-                  className="shrink-0 p-0.5 rounded hover:bg-green-500/20 transition-colors"
-                  aria-label="Dismiss"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            )}
           </div>
         )}
 
@@ -384,36 +315,12 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">Orkestrator Containers</h3>
             {orphanedCount > 0 && (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setShowCleanupConfirm(true)}
-                disabled={isCleaningUp}
-              >
-                {isCleaningUp ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    Cleaning...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    Clean Up ({orphanedCount})
-                  </>
-                )}
+              <Button variant="destructive" size="sm" onClick={() => setShowCleanupReview(true)}>
+                <Trash2 className="h-4 w-4 mr-1" />
+                Review cleanup ({orphanedCount})
               </Button>
             )}
           </div>
-          {cleanupResult !== null && (
-            <div className="flex items-center gap-2 p-3 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>
-                {cleanupResult === 0
-                  ? "No orphaned containers to remove."
-                  : `Successfully removed ${cleanupResult} orphaned container${cleanupResult > 1 ? "s" : ""}.`}
-              </span>
-            </div>
-          )}
           {containers.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
               No Orkestrator containers found.
@@ -421,7 +328,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
           ) : (
             <div className="space-y-2">
               {containers.map((container) => {
-                const isOrphaned = !container.isAssigned;
+                const isOrphaned = isUnclaimedContainer(container);
+                const isLinked = !container.isAssigned && !isOrphaned;
                 const isStopping = stoppingContainerId === container.id;
                 const isDeleting = deletingContainerId === container.id;
                 const isOperating = isStopping || isDeleting;
@@ -446,20 +354,44 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                         </span>
                         {isOrphaned && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-400">
-                            Orphaned
+                            {container.cleanupExclusion === "legacy-unadopted"
+                              ? "Legacy"
+                              : "Orphaned"}
+                          </span>
+                        )}
+                        {isLinked && (
+                          <span
+                            className="text-xs px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-700 dark:text-yellow-400"
+                            title="Kept by cleanup: an environment or operation still claims this container."
+                          >
+                            Protected
                           </span>
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {container.id.substring(0, 12)} · {formatRelativeTime(container.created)}
+                        {container.id.substring(0, 12)} ·{" "}
+                        {container.created != null
+                          ? formatRelativeTime(container.created)
+                          : "created time unknown"}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {isRunning && container.cpuPercent !== null && (
                         <span className="text-xs text-muted-foreground">
-                          CPU: {container.cpuPercent}%
+                          CPU: {(container.cpuPercent / 100).toFixed(2)} cores
+                          {container.memoryBytes != null
+                            ? ` · ${formatBytes(container.memoryBytes)}`
+                            : ""}
                         </span>
                       )}
+                      {!isRunning && container.oomKilled ? (
+                        <span className="text-xs text-destructive">Out of memory</span>
+                      ) : container.oomEvents ? (
+                        <span className="text-xs text-destructive">
+                          {container.oomEvents} out-of-memory{" "}
+                          {container.oomEvents === 1 ? "kill" : "kills"}
+                        </span>
+                      ) : null}
                       <div className="flex items-center gap-1">
                         {isRunning ? (
                           <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -520,8 +452,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
           )}
           {orphanedCount > 0 && (
             <p className="text-xs text-muted-foreground">
-              Orphaned containers are not assigned to any environment. Cleaning them up will
-              permanently delete them.
+              Orphaned containers are not assigned to any environment or kept as a recovery copy.
+              Review cleanup lists exactly what would be deleted before anything is removed.
             </p>
           )}
         </div>
@@ -540,72 +472,11 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
         {() => renderDockerSection()}
       </FullscreenSettingsLayout>
 
-      {/* Cleanup Confirmation Dialog */}
-      <AlertDialog open={showCleanupConfirm} onOpenChange={setShowCleanupConfirm}>
-        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Clean Up Orphaned Containers?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete {orphanedCount} container{orphanedCount > 1 ? "s" : ""}{" "}
-              that {orphanedCount > 1 ? "are" : "is"} not assigned to any environment. This action
-              cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isCleaningUp}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleCleanup}
-              disabled={isCleaningUp}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {isCleaningUp ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Cleaning...
-                </>
-              ) : (
-                "Delete Containers"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Stopped Container Prune Confirmation Dialog */}
-      <AlertDialog open={showPruneConfirm} onOpenChange={setShowPruneConfirm}>
-        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove Stopped Orkestrator Containers?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-3">
-                <p>
-                  This removes every stopped container belonging to this Orkestrator instance,
-                  including containers for environments you have stopped but not deleted. Starting
-                  such an environment afterwards rebuilds its container from scratch.
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Containers from other applications and Orkestrator installations are left
-                  untouched. Images, networks and volumes are also left alone because they cannot be
-                  scoped safely to this installation.
-                </p>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isPruning}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleSystemPrune} disabled={isPruning}>
-              {isPruning ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Cleaning...
-                </>
-              ) : (
-                "Clean Up"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DockerCleanupReview
+        open={showCleanupReview}
+        onOpenChange={setShowCleanupReview}
+        onFinished={() => void loadData()}
+      />
 
       {/* Reattach Container Dialog */}
       <AlertDialog

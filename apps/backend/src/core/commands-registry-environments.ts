@@ -1,4 +1,24 @@
 import {
+  containerLifecycleSnapshot,
+  parseContainerLifecycle,
+  parseContainerMutationIdentity,
+  parseRecreateEnvironmentRequest,
+} from "@orkestrator/protocol/container-lifecycle";
+import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
+import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
+import { listRecoveryCopies } from "./recovery-copies.js";
+import { applyEnvironmentAllowedDomains, environmentNetworkPolicy } from "./container-network.js";
+import { environmentResourcePolicy, updateEnvironmentResources } from "./container-resources.js";
+import {
+  parseResourceLimits,
+  type ContainerResourceLimits,
+} from "@orkestrator/protocol/container-resources";
+import {
+  environmentInputStatus,
+  restoreProviderCredentials,
+  revokeProviderCredentials,
+} from "./portable-input-status.js";
+import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
   type AgentSettingsTier,
@@ -10,6 +30,7 @@ import {
   defaultEnvironmentName,
   sanitizeEnvironmentName,
   discoverAgentExtensions,
+  dockerOwnerNamespace,
 } from "./commands-dependencies.js";
 import type { Environment } from "./commands-dependencies.js";
 import {
@@ -37,7 +58,9 @@ import {
   toClientEnvironmentSetupStartResult,
   terminalOutputBufferLength,
   logSetupTerminal,
-  getDockerStatus,
+  environmentStartTasks,
+  inspectDockerContainerIdentity,
+  isMissingDockerObjectError,
   getOrkestratorContainerStates,
   syncStoredEnvironmentStatus,
   clearPendingAgentLaunchUpdates,
@@ -45,10 +68,13 @@ import {
   admitEnvironmentStartTask,
   stopEnvironmentTask,
   recreateEnvironmentTask,
+  restoreRecoveryCopyTask,
+  discardRecoveryCopyTask,
   runEnvironmentSetupNow,
   deleteEnvironmentTask,
   scheduleMergeCleanupRecovery,
   logEnvironmentLifecycleFailure,
+  enqueueEnvironmentLifecycleOperation,
 } from "./commands-helpers.js";
 import { ControlRequestConflictError } from "./storage-projects.js";
 import { forkEnvironmentRecord } from "./commands-environment-fork.js";
@@ -368,14 +394,22 @@ export function registerEnvironmentCommands(
     const knownContainerStates = await getOrkestratorContainerStates(context);
     for (const environment of environments) {
       if (knownContainerStates?.has(environment.containerId!)) continue;
-      if (context.strictDockerOwner && knownContainerStates) {
-        await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
-        cleared.push(environment.id);
-        continue;
-      }
+      // An admitted start or replacement owns the reference right now.
+      if (environmentStartTasks.has(environment.id)) continue;
+      // Only a definite answer clears a reference. An unreachable daemon, a
+      // timeout or a permission failure says nothing about whether the
+      // container — possibly the only copy of the workspace — still exists.
       try {
-        await getDockerStatus(environment.containerId!);
-      } catch {
+        const identity = await inspectDockerContainerIdentity(environment.containerId!);
+        if (
+          context.strictDockerOwner &&
+          identity.owner !== dockerOwnerNamespace(storage.getDataDir())
+        ) {
+          await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+          cleared.push(environment.id);
+        }
+      } catch (error) {
+        if (!isMissingDockerObjectError(error)) continue;
         await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
         cleared.push(environment.id);
       }
@@ -385,34 +419,215 @@ export function registerEnvironmentCommands(
   // `admit` refuses synchronously by design, so every lifecycle command is
   // `async`: a caller that reaches the registry directly must see a rejection
   // rather than a throw from the call expression itself.
-  register("start_environment", async ({ environmentId }, context) => {
+  register("start_environment", async (args, context) => {
     const { task } = await admitEnvironmentStartTask(
-      asString(environmentId, "environmentId"),
+      asString(args.environmentId, "environmentId"),
       context,
       schedulePendingEnvironmentRename,
+      parseContainerMutationIdentity(args),
     );
     return toClientEnvironmentSetupStartResult(await task);
   });
-  register("start_environment_background", async ({ environmentId }, context) => {
-    const id = asString(environmentId, "environmentId");
+  register("start_environment_background", async (args, context) => {
+    const id = asString(args.environmentId, "environmentId");
     // Validate before acknowledging the request. Once accepted, the task is
     // backend-owned: a renderer, browser, or reverse proxy can disconnect
     // without cancelling Docker provisioning or losing the durable launch.
-    const { task } = await admitEnvironmentStartTask(id, context, schedulePendingEnvironmentRename);
+    const { task } = await admitEnvironmentStartTask(
+      id,
+      context,
+      schedulePendingEnvironmentRename,
+      parseContainerMutationIdentity(args),
+    );
     void task.catch((error) => {
       // `startEnvironmentOnce` has already logged the cause; this only records
       // that nobody was awaiting the result, so the rejection is not unhandled.
       logEnvironmentLifecycleFailure("background start", id, error);
     });
   });
-  register("stop_environment", async ({ environmentId }, context) =>
-    stopEnvironmentTask(asString(environmentId, "environmentId"), context, (id) =>
-      extensionDiscoveryCache.invalidate(id),
+  register("stop_environment", async (args, context) =>
+    stopEnvironmentTask(
+      asString(args.environmentId, "environmentId"),
+      context,
+      (id) => extensionDiscoveryCache.invalidate(id),
+      parseContainerMutationIdentity(args),
     ),
   );
-  register("recreate_environment", async ({ environmentId }, context) => {
+  register("get_container_lifecycle_snapshot", async ({ environmentId }, { storage }) => {
+    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return containerLifecycleSnapshot(parseContainerLifecycle(environment.containerLifecycle));
+  });
+  register("resolve_container_operation", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "operationId", "resolution", "containerId"],
+      "arguments",
+    );
+    const environmentId = asString(args.environmentId, "environmentId");
+    const operationId = asString(args.operationId, "operationId");
+    const resolution = args.resolution;
+    if (resolution !== "adopt" && resolution !== "release") {
+      throw new Error("Expected resolution to be adopt or release");
+    }
+    const updated = await enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      resolveNeedsAttentionOperation(
+        context,
+        environmentId,
+        operationId,
+        resolution === "adopt"
+          ? { kind: "adopt", containerId: asString(args.containerId, "containerId") }
+          : { kind: "release" },
+      ),
+    );
+    return updated ? toClientEnvironment(updated) : undefined;
+  });
+  register("get_rebuild_preview", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return rebuildPreview(asString(args.environmentId, "environmentId"), context);
+  });
+  register("list_recovery_copies", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "measureSize"], "arguments");
+    return listRecoveryCopies(asString(args.environmentId, "environmentId"), context, {
+      measureSize: args.measureSize === true,
+    });
+  });
+  register("discard_recovery_copy", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "copyId", "expectedRevision", "operationId"],
+      "arguments",
+    );
+    return discardRecoveryCopyTask(
+      {
+        environmentId: asString(args.environmentId, "environmentId"),
+        copyId: asString(args.copyId, "copyId"),
+        ...parseContainerMutationIdentity(args),
+      },
+      context,
+    );
+  });
+  register("restore_recovery_copy", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "copyId", "expectedContainerId", "expectedRevision", "operationId"],
+      "arguments",
+    );
+    const expected = args.expectedContainerId;
+    if (expected !== null && typeof expected !== "string") {
+      throw new Error("Expected expectedContainerId to be the reviewed container id or null");
+    }
+    const result = await restoreRecoveryCopyTask(
+      {
+        environmentId: asString(args.environmentId, "environmentId"),
+        copyId: asString(args.copyId, "copyId"),
+        expectedContainerId: expected,
+        ...parseContainerMutationIdentity(args),
+      },
+      context,
+      schedulePendingEnvironmentRename,
+      (id) => extensionDiscoveryCache.invalidate(id),
+    );
+    return result ? toClientEnvironmentSetupStartResult(result) : undefined;
+  });
+  register("get_environment_resources", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return environmentResourcePolicy(asString(args.environmentId, "environmentId"), context);
+  });
+  register("update_environment_resources", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "limits", "applyNow", "allowBelowUsage"], "arguments");
+    const environmentId = asString(args.environmentId, "environmentId");
+    let limits: ContainerResourceLimits | undefined;
+    if (args.limits !== null && args.limits !== undefined) {
+      const parsed = parseResourceLimits(args.limits);
+      if (!parsed.ok) throw new Error(`Invalid ${parsed.field}: ${parsed.reason}`);
+      limits = parsed.limits;
+    }
+    return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      updateEnvironmentResources(
+        {
+          environmentId,
+          limits,
+          applyNow: args.applyNow === true,
+          allowBelowUsage: args.allowBelowUsage === true,
+        },
+        context,
+      ),
+    );
+  });
+  register("set_container_resource_limits", async (args, { storage }) => {
+    assertOnlyKeys(args, ["limits"], "arguments");
+    let limits: ContainerResourceLimits | undefined;
+    if (args.limits !== null && args.limits !== undefined) {
+      const parsed = parseResourceLimits(args.limits);
+      if (!parsed.ok) throw new Error(`Invalid ${parsed.field}: ${parsed.reason}`);
+      limits = parsed.limits;
+    }
+    // Applies to runtimes created from now on; existing ones keep theirs.
+    const current = await storage.loadConfig();
+    await storage.updateGlobalConfig(
+      { ...current.global, containerResourceLimits: limits },
+      { preserveCredentials: true },
+    );
+    return { limits: limits ?? null };
+  });
+  register("get_environment_network_policy", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return environmentNetworkPolicy(asString(args.environmentId, "environmentId"), context);
+  });
+  register("apply_environment_allowed_domains", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return applyEnvironmentAllowedDomains(asString(args.environmentId, "environmentId"), context);
+  });
+  register("get_environment_inputs", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return environmentInputStatus(asString(args.environmentId, "environmentId"), context);
+  });
+  register("revoke_provider_credentials", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "provider"], "arguments");
+    const provider = args.provider;
+    if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
+    return revokeProviderCredentials(
+      asString(args.environmentId, "environmentId"),
+      provider,
+      context,
+    );
+  });
+  register("restore_provider_credentials", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "provider"], "arguments");
+    const provider = args.provider;
+    if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
+    return restoreProviderCredentials(
+      asString(args.environmentId, "environmentId"),
+      provider,
+      context,
+    );
+  });
+  register("cancel_container_operation", async (args, { storage }) => {
+    assertOnlyKeys(args, ["environmentId", "operationId"], "arguments");
+    const environmentId = asString(args.environmentId, "environmentId");
+    const operationId = asString(args.operationId, "operationId");
+    const environment = await storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    const operation = parsed.supported ? parsed.record.operation : undefined;
+    // Not queued: the rebuild holds the lifecycle queue. Only a replacement
+    // that has not committed can be cancelled; it stops at its next phase
+    // boundary and rolls back exactly as a failure would.
+    if (
+      !operation ||
+      operation.operationId !== operationId ||
+      (operation.kind !== "migrate" && operation.kind !== "rebuild") ||
+      operation.phase === "committed"
+    ) {
+      return { cancelled: false };
+    }
+    requestReplacementCancellation(operationId);
+    return { cancelled: true, pending: true };
+  });
+  register("recreate_environment", async (args, context) => {
     const result = await recreateEnvironmentTask(
-      asString(environmentId, "environmentId"),
+      parseRecreateEnvironmentRequest(args),
       context,
       schedulePendingEnvironmentRename,
       (id) => extensionDiscoveryCache.invalidate(id),
@@ -707,28 +922,40 @@ export function registerEnvironmentCommands(
       { refresh: refresh === true },
     );
   });
-  register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
-    storage
-      .updateEnvironment(asString(environmentId, "environmentId"), {
-        allowedDomains: asStringArray(domains),
-      })
-      .then(toClientEnvironment),
-  );
-  register("add_environment_domains", async ({ environmentId, domains }, { storage }) => {
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+  // A saved allowlist is applied to the running container in place when its
+  // image supports it. The save stands either way; the network section
+  // reports whether the container enforces it yet.
+  const applySaved = (environmentId: string, context: CommandContext) =>
+    applyEnvironmentAllowedDomains(environmentId, context).catch(() => undefined);
+  register("update_environment_allowed_domains", async ({ environmentId, domains }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.updateEnvironment(id, {
+      allowedDomains: asStringArray(domains),
+    });
+    await applySaved(id, context);
+    return toClientEnvironment(environment);
+  });
+  register("add_environment_domains", async ({ environmentId, domains }, context) => {
+    const environment = await context.storage.getEnvironment(
+      asString(environmentId, "environmentId"),
+    );
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const updated = Array.from(
       new Set([...(environment.allowedDomains ?? []), ...asStringArray(domains)]),
     );
-    await storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await context.storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await applySaved(environment.id, context);
     return updated.join(",");
   });
-  register("remove_environment_domains", async ({ environmentId, domains }, { storage }) => {
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+  register("remove_environment_domains", async ({ environmentId, domains }, context) => {
+    const environment = await context.storage.getEnvironment(
+      asString(environmentId, "environmentId"),
+    );
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const remove = new Set(asStringArray(domains));
     const updated = (environment.allowedDomains ?? []).filter((domain) => !remove.has(domain));
-    await storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await context.storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await applySaved(environment.id, context);
     return updated.join(",");
   });
 }

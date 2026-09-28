@@ -18,6 +18,7 @@ import { environmentStateDirectories } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
 
 const tempDirectories: string[] = [];
 
@@ -91,6 +92,8 @@ function entry(overrides: Partial<EnvironmentCleanupEntry>): EnvironmentCleanupE
     createdFromCommit: null,
     baseBranches: [],
     containerId: null,
+    retainedContainers: [],
+    volumes: [],
     stateDirectories: [],
     pending: [],
     attempts: 0,
@@ -154,7 +157,10 @@ describe("environment cleanup entry", () => {
       { localPath: "/project" },
       dataDir,
     );
-    expect(container).toMatchObject({ branch: null, pending: ["container", "state-dirs"] });
+    expect(container).toMatchObject({
+      branch: null,
+      pending: ["container", "network", "state-dirs"],
+    });
   });
 
   test("redacts failures to codes and exit statuses", () => {
@@ -458,5 +464,49 @@ describe("environment cleanup steps", () => {
       pending: ["container"],
       lastError: "container: exit 1",
     });
+  });
+});
+
+describe("storage volume cleanup", () => {
+  test("waits for the container, verifies labels and treats a missing volume as removed", async () => {
+    const { context, dataDir } = await cleanupContext();
+    const owner = dockerOwnerNamespace(dataDir);
+    const ledger = environmentCleanupLedger(dataDir);
+    const calls: string[] = [];
+    const run = async (_command: string, args: string[]) => {
+      calls.push(args.join(" "));
+      if (args[1] === "inspect") {
+        if (args.at(-1) === "vol-gone") throw new Error("Error: No such volume: vol-gone");
+        if (args.at(-1) === "vol-foreign") {
+          return {
+            stdout: JSON.stringify({ "orkestrator-owner": "other", "environment-id": "e1" }),
+            stderr: "",
+          };
+        }
+        return {
+          stdout: JSON.stringify({ "orkestrator-owner": owner, "environment-id": "e1" }),
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    };
+
+    // The container is still owed: volumes are not touched.
+    const blocked = entry({ volumes: ["vol-ws"], pending: ["container", "volumes"] });
+    await ledger.record(blocked);
+    expect(await runEnvironmentCleanupStep(blocked, "volumes", context, { run })).toBe(false);
+    expect(calls).toEqual([]);
+
+    await ledger.complete("e1", "container");
+    expect(await runEnvironmentCleanupStep(blocked, "volumes", context, { run })).toBe(true);
+    expect(calls).toContain("volume rm vol-ws");
+    expect(calls.some((call) => call.startsWith("volume rm -f"))).toBe(false);
+
+    calls.length = 0;
+    const foreign = entry({ volumes: ["vol-gone", "vol-foreign"], pending: ["volumes"] });
+    await ledger.record(foreign);
+    expect(await runEnvironmentCleanupStep(foreign, "volumes", context, { run })).toBe(false);
+    expect(calls).not.toContain("volume rm vol-foreign");
+    expect((await ledger.get("e1"))?.pending).toEqual(["volumes"]);
   });
 });

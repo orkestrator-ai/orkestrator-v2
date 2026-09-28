@@ -1,6 +1,6 @@
 # 06 — Migration and transactional replacement
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [04](04-runtime-readiness-and-graceful-shutdown.md),
 [05](05-persistent-workspace-and-agent-state.md).
 Return to [index](00-index.md).
@@ -138,3 +138,55 @@ visible and never runs merely because the UI unmounted.
 Ship migration as an explicit operation first, then enable it as the preserve
 implementation for rebuild. Exit when failure injection demonstrates retained
 data and the UI describes precisely which paths and session formats survive.
+
+## Implementation record
+
+- **Image.** `docker/orkestrator-migrate.sh` (`persistent-workspace=1`):
+  `copy-stream` tees one read of a tar stream into GNU-tar extraction (absolute
+  paths stripped, `..` refused, existing destination symlinks not followed), a
+  per-file SHA-256 manifest and a listing, then verifies the destination
+  (path/mode/size/hash, symlink targets, `git fsck --connectivity-only`);
+  `copy-volume` and `measure` (bytes and free space on the daemon side).
+  Result lines carry counts only.
+- **Backend.** `container-replacement.ts`: `replaceRuntimePreservingState`
+  (phases `preflight` → `committed`, cancellation between phases, rollback
+  before commit), `rebuildPreview`, capacity verdict. Operation records carry
+  `candidateStorage`; the commit patch moves runtime and storage together and
+  appends `retainedRuntimes` / `retainedStorage` in the same write.
+  `reconcileContainerOperation` rolls back an unresolved `migrate`/`rebuild`.
+  `recreate_environment` routes `preserve` + reviewed container id here and then
+  starts the committed runtime through the normal start path (setup re-runs on
+  the preserved checkout; `createdFromCommit` kept). New commands
+  `get_rebuild_preview`, `cancel_container_operation`; public CLI `environment
+  recreate` without `--discard` is now a preserving rebuild.
+- **UI.** `EnvironmentRebuildSection`: "Rebuild (keeps files)…" with a preview
+  of kept/not-kept paths and per-provider limitations, an explicit
+  unknown-capacity opt-in, and progress/cancel rehydrated from the lifecycle
+  snapshot. "Reset container…" (discard) is unchanged.
+- **Decisions.** Always copy into a new storage set, including for volume
+  rebuilds. The source is stopped (never restarted) before copying. The
+  candidate is stopped again after its health check so setup and agent launch
+  run only against the committed runtime. No resumable chunk journal: an
+  interrupted copy discards the candidate and a retry recopies.
+- **Tests.** `tests/unit/electron/container-replacement.test.ts` (copy plan,
+  helper parsing, capacity, admission refusals, restart rollback, failed
+  candidate retention); `EnvironmentRebuildSection.test.tsx`. Live (Engine
+  29.7.2, `container-live-replacement.test.ts`): C14 legacy migration (Git
+  refs/branch/status, modes/owner, symlinks, 3 MiB binary, `node_modules`,
+  Claude/Codex transcripts, relocated Codex SQLite + WAL, OpenCode DB, config
+  and OpenCode snapshots not copied, source kept stopped) and volume rebuild
+  (new set, old set retained and isolated from candidate writes); C15
+  cancellation during copy (candidate container and volumes removed, source
+  restartable with identical state) and a changed runtime refused before any
+  stop; C16 a symlinked session root fails verification and rolls back.
+- **Limitations.** ENOSPC/inode exhaustion and daemon disconnect mid-copy are
+  covered by the capacity preflight and rollback path but not injected live;
+  kill-at-every-phase is exercised through unit reconciliation, not a live
+  process kill. Retained recovery copies are listed and retired in step 07.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 9, 12, 24, 25, 34, 35);
+what could not be done on this host is listed there as environment-limited.

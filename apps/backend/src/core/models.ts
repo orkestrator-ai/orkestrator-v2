@@ -8,6 +8,10 @@ import type {
 } from "@orkestrator/protocol/agent-activity";
 import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type {
+  ContainerLifecycleSnapshot,
+  EnvironmentContainerLifecycle,
+} from "@orkestrator/protocol/container-lifecycle";
+import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
   AgentInteractionResolutionJournal,
@@ -213,6 +217,18 @@ export interface Environment {
   cleanupAfterMergeRequestedAt?: string;
   /** Last backend cleanup failure retained for rehydration and manual retry. */
   cleanupAfterMergeError?: string;
+  /**
+   * Durable container lifecycle record: runtime/storage identity, the one
+   * unresolved operation and recent outcomes. Backend-private; clients receive
+   * `ContainerLifecycleSnapshot`. Always read through `parseContainerLifecycle`
+   * because a newer backend may have written a version this one cannot read.
+   */
+  containerLifecycle?: EnvironmentContainerLifecycle;
+  /**
+   * Per-environment resource budget; overrides the global default. Absent
+   * inherits; a `null` field is explicitly unrestricted.
+   */
+  containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
   /** Backend-owned long-running operation currently affecting this environment. */
   lifecycleOperation?: EnvironmentLifecycleOperation;
   lifecycleOperationStartedAt?: string;
@@ -267,6 +283,11 @@ export interface Environment {
   delegationBaseCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];
+  /**
+   * Providers whose credentials the user removed from this environment. They
+   * are left out of staged inputs and credential syncs until allowed again.
+   */
+  revokedInputProviders?: AgentPlatform[];
   order: number;
   portMappings?: PortMapping[];
   entryPort?: number;
@@ -378,7 +399,10 @@ export type ClientEnvironment = Omit<
   | "controlRequestId"
   | "controlRequestFingerprint"
   | "branchRevision"
+  | "containerLifecycle"
 > & {
+  /** Safe projection of the durable container lifecycle record. */
+  containerLifecycle?: ContainerLifecycleSnapshot;
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.
    *
@@ -748,6 +772,12 @@ export interface AppConfig {
   version: string;
   desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: {
+    /**
+     * Default resource budget enforced on new container runtimes. Absent means
+     * unrestricted: defaults are chosen from measurements, not guessed. (The
+     * older `containerResources` value was never applied and is not read.)
+     */
+    containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
     /**

@@ -120,6 +120,8 @@ export function branchIsDisposable(run: CommandRunner, gitDir: string, branch: s
 
 export type ProfileRemoval = {
   containersRemoved: number;
+  volumesRemoved: number;
+  networksRemoved: number;
   worktreesReleased: number;
   branchesDeleted: string[];
   branchesKept: string[];
@@ -168,6 +170,36 @@ export async function removeProfile(
     }
   }
 
+  // Persistent volumes and per-environment networks carry the same exact
+  // owner label. Remove them after their containers release them.
+  const ownedResources = (kind: "volume" | "network") => {
+    const found = run("docker", [
+      kind,
+      "ls",
+      "-q",
+      "--filter",
+      `label=orkestrator-owner=${profile.dockerOwner}`,
+    ]);
+    return found.status === 0
+      ? found.stdout
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      : [];
+  };
+  let volumesRemoved = 0;
+  let networksRemoved = 0;
+  for (const kind of ["volume", "network"] as const) {
+    const names = ownedResources(kind);
+    if (!names.length) continue;
+    const removed = run("docker", [kind, "rm", ...names]);
+    if (removed.status !== 0) {
+      throw new Error(removed.stderr.trim() || `Could not remove profile Docker ${kind}s`);
+    }
+    if (kind === "volume") volumesRemoved = names.length;
+    else networksRemoved = names.length;
+  }
+
   for (const { worktree, commonDir } of worktrees) {
     const removed = run("git", ["--git-dir", commonDir, "worktree", "remove", "--force", worktree]);
     if (removed.status !== 0) throw new Error(`Could not release linked worktree ${worktree}`);
@@ -191,7 +223,14 @@ export async function removeProfile(
       branchesKept.push(branch);
     }
   }
-  return { containersRemoved, worktreesReleased: worktrees.length, branchesDeleted, branchesKept };
+  return {
+    containersRemoved,
+    volumesRemoved,
+    networksRemoved,
+    worktreesReleased: worktrees.length,
+    branchesDeleted,
+    branchesKept,
+  };
 }
 
 export type PruneOutcome = {

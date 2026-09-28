@@ -24,6 +24,7 @@ describe("environment state paths", () => {
       "pi-bridge-state",
       "cursor-bridge-state",
       "acp-bridge-state",
+      "portable-inputs",
     ]);
     const dataDir = path.join(path.sep, "data");
     expect(environmentStateDirectory(dataDir, "cursor-bridge-state", "e1")).toBe(

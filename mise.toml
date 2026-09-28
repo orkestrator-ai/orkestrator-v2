@@ -299,9 +299,13 @@ description = "Strictly verify the Codex app-server protocol"
 env = { CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY = "0" }
 run = "bun scripts/generate-codex-app-server-protocol.ts --check"
 
+[tasks."docker:check-base"]
+description = "Check whether the pinned Docker base image digest is still current"
+run = "bun scripts/check-base-image-digest.ts"
+
 [tasks."docker:build"]
 description = "Build the production Docker image"
-run = "docker build -t orkestrator-v2:latest -f docker/Dockerfile ."
+run = "docker build $(bun scripts/docker-image-build-args.ts) -t orkestrator-v2:latest -f docker/Dockerfile ."
 
 [tasks."docker:build:dev"]
 description = "Build the development Docker image"

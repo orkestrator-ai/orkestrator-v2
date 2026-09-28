@@ -495,7 +495,9 @@ exit 0
           "setsid bun /opt/cursor-bridge/dist/index.js",
           scriptStart,
         );
-        const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+        // The launch is an if/else choosing the rotating log writer; parse through
+        // its closing fi.
+        const scriptEnd = detachedExec.indexOf("\nfi", setsidLine) + "\nfi".length;
         expect(setsidLine).toBeGreaterThan(scriptStart);
         const parsed = Bun.spawnSync([
           "bash",
@@ -580,7 +582,7 @@ case "$1" in
       *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
         cat "$FAKE_CURSOR_FINGERPRINT_FILE" 2>/dev/null || true
         exit 0 ;;
-      *"cat /tmp/${provider}-acp-bridge.log"*)
+      *"tail -c"*"/tmp/${provider}-acp-bridge.log"*)
         printf '${provider} acp log\\n'; exit 0 ;;
       *pkill*)
         rm -f "$FAKE_BRIDGE_TOKEN_FILE"
@@ -666,7 +668,9 @@ exit 0
           `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
           scriptStart,
         );
-        const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+        // The launch is an if/else choosing the rotating log writer; parse through
+        // its closing fi.
+        const scriptEnd = detachedExec.indexOf("\nfi", setsidLine) + "\nfi".length;
         expect(setsidLine).toBeGreaterThan(scriptStart);
         const launchScript = detachedExec.slice(scriptStart, scriptEnd);
         const parsed = Bun.spawnSync(["bash", "-n", "-c", launchScript]);
@@ -732,7 +736,7 @@ case "$1" in
       *"cat /tmp/pi-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
-      *"cat /tmp/pi-bridge.log"*)
+      *"tail -c"*"/tmp/pi-bridge.log"*)
         printf 'pi bridge log\\n'
         exit 0 ;;
       *pkill*)

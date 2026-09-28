@@ -837,10 +837,22 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.2-debian`, matching the Bun version
-managed in `mise.toml` for development and CI. Every agent CLI version below
-is pinned by an `ARG` in `docker/Dockerfile`, which is its container source of
-truth.
+The image is built from `oven/bun:1.4.2-debian`, pinned by its multi-architecture
+index digest on both stages, matching the Bun version managed in `mise.toml`
+for development and CI. Refresh the digest deliberately (`docker buildx
+imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;
+`mise run docker:check-base` reports when the tag has moved past the pin.
+`tests/unit/version-drift.test.ts` requires both `FROM` lines to agree. After
+any image change, `bash docker/tests/final-image-smoke.sh <image>` runs the
+built image (CI runs it on both architectures). Every
+agent CLI version below is pinned by an `ARG` in `docker/Dockerfile`, which is
+its container source of truth.
+
+The bridges are built in a separate `bridge-build` stage (manifests and
+patches first, then a `--frozen-lockfile` filtered install, then sources), and
+the delivered image receives only each bridge's runtime directory. Do not move
+bridge builds back into the final stage: the workspace install and build
+layers would ship in the image's history even when deleted later.
 
 Runtimes:
 - Bun, installed in mise's shared system tool directory. The matching base-image
@@ -882,10 +894,12 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly two things: `/usr/local/bin/init-firewall.sh`
-  and `/usr/local/bin/run-root-setup.sh` (the latter only when PID 1's
-  `NETWORK_MODE` is `full`). The container boundary, not a reusable root
-  shell, is what isolates an agent. Runtime allowlist edits use
+  passwordless sudo for exactly three things: the image entrypoint
+  (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
+  policy once, root-owned, before dropping to `node`),
+  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
+  (the latter only when the recorded mode is `full`). The container boundary,
+  not a reusable root shell, is what isolates an agent. Runtime allowlist edits use
   `docker exec --user root /usr/local/bin/update-firewall.sh`.
 
 ### Playwright
@@ -933,17 +947,34 @@ Branded Google Chrome (`channel: "chrome"`) is deliberately absent: Google
 publishes no linux/arm64 package, so installing it would break the image build
 on Apple Silicon.
 
+### Environment storage and lifecycle
+
+New runtimes of a capable image keep `/workspace` and the provider session
+paths in `PROVIDER_STATE_LAYOUT` on two owner-labelled volumes; credentials and
+configuration stay in the container layer, staged per environment from the
+entrypoint's allowlist. Every container mutation is a durable lifecycle
+operation (`container-lifecycle-service.ts`). A preserving rebuild copies and
+verifies into a new storage set before one commit write; earlier runtimes and
+sets become recovery copies that only the user or environment deletion
+removes. Never add a code path that removes an environment's container or
+volumes outside those operations, and never prune by owner, age or state.
+The living reference is
+[`docs/architecture/container-lifecycle.md`](docs/architecture/container-lifecycle.md).
+
 ### Network Isolation
 
 Containers in `restricted` mode (the default) reach only an allowlist; anything
 else is rejected outright. `full` mode skips the firewall entirely.
 
-- GitHub's own ranges are always resolved from `api.github.com/meta` at startup.
+- GitHub's own published ranges are always allowed: from the backend's hourly
+  seed (`github-ranges-cache.ts`) when it is under a day old, else a live
+  fetch of `api.github.com/meta`, else a cached copy under a week old; with
+  none the firewall fails closed.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
-  re-adds Cursor's, Grok's and Pi's hosts only when those platforms are
-  enabled). Pi's list is necessarily partial: it fronts the user's own model
+  re-adds Codex's (`chatgpt.com`, `auth.openai.com`, for ChatGPT sign-in),
+  Cursor's, Grok's and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
@@ -955,7 +986,34 @@ else is rejected outright. `full` mode skips the firewall entirely.
   to match, but `tests/unit/version-drift.test.ts` does require the hosts the
   image itself depends on to appear in all three, so a new one cannot be added to
   only one list.
-- DNS, localhost, outbound SSH, and the host network are always allowed.
+- DNS (to Docker's resolvers and the upstreams its embedded resolver names)
+  and localhost are always allowed. There is no general outbound SSH
+  exception: SSH reaches only hosts whose addresses are allowlisted (GitHub's
+  published ranges, allowed domains).
+- An allowed address is allowed on every port and protocol, and the list is
+  of addresses, not names: a domain on a shared CDN address also opens every
+  other site served from that address. An empty allowlist means nothing
+  beyond GitHub (`ALLOWED_DOMAINS=none`); an environment whose own list is
+  empty uses the global list.
+- Host access depends on the container's network policy. A container created
+  from an image with `network-policy=2` runs on its own labelled Docker
+  network with IPv6 disabled; it may reach the host only on the backend's
+  agent-tools port (kept current by `update-firewall.sh --host-ports`) and
+  accepts inbound connections only on its published ports. Older containers
+  (policy 1, default bridge) still allow the whole gateway `/24`, which
+  includes sibling containers, until they are rebuilt.
+- Images with `network-refresh=1` keep the allowlist current in place:
+  resolved addresses expire six hours after their domain last returned them,
+  a root refresher re-resolves on the record TTL, and saving an environment's
+  domains applies them to the running container (`update-firewall.sh
+  --set-domains`), swapping the set atomically, revoking open connections to
+  removed addresses and storing the list for the next boot. Keep that state in
+  root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
+- The firewall limits destinations. It does not stop data leaving through an
+  allowed service. A root terminal (`orkroot`) has `NET_ADMIN` in restricted
+  mode too and can change the firewall; restricted mode constrains agents and
+  `node` terminals, not a user who opens a root shell. Full-mode containers
+  are not given `NET_ADMIN`.
 
 ## Configuration Storage
 

@@ -96,6 +96,7 @@ const {
   withGnuBase64Shim,
   writeBridgeEntrypoint,
   writeBridgeServer,
+  ownedContainerInspect,
 } = await createCommandFixtures();
 
 import type {
@@ -114,6 +115,7 @@ describe("Electron backend command registry", () => {
   // on every platform instead of silently depending on the developer's OS.
   const CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi
@@ -211,6 +213,8 @@ exit 0
           githubToken,
           anthropicApiKey,
           cursorApiKey,
+          // Credentials reach a container only for enabled providers.
+          enabledAgentPlatforms: ["claude", "cursor"],
         },
         repositories: {
           "project-1": { defaultBranch: "main", prBaseBranch: "main" },
@@ -307,8 +311,16 @@ if [ "$1" = "ps" ]; then
   esac
   exit 0
 fi
+if [ "$1" = "inspect" ]; then
+  case "$4" in
+    ${legacyOrphanId}) printf 'exited\\t{"app":"orkestrator-v2"}\\n' ;;
+    ${orphanId}) printf 'exited\\t{"app":"orkestrator-v2","orkestrator-owner":"${currentOwner}"}\\n' ;;
+    *) printf 'running\\t{"app":"orkestrator-v2"}\\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = "rm" ]; then
-  printf '%s\\n' "$3" >> "$FAKE_DOCKER_RM_LOG"
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_RM_LOG"
   exit 0
 fi
 exit 0
@@ -336,10 +348,29 @@ exit 0
         });
         expect(containers.find((container) => container.id === foreignId)).toBeUndefined();
 
-        await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(2);
+        // Removal is reviewed: only this registry's orphan is eligible. A
+        // container from before owner labels could be any installation's and
+        // is listed for adoption, never offered for removal.
+        const preview = (await commands.get("docker_cleanup_preview")?.({}, context)) as {
+          selectionToken: string;
+          rows: Array<{ kind: string; id: string; classification: string }>;
+        };
+        const containerRows = preview.rows.filter((row) => row.kind === "container");
+        expect(containerRows.find((row) => row.id === orphanId)?.classification).toBe("eligible");
+        expect(containerRows.find((row) => row.id === legacyOrphanId)?.classification).toBe(
+          "legacy-unadopted",
+        );
+        expect(containerRows.find((row) => row.id === foreignId)).toBeUndefined();
+        await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).rejects.toThrow(
+          "ContainerLifecycleError:invalid-request",
+        );
+        await commands.get("docker_cleanup_execute")?.(
+          { selectionToken: preview.selectionToken, containerIds: [orphanId, legacyOrphanId] },
+          context,
+        );
         const removed = await fs.readFile(logs.rm, "utf8");
         expect(removed).toContain(orphanId);
-        expect(removed).toContain(legacyOrphanId);
+        expect(removed).not.toContain(legacyOrphanId);
         expect(removed).not.toContain(shortAssignedId);
         expect(removed).not.toContain(foreignId);
 
@@ -348,7 +379,15 @@ exit 0
         // Ownership is decided from the returned labels. Filtering it in the
         // daemon query would hide unlabelled pre-upgrade containers for good.
         expect(dockerCalls).toContain("label=app=orkestrator-v2");
-        expect(dockerCalls).not.toContain(`label=orkestrator-owner=${currentOwner}`);
+        // The listing itself is unfiltered; only the usage sample (which is
+        // installation-scoped by definition) filters by owner.
+        const listingCalls = dockerCalls
+          .split("\n")
+          .filter((call) => call.startsWith("ps") && call.includes("{{json .}}"));
+        expect(listingCalls.length).toBeGreaterThan(0);
+        for (const call of listingCalls) {
+          expect(call).not.toContain(`label=orkestrator-owner=${currentOwner}`);
+        }
       },
     );
   });
@@ -518,6 +557,7 @@ exit 0
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi
@@ -759,5 +799,131 @@ exit 0
         expect(message).toContain("[REDACTED]");
       },
     );
+  });
+});
+
+describe("container cleanup protection", () => {
+  test("keeps assigned, linked and racing containers and counts only real removals", async () => {
+    const dataDir = await createTempDir("ork-cleanup-protection-");
+    const owner = dockerOwnerNamespace(dataDir);
+    const assigned = createEnvironment({
+      id: "env-assigned-stopped",
+      environmentType: "containerized",
+      containerId: "stopped-assigned",
+      status: "stopped",
+    });
+    // A live environment whose create was interrupted before the container id
+    // was persisted: only the label connects them, and that is enough.
+    const linked = createEnvironment({
+      id: "env-linked",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+    });
+    const becomesAssigned = createEnvironment({
+      id: "env-late-assignment",
+      environmentType: "containerized",
+      containerId: "racing-orphan",
+      status: "running",
+    });
+    const { context } = createContext([assigned, linked], { dataDir });
+    let loads = 0;
+    context.storage.loadEnvironments = mock(async () => {
+      loads += 1;
+      // The first read is the inventory; later reads are the per-container
+      // rechecks, by which time a reattach assigned the racing container.
+      return loads === 1 ? [assigned, linked] : [assigned, linked, becomesAssigned];
+    });
+    const commands = createCommandRegistry();
+    const label = (environmentId: string) =>
+      `app=orkestrator-v2,orkestrator-owner=${owner},environment-id=${environmentId}`;
+
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf '%s\\n' \\
+    '{"ID":"stopped-assigned","Names":"a","State":"exited","Size":"1MB","Labels":"${label(assigned.id)}"}' \\
+    '{"ID":"linked-container","Names":"b","State":"exited","Size":"1MB","Labels":"${label(linked.id)}"}' \\
+    '{"ID":"racing-orphan","Names":"c","State":"exited","Size":"1MB","Labels":"${label("env-gone-1")}"}' \\
+    '{"ID":"stuck-orphan","Names":"d","State":"exited","Size":"1MB","Labels":"${label("env-gone-2")}"}' \\
+    '{"ID":"free-orphan","Names":"e","State":"exited","Size":"2MB","Labels":"${label("env-gone-3")}"}'
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'exited\\t{"app":"orkestrator-v2","orkestrator-owner":"${owner}"}\\n'
+  exit 0
+fi
+if [ "$1" = "rm" ]; then
+  if [ "$2" = "stuck-orphan" ]; then
+    printf 'Error response from daemon: device or resource busy\\n' >&2
+    exit 1
+  fi
+  printf '%s\\n' "$2" >> "$FAKE_DOCKER_RM_LOG"
+  exit 0
+fi
+exit 0
+`,
+      async (logs) => {
+        const preview = (await commands.get("docker_cleanup_preview")?.({}, context)) as {
+          selectionToken: string;
+          rows: Array<{ kind: string; id: string; classification: string }>;
+        };
+        const eligible = preview.rows
+          .filter((row) => row.kind === "container" && row.classification === "eligible")
+          .map((row) => row.id)
+          .sort();
+        // Assigned and label-linked containers are kept out of the review.
+        expect(eligible).toEqual(["free-orphan", "racing-orphan", "stuck-orphan"]);
+        const result = (await commands.get("docker_cleanup_execute")?.(
+          { selectionToken: preview.selectionToken, containerIds: eligible },
+          context,
+        )) as { outcomes: Array<{ id: string; outcome: string }> };
+        const outcome = (id: string) => result.outcomes.find((entry) => entry.id === id)?.outcome;
+        expect(outcome("free-orphan")).toBe("removed");
+        // Assigned between review and removal: rechecked and kept.
+        expect(outcome("racing-orphan")).toBe("conflict");
+        expect(outcome("stuck-orphan")).toBe("failed");
+        const removed = (await fs.readFile(logs.rm, "utf8")).split("\n").filter(Boolean);
+        expect(removed).toEqual(["free-orphan"]);
+      },
+    );
+  });
+
+  test("raw removal refuses an environment's container", async () => {
+    const dataDir = await createTempDir("ork-raw-remove-");
+    const owner = dockerOwnerNamespace(dataDir);
+    const environment = createEnvironment({
+      id: "env-raw-remove",
+      environmentType: "containerized",
+      containerId: "assigned-container",
+      status: "stopped",
+    });
+    const { context } = createContext(environment, { dataDir });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  case "$4" in
+    foreign-container) printf 'exited\\t{"some":"label"}\\n' ;;
+    *) printf 'exited\\t{"app":"orkestrator-v2","orkestrator-owner":"${owner}"}\\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+`,
+      async (logs) => {
+        await expect(
+          commands.get("docker_remove_container")?.({ containerId: "assigned-container" }, context),
+        ).rejects.toThrow("ContainerLifecycleError:preservation-required");
+        await expect(
+          commands.get("docker_remove_container")?.({ containerId: "foreign-container" }, context),
+        ).rejects.toThrow("ContainerLifecycleError:not-owned");
+        expect(await fs.readFile(logs.all, "utf8")).not.toContain("rm ");
+      },
+    );
+    expect(environment.containerId).toBe("assigned-container");
   });
 });

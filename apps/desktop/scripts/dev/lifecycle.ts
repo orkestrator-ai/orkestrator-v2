@@ -795,7 +795,7 @@ export async function resetProfile(args: DevArguments): Promise<number> {
     ? ` Kept unmerged branch(es): ${removal.branchesKept.join(", ")}.`
     : "";
   console.log(
-    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}`,
+    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s), ${removal.volumesRemoved} volume(s), ${removal.networksRemoved} network(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}`,
   );
   return 0;
 }

@@ -1300,6 +1300,7 @@ describe("NativeAgentService", () => {
           agentActivityState: "working",
           hasUnreadWork: true,
         });
+        expect(await service.hasObservedLiveWork("env-1", "claude")).toBe(true);
       },
     );
   });

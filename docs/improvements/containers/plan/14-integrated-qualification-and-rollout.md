@@ -1,6 +1,6 @@
 # 14 — Integrated qualification and rollout
 
-Status: Not started. Dependencies: steps 01–13, including explicit deferrals
+Status: Implemented on branch; awaiting review. Dependencies: steps 01–13, including explicit deferrals
 permitted by their exit criteria. Return to [index](00-index.md).
 
 ## Goal
@@ -165,3 +165,31 @@ safe disabled behavior; do not accumulate permanent duplicate lifecycle engines.
 Exit when C01–C30 have passing evidence or a narrowly documented unsupported
 capability that the product actually gates, rollback behavior is demonstrated,
 and every implementation step's record and index status are consistent.
+
+## Implementation record
+
+- **Evidence.** [`../qualification.md`](../qualification.md) records C01–C30:
+  24 pass, 6 partial with the missing proof named (C13 provider resume — gated
+  in the UI; C16 disk exhaustion; C21 live credential refresh; C23 DNS
+  refresh; C27 arm64; C29 live switch-away during a rebuild). Suites: `mise
+  run test`, the three live Docker suites (18 scenarios), the benchmark
+  harness, `test:agent:browser:isolated`, and `test:agent:docker` against a
+  container fixture profile — including a new
+  `e2e/agent-testing/container-settings.spec.ts` (desktop and narrow, reload)
+  and a public-CLI preserving rebuild of the real fixture container.
+- **Fixes found by qualification.** `dev:reset` now removes the profile's
+  exact-owner volumes and networks; the settings dialog gained a Container
+  section instead of hiding container actions under Ports; the rebuild preview
+  no longer implies provider resume that has not been verified.
+- **Docs.** README image instructions (`mise run docker:build`, digest
+  records, capability-gated behaviour, rebuild to adopt a new image), the
+  documentation catalog, AGENTS.md network/storage guidance.
+- **Found, not fixed.** A pre-existing mobile defect: Settings opened from the
+  narrow sidebar's actions menu is blocked by the still-open projects drawer.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 15, 31);
+what could not be done on this host is listed there as environment-limited.

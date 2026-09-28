@@ -24,3 +24,19 @@ The draft spec retries the load once, only for this exact startup message, and
 records the retry as a `retry` annotation. Any other startup failure still fails
 the case. Keep this open as environmental until the dev gateway's module
 fetches are shown to fail for another reason.
+
+## Recurrence — 2026-09-27
+
+- **Tests:** `e2e/agent-testing/container-settings.spec.ts` (desktop and narrow)
+  run right after `container-rebuild-cycle.spec.ts`, while that case's
+  preserving rebuild was still copying and starting the new container.
+- **Command:** `ORKESTRATOR_AGENT_TEST_PROFILE=containers-audit-qa mise run test:agent:docker`
+  against a `dev:test --fixture --fixture-environments local,container`
+  profile on branch `implement-containers-50431d61c9b0-r1`.
+- **Failure:** "Orkestrator couldn’t connect" on the page load; the backend
+  kept running, logged no error, and answered CLI reads in ~50 ms throughout.
+- **Isolated check:** four page loads during a CLI-started rebuild all started
+  in ~2 s; two further full runs of the Docker suite passed 5/5.
+- **Change:** both container specs now load through
+  `e2e/agent-testing/dev-startup-retry.ts`, the same single, annotated retry
+  the draft spec uses, limited to the dev server's module-fetch failure.

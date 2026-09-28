@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
+import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
 import {
   dockerContainerRuntimeName,
   dockerOwnerNamespace,
@@ -72,7 +73,20 @@ if [ "$1" = "create" ]; then
   exit 0
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "-f" ]; then
-  printf '%s\n' "\${FAKE_DOCKER_STATUS:-running}"
+  case "$3" in
+    *'index .Config.Labels "orkestrator-owner"'*)
+      printf '%s\t%s\torkestrator-v2\t%s\n' "\${FAKE_DOCKER_OWNER:-}" "\${FAKE_DOCKER_STATUS:-running}" "$4"
+      ;;
+    *"json .Config.Labels"*)
+      case "$4" in
+        container-old) printf 'exited\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_OWNER:-}" ;;
+        legacy-old) printf 'exited\t{"app":"orkestrator-v2"}\n' ;;
+        container-a) printf '%s\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_STATUS:-running}" "\${FAKE_DOCKER_OWNER:-}" ;;
+        *) echo "Error: No such object: $4" >&2; exit 1 ;;
+      esac
+      ;;
+    *) printf '%s\n' "\${FAKE_DOCKER_STATUS:-running}" ;;
+  esac
   exit 0
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "--format" ]; then
@@ -82,6 +96,12 @@ fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
   case " $* " in
     *" -q "*) printf 'container-a\ncontainer-b\n' ;;
+    *"{{json .}}"*)
+      printf '{"ID":"container-old","Names":"old","State":"exited","Size":"1.25GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=%s"}\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf '{"ID":"legacy-old","Names":"legacy","State":"exited","Size":"512MB (virtual 3GB)","Labels":"app=orkestrator-v2"}\n'
+      printf '{"ID":"container-existing","Names":"assigned","State":"exited","Size":"9GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=%s"}\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf '{"ID":"container-foreign","Names":"foreign","State":"exited","Size":"1GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=other-registry"}\n'
+      ;;
     *)
       printf 'container-a\talpha\tapp=orkestrator-v2,orkestrator-owner=%s\n' "\${FAKE_DOCKER_OWNER:-}"
       printf 'container-b\tbeta\tapp=orkestrator-v2\n'
@@ -224,6 +244,7 @@ function createContext(initialEnvironment = environment()): {
   const context = {
     appRoot: root,
     resourceRoot: root,
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
       getDataDir: () => root,
@@ -302,10 +323,13 @@ async function readLauncherInvocations(): Promise<LauncherInvocation[]> {
   return invocations;
 }
 
-async function waitFor(predicate: () => boolean, description: string): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  description: string,
+): Promise<void> {
   const deadline = Date.now() + 1_000;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Timed out waiting for ${description}`);
@@ -536,10 +560,17 @@ describe("process and platform command behavior", () => {
   });
 
   test("provisions and controls a container with validated arguments", async () => {
+    fixture.environment.containerId = null;
     expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
       "container-created-123",
     );
-    expect(fixture.updates).toContainEqual({ containerId: "container-created-123" });
+    expect(fixture.updates).toContainEqual(
+      expect.objectContaining({ containerId: "container-created-123" }),
+    );
+    // Provisioning is idempotent: a repeated request returns the same runtime.
+    expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
+      "container-created-123",
+    );
 
     await invoke("docker_start_container", { containerId: "container-a" });
     await invoke("docker_stop_container", { containerId: "container-a" });
@@ -553,7 +584,7 @@ describe("process and platform command behavior", () => {
     expect(log).toContain(
       `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
     );
-    expect(log).toContain("--shm-size 1g");
+    expect(log).toContain("--shm-size 1024m");
     expect(log).toContain("--label environment-name=feature-environment");
     expect(log).toContain(`--label orkestrator-owner=${owner}`);
     expect(log).toContain("ALLOWED_DOMAINS=");
@@ -580,6 +611,8 @@ describe("process and platform command behavior", () => {
     fixture.context.storage.getDataDir = () => profileDataDir;
     fixture.project.gitUrl = originPath;
 
+    fixture.environment.containerId = null;
+
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const log = await readCommandLog();
@@ -595,6 +628,8 @@ describe("process and platform command behavior", () => {
     fixture.context.runtimeFlavor = "agent-test";
     fixture.project.gitUrl = unrelatedRemote;
 
+    fixture.environment.containerId = null;
+
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const log = await readCommandLog();
@@ -605,6 +640,7 @@ describe("process and platform command behavior", () => {
   test("adds ACP vendor hosts only for the platforms that are enabled", async () => {
     fixture.environment.allowedDomains = ["github.com"];
     fixture.globalConfig.enabledAgentPlatforms = ["claude", "cursor"];
+    fixture.environment.containerId = null;
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const allowed = lastAllowedDomains(await readCommandLog());
@@ -619,13 +655,24 @@ describe("process and platform command behavior", () => {
     expect(allowed.filter((domain) => domain === "github.com")).toHaveLength(1);
   });
 
-  test("keeps an explicit per-environment allowlist intact when no ACP platform is enabled", async () => {
+  test("keeps an explicit per-environment allowlist intact when no platform with its own hosts is enabled", async () => {
     fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
-    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex", "opencode"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "opencode"];
+    fixture.environment.containerId = null;
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const allowed = lastAllowedDomains(await readCommandLog());
     expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
+  });
+
+  test("adds ChatGPT's hosts when Codex is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toEqual(["github.com", "chatgpt.com", "auth.openai.com"]);
   });
 
   test("parses container status, listings, ports, logs, prune output, and aggregate stats", async () => {
@@ -656,36 +703,48 @@ describe("process and platform command behavior", () => {
     expect(await invoke("get_container_logs", { containerId: "container-a", tail: "25" })).toBe(
       "historical container log\n",
     );
-    await invoke("stream_container_logs", { containerId: "container-a" });
-    await waitFor(() => fixture.events.length === 2, "stdout and stderr container-log events");
-    expect(fixture.events).toEqual([
-      { event: "container-log", payload: { containerId: "container-a", line: "stream stdout\n" } },
-      { event: "container-log", payload: { containerId: "container-a", line: "stream stderr\n" } },
-    ]);
+    // Log content is never pushed as events: it is read by cursor.
+    const stream = (await invoke("stream_container_logs", { containerId: "container-a" })) as {
+      subscriptionId: string;
+      sourceId: string;
+    };
+    let lines: string[] = [];
+    await waitFor(async () => {
+      const read = (await invoke("read_container_logs", {
+        subscriptionId: stream.subscriptionId,
+        sourceId: stream.sourceId,
+        cursor: 0,
+      })) as { records?: Array<{ text: string }> };
+      lines = (read.records ?? []).map((record) => record.text);
+      return lines.length === 2;
+    }, "stdout and stderr container log records");
+    expect(lines.sort()).toEqual(["stream stderr\n", "stream stdout\n"]);
+    expect(fixture.events.filter((entry) => entry.event === "container-log")).toEqual([]);
+    await invoke("close_container_logs", { subscriptionId: stream.subscriptionId });
 
-    expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
-      containersDeleted: 2,
-      imagesDeleted: 0,
-      networksDeleted: 0,
-      volumesDeleted: 0,
-      spaceReclaimed: 1_250_000_000 + 512_000_000,
-    });
+    // Unreviewed removal is refused; cleanup goes through the reviewed preview.
+    await expect(invoke("docker_system_prune", { pruneVolumes: true })).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
+    // Capacity is the daemon's and usage this installation's; anything the
+    // fake daemon does not answer is reported unknown, not as host values.
     expect(await invoke("get_docker_system_stats")).toMatchObject({
-      containersRunning: 1,
-      containersTotal: 2,
       imagesTotal: 2,
+      // Nothing is running, so nothing is in use; what Docker did not say is null.
       memoryUsed: 0,
-      diskUsed: 0,
+      cpuCoresUsed: 0,
+      memoryTotal: null,
+      cpus: null,
+      diskUsed: null,
+      diskTotal: null,
+      diskKnown: false,
+      memoryTotalKnown: false,
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
     });
     const pruneLog = await readCommandLog();
-    expect(pruneLog).toContain(
-      `docker container prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)}`,
-    );
-    // A second pass removes legacy containers that predate ownership labels,
-    // so the cleanup matches what the listings adopt as this installation's.
-    expect(pruneLog).toContain(
-      "docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner",
-    );
+    // Nothing is removed without a reviewed selection.
+    expect(pruneLog).not.toMatch(/docker rm( -f)? /);
+    expect(pruneLog).not.toContain("docker container prune");
     expect(pruneLog).not.toContain("docker system prune");
     expect(pruneLog).not.toContain("--volumes");
   });

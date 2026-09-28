@@ -36,6 +36,8 @@ function entry(overrides: Partial<EnvironmentCleanupEntry> = {}): EnvironmentCle
     createdFromCommit: null,
     baseBranches: [],
     containerId: null,
+    retainedContainers: [],
+    volumes: [],
     stateDirectories: ["/data/cursor-bridge-state/abc"],
     pending: ["worktree", "branch", "state-dirs"],
     attempts: 0,

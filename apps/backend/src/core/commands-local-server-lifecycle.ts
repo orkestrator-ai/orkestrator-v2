@@ -21,6 +21,7 @@ import {
   localOpenCodeServerPasswords,
   localServerEnvironmentOperations,
   localServerProcesses,
+  localServerUnresponsiveSince,
   localServerWorkingDirectories,
   openCodeAgentToolsConfigurations,
   terminateProcessTreeImpl,
@@ -190,6 +191,7 @@ export function releaseLocalServerOwnership(
   if (localServerProcesses.get(key) !== child) return false;
   localServerProcesses.delete(key);
   localServerWorkingDirectories.delete(key);
+  localServerUnresponsiveSince.delete(key);
   if (key.startsWith("codex:")) {
     localCodexBridgeTokens.delete(key.slice("codex:".length));
   } else if (key.startsWith("claude:")) {
@@ -210,10 +212,20 @@ export function releaseLocalServerOwnership(
   return true;
 }
 
+/**
+ * Stops one owned server's whole process tree, agent CLIs included.
+ *
+ * `reason` is logged so an agent that vanished mid-turn can be traced back to
+ * the decision that killed it. Short-lived probe bridges omit it.
+ */
 export async function terminateLocalServerChild(
   key: string,
   child: ChildProcessWithoutNullStreams,
+  reason?: string,
 ): Promise<void> {
+  if (reason) {
+    console.warn(`[local-server] Stopping ${key} (pid ${child.pid ?? "unknown"}): ${reason}`);
+  }
   const exited = await terminateProcessTreeImpl(child, {
     graceMs: LOCAL_SERVER_SHUTDOWN_GRACE_MS,
     killWaitMs: LOCAL_SERVER_KILL_WAIT_MS,
@@ -250,7 +262,7 @@ export async function stopLocalServerUnlocked(
     cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
   }
   const child = localServerProcesses.get(key);
-  if (child) await terminateLocalServerChild(key, child);
+  if (child) await terminateLocalServerChild(key, child, "stop requested");
   const { port, pid } = localServerFields(kind);
   const fields = { [port]: null, [pid]: null };
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);

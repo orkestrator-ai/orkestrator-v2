@@ -4,6 +4,7 @@ import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/application-logging";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 
 export const HOSTED_WEB_CLIENT_ORIGINS = [
@@ -165,7 +166,13 @@ export function createBackendProcessEnvironment(
     isolatedCredentialRoot?: string;
   },
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...parentEnv, ORKESTRATOR_GATEWAY_DISABLED: "0" };
+  const env: NodeJS.ProcessEnv = {
+    ...parentEnv,
+    ORKESTRATOR_GATEWAY_DISABLED: "0",
+    // Electron re-logs this child's output into its own log file, so the
+    // backend must not also write one of its own.
+    [DESKTOP_SUPERVISED_ENV]: "1",
+  };
   const version = appVersion?.trim();
   if (version) {
     // Always prefer Electron's authoritative application version over a value

@@ -35,6 +35,7 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import {
   checkHttpHealth,
+  confirmRunningServerHealth,
   waitForLocalServerHealth,
   openCodeHealthHeaders,
   bearerBridgeHeaders,
@@ -60,12 +61,15 @@ import {
   configuredOpenCodeAgentTools,
   BRIDGE_TOKEN_PATTERN,
   localServerEnvironmentOperations,
+  localServerUnresponsiveSince,
   localServerWorkingDirectories,
   containerBridgeOperations,
   deletingLocalServerEnvironments,
   mergingEnvironments,
   mergeCleanupRecoveryTasks,
   retryableBridgeStartupError,
+  LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS,
+  LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS,
   LOCAL_SERVER_KINDS,
   isLocalServerShutdownRequested,
   requestLocalServerShutdown,
@@ -390,13 +394,32 @@ export async function peekLocalAgentBridge(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; authToken: string } | null> {
+  const state = await peekLocalAgentBridgeState(environmentId, context, kind);
+  return state.status === "running" ? { port: state.port, authToken: state.authToken } : null;
+}
+
+/**
+ * {@link peekLocalAgentBridge}, keeping "not running" apart from "running but
+ * not answering". The activity sweep records an absent bridge's sessions as
+ * idle; a bridge stalled by host load still has its turns in flight, so it must
+ * read as a failed observation rather than as no bridge.
+ */
+export async function peekLocalAgentBridgeState(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<
+  | { status: "running"; port: number; authToken: string }
+  | { status: "absent" }
+  | { status: "unresponsive" }
+> {
   const child = localServerProcesses.get(`${kind}:${environmentId}`);
-  if (!child || child.killed || !child.pid) return null;
+  if (!child || child.killed || !child.pid) return { status: "absent" };
   const authToken = localBridgeTokens(kind).get(environmentId);
-  if (!authToken) return null;
+  if (!authToken) return { status: "absent" };
   const environment = await localRuntimeEnvironment(environmentId, context);
   const port = localServerPort(environment, kind);
-  if (!port) return null;
+  if (!port) return { status: "absent" };
   const healthy = await checkHttpHealth(
     port,
     "/global/health",
@@ -406,7 +429,16 @@ export async function peekLocalAgentBridge(
         ? bearerBridgeHeaders(authToken)
         : undefined,
   );
-  return healthy ? { port, authToken } : null;
+  if (healthy) {
+    const key = `${kind}:${environmentId}`;
+    if (localServerUnresponsiveSince.get(key)?.child === child) {
+      localServerUnresponsiveSince.delete(key);
+    }
+    return { status: "running", port, authToken };
+  }
+  return child.exitCode === null && child.signalCode === null
+    ? { status: "unresponsive" }
+    : { status: "absent" };
 }
 
 /**
@@ -910,30 +942,74 @@ export async function startLocalServerUnlocked(
       localCursorCredentialFingerprints.get(environmentId) === cursorCredentialFingerprint;
     const workingDirectoryMatches =
       Boolean(env?.worktreePath) && localServerWorkingDirectories.get(key) === env?.worktreePath;
-    if (
-      credentialMatches &&
-      workingDirectoryMatches &&
-      port &&
-      authToken &&
-      (await checkHttpHealth(port, "/global/health", healthHeaders))
-    ) {
-      if (kind === "opencode" && env?.worktreePath && context.agentTools) {
-        scheduleOpenCodeAgentToolsConfiguration(
-          `local:${environmentId}`,
+    let replaceReason: string;
+    if (!credentialMatches) {
+      replaceReason = "Cursor credentials changed";
+    } else if (!workingDirectoryMatches) {
+      replaceReason = "worktree path changed";
+    } else if (!port) {
+      replaceReason = "bridge port is unknown";
+    } else if (!authToken) {
+      replaceReason = "this backend does not hold the bridge's auth token";
+    } else {
+      const isAlive = () =>
+        localServerProcesses.get(key) === existing &&
+        existing.exitCode === null &&
+        existing.signalCode === null;
+      const health = await confirmRunningServerHealth(port, healthHeaders, isAlive);
+      if (health.healthy) {
+        localServerUnresponsiveSince.delete(key);
+        if (kind === "opencode" && env?.worktreePath && context.agentTools) {
+          scheduleOpenCodeAgentToolsConfiguration(
+            `local:${environmentId}`,
+            port,
+            authToken,
+            context.agentTools.connection(env.id, env.projectId, "host"),
+            env.worktreePath,
+          );
+        }
+        return {
           port,
+          pid: existing.pid,
+          wasRunning: true,
           authToken,
-          context.agentTools.connection(env.id, env.projectId, "host"),
-          env.worktreePath,
-        );
+        };
       }
-      return {
-        port,
-        pid: existing.pid,
-        wasRunning: true,
-        authToken,
-      };
+      if (!isAlive()) {
+        replaceReason = "bridge process exited";
+      } else {
+        replaceReason = `health check failed ${health.failedProbes} consecutive times`;
+        const marker = localServerUnresponsiveSince.get(key);
+        const now = Date.now();
+        const since =
+          marker?.child === existing &&
+          now - marker.lastFailureAt <= LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS
+            ? marker.since
+            : now;
+        localServerUnresponsiveSince.set(key, { child: existing, since, lastFailureAt: now });
+        const unresponsiveForMs = now - since;
+        if (
+          unresponsiveForMs < LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS &&
+          (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind))
+        ) {
+          // Replacing the bridge would kill a running turn or its background
+          // work (a test suite, a dev server). A loaded host stalls a healthy
+          // bridge far more often than a bridge wedges, so wait it out.
+          console.warn(
+            `[local-server] ${key} (pid ${existing.pid}) is not answering health checks ` +
+              `(${Math.round(unresponsiveForMs / 1000)}s) but has work in progress; not restarting it yet`,
+          );
+          throw retryableBridgeStartupError(
+            "The agent bridge is busy and not responding yet. Retrying shortly.",
+            2_000,
+          );
+        }
+        if (unresponsiveForMs > 0) {
+          replaceReason += `; unresponsive for ${Math.round(unresponsiveForMs / 1000)}s`;
+        }
+      }
     }
-    await terminateLocalServerChild(key, existing);
+    await terminateLocalServerChild(key, existing, `replacing bridge: ${replaceReason}`);
   }
 
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
@@ -1336,7 +1412,11 @@ export async function startLocalServerUnlocked(
   } catch (error) {
     let terminationError: unknown;
     try {
-      await terminateLocalServerChild(key, child);
+      await terminateLocalServerChild(
+        key,
+        child,
+        `startup did not complete: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
     } catch (caught) {
       terminationError = caught;
     }
@@ -1729,7 +1809,7 @@ export async function shutdownLocalServers(
     await waitForLocalServerEnvironmentOperations(options.operationDrainTimeoutMs);
     const owned = [...localServerProcesses.entries()];
     const results = await Promise.allSettled(
-      owned.map(([key, child]) => terminateLocalServerChild(key, child)),
+      owned.map(([key, child]) => terminateLocalServerChild(key, child, "backend shutting down")),
     );
     aggregateRejectedResults(results, "Failed to shut down all local servers");
   })();

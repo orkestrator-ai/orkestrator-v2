@@ -2761,6 +2761,55 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("keeps working when a bridge peek fails and surfaces the failure to close and MCP reload", async () => {
+    const commands: string[] = [];
+    const invoke = (async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      if (command === "peek_local_agent_bridge") {
+        throw new Error("Bridge is not answering health checks");
+      }
+      throw new Error(`Unexpected backend command: ${command}`);
+    }) as Invoke;
+    await withService(
+      { prefix: "orkestrator-native-unresponsive-bridge-", invoke },
+      async ({ storage, service }) => {
+        const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        await storage.setEnvironmentAgentActivity(
+          "env-1",
+          "working",
+          new Date().toISOString(),
+          "native-agent",
+        );
+
+        await captureWarnings(() => service.reconcileAgentActivity());
+        expect(await storage.getNativeAgentSession(key)).toMatchObject({
+          providerSessionId: "provider-1",
+        });
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivitySources: { "native-agent": { state: "working" } },
+        });
+        await expect(
+          service.closeProviderSessionIfRunning("env-1", "codex", "provider-1"),
+        ).rejects.toThrow("Bridge is not answering health checks");
+        await expect(service.reloadMcpConfigurationIfRunning("env-1", "codex")).rejects.toThrow(
+          "Bridge is not answering health checks",
+        );
+        expect(commands).toEqual([
+          "peek_local_agent_bridge",
+          "peek_local_agent_bridge",
+          "peek_local_agent_bridge",
+        ]);
+      },
+    );
+  });
+
   test("observes a running bridge without ever issuing a start command", async () => {
     const commands: string[] = [];
     const invoke = (async <T>(command: string): Promise<T> => {

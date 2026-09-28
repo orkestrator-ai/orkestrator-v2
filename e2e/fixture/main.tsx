@@ -27,6 +27,7 @@ import {
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "../../apps/web/src/components/chat/compose-metrics";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
+import { TiptapMarkdownEditor } from "../../apps/web/src/components/markdown/TiptapMarkdownEditor";
 import { MonacoFileEditor } from "../../apps/web/src/components/terminal/MonacoFileEditor";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
@@ -762,6 +763,20 @@ function GlobalStylesFixture() {
       <div data-testid="context-item" data-slot="context-menu-item">
         Context item
       </div>
+    </main>
+  );
+}
+
+function MarkdownEditorFixture() {
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <TiptapMarkdownEditor
+        markdown={"Inline `chip` text.\n\n```bash\nmise install\nmise run dev\n```"}
+        fontFamily="Fira Code"
+        fontSize={14}
+        onChange={() => {}}
+        onSave={() => {}}
+      />
     </main>
   );
 }
@@ -1581,6 +1596,7 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
+  if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
   if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;
   if (window.location.pathname === "/pr-check-status") {
     return <PullRequestCheckStatusFixture />;

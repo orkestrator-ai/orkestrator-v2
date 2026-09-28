@@ -125,6 +125,31 @@ describe("TiptapMarkdownEditor", () => {
     expect(screen.getByRole("cell", { name: "two" })).toBeTruthy();
   });
 
+  // `prose-code:px-1` also matches `pre > code`; on that inline element the
+  // left padding only shifts the first line of a fenced block.
+  test("resets inline-code chip styling inside fenced code blocks", async () => {
+    render(
+      <TiptapMarkdownEditor
+        markdown={"```bash\nmise install\nmise run dev\n```"}
+        fontFamily="Fira Code"
+        fontSize={14}
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    const editor = await screen.findByTestId("tiptap-markdown-editor");
+    await waitFor(() => {
+      expect(editor.querySelector("pre code")?.textContent).toBe("mise install\nmise run dev");
+    });
+
+    expect(editor.className).toContain("prose-code:px-1");
+    expect(editor.className).toContain("[&_pre_code]:px-0");
+    expect(editor.className).toContain("[&_pre_code]:py-0");
+    expect(editor.className).toContain("[&_pre_code]:bg-transparent");
+    expect(editor.className).toContain("[&_pre_code]:rounded-none");
+  });
+
   test("debounces rich-editor changes into Markdown", async () => {
     const onChange = mock((_markdown: string) => {});
     render(

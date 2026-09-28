@@ -1,4 +1,5 @@
 import { observeClaudeMessage } from "./diagnostics.js";
+import { pluginStatusesFromInit } from "./init-plugins.js";
 import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
@@ -23,34 +24,23 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  ImageBlockParam,
-  TextBlockParam,
-  ContentBlockParam,
-} from "@anthropic-ai/sdk/resources/messages/messages";
-import type {
-  ModelInfo,
   SessionState,
   NormalizedMessage,
   NormalizedPart,
   SSEEvent,
-  ToolDiffMetadata,
   QuestionInfo,
   QuestionRequest,
   PlanApprovalRequest,
   PromptOptions,
   SessionInitData,
   McpServerRuntimeStatus,
-  PluginRuntimeStatus,
   SdkMessageBase,
   SdkResultMessage,
   SdkSystemMessage,
   SessionTurnActivity,
-  TaskListSnapshot,
-  MessagePatchEventData,
   SessionUsageSnapshot,
   BackgroundTaskSnapshot,
   SessionRateLimitWindow,
-  StopBackgroundTaskResult,
 } from "../types/index.js";
 import {
   isHandledSdkMessageType,
@@ -59,30 +49,14 @@ import {
   sessionHealth,
   systemSubtypeDisposition,
 } from "../types/index.js";
-import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
-import {
-  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
-  AGENT_INTERACTION_LIMITS,
-} from "@orkestrator/protocol/agent-interactions";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import {
-  structuredOutputFailure,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
+import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
-import {
-  deleteSessionPreferences,
-  MAX_DISPATCHED_REQUEST_IDS,
-  readSessionPreferences,
-  sessionPreferencesUnavailable,
-  updateSessionPreferences,
-  type SessionPreferences,
-} from "./session-preferences.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { debugLog, flushDebugLogs, isDebugLoggingEnabled } from "./logger.js";
-import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import {
   AGENT_MCP_SERVER_NAME,
   getMcpRuntimeConfig,
@@ -107,7 +81,6 @@ import {
   recordCommandsChanged,
   recordInitCommandInventory,
 } from "./session-manager-commands.js";
-import type { McpToolMetadata } from "../types/mcp.js";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { commandChangeHooks, commandChangeProbe } from "./command-changes.js";
 
@@ -195,16 +168,7 @@ export function applyClaudeUsageReport(
   session.usage = snapshot;
   return snapshot;
 }
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, existsSync, type Stats } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as core from "./session-manager-core.js";
-import * as lifecycle from "./session-manager-lifecycle.js";
-import * as messageParts from "./session-manager-messages.js";
-import * as persistence from "./session-manager-persistence.js";
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
 import {
   ClaudeStreamUsageAccumulator,
@@ -286,7 +250,6 @@ import {
 } from "./session-manager-background-tasks.js";
 type StructuredUsageRefreshCoordinator = core.StructuredUsageRefreshCoordinator;
 type PlanApprovalResponse = core.PlanApprovalResponse;
-type OrderedPartEntry = messageParts.OrderedPartEntry;
 export const STREAM_EVENT_COALESCE_MS = 100;
 /**
  * How long a released turn waits in silence for the continuation that a
@@ -398,6 +361,14 @@ function appendTranscriptNotice(
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
 const MAX_SDK_CAPABILITIES = 64;
 
+/** Notice wording per `conversation_reset.trigger`; an open set upstream. */
+const CONVERSATION_RESET_CAUSES: Record<string, string> = {
+  clear: "Conversation cleared with /clear.",
+  plan_mode_exit: "Conversation cleared when the plan was approved.",
+  fresh_session: "Started a fresh session to implement the approved plan.",
+  onboarding: "Conversation restarted by onboarding.",
+};
+
 function supportsClaudeContext1m(model: string | undefined): boolean {
   const selected = model?.trim();
   // The SDK catalogue's `default` entry, and an omitted model on backend-owned
@@ -429,6 +400,25 @@ const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = 
  */
 function recordSystemMessageNotice(session: SessionState, message: SdkSystemMessage): void {
   const subtype = message.subtype ?? "unknown";
+  if (subtype === "plugin_install") {
+    // A failed install names its plugin and carries its own `error`, not the
+    // `message` every other subtype uses; reading it generically recorded an
+    // info notice with no detail.
+    const install = message as { status?: unknown; name?: unknown; error?: unknown };
+    if (install.status === "failed") {
+      const name = typeof install.name === "string" && install.name ? install.name : undefined;
+      sessionHealth(session).recordNotice({
+        message: name
+          ? `Claude plugin ${name} failed to install`
+          : "A Claude plugin failed to install",
+        method: "plugin/install",
+        severity: "error",
+        source: "provider",
+        ...(typeof install.error === "string" && install.error ? { detail: install.error } : {}),
+      });
+      return;
+    }
+  }
   const outcome = (message as { outcome?: unknown }).outcome;
   const severity =
     subtype === "hook_response"
@@ -1372,7 +1362,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.280: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.283: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK
@@ -1785,14 +1775,11 @@ export async function sendPrompt(
         }
 
         // Capture MCP servers and plugins from init message
-        // Note: Claude SDK sends MCP-provided plugins as MCP servers with "plugin:" prefix
         const allMcpServers = initMsg.mcp_servers || [];
 
-        // Separate regular MCP servers from plugin-type MCP servers
+        // Plugin-provided MCP servers are listed with the plugins below.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const regularMcpServers = allMcpServers.filter((s: any) => !s.name?.startsWith("plugin:"));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pluginMcpServers = allMcpServers.filter((s: any) => s.name?.startsWith("plugin:"));
 
         const mcpServerStatuses: McpServerRuntimeStatus[] = regularMcpServers.map(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1804,24 +1791,28 @@ export async function sendPrompt(
           }),
         );
 
-        // Convert plugin-type MCP servers to plugin statuses
-        // Also include any traditional plugins from initMsg.plugins
-        const pluginStatuses: PluginRuntimeStatus[] = [
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ...pluginMcpServers.map((s: any) => ({
-            name: s.name,
-            path: undefined,
-            status: (s.status === "connected" ? "loaded" : "failed") as "loaded" | "failed",
-            error: s.error,
-          })),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ...(initMsg.plugins || []).map((p: any) => ({
-            name: p.name,
-            path: p.path,
-            status: (p.status === "loaded" ? "loaded" : "failed") as "loaded" | "failed",
-            error: p.error,
-          })),
-        ];
+        const { statuses: pluginStatuses, errors: pluginErrors } = pluginStatusesFromInit(initMsg);
+        const previousPluginErrors = new Set(session.pluginErrorSignatures);
+        session.pluginErrorSignatures = pluginErrors.map(
+          ({ plugin, type, message, path, loaded }) =>
+            JSON.stringify([plugin, type, message, path, loaded]),
+        );
+        for (const [index, pluginError] of pluginErrors.entries()) {
+          const signature = session.pluginErrorSignatures[index]!;
+          if (previousPluginErrors.has(signature)) continue;
+          previousPluginErrors.add(signature);
+          sessionHealth(session).recordNotice({
+            message: pluginError.loaded
+              ? `Claude plugin ${pluginError.plugin} loaded with errors`
+              : `Claude plugin ${pluginError.plugin} failed to load`,
+            // Named like Pi's `extension/load`, so a load failure reads the
+            // same whichever harness reported it.
+            method: "plugin/load",
+            severity: pluginError.loaded ? "warning" : "error",
+            source: "provider",
+            detail: `${pluginError.type}: ${pluginError.message}`,
+          });
+        }
 
         // Store init data in session
         session.initData = {
@@ -2943,11 +2934,22 @@ export async function sendPrompt(
         // No bespoke "cleared" event: the backend re-reads the whole transcript
         // on every projection poll, so the authoritative snapshot already
         // reflects the clear. The status row below is what a live client needs.
+        // `trigger` (Agent SDK 0.3.281+) only words the notice: every reset
+        // clears, whatever it says, and an absent or unknown value is generic.
+        const reset = message as { trigger?: unknown; timestamp?: unknown };
+        const cause =
+          typeof reset.trigger === "string" &&
+          Object.hasOwn(CONVERSATION_RESET_CAUSES, reset.trigger)
+            ? CONVERSATION_RESET_CAUSES[reset.trigger]
+            : undefined;
         appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
           type: "status",
-          content: "Conversation cleared. The agent no longer has the earlier history.",
+          content: `${cause ?? "Conversation cleared."} The agent no longer has the earlier history.`,
           severity: "warning",
-          createdAt: new Date().toISOString(),
+          createdAt:
+            typeof reset.timestamp === "string" && !Number.isNaN(Date.parse(reset.timestamp))
+              ? new Date(reset.timestamp).toISOString()
+              : new Date().toISOString(),
         });
       } else if (isKnownInternalSdkMessageType(message.type)) {
         // An internal CLI frame outside the SDK's union that the bridge has

@@ -1,10 +1,13 @@
 {
-  "codexVersion": "0.155.1",
-  "typescriptDigest": "sha256:dc1b2a0f17382a62b850ab463340f9d5f179d195800e9cce07b4ff2e0dbef728",
-  "schemaDigest": "sha256:04938ea8b0c0b199ed695c096c2d970206f32ade88a4f5e52c0907ed02513830",
-  "typescriptFileCount": 721,
-  "schemaFileCount": 312,
+  "codexVersion": "0.158.0",
+  "typescriptDigest": "sha256:c7f68b2111e18528af8578f75b399722dede63f61b962b6871cf0b8b2cd915e5",
+  "schemaDigest": "sha256:15c3c4553ac38e95e6be8f7e8cd6f88b938658bd0e8b8ba61fa474862a799d71",
+  "typescriptFileCount": 732,
+  "schemaFileCount": 314,
   "clientRequestMethods": [
+    "account/gatewayOAuth/cancel",
+    "account/gatewayOAuth/login",
+    "account/gatewayOAuth/read",
     "account/login/cancel",
     "account/login/start",
     "account/logout",
@@ -94,7 +97,6 @@
     "thread/read",
     "thread/resume",
     "thread/revert",
-    "thread/rollback",
     "thread/section/move",
     "thread/shellCommand",
     "thread/start",
@@ -112,6 +114,7 @@
     "windowsSandbox/setupStart"
   ],
   "serverNotificationMethods": [
+    "account/gatewayOAuth/changed",
     "account/login/completed",
     "account/rateLimits/updated",
     "account/updated",

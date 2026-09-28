@@ -99,6 +99,7 @@ function turnStatus(value: unknown): "completed" | "interrupted" | "failed" {
 const IGNORED_METHODS = new Set([
   // Connection/account scope, not thread scope.
   "account/updated",
+  "account/gatewayOAuth/changed",
   "account/login/completed",
   "app/list/updated",
   "remoteControl/status/changed",

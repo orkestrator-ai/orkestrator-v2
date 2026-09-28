@@ -16,7 +16,7 @@ import type { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-br
  * 2. Restore temporary reviewer permissions even when no workflow turn was
  *    left unsettled.
  * 3. Reject every permission and question still pending for this session.
- *    Neither the pinned SDK (1.18.32: abort returns a boolean) nor the server
+ *    Neither the pinned SDK (1.18.33: abort returns a boolean) nor the server
  *    docs promise that abort withdraws them, so close fails closed: a request
  *    answered after the close would be answering for a tab that is gone. A
  *    read or rejection failure rejects the close so the durable intent stays;

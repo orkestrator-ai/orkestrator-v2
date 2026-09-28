@@ -44,7 +44,10 @@ import {
 import { inheritCommandChanges } from "./sessions/command-changes.js";
 import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
-import type { AppServerEngine } from "./engine/app-server-engine.js";
+import {
+  CODEX_SIGN_IN_REQUIRED_MESSAGE,
+  type AppServerEngine,
+} from "./engine/app-server-engine.js";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -1268,6 +1271,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     messageRevision: number;
     contentEpoch: number;
     commandRevision?: number;
+    readiness?: { state: "authentication-required"; message: string };
   } | null {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
@@ -1316,6 +1320,15 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // backend revalidates its cached catalogue when it moves.
       ...(this.commandCatalogue.revision > 0
         ? { commandRevision: this.commandCatalogue.revision }
+        : {}),
+      // Omitted rather than "ready" otherwise: only a confirmed sign-out is known.
+      ...(this.options.engine.isAccountSignInRequired()
+        ? {
+            readiness: {
+              state: "authentication-required" as const,
+              message: CODEX_SIGN_IN_REQUIRED_MESSAGE,
+            },
+          }
         : {}),
     };
   }

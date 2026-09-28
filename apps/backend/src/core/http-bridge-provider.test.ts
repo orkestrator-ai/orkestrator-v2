@@ -2266,4 +2266,23 @@ describe("HTTP bridge progressive transcript", () => {
     expect(requests.some((request) => request.url.endsWith("/runtime-health"))).toBe(true);
     expect(requests.every((request) => !request.url.includes("/messages"))).toBe(true);
   });
+
+  test("carries a Codex sign-out as prompt-admission readiness", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/config")) return Response.json({ model: "gpt-5.5" });
+      return Response.json({
+        status: "idle",
+        readiness: {
+          state: "authentication-required",
+          message: "You've been signed out of Codex. Sign in again to keep working.",
+        },
+      });
+    }, codexConnection);
+
+    const state = await provider.sessionStateSnapshot!("session-1");
+    expect(state.readiness).toEqual({
+      state: "authentication-required",
+      message: "You've been signed out of Codex. Sign in again to keep working.",
+    });
+  });
 });

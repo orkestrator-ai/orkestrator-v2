@@ -821,6 +821,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         );
       }
       const codexContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
+      const codexReadiness = normalizeProviderReadiness(payload.readiness);
       const codexNotices = snapshotNotices({
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
@@ -867,6 +868,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ? { commandCatalogueRevision: payload.commandRevision as number }
           : {}),
         ...(codexContextUsage ? { contextUsage: codexContextUsage } : {}),
+        ...(codexReadiness ? { readiness: codexReadiness } : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
         ...(runtime ? { runtime } : {}),
         ...(runtimeResponse

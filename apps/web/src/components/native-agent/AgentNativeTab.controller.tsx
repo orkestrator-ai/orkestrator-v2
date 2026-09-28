@@ -54,6 +54,7 @@ import {
 } from "@/hooks/useVirtuosoScrollState";
 import {
   adoptNativeAgentSession,
+  beginNativeAgentSignIn,
   recoverMultiReviewFixSession,
   writeCoordinatorAttachment,
 } from "@/lib/backend";
@@ -787,6 +788,30 @@ export function SharedNativeAgentController({
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
+  // Only flows the app can drive itself; a terminal login is explained in settings.
+  const inlineSignInAvailable =
+    projection?.auth?.signIn?.kind === "browser-url" ||
+    projection?.auth?.signIn?.kind === "device-code";
+  const [signInPending, setSignInPending] = useState(false);
+  const startSignIn = useCallback(() => {
+    setSignInPending(true);
+    void beginNativeAgentSignIn({
+      environmentId: data.environmentId,
+      agent: platform,
+      logicalSessionKey: sessionKey,
+    })
+      .then((result) => {
+        if (result.url) window.open(result.url, "_blank", "noopener,noreferrer");
+        if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
+        else toast.info(`Finish signing in to ${label} in your browser`);
+      })
+      .catch((error: unknown) => {
+        toast.error(
+          `Could not start ${label} sign-in: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => setSignInPending(false));
+  }, [data.environmentId, label, platform, sessionKey]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -2046,15 +2071,32 @@ export function SharedNativeAgentController({
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
         <span>{authenticationReadiness.message}</span>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => requestGlobalSettings(platform)}
-        >
-          <LogIn className="mr-1.5 h-3.5 w-3.5" />
-          Open {label} settings
-        </Button>
+        {inlineSignInAvailable ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={signInPending}
+            onClick={startSignIn}
+          >
+            {signInPending ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <LogIn className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Sign in to {label}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => requestGlobalSettings(platform)}
+          >
+            <LogIn className="mr-1.5 h-3.5 w-3.5" />
+            Open {label} settings
+          </Button>
+        )}
       </div>
     ) : null,
     // The backend persists the request id before it reaches the provider — for

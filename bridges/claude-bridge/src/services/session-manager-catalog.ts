@@ -28,6 +28,7 @@ import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
 import { recordPromptDispatch } from "./session-manager-lifecycle.js";
+import { ultracodeFlagSetting } from "./ultracode.js";
 import type {
   ClaudeSteerJournalEntry,
   ClaudeQueryControl,
@@ -528,10 +529,20 @@ export async function configureClaudeSession(
   try {
     if (input.model !== undefined) await control.setModel?.(input.model);
     if (input.permissionMode !== undefined) await control.setPermissionMode?.(input.permissionMode);
-    const settings: Record<string, unknown> = {};
+    const settings: Record<string, unknown> = {
+      ...ultracodeFlagSetting({
+        parameterValues: input.parameterValues,
+        effortChanged: input.effort !== undefined,
+        modelChanged: input.model !== undefined,
+        live: session.ultracode,
+      }),
+    };
     if (input.effort !== undefined) settings.effortLevel = input.effort;
     if (input.fastMode !== undefined) settings.fastMode = input.fastMode;
-    if (Object.keys(settings).length > 0) await control.applyFlagSettings?.(settings);
+    if (Object.keys(settings).length > 0 && control.applyFlagSettings) {
+      await control.applyFlagSettings(settings);
+      if (typeof settings.ultracode === "boolean") session.ultracode = settings.ultracode;
+    }
     const thinking = input.parameterValues?.thinking;
     if (thinking === "disabled") await control.setMaxThinkingTokens?.(0, "omitted");
     else if (thinking === "adaptive") await control.setMaxThinkingTokens?.(null, "summarized");

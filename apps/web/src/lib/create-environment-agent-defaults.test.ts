@@ -233,7 +233,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
   });
 
   /**
-   * Pins the shipped default. `global.claudeModel` defaults to `claude-sonnet-5`
+   * Pins the shipped default. `global.claudeModel` defaults to `claude-sonnet-5-5`
    * and the fallback catalog lists that model under the id `sonnet`, so the
    * create dialog must preselect `sonnet` — the same answer the review, multi-
    * review and build launchers already give for the same preference. It must not
@@ -243,7 +243,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
     useClaudeStore.setState({ models: [] });
     const shippedClaudeModel =
       useConfigStore.getInitialState().config.global.agentSettings?.platforms?.claude?.model;
-    expect(shippedClaudeModel).toBe("claude-sonnet-5");
+    expect(shippedClaudeModel).toBe("claude-sonnet-5-5");
 
     const shippedCatalog = buildReviewModelCatalog(undefined);
     expect(shippedCatalog.claude[0]?.id).toBe("default");

@@ -384,6 +384,12 @@ export interface ClaudeQueryControl {
     display?: "summarized" | "omitted" | null,
   ) => Promise<void>;
   applyFlagSettings?: (settings: Record<string, unknown>) => Promise<void>;
+  /**
+   * The CLI's `get_settings` answer. Not in the SDK's declarations, so it is
+   * feature-detected and its response validated at runtime; the bridge reads
+   * only the runtime-resolved `applied` block (see `ultracode.ts`).
+   */
+  getSettings?: () => Promise<unknown>;
   supportedCommands?: () => Promise<import("@anthropic-ai/claude-agent-sdk").SlashCommand[]>;
   initializationResult?: () => Promise<unknown>;
   reloadSkills?: () => Promise<{ skills: import("@anthropic-ai/claude-agent-sdk").SlashCommand[] }>;
@@ -455,6 +461,12 @@ export interface SessionState {
   initData?: SessionInitData;
   /** Last init's plugin errors, so unchanged load failures do not reissue advisories each turn. */
   pluginErrorSignatures?: string[];
+  /**
+   * Ultracode as last sent to the live turn query: from the prompt at start,
+   * then from each accepted `applyFlagSettings`. Read to keep it on across an
+   * effort change, which the CLI otherwise treats as turning it off.
+   */
+  ultracode?: boolean;
   /** Last bounded MCP inventory, retained while no turn query is attached. */
   mcpInventory?: import("@orkestrator/protocol/native-agent").NativeAgentMcpServer[];
   /**

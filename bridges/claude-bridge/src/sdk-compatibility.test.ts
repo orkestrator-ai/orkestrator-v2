@@ -113,6 +113,9 @@ describe("Claude Agent SDK runtime compatibility", () => {
               rewindFiles: typeof request.rewindFiles,
               stopTask: typeof request.stopTask,
               getContextUsage: typeof request.getContextUsage,
+              applyFlagSettings: typeof request.applyFlagSettings,
+              // Undeclared in sdk.d.ts; Ultracode's runtime check reads it.
+              getSettings: typeof request.getSettings,
             },
           };
           await request.close();
@@ -147,6 +150,8 @@ describe("Claude Agent SDK runtime compatibility", () => {
         rewindFiles: "function",
         stopTask: "function",
         getContextUsage: "function",
+        applyFlagSettings: "function",
+        getSettings: "function",
       },
     });
   }, 15_000);

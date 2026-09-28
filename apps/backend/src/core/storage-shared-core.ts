@@ -1897,7 +1897,7 @@ export function defaultConfig(): AppConfig {
         platforms: {
           claude: {
             mode: DEFAULT_CLAUDE_MODE,
-            model: "claude-sonnet-5",
+            model: "claude-sonnet-5-5",
             claudeNativeBackend: "sdk",
           },
           // New installs only. An existing config.json already holds a concrete

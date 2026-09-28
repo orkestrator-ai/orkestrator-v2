@@ -1,5 +1,6 @@
 import { observeClaudeMessage } from "./diagnostics.js";
 import { pluginStatusesFromInit } from "./init-plugins.js";
+import { reportUltracodeRuntime, requestsUltracode } from "./ultracode.js";
 import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
@@ -836,6 +837,8 @@ export async function sendPrompt(
       : policy?.toolPolicy?.deny;
 
     const fastMode = options?.fastMode === true;
+    const ultracode = requestsUltracode(options?.parameterValues);
+    session.ultracode = ultracode;
 
     debugLog("[session-manager] Starting query", {
       sessionId,
@@ -845,6 +848,7 @@ export async function sendPrompt(
       effortLevel,
       permissionMode,
       fastMode,
+      ultracode,
       mcpServerCount,
       mcpServerNames: Array.from(mcpServerNames),
       pluginCount,
@@ -1325,9 +1329,15 @@ export async function sendPrompt(
         // hooks and MCP servers, both of which run programs this boundary is
         // supposed to exclude.
         settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
-        // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
-        // Pass it through the flag-layer settings so the user can opt in per prompt.
-        ...(fastMode && { settings: { fastMode: true } }),
+        // Fast mode (priority service tier) and Ultracode are Claude Code
+        // flag-layer settings, so the user can opt into each per prompt. The
+        // CLI keeps neither across processes, and each turn is its own query.
+        ...((fastMode || ultracode) && {
+          settings: {
+            ...(fastMode && { fastMode: true }),
+            ...(ultracode && { ultracode: true }),
+          },
+        }),
         // Also pass MCP servers explicitly for any project-local .mcp.json overrides.
         // The CLI (2.1.280) also loads the servers of every enabled settings
         // source itself — `user` reads `$CLAUDE_CONFIG_DIR/.claude.json` (else
@@ -1363,7 +1373,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.283: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.284: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK
@@ -1688,6 +1698,7 @@ export async function sendPrompt(
     // One control read per turn, off the message path, so the inventory a
     // selected command is validated against is the session's own.
     readLiveCommandInventory(session, liveQuery);
+    reportUltracodeRuntime(session, liveQuery);
     let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
     if (typeof queryIterator.supportedAgents === "function") {
       try {

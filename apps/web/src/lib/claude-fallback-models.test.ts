@@ -53,7 +53,7 @@ describe("FALLBACK_CLAUDE_MODELS", () => {
       default: "claude-opus-5-5[1m]",
       "opus[1m]": "claude-opus-5-5[1m]",
       "claude-fable-5-1[1m]": "claude-fable-5-1",
-      sonnet: "claude-sonnet-5",
+      sonnet: "claude-sonnet-5-5",
       haiku: "claude-haiku-4-5-20251001",
     });
   });

@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import {
   isActiveBuildPhase,
   isReviewPackagePreparationSession,
+  reviewValidationStage,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewSlot,
@@ -664,7 +665,7 @@ export function BuildChatTab({
       // The restart opens a new session; follow it rather than leaving the
       // user on whichever stage they were reading.
       pinnedSessionRef.current = false;
-      toast.success("Stage restarted");
+      toast.success(`${restartCurrentStageLabel?.replace(/^Restart /, "") ?? "Stage"} restarted`);
     } catch (error) {
       toast.error("Failed to restart the stage", {
         description: error instanceof Error ? error.message : String(error),
@@ -754,9 +755,20 @@ export function BuildChatTab({
       : isActiveBuildPhase(pipeline.phase)
         ? (pipeline.phase as ResumableBuildPhase)
         : undefined;
-  const restartCurrentStageLabel = currentStagePhase
-    ? RESTART_STAGE_LABELS[currentStagePhase]
-    : undefined;
+  const validationRestartTarget = reviewValidationStage(pipeline, currentStagePhase);
+  const currentStageSession = pipeline.sessions[pipeline.currentSessionIndex];
+  const dedicatedPreparationRunning =
+    (currentStagePhase === "building" || currentStagePhase === "fixing") &&
+    currentStageSession?.phase === (currentStagePhase === "building" ? "build" : "fix") &&
+    currentStageSession.label === REVIEW_PACKAGE_SESSION_LABEL;
+  const restartCurrentStageLabel =
+    validationRestartTarget === "validation"
+      ? "Restart Validation"
+      : validationRestartTarget === "review-package" || dedicatedPreparationRunning
+        ? "Restart Review Preparation"
+        : currentStagePhase
+          ? RESTART_STAGE_LABELS[currentStagePhase]
+          : undefined;
   const canRestartCurrentStage =
     Boolean(restartCurrentStageLabel) &&
     pipeline.sessions.length > 0 &&

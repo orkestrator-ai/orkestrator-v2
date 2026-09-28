@@ -14,6 +14,8 @@ import {
   isActiveBuildPhase,
   isStartBuildPipelineInput,
   isReviewPackagePreparationSession,
+  reviewValidationStage,
+  REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
@@ -1026,30 +1028,39 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       if (!phase || !stagePhase) {
         return new Error("This build has no running stage to restart");
       }
-      // Mirrors the supervisor: tests run between package preparation and review.
-      if (
-        candidate.validationRun &&
-        !candidate.reviewPackage &&
-        (phase === "building" || phase === "fixing")
-      ) {
-        return { kind: "validation" };
+      const validationTarget = reviewValidationStage(candidate, phase);
+      if (validationTarget === "validation") return { kind: "validation" };
+      if (validationTarget === "review-package") {
+        return {
+          kind: "review-package",
+          implementationPhase: phase === "fixing" ? "fix" : "build",
+        };
       }
       // Between a transition and the next tick the current session can still be
       // the previous stage's, so it only stands for this stage when it matches.
       const session = sessionForCurrentPhase(candidate);
       return session?.phase === stagePhase
-        ? { kind: "session", session, phase: stagePhase }
+        ? {
+            kind: "session",
+            session,
+            phase: stagePhase,
+            forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+          }
         : { kind: "session", phase: stagePhase };
     });
   }
 
   private async restartLocatedStage(
     pipelineId: string,
-    locate: (
-      candidate: BuildPipeline,
-    ) =>
+    locate: (candidate: BuildPipeline) =>
       | { kind: "validation" }
-      | { kind: "session"; session?: PipelineSession; phase: PipelineSessionPhase }
+      | { kind: "review-package"; implementationPhase: "build" | "fix" }
+      | {
+          kind: "session";
+          session?: PipelineSession;
+          phase: PipelineSessionPhase;
+          forceStage?: boolean;
+        }
       | Error,
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
@@ -1120,7 +1131,12 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
           kind: "validation",
           implementationPhase: implementationPhase(),
         };
-      } else if (isReviewPackagePreparationSession(target.session, candidate)) {
+      } else if (target.kind === "review-package") {
+        candidate.restartRequest = target;
+      } else if (
+        !target.forceStage &&
+        isReviewPackagePreparationSession(target.session, candidate)
+      ) {
         candidate.restartRequest = {
           kind: "review-package",
           implementationPhase: target.phase === "fix" ? "fix" : "build",

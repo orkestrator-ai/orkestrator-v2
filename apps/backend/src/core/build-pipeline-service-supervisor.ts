@@ -22,6 +22,7 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   REVIEW_PACKAGE_SESSION_LABEL,
+  reviewValidationStage,
   usesReviewFanout,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -419,12 +420,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
 
-    if (
-      pipeline.validationRun &&
-      !pipeline.reviewPackage &&
-      (pipeline.phase === "fixing" || pipeline.phase === "building")
-    ) {
-      if (pipeline.reviewRetryRequested || pipeline.validationRun.status === "cancelled") {
+    const validationTarget = reviewValidationStage(
+      pipeline,
+      resumablePhase(pipeline.phase) ?? undefined,
+    );
+    if (validationTarget) {
+      if (validationTarget === "review-package") {
         delete pipeline.reviewRetryRequested;
         await this.startReviewPackagePreparation(pipeline);
         return;

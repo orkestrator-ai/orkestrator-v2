@@ -4350,6 +4350,7 @@ describe("BuildChatTab agent messaging", () => {
     await waitFor(() =>
       expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.backendRevision).toBe(13),
     );
+    expect(mockToastSuccess).toHaveBeenCalledWith("Build Stage restarted");
   });
 
   test("names the stage the pipeline is on rather than the review", async () => {
@@ -4376,6 +4377,84 @@ describe("BuildChatTab agent messaging", () => {
     renderTab();
 
     expect(screen.getByRole("button", { name: "Restart Verification Stage" })).toBeTruthy();
+  });
+
+  test.each([
+    ["reviewing", "Restart Review Stage"],
+    ["addressing", "Restart Address Stage"],
+    ["fixing", "Restart Fix Stage"],
+    ["creating-pr", "Restart PR Stage"],
+    ["resolving-conflicts", "Restart Conflict Resolution"],
+  ] as const)("names the %s header restart", (phase, label) => {
+    useBuildPipelineStore.getState().replacePipeline({ ...running, phase });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: label })).toBeTruthy();
+  });
+
+  test.each(["building", "fixing"] as const)("names validation during the %s phase", (phase) => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase,
+      validationRun: validationRun({ status: "running" }),
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Validation" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", {
+        name: `Restart ${phase === "building" ? "Build" : "Fix"} Stage`,
+      }) === null,
+    ).toBe(true);
+  });
+
+  test.each(["cancelled", "retry"] as const)(
+    "names review preparation after a %s validation run",
+    (reason) => {
+      useBuildPipelineStore.getState().replacePipeline({
+        ...running,
+        phase: "fixing",
+        validationRun: validationRun({ status: reason === "cancelled" ? "cancelled" : "running" }),
+        ...(reason === "retry" ? { reviewRetryRequested: true } : {}),
+      });
+      renderTab();
+
+      expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
+    },
+  );
+
+  test("names the dedicated preparation session during a fix", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase: "fixing",
+      sessions: [
+        ...running.sessions,
+        {
+          ...running.sessions[0]!,
+          phase: "fix",
+          sessionKey: "preparation-key",
+          sdkSessionId: "preparation-session",
+          status: "running",
+          label: REVIEW_PACKAGE_SESSION_LABEL,
+        },
+      ],
+      currentSessionIndex: 2,
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
+  });
+
+  test("offers review restart when a multi-review pipeline is paused", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase: "paused",
+      pausedFromPhase: "reviewing",
+      reviewers: [{ agent: "claude" }, { agent: "codex" }],
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Review Stage" })).toBeTruthy();
   });
 
   test("reports a queue of more than one message as a queue", () => {

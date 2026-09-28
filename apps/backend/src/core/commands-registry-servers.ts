@@ -1,3 +1,9 @@
+import {
+  boundedBackgroundLaunch,
+  boundedTailCommand,
+  boundDiagnosticTail,
+} from "./container-log-bounds.js";
+import { persistentStateExports } from "./container-state-layout.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   fs,
@@ -125,8 +131,8 @@ export function registerServerCommands(
   register("get_opencode_server_log", ({ containerId }) =>
     dockerExec(
       asString(containerId, "containerId"),
-      "cat /tmp/opencode-serve.log 2>/dev/null || true",
-    ),
+      boundedTailCommand("/tmp/opencode-serve.log"),
+    ).then(boundDiagnosticTail),
   );
   register("get_opencode_model_preferences", async (_args, context) => {
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
@@ -223,8 +229,8 @@ export function registerServerCommands(
   register("get_claude_server_log", ({ containerId }) =>
     dockerExec(
       asString(containerId, "containerId"),
-      "cat /tmp/claude-bridge.log 2>/dev/null || true",
-    ),
+      boundedTailCommand("/tmp/claude-bridge.log"),
+    ).then(boundDiagnosticTail),
   );
   register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -335,7 +341,8 @@ export function registerServerCommands(
           }
           export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
           export ORKESTRATOR_VERSION="${APP_VERSION}"
-          setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
+          ${persistentStateExports("codex")}
+          ${boundedBackgroundLaunch("bun /opt/codex-bridge/dist/index.js", "/tmp/codex-bridge.log")}
         `,
           [authToken, agentToolConnection?.token],
         );
@@ -407,8 +414,8 @@ export function registerServerCommands(
   register("get_codex_server_log", ({ containerId }) =>
     dockerExec(
       asString(containerId, "containerId"),
-      "cat /tmp/codex-bridge.log 2>/dev/null || true",
-    ),
+      boundedTailCommand("/tmp/codex-bridge.log"),
+    ).then(boundDiagnosticTail),
   );
 
   for (const provider of ["cursor", "grok"] as const) {
@@ -492,8 +499,11 @@ export function registerServerCommands(
           }
           ${
             useCursorSdk
-              ? `setsid bun /opt/cursor-bridge/dist/index.js > ${logFile} 2>&1 &`
-              : `setsid bun /opt/acp-bridge/dist/index.js --provider=grok > ${logFile} 2>&1 &`
+              ? boundedBackgroundLaunch("bun /opt/cursor-bridge/dist/index.js", logFile)
+              : boundedBackgroundLaunch(
+                  "bun /opt/acp-bridge/dist/index.js --provider=grok",
+                  logFile,
+                )
           }
         `,
           [token],
@@ -531,7 +541,9 @@ export function registerServerCommands(
       };
     });
     register(`get_${provider}_server_log`, ({ containerId }) =>
-      dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`),
+      dockerExec(asString(containerId, "containerId"), boundedTailCommand(logFile)).then(
+        boundDiagnosticTail,
+      ),
     );
   }
 
@@ -586,7 +598,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
           export PI_BRIDGE_TOKEN=${quoteShell(token)}
           export ORKESTRATOR_BRIDGE_DEBUG=${config.global.debugLogging === true ? "1" : "0"}
-          setsid bun /opt/pi-bridge/dist/index.js > ${logFile} 2>&1 &
+          ${boundedBackgroundLaunch("bun /opt/pi-bridge/dist/index.js", logFile)}
         `,
         [token],
       );
@@ -617,6 +629,8 @@ function registerPiServerCommands(register: CommandRegistrar): void {
   });
 
   register("get_pi_server_log", ({ containerId }) =>
-    dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`),
+    dockerExec(asString(containerId, "containerId"), boundedTailCommand(logFile)).then(
+      boundDiagnosticTail,
+    ),
   );
 }

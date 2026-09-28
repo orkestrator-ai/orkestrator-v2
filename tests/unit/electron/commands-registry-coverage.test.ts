@@ -8,6 +8,7 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
 import { runCommand } from "../../../apps/backend/src/core/shell";
 import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
+import { resetContainerOwnershipCache } from "../../../apps/backend/src/core/container-lifecycle-service";
 
 const { createCommandRegistry, shutdownPrMonitorTracking } =
   await import("../../../apps/backend/src/core/commands");
@@ -40,7 +41,8 @@ if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
     *"{{json .}}"*)
       printf '%s\\n' \
         '{"ID":"assigned-container","Names":"runtime-assigned","Status":"Up 2 minutes","State":"running","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=assigned"}' \
-        '{"ID":"orphan-container","Names":"runtime-orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=orphan"}'
+        '{"ID":"orphan-container","Names":"runtime-orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Size":"768MB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=orphan"}' \
+        '{"ID":"legacy-container","Names":"runtime-legacy","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Size":"768MB (virtual 3GB)","Labels":"app=orkestrator-v2,environment-name=legacy"}'
       ;;
     *" -q "*) printf 'assigned-container\\norphan-container\\n' ;;
     *) printf 'assigned-container\\tassigned\\tapp=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER}\\norphan-container\\torphan\\tapp=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER}\\n' ;;
@@ -57,6 +59,13 @@ if [ "$1" = "images" ] && [ "$2" = "-q" ]; then
 fi
 if [ "$1" = "inspect" ]; then
   case "$*" in
+    *"json .Config.Labels"*)
+      case "$*" in
+        *orphan-container*) printf 'exited\t{"app":"orkestrator-v2","orkestrator-owner":"${REGISTRY_DOCKER_OWNER}"}\n' ;;
+        *legacy-container*) printf 'exited\t{"app":"orkestrator-v2"}\n' ;;
+        *) printf 'running\t{"app":"orkestrator-v2","orkestrator-owner":"${REGISTRY_DOCKER_OWNER}"}\n' ;;
+      esac
+      ;;
     *orkestrator-owner*)
       case "$*" in
         *foreign-container*) printf 'foreign-owner\trunning\n' ;;
@@ -78,7 +87,7 @@ if [ "$1" = "exec" ]; then
   esac
   exit 0
 fi
-if [ "$1" = "rm" ] && [ "$2" = "-f" ]; then
+if [ "$1" = "rm" ]; then
   exit 0
 fi
 exit 0
@@ -220,23 +229,20 @@ afterAll(async () => {
 });
 
 describe("direct backend command registry coverage", () => {
-  test("reports Docker maintenance results and removes only unassigned containers", async () => {
+  test("reports Docker maintenance state; unreviewed removal is refused", async () => {
     const assigned = environment();
     const context = contextWithStorage({
       loadEnvironments: mock(async () => [assigned]),
     });
 
-    await expect(invoke("docker_system_prune", {}, context)).resolves.toEqual({
-      containersDeleted: 2,
-      imagesDeleted: 0,
-      networksDeleted: 0,
-      volumesDeleted: 0,
-      spaceReclaimed: 768_000_000 * 2,
-    });
+    // Removal goes through docker_cleanup_preview / docker_cleanup_execute.
+    await expect(invoke("docker_system_prune", {}, context)).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
-      containersRunning: 1,
       containersTotal: 2,
       imagesTotal: 2,
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
     });
     await expect(invoke("get_orkestrator_containers", {}, context)).resolves.toEqual([
       {
@@ -245,11 +251,16 @@ describe("direct backend command registry coverage", () => {
         status: "Up 2 minutes",
         state: "running",
         image: "orkestrator-v2:latest",
-        created: 0,
+        // The fake daemon reports no creation time: unknown, not the epoch.
+        created: null,
         environmentId: "environment-1",
         projectId: "project-1",
         isAssigned: true,
+        cleanupExclusion: "assigned",
         cpuPercent: null,
+        memoryBytes: null,
+        oomKilled: null,
+        oomEvents: null,
       },
       {
         id: "orphan-container",
@@ -257,40 +268,44 @@ describe("direct backend command registry coverage", () => {
         status: "Exited (0)",
         state: "exited",
         image: "orkestrator-v2:latest",
-        created: 0,
+        // The fake daemon reports no creation time: unknown, not the epoch.
+        created: null,
         environmentId: null,
         projectId: null,
         isAssigned: false,
+        cleanupExclusion: null,
         cpuPercent: null,
+        memoryBytes: null,
+        oomKilled: null,
+        oomEvents: null,
+      },
+      {
+        id: "legacy-container",
+        name: "legacy",
+        status: "Exited (0)",
+        state: "exited",
+        image: "orkestrator-v2:latest",
+        // The fake daemon reports no creation time: unknown, not the epoch.
+        created: null,
+        environmentId: null,
+        projectId: null,
+        isAssigned: false,
+        // No owner label: it could be any installation's.
+        cleanupExclusion: "legacy-unadopted",
+        cpuPercent: null,
+        memoryBytes: null,
+        oomKilled: null,
+        oomEvents: null,
       },
     ]);
-    await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toBe(1);
+    await expect(invoke("cleanup_orphaned_containers", {}, context)).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
 
     const log = await commandLogContents();
-    expect(log).toContain(
-      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
-    );
-    expect(log).toContain(
-      "docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner",
-    );
+    expect(log).not.toContain("docker container prune");
     expect(log).not.toContain("docker system prune");
-    expect(log).toContain("docker rm -f orphan-container");
-    expect(log).not.toContain("docker rm -f assigned-container");
-  });
-
-  test("agent-test Docker cleanup never adopts or prunes ownerless containers", async () => {
-    const context = contextWithStorage({ loadEnvironments: mock(async () => []) });
-    context.strictDockerOwner = true;
-
-    await expect(invoke("docker_system_prune", {}, context)).resolves.toMatchObject({
-      containersDeleted: 1,
-      spaceReclaimed: 768_000_000,
-    });
-    const log = await commandLogContents();
-    expect(log).toContain(
-      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
-    );
-    expect(log).not.toContain("label!=orkestrator-owner");
+    expect(log).not.toMatch(/docker rm( -f)? /);
   });
 
   test("agent-test container commands reject foreign ownership before reads or execution", async () => {
@@ -319,20 +334,36 @@ describe("direct backend command registry coverage", () => {
     expect(await commandLogContents()).toContain("docker logs --tail 200 assigned-container");
   });
 
-  test("the ownership wrapper costs nothing outside an agent-test profile", async () => {
+  test("the ownership wrapper protects production without re-inspecting known containers", async () => {
     // The wrapper sits in front of *every* command carrying a containerId,
-    // including ones the renderer polls. Without the strict-mode guard each of
-    // those would pay for an extra `docker inspect` round trip in production.
-    const context = contextWithStorage({});
+    // including ones the renderer polls. Production refuses a container this
+    // registry does not own, but an exact persisted association costs nothing
+    // and a verified owner label is inspected once, then cached.
+    resetContainerOwnershipCache();
+    const context = contextWithStorage({
+      loadEnvironments: mock(async () => [environment()]),
+    });
     expect(context.strictDockerOwner).toBeFalsy();
 
     await expect(
       invoke("get_container_logs", { containerId: "foreign-container" }, context),
+    ).rejects.toThrow("not owned by this development profile");
+    await expect(
+      invoke("get_container_logs", { containerId: "assigned-container" }, context),
+    ).resolves.toBe("");
+    await expect(
+      invoke("get_container_logs", { containerId: "owned-unassigned" }, context),
+    ).resolves.toBe("");
+    await expect(
+      invoke("get_container_logs", { containerId: "owned-unassigned" }, context),
     ).resolves.toBe("");
 
     const log = await commandLogContents();
-    expect(log).not.toContain("docker inspect");
-    expect(log).toContain("docker logs --tail 200 foreign-container");
+    expect(log.match(/docker inspect .* foreign-container/g)).toHaveLength(1);
+    expect(log).not.toMatch(/docker inspect .* assigned-container/);
+    expect(log.match(/docker inspect .* owned-unassigned/g)).toHaveLength(1);
+    expect(log).not.toContain("docker logs --tail 200 foreign-container");
+    expect(log).toContain("docker logs --tail 200 assigned-container");
   });
 
   test("stops each bridge, reports authenticated OpenCode health, and delegates model caching", async () => {

@@ -774,9 +774,37 @@ export async function resetProfile(args: DevArguments): Promise<number> {
     }
   }
 
+  // Persistent storage volumes and per-environment networks carry the same
+  // exact owner label; they go after the containers that used them.
+  const ownedResources = (kind: "volume" | "network") => {
+    const found = spawnSync(
+      "docker",
+      [kind, "ls", "-q", "--filter", `label=orkestrator-owner=${profile.dockerOwner}`],
+      { encoding: "utf8" },
+    );
+    return found.status === 0
+      ? found.stdout
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      : [];
+  };
+  let volumesRemoved = 0;
+  let networksRemoved = 0;
+  for (const kind of ["volume", "network"] as const) {
+    const names = ownedResources(kind);
+    if (!names.length) continue;
+    const removed = spawnSync("docker", [kind, "rm", ...names], { encoding: "utf8" });
+    if (removed.status !== 0) {
+      throw new Error(removed.stderr.trim() || `Could not remove profile Docker ${kind}s`);
+    }
+    if (kind === "volume") volumesRemoved = names.length;
+    else networksRemoved = names.length;
+  }
+
   await removeProfileState(profile, args.keepToolchains);
   console.log(
-    `Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}`,
+    `Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s), ${volumesRemoved} volume(s), ${networksRemoved} network(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}`,
   );
   return 0;
 }

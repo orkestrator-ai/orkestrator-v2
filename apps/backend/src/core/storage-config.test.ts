@@ -7,6 +7,28 @@ import { defaultConfig, normalizePersistedConfig } from "./storage-shared.js";
 import { StorageService } from "./storage.js";
 
 describe("StorageService config migration", () => {
+  test("a renderer save preserves backend-owned default resource limits", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-resource-config-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      const initial = (await storage.loadConfig()).global;
+      await storage.updateGlobalConfig({
+        ...initial,
+        containerResourceLimits: { cpus: 2, memoryMiB: 4096, pids: 512 },
+      });
+      const current = (await storage.loadConfig()).global;
+      const { containerResourceLimits: _omitted, ...rendererSave } = current;
+      await storage.updateGlobalConfig({ ...rendererSave, debugLogging: !current.debugLogging });
+      expect((await storage.loadConfig()).global.containerResourceLimits).toEqual({
+        cpus: 2,
+        memoryMiB: 4096,
+        pids: 512,
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
   test("adds default notification settings to persisted legacy config", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-sound-settings-migration-"));
     try {

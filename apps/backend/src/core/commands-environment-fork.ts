@@ -6,7 +6,7 @@ import {
   sanitizeEnvironmentName,
 } from "./commands-dependencies.js";
 import type { Environment, EnvironmentType, Project } from "./commands-dependencies.js";
-import type { NetworkAccessMode } from "./models.js";
+import type { ClientEnvironment, NetworkAccessMode } from "./models.js";
 import { isContainerRunning } from "./commands-container-exec.js";
 import {
   parseHeadCommit,
@@ -240,7 +240,7 @@ export async function forkEnvironmentRecord(
   source: Environment,
   environmentType: EnvironmentType,
   context: CommandContext,
-): Promise<Environment> {
+): Promise<ClientEnvironment> {
   const { storage } = context;
   const project = await storage.getProject(source.projectId);
   if (!project) throw new Error(`Project not found: ${source.projectId}`);

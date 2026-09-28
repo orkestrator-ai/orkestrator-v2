@@ -532,6 +532,11 @@ export abstract class StorageConfig extends StorageProjects {
       // carry it must not silently re-enable a switched-off feature.
       if (validated.mcpManagement === undefined && config.global.mcpManagement !== undefined)
         validated.mcpManagement = config.global.mcpManagement;
+      if (
+        validated.containerResourceLimits === undefined &&
+        config.global.containerResourceLimits !== undefined
+      )
+        validated.containerResourceLimits = config.global.containerResourceLimits;
       config.global = options.preserveCredentials
         ? {
             ...validated,

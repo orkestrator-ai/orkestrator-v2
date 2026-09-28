@@ -1,6 +1,6 @@
 # 08 — Portable inputs and credential lifecycle
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [02](02-lifecycle-authority-and-durable-operations.md),
 [03](03-image-contracts-and-daemon-preflight.md),
 [04](04-runtime-readiness-and-graceful-shutdown.md).
@@ -116,3 +116,49 @@ they must not disappear without explanation.
 Exit when new/rebuilt containers expose only selected inputs and the UI reports
 actual synchronization/revocation state. Rollback may keep staged inputs with
 the compatible image; it must never silently restore whole-home exposure.
+
+## Implementation record
+
+- **Image.** `entrypoint.sh` declares `staged-inputs=1` and documents the
+  mount-point contract; its copy logic is unchanged.
+- **Backend.** `portable-inputs.ts`: the versioned allowlist
+  (`PORTABLE_INPUT_SPEC_VERSION`), no-follow bounded copying with injectable
+  limits, atomic private revisions, `--mount` arguments, revision pruning and
+  a content-free manifest. `portable-input-status.ts`: provider selection,
+  pruning by container labels, `get_environment_inputs`,
+  `revoke_provider_credentials`. `createDockerContainer` stages and binds
+  inputs for capable images (opt-out `ORKESTRATOR_PORTABLE_INPUTS=host-mounts`),
+  labels the revision and drops `CURSOR_API_KEY` from the creation environment.
+  `portable-inputs` joins the per-environment state roots, so deletion and the
+  orphan sweep remove it.
+- **UI.** An "Agent inputs" section in environment settings: staged providers
+  with counts, skipped totals, providers enabled since creation, legacy
+  whole-home mounts, and a per-provider "Remove credentials" that reports a
+  pending rebuild honestly.
+- **Decisions.** Staged copies are bound at the existing mount points, so the
+  entrypoint and its bounds stay the single copy implementation inside the
+  container. Refresh after enabling a provider is a rebuild, not a live
+  copy-in. The Anthropic API key stays in the process environment
+  (documented limitation).
+- **Tests.** `tests/unit/electron/portable-inputs.test.ts` (allowlist only,
+  sentinels absent, symlink entries and ancestors refused, dotfile-linked
+  root resolved, per-file and aggregate bounds, private modes, atomic
+  revision, manifest without names, pruning, provider selection, entrypoint
+  parity); `EnvironmentInputsSection.test.tsx`. Live (Engine 29.7.2): C20 —
+  a runtime with Claude and Codex enabled and Pi authorized-but-disabled binds
+  only `/claude-config` and `/codex-home`, read-only, from the staged revision;
+  unique sentinels in history, transcripts, Codex sessions and the disabled
+  provider's credentials are unreachable anywhere in the container; the
+  entrypoint still imports the allowlisted files.
+- **Limitations.** Credential rotation while a provider process is live is
+  not exercised against real providers (credential-free fixtures only). Live
+  credential sync paths (`syncContainerClaudeCredential`, Cursor file sync)
+  are unchanged and still refresh a running container.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 7, 8, 13, 37);
+what could not be done on this host is listed there as environment-limited.
+

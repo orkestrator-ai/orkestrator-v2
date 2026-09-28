@@ -153,11 +153,17 @@ function getMiseToolVersion(tool: string): string {
 
 function getDockerfileBaseImageTag(): string {
   const dockerfile = read("docker/Dockerfile");
-  const match = dockerfile.match(/^FROM\s+oven\/bun:(\S+)/m);
+  const match = dockerfile.match(/^FROM\s+oven\/bun:([^@\s]+)/m);
   if (!match) {
     throw new Error("Expected `FROM oven/bun:<tag>` in docker/Dockerfile");
   }
   return match[1];
+}
+
+/** Every `FROM oven/bun` line, as `tag@digest`. */
+function getDockerfileBaseImagePins(): string[] {
+  const dockerfile = read("docker/Dockerfile");
+  return [...dockerfile.matchAll(/^FROM\s+oven\/bun:(\S+)/gm)].map((match) => match[1]!);
 }
 
 interface ArtifactIntegrityValues {
@@ -390,6 +396,13 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(hostPin).toBe(misePin);
     expect(baseImageTag).toBe(`${misePin}-debian`);
+    // Builder and runtime stages share one digest-pinned base.
+    const pins = getDockerfileBaseImagePins();
+    expect(pins.length).toBe(2);
+    expect(new Set(pins).size).toBe(1);
+    expect(pins[0]).toMatch(
+      new RegExp(`^${misePin.replaceAll(".", "\\.")}-debian@sha256:[0-9a-f]{64}$`),
+    );
     expect(dockerfile).toContain(`mise install --system bun@${misePin}`);
     expect(dockerfile).toContain(`mise where bun@${misePin}`);
     expect(dockerfile).toContain(`mise exec bun@${misePin} -- bun --version`);
@@ -1054,13 +1067,14 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // fails as a mid-run renderer crash rather than a launch error — invisible
     // until an agent loads a real page. `--ipc=host` is the other documented fix
     // but shares the host IPC namespace, so the mount size is what is asserted.
+    // Without a memory budget the mount is the default below; under a budget
+    // it is capped at half the limit, because shared memory is charged to it.
     const containers = read("apps/backend/src/core/commands-containers.ts");
-    const shmIndex = containers.indexOf('"--shm-size"');
-    expect(shmIndex).toBeGreaterThan(-1);
-    const size = containers.slice(shmIndex).match(/"--shm-size",\s*"(\d+)([mg])"/i);
+    expect(containers).toMatch(/"--shm-size",\s*`\$\{sharedMemoryMiB\(/);
+    const resources = read("apps/backend/src/core/container-resources.ts");
+    const size = resources.match(/DEFAULT_SHARED_MEMORY_MIB = (\d+);/);
     expect(size).not.toBeNull();
-    const megabytes = size![2].toLowerCase() === "g" ? Number(size![1]) * 1024 : Number(size![1]);
-    expect(megabytes).toBeGreaterThanOrEqual(512);
+    expect(Number(size![1])).toBeGreaterThanOrEqual(512);
   });
 
   test("allowlists: every host required by the image is in all three default lists", () => {
@@ -1247,5 +1261,19 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         "arm64",
       ),
     ).toThrow("Pinned toolchain manifest is incomplete for darwin-arm64");
+  });
+});
+
+describe("base image refresh check", () => {
+  test("reads one consistent pinned base from the Dockerfile", async () => {
+    const { pinnedBase } = await import("../../scripts/check-base-image-digest");
+    const digest = `sha256:${"a".repeat(64)}`;
+    expect(pinnedBase(`FROM img:1@${digest} AS build\nFROM img:1@${digest}\n`)).toEqual({
+      image: "img:1",
+      digest,
+    });
+    expect(pinnedBase(`FROM img:1@${digest}\nFROM img:1@sha256:${"b".repeat(64)}\n`)).toBeNull();
+    expect(pinnedBase("FROM img:1\n")).toBeNull();
+    expect(pinnedBase(read("docker/Dockerfile"))).not.toBeNull();
   });
 });

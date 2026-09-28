@@ -1,6 +1,9 @@
 # Container improvements — implementation plan
 
-Status: Active plan; all implementation steps are **not started**.
+Status: All fourteen steps implemented on branch `implement-containers-50431d61c9b0-r1`,
+awaiting human review. Evidence: [qualification](../qualification.md) and
+[benchmarks](../benchmarks.md); each step file ends with its implementation
+record and remaining limitations.
 
 Prepared: 2026-09-21 against `88c2f9cc`.
 Source: [container investigation](../../containers.md).
@@ -13,8 +16,8 @@ survive renderer inactivity and recover from backend crashes. Host inputs,
 network access, resource consumption and diagnostic output must have explicit
 boundaries. An image upgrade must be identifiable, compatible and recoverable.
 
-This directory is an implementation specification, not evidence that these
-features exist. Proposed filenames, types and commands are marked as such.
+This directory began as an implementation specification; the implementation
+records at the end of each step describe what was actually built. Proposed filenames, types and commands are marked as such.
 Existing source links identify integration points, not APIs to replace blindly.
 Recheck those points when beginning a step because the repository can change.
 
@@ -26,20 +29,20 @@ combine the whole row into one large change.
 
 | Step | Plan | Depends on | Status | Deliverable |
 | --- | --- | --- | --- | --- |
-| 01 | [Immediate data-loss safeguards](01-immediate-data-loss-safeguards.md) | — | Not started | Accurate warnings, protected cleanup and safe failure of legacy recreation |
-| 02 | [Lifecycle authority and durable operations](02-lifecycle-authority-and-durable-operations.md) | 01 | Not started | Shared ownership checks, operation records, serialization and reconciliation |
-| 03 | [Image contracts and daemon preflight](03-image-contracts-and-daemon-preflight.md) | 02 | Not started | Immutable image identity, capabilities and supported topology checks |
-| 04 | [Runtime readiness and graceful shutdown](04-runtime-readiness-and-graceful-shutdown.md) | 02, 03 | Not started | Generation-bound readiness, process draining and safe setup retries |
-| 05 | [Persistent workspace and agent state](05-persistent-workspace-and-agent-state.md) | 02, 03, 04 | Not started | Versioned, owner-labeled storage for new environments |
-| 06 | [Migration and transactional replacement](06-migration-and-transactional-replacement.md) | 04, 05 | Not started | Verified migration, replacement commit point and rollback rules |
-| 07 | [Recovery, deletion and cleanup UX](07-recovery-deletion-and-cleanup-ux.md) | 02, 05, 06 | Not started | Exact cleanup inventory and resumable, intentional data deletion |
-| 08 | [Portable inputs and credential lifecycle](08-portable-inputs-and-credential-lifecycle.md) | 02, 03, 04 | Not started | Bounded staging, provider scope and refresh/revocation behavior |
-| 09 | [Environment networks and egress policy](09-environment-networks-and-egress-policy.md) | 02, 03, 04 | Not started | Separate networks, narrow host access and tested effective policy |
-| 10 | [Resource budgets and usage telemetry](10-resource-budgets-and-usage-telemetry.md) | 02, 03, 04 | Not started | Configurable limits and truthful bounded usage snapshots |
-| 11 | [Bounded logs and diagnostic subscriptions](11-bounded-logs-and-diagnostic-subscriptions.md) | 02, 04 | Not started | Rotated logs, bounded tails and owned log followers |
-| 12 | [Image build and release delivery](12-image-build-and-release-delivery.md) | 03 | Not started | Multi-stage builds, reproducible artifacts and compatibility checks |
-| 13 | [Performance baselines and targeted optimization](13-performance-baselines-and-targeted-optimization.md) | 06, 08–12 | Not started | Comparable measurements and evidence-based optimization decisions |
-| 14 | [Integrated qualification and rollout](14-integrated-qualification-and-rollout.md) | 01–13 | Not started | Cross-platform failure matrix, staged adoption and release evidence |
+| 01 | [Immediate data-loss safeguards](01-immediate-data-loss-safeguards.md) | — | Implemented, in review | Accurate warnings, protected cleanup and safe failure of legacy recreation |
+| 02 | [Lifecycle authority and durable operations](02-lifecycle-authority-and-durable-operations.md) | 01 | Implemented, in review | Shared ownership checks, operation records, serialization and reconciliation |
+| 03 | [Image contracts and daemon preflight](03-image-contracts-and-daemon-preflight.md) | 02 | Implemented, in review | Immutable image identity, capabilities and supported topology checks |
+| 04 | [Runtime readiness and graceful shutdown](04-runtime-readiness-and-graceful-shutdown.md) | 02, 03 | Implemented, in review | Generation-bound readiness, process draining and safe setup retries |
+| 05 | [Persistent workspace and agent state](05-persistent-workspace-and-agent-state.md) | 02, 03, 04 | Implemented, in review | Versioned, owner-labeled storage for new environments |
+| 06 | [Migration and transactional replacement](06-migration-and-transactional-replacement.md) | 04, 05 | Implemented, in review | Verified migration, replacement commit point and rollback rules |
+| 07 | [Recovery, deletion and cleanup UX](07-recovery-deletion-and-cleanup-ux.md) | 02, 05, 06 | Implemented, in review | Exact cleanup inventory and resumable, intentional data deletion |
+| 08 | [Portable inputs and credential lifecycle](08-portable-inputs-and-credential-lifecycle.md) | 02, 03, 04 | Implemented, in review | Bounded staging, provider scope and refresh/revocation behavior |
+| 09 | [Environment networks and egress policy](09-environment-networks-and-egress-policy.md) | 02, 03, 04 | Implemented, in review | Separate networks, narrow host access and tested effective policy |
+| 10 | [Resource budgets and usage telemetry](10-resource-budgets-and-usage-telemetry.md) | 02, 03, 04 | Implemented, in review | Configurable limits and truthful bounded usage snapshots |
+| 11 | [Bounded logs and diagnostic subscriptions](11-bounded-logs-and-diagnostic-subscriptions.md) | 02, 04 | Implemented, in review | Rotated logs, bounded tails and owned log followers |
+| 12 | [Image build and release delivery](12-image-build-and-release-delivery.md) | 03 | Implemented, in review | Multi-stage builds, reproducible artifacts and compatibility checks |
+| 13 | [Performance baselines and targeted optimization](13-performance-baselines-and-targeted-optimization.md) | 06, 08–12 | Implemented, in review | Comparable measurements and evidence-based optimization decisions |
+| 14 | [Integrated qualification and rollout](14-integrated-qualification-and-rollout.md) | 01–13 | Implemented, in review | Cross-platform failure matrix, staged adoption and release evidence |
 
 Step 12 can introduce the build structure after step 03; its final image must
 include and qualify the contracts added by subsequent steps. Step 13 completes

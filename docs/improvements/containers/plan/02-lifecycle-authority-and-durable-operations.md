@@ -1,6 +1,6 @@
 # 02 — Lifecycle authority and durable operations
 
-Status: Not started. Dependencies: [01](01-immediate-data-loss-safeguards.md).
+Status: Implemented on branch; awaiting review. Dependencies: [01](01-immediate-data-loss-safeguards.md).
 Return to [index](00-index.md).
 
 ## Goal
@@ -52,59 +52,59 @@ not silent redispatch of an old destructive request.
 
 ### Ownership and command routing
 
-- [ ] Introduce a backend service, provisionally `container-lifecycle-service.ts`,
+- [x] Introduce a backend service, provisionally `container-lifecycle-service.ts`,
   attached to `CommandContext`. Keep low-level exec/inspect helpers free of
   imports that create cycles with registry composition.
-- [ ] Inventory all paths that create, start, stop, rename, remove or adopt
+- [x] Inventory all paths that create, start, stop, rename, remove or adopt
   containers. Include direct commands, deletion after PR merge, control tools,
   setup, credential propagation and isolated-profile cleanup.
-- [ ] Require app/owner labels and matching persisted association for assigned
+- [x] Require app/owner labels and matching persisted association for assigned
   resources in production as well as strict profiles. A supplied container ID
   is not proof of ownership. Follow-up volume/network operations use the same
   owner, environment and role validation.
-- [ ] Handle pre-label resources by explicit adoption with a reviewed identity;
+- [x] Handle pre-label resources by explicit adoption with a reviewed identity;
   do not auto-adopt every unlabeled container across multiple installations.
   An existing trusted record can be migration evidence, but mismatches conflict.
-- [ ] Keep legacy command names as adapters into the service. Raw removal of an
+- [x] Keep legacy command names as adapters into the service. Raw removal of an
   assigned runtime resolves to the relevant environment operation, preserving
   step 01's data protection.
 
 ### Serialization and persistence
 
-- [ ] Reuse the existing per-environment queue and shutdown admission tracker.
+- [x] Reuse the existing per-environment queue and shutdown admission tracker.
   Define and test one lock order: environment operation before owned-resource
   mutation; no service should re-enter its own queued public method.
   Namespace lock keys by registry owner as well as environment ID so separate
   test/embedded contexts cannot accidentally share in-memory operation state.
-- [ ] Add revision-checked storage updates through the current queued/atomic
+- [x] Add revision-checked storage updates through the current queued/atomic
   storage mechanism. Persist operation intent before invoking Docker.
-- [ ] Prevent two backend processes from mutating the same registry through an
+- [x] Prevent two backend processes from mutating the same registry through an
   exclusive registry writer lease/lock, reusing an existing mechanism if present.
   An in-memory promise queue alone does not coordinate two processes.
-- [ ] Labels on newly created resources include operation ID and generation so
+- [x] Labels on newly created resources include operation ID and generation so
   a timeout between Docker success and storage update is reconcilable.
-- [ ] On ambiguous create/start/remove, inspect exact IDs/names/labels before
+- [x] On ambiguous create/start/remove, inspect exact IDs/names/labels before
   deciding the next phase. Missing, foreign, unreachable and malformed are
   distinct results. Never recover using display-name prefixes alone.
-- [ ] On restart, reconcile unresolved operations before background launch or
+- [x] On restart, reconcile unresolved operations before background launch or
   cleanup can act on their resources. Existing durable deletion tombstones
   remain authoritative; extend their implementation rather than replacing them
   with a second contradictory state machine.
 
 ### Projections and compatibility
 
-- [ ] Emit revisioned operation progress only after persistence. Expose a
+- [x] Emit revisioned operation progress only after persistence. Expose a
   snapshot read that works after missed events and renderer remount.
-- [ ] Bind old terminal/session handles to the runtime generation, and return
+- [x] Bind old terminal/session handles to the runtime generation, and return
   stale-generation conflicts rather than connecting them to a replacement.
-- [ ] Add optional fields with explicit defaults for legacy records. Unknown
+- [x] Add optional fields with explicit defaults for legacy records. Unknown
   future storage/operation versions must block destructive mutations.
-- [ ] Introduce a minimum-writer/schema marker and ship its enforcement before
+- [x] Introduce a minimum-writer/schema marker and ship its enforcement before
   activating new formats. Define a supported rollback version floor. Arbitrary
   historical binaries cannot be retroactively made to honor a new marker;
   downgrade support must be limited to versions that implement the check, with
   installer/launcher protection and documented manual-bypass limitations.
-- [ ] Regenerate tracked Bun lockfiles if protocol package metadata changes,
+- [x] Regenerate tracked Bun lockfiles if protocol package metadata changes,
   following AGENTS.md even when dependencies did not change.
 
 ## Recovery table to implement
@@ -121,18 +121,57 @@ not silent redispatch of an old destructive request.
 
 ## Verification and exit criteria
 
-- [ ] Unit/contract tests cover malformed/oversized inputs, revision conflicts,
+- [x] Unit/contract tests cover malformed/oversized inputs, revision conflicts,
   deduplication, queue ordering and all rows above.
-- [ ] Test direct registry invocation and gateway invocation separately; strict
+- [x] Test direct registry invocation and gateway invocation separately; strict
   mode existing tests remain green and production gets equivalent protection.
-- [ ] Inject process death after intent, Docker success and pointer persistence.
+- [x] Inject process death after intent, Docker success and pointer persistence.
   Restart with the same data directory and verify one authoritative outcome.
-- [ ] Run a two-backend writer test against a fixture registry; exactly one
+- [x] Run a two-backend writer test against a fixture registry; exactly one
   writer must be admitted. Foreign data directories remain independently usable.
 - [ ] Unmount/reconnect while an operation is pending and reconstruct status
-  from the snapshot without repeating the request.
+  from the snapshot without repeating the request. (Backend snapshot and
+  replay are covered; the real-browser cycle is part of step 14.)
 
 Ship additive schema and readers before switching every writer. Rollback may
 disable new mutations while preserving their operation records; it must not
 allow an older writer to ignore them. Exit when every mutating command passes
 through this boundary and recovery is proven with real Docker identities.
+
+## Implementation record
+
+- **Contract.** `packages/protocol/src/container-lifecycle.ts`: runtime and
+  storage identities, `ContainerOperationRecord`, outcomes, bounded parser,
+  `ContainerLifecycleSnapshot`, UUIDv7 operation ids and
+  `parseContainerMutationIdentity`. Living doc:
+  [container-lifecycle.md](../../../architecture/container-lifecycle.md).
+- **Storage.** The record lives on the environment (`containerLifecycle`), so
+  it shares the queued atomic environment writes and deletion tombstones; the
+  storage layer rejects a record over 64 KiB. Clients get the safe snapshot.
+- **Service.** `container-lifecycle-service.ts`: begin (dedupe, horizon,
+  revision, stale-operation reconciliation, persist before effect), advance,
+  complete, `runContainerOperation`, ownership resolution, exact-label
+  candidate search, startup reconciliation and needs-attention resolution.
+- **Writers.** Start/create, stop and discard run as operations; create labels
+  the container with operation id and generation and adopts an exact candidate
+  after an ambiguous failure. Raw `docker_*` commands and `provision_environment`
+  are adapters; `reattach_container` is verified adoption.
+- **Ownership.** Checked in every profile, before admission. Decision: the
+  registry wrapper accepts an exact persisted association without a probe
+  outside strict profiles (the association was written by this registry after
+  create/adoption); lifecycle mutations always verify labels.
+- **Writer lease and schema floor.** `registry-writer-lease.ts`; acquired in
+  `OrkestratorBackend.init()` before reconciliation, released on shutdown.
+  Decision: writer version 1, rollback floor is the first release with the
+  marker, unreadable marker blocks writes.
+- **Generation binding.** `expectedRuntimeGeneration` on any command answers
+  `runtime-changed` for a replaced runtime.
+- **Tests.** `tests/unit/electron/container-lifecycle-service.test.ts`
+  (dedupe, bounds/horizon, revision conflicts, unsupported schema, every
+  recovery-table row including crash after intent / after Docker success /
+  after pointer persistence, ownership verdicts, lease exclusivity and
+  reclamation, schema marker, generation binding); updated registry, lifecycle,
+  status, PR, terminal and process fixtures to model the ownership probe.
+- **Limitations.** Real Docker identity recovery and the browser
+  unmount/reconnect cycle are exercised in step 14. Credential propagation and
+  isolated-profile cleanup still use their existing owner-scoped paths.

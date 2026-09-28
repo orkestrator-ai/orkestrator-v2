@@ -182,7 +182,8 @@ export const PUBLIC_ACTIONS = {
     observation: "receipt",
     milestone: "B",
     waitConditions: ["running", "ready"],
-    summary: "Destroy and recreate the environment's container (container environments only).",
+    summary:
+      "Rebuild the environment's container, preserving its workspace and agent sessions; with discard, reset it and delete its local files.",
   },
   "environment.delete": {
     version: 1,

@@ -1,3 +1,9 @@
+import { cleanupStaleManifestProbes } from "./docker-image.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { openRegistryWriter } from "./registry-writer-lease.js";
+import { shutdownContainerLogService } from "./container-log-service.js";
+import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
+import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
@@ -150,7 +156,7 @@ export class OrkestratorBackend {
     AgentToolsServer,
     "connection" | "revokeEnvironment" | "start" | "stop"
   > &
-    Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection">>;
+    Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection" | "servicePort">>;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -730,9 +736,32 @@ export class OrkestratorBackend {
     // Do not accept commands while durable state claims work is still running
     // from a previous process. If this write fails, startup fails closed rather
     // than exposing progress that this backend can never complete.
+    // Exclusive container mutation for this data directory. A second backend,
+    // or one older than the directory's schema marker, keeps serving reads
+    // while every container mutation is refused.
+    this.context.registryWriterLease ??= await openRegistryWriter(
+      this.context.storage.getDataDir(),
+    );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,
     );
+    // Before background launch or cleanup can act on their resources:
+    // operations a previous process left unresolved are settled by exact
+    // Docker identity. An unreachable daemon leaves them for the next attempt.
+    if (this.context.registryWriterLease.isHeld()) {
+      await reconcileContainerOperations(this.context).catch((error: unknown) => {
+        console.warn(
+          "[backend] Container operation reconciliation failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+      // Probe containers are never started; one left by an interrupted
+      // manifest read is removed in the background.
+      void cleanupStaleManifestProbes(this.context).catch(() => undefined);
+    }
+    // Counts out-of-memory kills of this installation's containers for the
+    // usage view; a read-only observer, stopped at shutdown.
+    startOomEventWatcher(dockerOwnerNamespace(this.context.storage.getDataDir()));
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -1310,6 +1339,9 @@ export class OrkestratorBackend {
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    // Log followers are observers; stopping them never touches containers.
+    shutdownContainerLogService();
+    shutdownOomEventWatcher();
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;
@@ -1381,6 +1413,7 @@ export class OrkestratorBackend {
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {
+        await this.context.registryWriterLease?.release().catch(() => undefined);
         this.context.previews?.dispose();
         this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();

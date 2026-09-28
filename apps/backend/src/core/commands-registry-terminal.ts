@@ -1,3 +1,4 @@
+import { assertContainerNotDraining } from "./container-readiness.js";
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
@@ -333,6 +334,8 @@ export function registerTerminalCommands(
       const resolvedContainerId = asString(containerId, "containerId");
       const requestedEnvironmentId = asOptionalString(environmentId);
       assertEnvironmentNotDeleting(requestedEnvironmentId);
+      // A stop that is draining the container refuses new terminals into it.
+      assertContainerNotDraining(resolvedContainerId);
       const requestedTerminalKey = asOptionalString(terminalKey);
       const shouldTrackActivity = asBoolean(trackEnvironmentActivity);
       const matchedEnvironment =
@@ -393,6 +396,7 @@ export function registerTerminalCommands(
     },
   );
   register("attach_terminal", ({ containerId, cols, rows, user }, { emit, storage }) => {
+    assertContainerNotDraining(asString(containerId, "containerId"));
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
     const config = {
       kind: "container" as const,

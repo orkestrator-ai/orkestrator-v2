@@ -716,12 +716,18 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   This will delete the git worktree from your machine.
                 </span>
               ) : (
-                isRunning && (
-                  <span className="block mt-2 text-orange-500">
-                    Warning: This environment is currently running. It will be stopped before
-                    deletion.
+                <>
+                  <span className="block mt-2">
+                    Its container, persistent storage and any recovery copies kept from earlier
+                    rebuilds are deleted with it.
                   </span>
-                )
+                  {isRunning && (
+                    <span className="block mt-2 text-orange-500">
+                      Warning: This environment is currently running. It will be stopped before
+                      deletion.
+                    </span>
+                  )}
+                </>
               )}
               {environment.prUrl && (
                 <span className="block mt-2">

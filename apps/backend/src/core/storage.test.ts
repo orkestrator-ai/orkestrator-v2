@@ -32,6 +32,26 @@ async function withTemporaryStorage<T>(
 // user has no persisted config. They must stay in sync with the renderer
 // defaults (see apps/web/src/stores/configStore.test.ts) and the offered model catalogs.
 describe("defaultConfig", () => {
+  test("persists and clears per-environment container resource limits", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project-1", { environmentType: "containerized" });
+      await storage.addEnvironment(environment);
+      const limits = { cpus: 1.5, memoryMiB: 2048, pids: 512 };
+      await storage.updateEnvironment(environment.id, { containerResourceLimits: limits });
+      await expect(
+        storage.updateEnvironment(environment.id, { containerResourceLimits: { cpus: -1 } }),
+      ).rejects.toThrow("Invalid container resource limit");
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getEnvironment(environment.id))?.containerResourceLimits).toEqual(
+        limits,
+      );
+      await restarted.updateEnvironment(environment.id, { containerResourceLimits: null });
+      expect(
+        (await restarted.getEnvironment(environment.id))?.containerResourceLimits,
+      ).toBeUndefined();
+    });
+  });
   test("returns the current default model selection", () => {
     const platforms = defaultConfig().global.agentSettings?.platforms;
     expect(platforms?.opencode?.model).toBe("opencode/claude-sonnet-5");

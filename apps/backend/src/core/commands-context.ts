@@ -37,6 +37,12 @@ export type CommandContext = {
   strictDockerOwner?: boolean;
   credentialSources?: ReadonlySet<AgentPlatform>;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
+  /**
+   * Exclusive right to mutate this registry's containers. Held by the backend
+   * process; absent only in embedded command fixtures, which own a private
+   * data directory.
+   */
+  registryWriterLease?: import("./registry-writer-lease.js").RegistryWriter;
   toolchainBinDir?: string;
   agentTools?: {
     connection(
@@ -47,6 +53,8 @@ export type CommandContext = {
     ): AgentToolConnection;
     revokeEnvironment(environmentId: string): void;
     revokeTab?(environmentId: string, tabId: string): void;
+    /** Port containers call back to; the network policy allows exactly it. */
+    servicePort?(): number | null;
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;

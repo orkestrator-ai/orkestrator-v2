@@ -12,6 +12,8 @@ export const ENVIRONMENT_STATE_ROOTS = [
   "pi-bridge-state",
   "cursor-bridge-state",
   "acp-bridge-state",
+  // Staged portable agent inputs (credentials and configuration copies).
+  "portable-inputs",
 ] as const;
 
 export type EnvironmentStateRoot = (typeof ENVIRONMENT_STATE_ROOTS)[number];

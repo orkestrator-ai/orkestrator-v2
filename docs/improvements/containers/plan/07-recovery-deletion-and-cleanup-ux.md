@@ -1,6 +1,6 @@
 # 07 — Recovery, deletion and cleanup UX
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [02](02-lifecycle-authority-and-durable-operations.md),
 [05](05-persistent-workspace-and-agent-state.md),
 [06](06-migration-and-transactional-replacement.md).
@@ -113,3 +113,46 @@ layers may be the recovery copy.
 Rollback can hide new cleanup actions but must continue reading recovery and
 deletion records. Never fall back to owner-wide prune. Exit when every deletion
 has a reviewable inventory, a durable owner and an accurate terminal outcome.
+
+## Implementation record
+
+- **Backend.** `recovery-copy-model.ts` groups retained runtimes and sets into
+  copies (runtimes now record `storageSetId`, `retainedAt`,
+  `retainedByOperationId`, `retainedReason`). `recovery-copies.ts`: list with
+  Docker presence/size/restorability, discard (label-verified, never forced,
+  partial failures stay referenced), restore (current state retained as
+  `restore-source` in the commit; swap or new runtime on a verified set), and
+  reset keeping a copy. `docker-cleanup-preview.ts`: container and volume
+  classification, selection tokens (10 min, 8 live, consumed on use),
+  per-resource outcomes with recheck at removal. The cleanup ledger records
+  `retainedContainers` and allows 64 volumes per entry. Restart reconciliation
+  rolls back an interrupted `restore` candidate without touching the copy.
+- **Commands.** `list_recovery_copies`, `discard_recovery_copy`,
+  `restore_recovery_copy`, `docker_cleanup_preview`, `docker_cleanup_execute`;
+  `recreate_environment` accepts `keepRecoveryCopy` with a discard.
+- **UI.** Settings: recovery copy list (restore/delete with confirmation) and a
+  reset dialog that keeps a copy by default and requires the destructive
+  acknowledgement only when the user opts out. Docker dialog: one "Review
+  cleanup" flow listing removable and kept resources with reasons, replacing
+  the two blind clean-up buttons.
+- **Decisions.** No automatic expiry. The cap blocks rather than evicts.
+  Merge-triggered cleanup already runs through `deleteEnvironmentTask`, so it
+  inherits the ledger contract, including recovery copies.
+- **Tests.** `tests/unit/electron/recovery-copies.test.ts` (grouping, listing,
+  discard success/partial/stale, restore refusals, deletion entry, volume
+  classification, reviewed execution with a resource that became assigned and
+  one outside the preview, token consumption). Live (Engine 29.7.2): C17 restore
+  the legacy copy after newer work, verify the legacy state, restore the newer
+  copy back, discard the legacy copy; C18 cleanup preview marks assigned and
+  retained resources and removes only the reviewed leftover volume.
+- **Limitations.** No real-browser cycle was run for the new dialogs (component
+  tests only). Restoring swaps back to the retained runtime's older generation
+  number when that runtime still exists.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 10, 11, 22, 23, 36);
+what could not be done on this host is listed there as environment-limited.
+

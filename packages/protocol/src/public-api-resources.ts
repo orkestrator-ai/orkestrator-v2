@@ -469,7 +469,8 @@ export const PUBLIC_ENVIRONMENT_SETTINGS: readonly PublicSettingDescriptor[] = O
     inherits: true,
     environmentTypes: ["container"],
     application: "next-start",
-    description: "Restricted-network allowlist; unset inherits the global list.",
+    description:
+      "Restricted-network allowlist; unset inherits the global list. A running container whose image supports it applies the change immediately (reported as applied).",
   },
   ...agentSettingDescriptors("environment"),
 ]);

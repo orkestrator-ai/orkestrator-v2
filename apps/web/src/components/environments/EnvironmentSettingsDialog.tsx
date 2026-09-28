@@ -63,7 +63,17 @@ import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
+import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
+import { EnvironmentRecoveryCopies } from "./EnvironmentRecoveryCopies";
+import { EnvironmentInputsSection } from "./EnvironmentInputsSection";
+import { EnvironmentResourcesSection } from "./EnvironmentResourcesSection";
+import { ContainerLogViewer } from "./ContainerLogViewer";
+import { EnvironmentNetworkPolicyStatus } from "./EnvironmentNetworkPolicyStatus";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import {
+  LEGACY_CONTAINER_DISCARD_WARNING,
+  parseContainerLifecycleError,
+} from "@orkestrator/protocol/container-lifecycle";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -73,7 +83,11 @@ interface EnvironmentSettingsDialogProps {
   onOpenChange: (open: boolean) => void;
   environment: Environment;
   onUpdate: (environment: Environment) => void;
-  onRestart?: (environmentId: string) => Promise<void>;
+  /**
+   * Replaces the container. Only ever called with an explicit, reviewed
+   * discard: the default port-edit path saves settings instead.
+   */
+  onRestart?: (environmentId: string, options: backend.RecreateEnvironmentOptions) => Promise<void>;
 }
 
 const AGENT_ORDER: backend.AgentExtensionId[] = [
@@ -353,8 +367,17 @@ export function EnvironmentSettingsDialog({
     protocol: "tcp",
   });
   const [portError, setPortError] = useState<string | null>(null);
-  const [showRestartConfirm, setShowRestartConfirm] = useState(false);
-  const [isRestarting, setIsRestarting] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showContainerLog, setShowContainerLog] = useState(false);
+  const [resetAcknowledged, setResetAcknowledged] = useState(false);
+  // Resetting keeps the current container and files as a recovery copy
+  // unless the user explicitly chooses to delete them.
+  const [keepResetCopy, setKeepResetCopy] = useState(true);
+  const [isResetting, setIsResetting] = useState(false);
+  // The runtime the reset confirmation describes. Captured when the dialog
+  // opens so a container replaced while it is open conflicts instead of being
+  // removed on the strength of a confirmation about a different one.
+  const [reviewedContainerId, setReviewedContainerId] = useState<string | null>(null);
 
   // Agent settings state
   // One block, the same shape the repository and app tiers store. Absent means
@@ -417,8 +440,9 @@ export function EnvironmentSettingsDialog({
       setShowAddPortForm(false);
       setNewPortMapping({ containerPort: 3000, hostPort: 3000, protocol: "tcp" });
       setPortError(null);
-      setShowRestartConfirm(false);
-      setIsRestarting(false);
+      setShowResetConfirm(false);
+      setResetAcknowledged(false);
+      setIsResetting(false);
 
       // Reset agent settings
       setAgentSettings(normalizeAgentSettings(environment.agentSettings));
@@ -600,36 +624,51 @@ export function EnvironmentSettingsDialog({
     setPortError(null);
   };
 
-  // Handle restart with port changes
-  const handleRestartWithChanges = async () => {
-    if (!onRestart || !dockerAvailable) return;
+  const openResetConfirm = () => {
+    setReviewedContainerId(environment.containerId);
+    setResetAcknowledged(false);
+    setKeepResetCopy(true);
+    setShowResetConfirm(true);
+  };
 
-    setIsRestarting(true);
+  // Explicit, destructive reset: removes the container (and every file in it)
+  // and creates a new one with the saved settings.
+  const handleResetContainer = async () => {
+    if (!onRestart || !dockerAvailable || !reviewedContainerId) return;
+    if (!keepResetCopy && !resetAcknowledged) return;
+
+    setIsResetting(true);
     try {
-      // First save the port mappings
-      await backend.updatePortMappings(environment.id, portMappings);
-
-      // Optimistically update status to "creating" so the UI shows a spinner immediately
+      if (portMappingsChanged) {
+        await backend.updatePortMappings(environment.id, portMappings);
+      }
       onUpdate({ ...environment, status: "creating" });
-
-      // Close the dialog immediately so user can see the spinner in the sidebar
-      setShowRestartConfirm(false);
+      setShowResetConfirm(false);
       onOpenChange(false);
 
-      // Then recreate the environment (this creates a new container with new port mappings)
-      await onRestart(environment.id);
+      await onRestart(environment.id, {
+        intent: "discard",
+        expectedContainerId: reviewedContainerId,
+        ...(keepResetCopy ? { keepRecoveryCopy: true } : {}),
+      });
 
-      // Sync the environment to get the updated container_id and status
       const synced = await backend.syncEnvironmentStatus(environment.id);
       onUpdate(synced);
-
-      toast.success("Environment recreated with new port mappings");
+      toast.success("Container reset", {
+        description: keepResetCopy
+          ? "A new container was created. The previous one is kept as a recovery copy."
+          : "A new container was created and setup is running again.",
+      });
     } catch (err) {
-      console.error("[EnvironmentSettingsDialog] Failed to restart with changes:", err);
-      const message = err instanceof Error ? err.message : String(err);
-      toast.error("Failed to recreate environment", { description: message });
-
-      // Try to sync even on error to get the correct state
+      console.error("[EnvironmentSettingsDialog] Failed to reset container:", err);
+      const lifecycle = parseContainerLifecycleError(err);
+      const message = lifecycle?.message ?? (err instanceof Error ? err.message : String(err));
+      toast.error(
+        lifecycle?.code === "runtime-changed"
+          ? "Container changed before the reset"
+          : "Failed to reset container",
+        { description: message },
+      );
       try {
         const synced = await backend.syncEnvironmentStatus(environment.id);
         onUpdate(synced);
@@ -637,7 +676,7 @@ export function EnvironmentSettingsDialog({
         // Ignore sync errors
       }
     } finally {
-      setIsRestarting(false);
+      setIsResetting(false);
     }
   };
 
@@ -648,18 +687,13 @@ export function EnvironmentSettingsDialog({
       return;
     }
 
-    // If port mappings changed and environment is running, show restart
-    // confirmation - but only when Docker can actually honour it. The
-    // confirmation's only action recreates the container, so offering it while
-    // the daemon is down parks the user on a dialog they cannot dismiss
-    // forwards and silently drops every other edit in the form. Saving still
-    // persists the new mappings; they take effect on the next recreate.
-    if (portMappingsChanged && environment.status === "running" && onRestart && dockerAvailable) {
-      setShowRestartConfirm(true);
-      return;
-    }
-    const portsDeferredByOutage =
-      portMappingsChanged && environment.status === "running" && !dockerAvailable;
+    // Saving never replaces the container. The workspace lives in its
+    // filesystem, so applying new port mappings means discarding it; that is
+    // offered only as the separately named, explicitly acknowledged reset.
+    const portsDeferred =
+      portMappingsChanged &&
+      environment.environmentType !== "local" &&
+      Boolean(environment.containerId);
 
     const domains = useGlobalDefaults
       ? undefined
@@ -697,8 +731,8 @@ export function EnvironmentSettingsDialog({
 
       onUpdate(updated);
       toast.success("Environment settings saved", {
-        description: portsDeferredByOutage
-          ? "Port changes apply the next time this environment is recreated, once Docker is running."
+        description: portsDeferred
+          ? "Port changes are saved and apply when this container is rebuilt. The current container keeps its ports and files."
           : undefined,
       });
       onOpenChange(false);
@@ -729,6 +763,7 @@ export function EnvironmentSettingsDialog({
       ? [
           { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
           { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
+          { id: "container", label: "Container", icon: <Server className="h-4 w-4" /> },
         ]
       : []),
     { id: "previews", label: "Preview services", icon: <Globe2 className="h-4 w-4" /> },
@@ -942,6 +977,9 @@ export function EnvironmentSettingsDialog({
       case "network":
         return (
           <div className="max-w-2xl space-y-4">
+            {environment.environmentType !== "local" && environment.containerId ? (
+              <EnvironmentNetworkPolicyStatus environmentId={environment.id} />
+            ) : null}
             <div className="flex items-center gap-2 p-3 rounded-md bg-zinc-800 border border-zinc-700">
               {isFullAccess ? (
                 <>
@@ -1042,6 +1080,92 @@ export function EnvironmentSettingsDialog({
             )}
           </div>
         );
+      case "container":
+        return (
+          <div className="max-w-2xl space-y-4">
+            {!environment.containerId ? (
+              <p className="text-sm text-muted-foreground">
+                This environment has no container yet. Start it to create one.
+              </p>
+            ) : null}
+            {environment.containerId && onRestart && (
+              <EnvironmentRebuildSection
+                environment={environment}
+                dockerAvailable={dockerAvailable}
+                onRestart={onRestart}
+                beforeRebuild={async () => {
+                  if (portMappingsChanged) {
+                    await backend.updatePortMappings(environment.id, portMappings);
+                  }
+                }}
+                onUpdate={onUpdate}
+                onClose={() => onOpenChange(false)}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentResourcesSection
+                environmentId={environment.id}
+                containerId={environment.containerId ?? null}
+                dockerAvailable={dockerAvailable}
+              />
+            )}
+            {environment.containerId && dockerAvailable ? (
+              <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">Container log</p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-expanded={showContainerLog}
+                    onClick={() => setShowContainerLog((value) => !value)}
+                  >
+                    {showContainerLog ? "Hide" : "Show"}
+                  </Button>
+                </div>
+                {/* Mounted only while shown: hiding it releases the subscription. */}
+                {showContainerLog ? (
+                  <ContainerLogViewer containerId={environment.containerId} />
+                ) : null}
+              </div>
+            ) : null}
+            {environment.environmentType !== "local" && (
+              <EnvironmentInputsSection
+                environmentId={environment.id}
+                dockerAvailable={dockerAvailable}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentRecoveryCopies
+                environment={environment}
+                dockerAvailable={dockerAvailable}
+                onUpdate={onUpdate}
+                onClose={() => onOpenChange(false)}
+              />
+            )}
+            {environment.containerId && onRestart && (
+              <div className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">
+                <p className="text-sm font-medium">Reset container</p>
+                <p className="text-sm text-muted-foreground">
+                  Starts over with a fresh clone in a new container. The current container and files
+                  are kept as a recovery copy unless you choose to delete them.
+                </p>
+                <div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={openResetConfirm}
+                    disabled={!dockerAvailable || isResetting}
+                    title={!dockerAvailable ? "Start Docker to reset this container" : undefined}
+                  >
+                    Reset container…
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
       case "ports":
         return (
           <div className="max-w-2xl space-y-4">
@@ -1097,10 +1221,13 @@ export function EnvironmentSettingsDialog({
                 No port mappings configured. Click "Add Port" to expose a container port.
               </p>
             )}
-            {portMappingsChanged && environment.status === "running" && (
+            {portMappingsChanged && environment.containerId && (
               <div className="flex items-center gap-2 p-2 rounded-md bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-sm">
                 <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>Port changes require a container restart to take effect.</span>
+                <span>
+                  Saved port changes apply when this container is rebuilt. The current container
+                  keeps its ports until then.
+                </span>
               </div>
             )}
             {showAddPortForm && (
@@ -1226,7 +1353,7 @@ export function EnvironmentSettingsDialog({
                       { containerPort, hostPort: 0, protocol: "tcp", hostPortMode: "auto" },
                     ]);
                     toast.info(
-                      `Port ${containerPort} will be published when you save and recreate the container.`,
+                      `Port ${containerPort} will be published when the container is next rebuilt.`,
                     );
                   }
             }
@@ -1343,37 +1470,79 @@ export function EnvironmentSettingsDialog({
         {renderSection}
       </FullscreenSettingsLayout>
 
-      {/* Restart confirmation dialog */}
-      <AlertDialog open={showRestartConfirm} onOpenChange={setShowRestartConfirm}>
+      {/* Explicit destructive reset confirmation */}
+      <AlertDialog
+        open={showResetConfirm}
+        onOpenChange={(next) => {
+          if (!isResetting) setShowResetConfirm(next);
+        }}
+      >
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Container Recreate Required</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <p>
-                Port mapping changes require the container to be recreated.
-                <strong> All running processes will be terminated.</strong>
-              </p>
-              <p className="text-sm">
-                Your filesystem state (installed packages, file changes) will be preserved. However,
-                any dev servers, build processes, or other running programs will need to be
-                restarted.
-              </p>
+            <AlertDialogTitle>
+              {keepResetCopy
+                ? "Reset container and keep a recovery copy?"
+                : "Reset container and delete its files?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                {keepResetCopy ? (
+                  <p>
+                    The current container and its files are stopped and kept as a recovery copy you
+                    can restore or delete later from these settings.
+                  </p>
+                ) : (
+                  <p>{LEGACY_CONTAINER_DISCARD_WARNING}</p>
+                )}
+                <p className="text-sm">
+                  All running processes stop. A new container is created with the saved settings,
+                  the repository is cloned again and setup runs from the start.
+                </p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={keepResetCopy}
+              onChange={(event) => setKeepResetCopy(event.target.checked)}
+              disabled={isResetting}
+            />
+            <span>Keep the current container and files as a recovery copy.</span>
+          </label>
+          {!keepResetCopy ? (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={resetAcknowledged}
+                onChange={(event) => setResetAcknowledged(event.target.checked)}
+                disabled={isResetting}
+              />
+              <span>I understand this permanently deletes the container&apos;s local files.</span>
+            </label>
+          ) : null}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isRestarting}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isResetting}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleRestartWithChanges}
-              disabled={isRestarting || !dockerAvailable}
-              title={!dockerAvailable ? "Start Docker to recreate this environment" : undefined}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => {
+                event.preventDefault();
+                void handleResetContainer();
+              }}
+              disabled={isResetting || !dockerAvailable || (!keepResetCopy && !resetAcknowledged)}
+              title={!dockerAvailable ? "Start Docker to reset this container" : undefined}
             >
-              {isRestarting ? (
+              {isResetting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Restarting...
+                  Resetting...
                 </>
+              ) : keepResetCopy ? (
+                "Reset and keep a copy"
               ) : (
-                "Restart Environment"
+                "Delete files and reset"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>

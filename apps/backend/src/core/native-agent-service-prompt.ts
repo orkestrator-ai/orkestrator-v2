@@ -142,6 +142,7 @@ import {
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { assertEnvironmentAcceptsAgentWork } from "./environment-replacement-fence.js";
 import {
   MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
   nativeAgentObservationGroupKey,
@@ -596,6 +597,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         : undefined;
     try {
       this.assertAcceptingWork();
+      // A rebuild or reset of this environment's runtime is in progress.
+      assertEnvironmentAcceptsAgentWork(input.environmentId);
       const hasAttachments =
         (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {

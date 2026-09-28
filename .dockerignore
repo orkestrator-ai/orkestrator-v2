@@ -13,3 +13,25 @@ coverage
 **/.DS_Store
 **/*.log
 **/*.tmp
+
+# Private local files never belong in the build context.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+
+# The image needs only workspace manifests outside the bridges and protocol
+# package (for Bun's frozen workspace resolution), not application sources.
+apps/**
+!apps/*/package.json
+packages/cli/**
+!packages/cli/package.json
+
+# Test and report output, documentation and plans.
+tests
+output
+test-results
+playwright-report
+**/.turbo
+docs
+plans

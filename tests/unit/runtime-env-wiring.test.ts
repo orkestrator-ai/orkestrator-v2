@@ -2002,7 +2002,7 @@ eval "$opencode_setup"
   test("workspace setup exits early when a prior setup already completed", () => {
     const setup = read("docker/workspace-setup.sh");
     const completionGuard = setup.indexOf("if [ -f /tmp/.workspace-setup-complete ]; then");
-    const cloneBlock = setup.indexOf('if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then');
+    const cloneBlock = setup.indexOf('if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] ||');
 
     expect(completionGuard).toBeGreaterThan(0);
     expect(cloneBlock).toBeGreaterThan(completionGuard);

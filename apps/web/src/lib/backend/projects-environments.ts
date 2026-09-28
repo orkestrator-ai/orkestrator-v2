@@ -1,5 +1,16 @@
 import { invoke } from "@/lib/native/backend";
 import type {
+  ContainerLifecycleSnapshot,
+  RebuildPreview,
+  RecreateEnvironmentIntent,
+} from "@orkestrator/protocol/container-lifecycle";
+import type {
+  CredentialRevocationResult,
+  EnvironmentInputStatus,
+  EnvironmentNetworkPolicy,
+  RecoveryCopyList,
+} from "@orkestrator/protocol/container-recovery";
+import type {
   Project,
   Environment,
   EnvironmentType,
@@ -193,12 +204,94 @@ export async function stopEnvironment(environmentId: string): Promise<void> {
   return invoke("stop_environment", { environmentId });
 }
 
+export interface RecreateEnvironmentOptions {
+  /**
+   * `preserve` copies the workspace and provider state into a new container
+   * and commits it only after verification; it is refused, with nothing
+   * changed, where the image or engine cannot preserve them. `discard`
+   * deletes the container and everything in its filesystem.
+   */
+  intent: RecreateEnvironmentIntent;
+  /** The container the user reviewed; a different runtime conflicts. */
+  expectedContainerId: string | null;
+  /** Preserve only: proceed when Docker host free space cannot be measured. */
+  allowUnknownCapacity?: boolean;
+  /** Discard only: keep the current container and files as a recovery copy. */
+  keepRecoveryCopy?: boolean;
+}
+
+/** Earlier states this environment keeps (rebuild, reset and restore sources). */
+export async function listRecoveryCopies(
+  environmentId: string,
+  options: { measureSize?: boolean } = {},
+): Promise<RecoveryCopyList> {
+  return invoke<RecoveryCopyList>("list_recovery_copies", { environmentId, ...options });
+}
+
+/** Permanently deletes one recovery copy, bound to the reviewed list revision. */
+export async function discardRecoveryCopy(
+  environmentId: string,
+  copyId: string,
+  expectedRevision: number,
+): Promise<
+  | { copyId: string; discarded: boolean; kept: { containerId: string | null; volumes: string[] } }
+  | undefined
+> {
+  return invoke("discard_recovery_copy", { environmentId, copyId, expectedRevision });
+}
+
 /**
- * Recreate an environment - preserves filesystem state via docker commit, then creates new container with updated port mappings
- * Note: All running processes will be terminated, but installed packages and file changes are preserved
+ * Makes a recovery copy current again. The current container and files are
+ * kept as another recovery copy first; the environment then starts on the copy.
  */
-export async function recreateEnvironment(environmentId: string): Promise<void> {
-  return invoke("recreate_environment", { environmentId });
+export async function restoreRecoveryCopy(
+  environmentId: string,
+  copyId: string,
+  expectedContainerId: string | null,
+  expectedRevision: number,
+): Promise<void> {
+  return invoke("restore_recovery_copy", {
+    environmentId,
+    copyId,
+    expectedContainerId,
+    expectedRevision,
+  });
+}
+
+/** The authoritative container lifecycle state, for rehydrating progress. */
+export async function getContainerLifecycleSnapshot(
+  environmentId: string,
+): Promise<ContainerLifecycleSnapshot> {
+  return invoke<ContainerLifecycleSnapshot>("get_container_lifecycle_snapshot", { environmentId });
+}
+
+/** What a preserving rebuild would keep, and whether it is possible now. */
+export async function getRebuildPreview(environmentId: string): Promise<RebuildPreview> {
+  return invoke<RebuildPreview>("get_rebuild_preview", { environmentId });
+}
+
+/**
+ * Asks an uncommitted rebuild to stop at its next phase boundary. The
+ * original container stays authoritative; the lifecycle snapshot reports the
+ * outcome.
+ */
+export async function cancelContainerOperation(
+  environmentId: string,
+  operationId: string,
+): Promise<{ cancelled: boolean; pending?: boolean }> {
+  return invoke("cancel_container_operation", { environmentId, operationId });
+}
+
+/**
+ * Replace an environment's container. Only an explicit, reviewed discard can
+ * remove a container whose writable layer holds the workspace; see
+ * `parseContainerLifecycleError` for the typed refusals.
+ */
+export async function recreateEnvironment(
+  environmentId: string,
+  options: RecreateEnvironmentOptions,
+): Promise<void> {
+  return invoke("recreate_environment", { environmentId, ...options });
 }
 
 export async function syncEnvironmentStatus(environmentId: string): Promise<Environment> {
@@ -223,3 +316,64 @@ export async function getEnvironmentStatus(environmentId: string): Promise<Envir
 }
 
 // --- Terminal Commands ---
+
+/** Which agent inputs the environment's container was given, and whether they are current. */
+export async function getEnvironmentInputs(environmentId: string): Promise<EnvironmentInputStatus> {
+  return invoke<EnvironmentInputStatus>("get_environment_inputs", { environmentId });
+}
+
+/** Removes one provider's imported credentials from the environment's container. */
+export async function revokeProviderCredentials(
+  environmentId: string,
+  provider: string,
+): Promise<CredentialRevocationResult> {
+  return invoke<CredentialRevocationResult>("revoke_provider_credentials", {
+    environmentId,
+    provider,
+  });
+}
+
+/** Allows a revoked provider again; its configuration returns with the next rebuild. */
+export async function restoreProviderCredentials(
+  environmentId: string,
+  provider: string,
+): Promise<{ provider: string; pendingRebuild: boolean }> {
+  return invoke("restore_provider_credentials", { environmentId, provider });
+}
+
+/** The configured network policy and what the container's firewall applied. */
+export async function getEnvironmentNetworkPolicy(
+  environmentId: string,
+): Promise<EnvironmentNetworkPolicy> {
+  return invoke<EnvironmentNetworkPolicy>("get_environment_network_policy", { environmentId });
+}
+
+/** Applies the saved allowlist to the running container in place, when it can. */
+export async function applyEnvironmentAllowedDomains(environmentId: string): Promise<{
+  kind: "applied" | "not-applicable" | "rebuild-required" | "not-running" | "failed";
+  policy: EnvironmentNetworkPolicy;
+}> {
+  return invoke("apply_environment_allowed_domains", { environmentId });
+}
+
+/** Requested budget, its source, and what Docker applied to the current runtime. */
+export async function getEnvironmentResources(
+  environmentId: string,
+): Promise<import("@orkestrator/protocol/container-resources").EnvironmentResourcePolicy> {
+  return invoke("get_environment_resources", { environmentId });
+}
+
+/**
+ * Sets (or with `null` clears) this environment's budget, optionally applying
+ * it to the running container now. The result reports what Docker applied.
+ */
+export async function updateEnvironmentResources(
+  environmentId: string,
+  options: {
+    limits: import("@orkestrator/protocol/container-resources").ContainerResourceLimits | null;
+    applyNow: boolean;
+    allowBelowUsage?: boolean;
+  },
+): Promise<import("@orkestrator/protocol/container-resources").EnvironmentResourcePolicy> {
+  return invoke("update_environment_resources", { environmentId, ...options });
+}

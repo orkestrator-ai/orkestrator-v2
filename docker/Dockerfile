@@ -1,8 +1,65 @@
 # Bun is the primary runtime: it builds and runs the bridge servers. This tag
 # mirrors the developer and CI version managed by the repository's mise.toml.
+# Both stages pin the same multi-architecture index digest, so a rebuild cannot
+# silently pick up a different base. Refresh it deliberately (security updates
+# to the same tag, or a Bun bump): `docker buildx imagetools inspect
+# oven/bun:<tag>` and replace the digest on both FROM lines.
 # `-debian` variant is glibc-based (Debian), which keeps the musl-delete logic
 # for the Claude Agent SDK below valid. (An Alpine/musl base would invert it.)
-FROM oven/bun:1.4.2-debian
+# ---------------------------------------------------------------------------
+# Bridge build stage. Everything here — the workspace install, sources, the
+# build tooling — stays out of the delivered image; the final stage copies
+# only each bridge's runtime output. Same pinned base (and glibc) as the final
+# stage, so vendored native helpers match the runtime.
+# ---------------------------------------------------------------------------
+FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73 AS bridge-build
+WORKDIR /opt/bridge-build
+# Manifests first: a source edit reuses the install layer; a lockfile, patch or
+# manifest edit invalidates it. Every workspace manifest is present so the
+# frozen lockfile resolves exactly as it does in the repository. Root
+# patchedDependencies are validated even for workspaces that do not use them.
+COPY package.json bun.lock ./
+COPY patches ./patches
+COPY apps/backend/package.json apps/backend/package.json
+COPY apps/desktop/package.json apps/desktop/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY apps/web-public/package.json apps/web-public/package.json
+COPY packages/cli/package.json packages/cli/package.json
+COPY packages/protocol/package.json packages/protocol/package.json
+COPY bridges/claude-bridge/package.json bridges/claude-bridge/package.json
+COPY bridges/codex-bridge/package.json bridges/codex-bridge/package.json
+COPY bridges/acp-bridge/package.json bridges/acp-bridge/package.json
+COPY bridges/pi-bridge/package.json bridges/pi-bridge/package.json
+COPY bridges/cursor-bridge/package.json bridges/cursor-bridge/package.json
+RUN bun install --frozen-lockfile --filter claude-bridge --filter codex-bridge \
+      --filter acp-bridge --filter pi-bridge --filter cursor-bridge
+COPY packages/protocol packages/protocol
+COPY bridges/claude-bridge bridges/claude-bridge
+COPY bridges/codex-bridge bridges/codex-bridge
+COPY bridges/acp-bridge bridges/acp-bridge
+COPY bridges/pi-bridge bridges/pi-bridge
+COPY bridges/cursor-bridge bridges/cursor-bridge
+# Claude: the SDK stays external and `vendor` copies it into dist/node_modules.
+# The SDK picks its native binary by libc; on this glibc base it resolves the
+# gnu variant, so the unused musl variant (~225 MB) is dropped. An Alpine/musl
+# base would invert this.
+RUN cd bridges/claude-bridge && bun run build \
+ && rm -rf node_modules \
+ && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
+# Codex and the ACP bridge bundle every dependency into dist/index.js.
+RUN cd bridges/codex-bridge && bun run build && rm -rf node_modules
+RUN cd bridges/acp-bridge && bun run build && rm -rf node_modules
+# Pi: the SDK compiles extension TypeScript with jiti and reads themes and
+# templates from its package files, so `vendor` keeps it in dist/node_modules.
+RUN cd bridges/pi-bridge && bun run build && rm -rf node_modules
+# Cursor: `vendor` stages the SDK's Linux platform package (ripgrep, the
+# sandbox helper, tree-sitter grammars) into dist/node_modules.
+RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules
+
+# ---------------------------------------------------------------------------
+# Development runtime image.
+# ---------------------------------------------------------------------------
+FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73
 
 ARG TZ
 ENV TZ="$TZ"
@@ -29,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ripgrep \
   iptables \
   ipset \
+  conntrack \
   iproute2 \
   dnsutils \
   aggregate \
@@ -257,78 +315,22 @@ USER node
 RUN NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
     node /usr/local/share/verify-playwright.cjs
 
-# Build both bridge servers from a filtered monorepo install. They import the
-# shared @orkestrator/protocol workspace package, so copying either bridge as a
-# standalone package leaves its `workspace:*` dependency impossible to resolve.
-COPY --chown=node:node package.json bun.lock /opt/bridge-build/
-COPY --chown=node:node patches /opt/bridge-build/patches
-COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol
-COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge
-COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge
-COPY --chown=node:node bridges/acp-bridge /opt/bridge-build/bridges/acp-bridge
-COPY --chown=node:node bridges/pi-bridge /opt/bridge-build/bridges/pi-bridge
-COPY --chown=node:node bridges/cursor-bridge /opt/bridge-build/bridges/cursor-bridge
-WORKDIR /opt/bridge-build
-RUN bun install --filter claude-bridge --filter codex-bridge --filter acp-bridge \
-      --filter pi-bridge --filter cursor-bridge
-
-# Build Claude Bridge Server.
-WORKDIR /opt/bridge-build/bridges/claude-bridge
-# The build bundles src into dist/index.js and the `vendor` step copies the
-# Claude Agent SDK (which is kept external) into dist/node_modules — so the top-
-# level node_modules is build-only and is discarded afterward. The SDK selects
-# its native binary at runtime by libc: on this glibc base bun reports
-# glibcVersionRuntime, so the SDK tries the `-linux-<arch>` (gnu) variant first.
-# We strip the unused `-musl` variant from the vendored tree (the path actually
-# resolved at runtime — the old top-level rm never touched it) to make resolution
-# unambiguous and drop ~225MB of dead weight. If switching to an Alpine/musl
-# base, keep musl and strip gnu instead.
-# Verified with the pinned oven/bun Debian image (linux/arm64): the bridge boots, /global/health
-# returns 200, and the SDK resolves the gnu binary from dist/node_modules with no
-# musl variant and no top-level node_modules left behind.
-RUN bun run build \
- && rm -rf node_modules \
- && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
-
-# Build Codex Bridge Server. Its build bundles every dependency into
-# dist/index.js (nothing is kept external), so node_modules is build-only and is
-# removed entirely after the build.
-WORKDIR /opt/bridge-build/bridges/codex-bridge
-RUN bun run build \
- && rm -rf node_modules
-
-# Build the ACP HTTP bridge used by Grok Build.
-WORKDIR /opt/bridge-build/bridges/acp-bridge
-RUN bun run build \
- && rm -rf node_modules
-
-# Build the Pi bridge. Like the Claude bridge, its `vendor` step copies the SDK
-# into dist/node_modules because the SDK compiles extension TypeScript with jiti
-# and reads its themes and templates from files inside the package — neither of
-# which a bundler can follow. The top-level node_modules is build-only.
-WORKDIR /opt/bridge-build/bridges/pi-bridge
-RUN bun run build \
- && rm -rf node_modules
-
-# Build the Cursor SDK bridge. Its build bundles @cursor/sdk's JavaScript into
-# dist/index.js and
-# the `vendor` step stages the SDK's Linux platform package — ripgrep, the
-# sandbox helper and the tree-sitter grammars, which cannot be bundled — into
-# dist/node_modules, where the SDK's runtime lookup walks up from dist/index.js
-# to find it. The top-level node_modules is therefore build-only.
-WORKDIR /opt/bridge-build/bridges/cursor-bridge
-RUN bun run build \
- && rm -rf node_modules
-
-# Preserve the runtime paths expected by the backend, then remove the temporary
-# workspace metadata and shared install.
+# Bridge runtime output only (built in the bridge-build stage above), at the
+# paths the backend launches: /opt/<name>/dist/index.js.
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge
 USER root
-RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
- && mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge \
- && mv /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge \
- && mv /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge \
- && mv /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge \
- && rm -rf /opt/bridge-build
+# Every bridge entrypoint must exist in the final filesystem.
+RUN for bridge in claude codex acp pi cursor; do \
+      test -s "/opt/${bridge}-bridge/dist/index.js" || { echo "missing ${bridge} bridge" >&2; exit 1; }; \
+    done \
+ && test -d /opt/claude-bridge/dist/node_modules/@anthropic-ai \
+ && test -d /opt/pi-bridge/dist/node_modules \
+ && test -d /opt/cursor-bridge/dist/node_modules \
+ && ! ls -d /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl 2>/dev/null
 
 # Starship owns the interactive Zsh prompt. Use the static musl artifacts on
 # both supported architectures so the prompt binary has no runtime libc
@@ -401,10 +403,13 @@ RUN test "$(/usr/local/bin/bun --version)" = "1.4.2" \
 
 # Copy and set up firewall scripts
 COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh /usr/local/bin/
+COPY docker/firewall-domains.sh /usr/local/lib/orkestrator/firewall-domains.sh
 USER root
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh && \
+  chown -R root:root /usr/local/lib/orkestrator && chmod 0755 /usr/local/lib/orkestrator && \
+  chmod 0644 /usr/local/lib/orkestrator/firewall-domains.sh && \
   printf '%s\n' \
-    'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS"' \
+    'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS"' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/network-policy-entrypoint.sh *' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/run-root-setup.sh *' \
@@ -431,6 +436,15 @@ RUN mkdir -p /home/node/.ssh && \
 # Copy entrypoint and workspace setup scripts
 COPY docker/entrypoint.sh docker/network-policy-entrypoint.sh /usr/local/bin/
 COPY docker/workspace-setup.sh /usr/local/bin/
+COPY docker/orkestrator-drain.sh /usr/local/bin/orkestrator-drain.sh
+COPY docker/orkestrator-storage.sh /usr/local/bin/orkestrator-storage.sh
+COPY docker/orkestrator-migrate.sh /usr/local/bin/orkestrator-migrate.sh
+COPY docker/orkestrator-log-writer.sh /usr/local/bin/orkestrator-log-writer
+# Per-boot status and process registration. Owned by node because the
+# entrypoint runs as node after the network policy is fixed; the records are
+# orchestration evidence, not a security boundary against the same user.
+RUN install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
+ && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer
 COPY docker/git-branch-helpers.sh /usr/local/bin/
 COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
 RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
@@ -438,6 +452,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
   && chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh \
   && command -v setpriv \
   && test "$(setpriv --reuid=node --regid=node --init-groups id -u)" = "$(id -u node)"
+
+# Image manifest: identity, pinned versions and the container contracts this
+# image implements. Generated from the ARG pins above and verified against the
+# scripts installed in this layer; see docker/image-manifest.ts. The backend
+# reads it from a never-started container, so the entrypoint never runs to
+# answer "what is this image?".
+ARG ORKESTRATOR_SOURCE_REVISION=unknown
+ARG ORKESTRATOR_IMAGE_CAPABILITIES=unverified
+LABEL org.orkestrator.image.manifest-schema="1" \
+      org.orkestrator.image.capabilities="${ORKESTRATOR_IMAGE_CAPABILITIES}"
+COPY package.json /tmp/orkestrator-manifest/package.json
+COPY packages/protocol/src/image-manifest.ts /tmp/orkestrator-manifest/packages/protocol/src/image-manifest.ts
+COPY docker/image-manifest.ts /tmp/orkestrator-manifest/docker/image-manifest.ts
+RUN ORKESTRATOR_PACKAGE_JSON=/tmp/orkestrator-manifest/package.json \
+    BUN_VERSION="$(bun --version)" \
+    bun /tmp/orkestrator-manifest/docker/image-manifest.ts generate \
+      --out /usr/local/share/orkestrator/image-manifest.json \
+ && chmod 0644 /usr/local/share/orkestrator/image-manifest.json \
+ && rm -rf /tmp/orkestrator-manifest
 
 USER node
 

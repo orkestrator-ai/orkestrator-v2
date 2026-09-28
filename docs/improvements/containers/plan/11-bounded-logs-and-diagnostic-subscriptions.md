@@ -1,6 +1,6 @@
 # 11 — Bounded logs and diagnostic subscriptions
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [02](02-lifecycle-authority-and-durable-operations.md),
 [04](04-runtime-readiness-and-graceful-shutdown.md).
 Return to [index](00-index.md).
@@ -111,3 +111,49 @@ Ship tail bounds first, service ownership second and rotation/subscription UI
 afterward. Rollback may fall back to bounded one-shot tails; it must not restore
 unbounded followers or whole-file reads. Exit when file, queue and child-process
 limits are enforced independently and missing diagnostic output is explicit.
+
+## Implementation record
+
+- **Tail bounds** (first): `container-log-bounds.ts` — `tail -c 65536 | tail
+  -n 200` at the source and a second byte/line bound in the host, applied to
+  every bridge/server startup-failure and log read; `get_container_logs` capped
+  at 2,000 lines and 512 KiB.
+- **Service ownership**: `container-log-service.ts` — shared followers,
+  incremental UTF-8 decoding, 16 KiB records, 1 MiB / 2,000-record ring,
+  explicit gaps, leases, 16-follower cap, 5 s idle grace, owned child
+  exit/error handlers, backend-lifetime instance stopped on shutdown. Commands
+  `open/read/close_container_logs`; `stream_container_logs` is a lease-bound
+  adapter. Container commands pass through the registry's ownership check.
+- **Rotation**: `docker/orkestrator-log-writer.sh` (`bounded-logs=1`), an awk
+  writer that owns its file (5 MiB × 3, oversize lines cut, `0600`, ignores
+  SIGHUP, drains to EOF); all six bridge/server launches use it where present.
+  New runtimes get Docker's `local` log driver (10 MiB × 3) when the daemon
+  lists it; existing containers change only on rebuild.
+- **Tests.** `tests/unit/electron/container-log-service.test.ts` (shared
+  follower and grace stop, split multibyte and huge lines, ring gaps and foreign
+  source ids, lease expiry and follower cap, ended source and shutdown, launch
+  shell, writer rotation/modes/line cut); `container-log-bounds.test.ts`
+  (existing). Live (Engine 29.7.2): C26 — a new runtime's log config is
+  `local` 10 MiB × 3; 40 MB of output through the bridge launch path ends as
+  three files within 15 MiB; real `docker logs -f` followers are shared and gone
+  after the idle grace.
+- **Audit fixes.** Log lines are no longer emitted as gateway events: those
+  reach every client and share the replay ring that lifecycle and approval
+  events depend on, so a busy container could push them out. Readers poll
+  `read_container_logs` with their cursor. Records are bounded in UTF-8 bytes
+  (a line of three-byte characters used to produce 48 KiB records) and a cut
+  never splits a surrogate pair; a gap returns the newest bounded tail; a
+  restarted container gets a new source instead of reusing the ended one.
+- **Limitations.** There is no renderer log viewer yet that uses the
+  subscription API (the initialization view keeps its bounded polled tail), so
+  the source-ended/disconnected/truncated UI states are exposed by the API but
+  not drawn. Aggregate per-environment diagnostic byte accounting is implied by
+  the per-file bounds (6 bridges × 15 MiB) rather than tracked.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 3, 4, 5, 17, 26);
+what could not be done on this host is listed there as environment-limited.
+

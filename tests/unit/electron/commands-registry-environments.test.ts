@@ -97,6 +97,7 @@ const {
   withGnuBase64Shim,
   writeBridgeEntrypoint,
   writeBridgeServer,
+  ownedContainerInspect,
 } = await createCommandFixtures();
 
 import type {
@@ -246,6 +247,7 @@ exit 1
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -485,6 +487,7 @@ exit 0
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -1013,6 +1016,7 @@ exit 1
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create) printf 'container-created\\n'; exit 0 ;;
   start) exit 0 ;;
@@ -1121,6 +1125,7 @@ exit 1
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${shellStartedPath}'
@@ -1213,6 +1218,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     while [ ! -f '${shellReleasePath}' ]; do sleep 0.01; done
@@ -1389,6 +1395,7 @@ esac
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create) printf 'container-unpersisted\\n' ;;
   rm) exit 0 ;;
@@ -1491,6 +1498,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -1546,6 +1554,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -1647,6 +1656,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1:$2" in
   rm:-f)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -1655,12 +1665,24 @@ case "$1:$2" in
 esac
 case "$1" in
   create) printf 'container-replacement\\n' ;;
-  start|stop|exec|rm) exit 0 ;;
+  inspect) printf 'running\\n' ;;
+  exec)
+    case "$*" in
+      *ORKESTRATOR_SETUP_CAPABILITIES*) printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037' ;;
+      *--prepare-only*) printf '\\036ORKESTRATOR_PREPARE_OK\\037' ;;
+      *rev-parse*) printf '1111111111111111111111111111111111111111\\n' ;;
+    esac
+    ;;
+  start|stop|rm) exit 0 ;;
 esac
 `,
           async (logs) => {
             const recreate = commands.get("recreate_environment")?.(
-              { environmentId: environment.id },
+              {
+                environmentId: environment.id,
+                intent: "discard",
+                expectedContainerId: "container-old",
+              },
               context,
             );
             await waitForCondition(() => existsSync(startedPath), "container removal to begin");
@@ -1683,6 +1705,10 @@ esac
             const calls = await fs.readFile(logs.all, "utf8");
             expect(calls).toContain("rm -f container-old");
             expect(calls).toContain("stop container-replacement");
+            // The replacement started from an empty workspace, so the stale
+            // setup completion was discarded and the checkout prepared again.
+            expect(calls).toContain("--prepare-only");
+            expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
           },
         );
       });
@@ -1796,6 +1822,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "stop" ]; then
   : > '${stopStartedPath.replaceAll("'", "'\\''")}'
   while [ ! -f '${releaseStopPath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
@@ -1877,6 +1904,7 @@ exit 0
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
@@ -1921,6 +1949,7 @@ esac
 
       await withFakeDocker(
         `#!/bin/sh
+${ownedContainerInspect()}
 if [ "$1" = "stop" ]; then
   printf 'container runtime refused stop\\n' >&2
   exit 1
@@ -1940,7 +1969,7 @@ exit 0
         "The container runtime is unavailable. Start it and retry.",
       );
 
-      await withFakeDocker("#!/bin/sh\nexit 0\n", async () => {
+      await withFakeDocker(`#!/bin/sh\n${ownedContainerInspect()}\nexit 0\n`, async () => {
         await expect(
           commands.get("stop_environment")?.({ environmentId: environment.id }, context),
         ).resolves.toBeUndefined();
@@ -1982,7 +2011,7 @@ exit 0
   });
 
   test(
-    "queues a recreate behind an in-flight start instead of interleaving it",
+    "queues a discard behind an in-flight start and refuses a runtime it never reviewed",
     async () => {
       const environment = createEnvironment({
         id: "env-start-recreate-race",
@@ -2002,15 +2031,12 @@ exit 0
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
-    if [ ! -f '${startedPath.replaceAll("'", "'\\''")}' ]; then
-      : > '${startedPath.replaceAll("'", "'\\''")}'
-      while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
-      printf 'container-first\\n'
-    else
-      printf 'container-recreated\\n'
-    fi
+    : > '${startedPath.replaceAll("'", "'\\''")}'
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    printf 'container-first\\n'
     ;;
   start|stop|exec|rm) exit 0 ;;
 esac
@@ -2024,30 +2050,25 @@ esac
               () => existsSync(startedPath),
               "first container create to begin",
             );
+            // The discard was reviewed against an earlier runtime. It queues
+            // behind the start and must not remove the container that start
+            // produces, which the user never saw.
             const recreate = commands.get("recreate_environment")?.(
-              { environmentId: environment.id },
+              {
+                environmentId: environment.id,
+                intent: "discard",
+                expectedContainerId: "container-reviewed-earlier",
+              },
               context,
             );
             await fs.writeFile(releasePath, "");
-            await expect(recreate).resolves.toEqual(
-              expect.objectContaining({
-                environment: expect.objectContaining({
-                  id: environment.id,
-                  containerId: "container-recreated",
-                  status: "running",
-                }),
-              }),
-            );
+            await expect(recreate).rejects.toThrow("ContainerLifecycleError:runtime-changed");
 
-            expect(environment.containerId).toBe("container-recreated");
+            expect(environment.containerId).toBe("container-first");
             expect(environment.status).toBe("running");
             const calls = await fs.readFile(logs.all, "utf8");
-            // The recreate observed the container the start had produced, which is
-            // only possible if it ran after that start committed rather than
-            // alongside it.
-            expect(calls.indexOf("start container-first")).toBeLessThan(
-              calls.indexOf("rm -f container-first"),
-            );
+            expect(calls).toContain("start container-first");
+            expect(calls).not.toContain("rm -f container-first");
           },
         );
       });
@@ -2076,6 +2097,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -2145,6 +2167,7 @@ esac
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -2182,7 +2205,7 @@ esac
   );
 
   test(
-    "recreates a container even when the old one cannot be removed",
+    "keeps the container reference when Docker refuses to remove it",
     async () => {
       const environment = createEnvironment({
         id: "env-recreate-remove-failure",
@@ -2190,6 +2213,7 @@ esac
         containerId: "container-still-present",
         status: "running",
         setupScriptsComplete: true,
+        createdFromCommit: "2222222222222222222222222222222222222222",
         networkAccessMode: "full",
       });
       const { context } = createContext(environment);
@@ -2197,45 +2221,167 @@ esac
       const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
 
       try {
-        // Recreate is the repair action for an already-broken container, so a
-        // daemon that refuses the removal must not be what makes the environment
-        // permanently unrepairable from the UI.
+        // The old name stays reserved when removal fails, so a create would
+        // collide with it — and the container may hold the only copy of the
+        // work. The reference, the setup state and the baseline all survive.
         await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
           await withFakeDocker(
             `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   rm)
     printf 'container runtime refused removal\\n' >&2
     exit 1
     ;;
-  create) printf 'container-after-recreate\\n' ;;
+  create)
+    printf 'Error response from daemon: Conflict. The container name is already in use\\n' >&2
+    exit 1
+    ;;
   start|exec) exit 0 ;;
 esac
 `,
-            async () => {
+            async (logs) => {
               await expect(
-                commands.get("recreate_environment")?.({ environmentId: environment.id }, context),
-              ).resolves.toEqual(
-                expect.objectContaining({
-                  environment: expect.objectContaining({
-                    id: environment.id,
-                    containerId: "container-after-recreate",
-                    status: "running",
-                  }),
-                }),
-              );
+                commands.get("recreate_environment")?.(
+                  {
+                    environmentId: environment.id,
+                    intent: "discard",
+                    expectedContainerId: "container-still-present",
+                  },
+                  context,
+                ),
+              ).rejects.toThrow("ContainerLifecycleError:removal-failed");
+              const calls = await fs.readFile(logs.all, "utf8");
+              expect(calls).not.toContain("create");
             },
           );
         });
 
-        expect(environment.containerId).toBe("container-after-recreate");
-        expect(environment.status).toBe("running");
-        expect(environment.lifecycleError).toBeNull();
+        expect(environment.containerId).toBe("container-still-present");
+        expect(environment.setupScriptsComplete).toBe(true);
+        expect(environment.createdFromCommit).toBe("2222222222222222222222222222222222222222");
+        expect(environment.lifecycleError).toBe(
+          ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.containerRemovalFailed,
+        );
         // The daemon-level cause is still recoverable from the backend logs.
         expect(JSON.stringify(errorLog.mock.calls)).toContain("container runtime refused removal");
       } finally {
         errorLog.mockRestore();
       }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test("refuses a recreate that does not explicitly discard the container", async () => {
+    const environment = createEnvironment({
+      id: "env-recreate-implicit",
+      environmentType: "containerized",
+      containerId: "container-with-work",
+      status: "running",
+      setupScriptsComplete: true,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
+exit 0
+`,
+      async (logs) => {
+        // An older client sends no intent at all; `preserve` is also refused
+        // while the workspace lives in the container's writable layer.
+        for (const args of [
+          { environmentId: environment.id },
+          { environmentId: environment.id, intent: "preserve" },
+        ]) {
+          await expect(commands.get("recreate_environment")?.(args, context)).rejects.toThrow(
+            "ContainerLifecycleError:preservation-required",
+          );
+        }
+        // Discard without the reviewed id is malformed, not a default.
+        await expect(
+          commands.get("recreate_environment")?.(
+            { environmentId: environment.id, intent: "discard" },
+            context,
+          ),
+        ).rejects.toThrow("ContainerLifecycleError:invalid-request");
+        expect(await fs.readFile(logs.all, "utf8").catch(() => "")).toBe("");
+      },
+    );
+    expect(environment.containerId).toBe("container-with-work");
+    expect(environment.setupScriptsComplete).toBe(true);
+  });
+
+  test(
+    "a confirmed discard invalidates setup but keeps the delegation base",
+    async () => {
+      const delegationBase = "3333333333333333333333333333333333333333";
+      const environment = createEnvironment({
+        id: "env-recreate-discard-reset",
+        environmentType: "containerized",
+        containerId: "container-old",
+        status: "running",
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+        setupOverride: true,
+        createdFromCommit: delegationBase,
+        delegationBaseCommit: delegationBase,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
+case "$1" in
+  rm) printf 'Error response from daemon: No such container: container-old\\n' >&2; exit 1 ;;
+  create) printf 'container-new\\n' ;;
+  inspect) printf 'running\\n' ;;
+  exec)
+    case "$*" in
+      *ORKESTRATOR_SETUP_CAPABILITIES*) printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037' ;;
+      *--prepare-only*) printf '\\036ORKESTRATOR_PREPARE_OK\\037' ;;
+      *"rev-parse HEAD"*) printf '${delegationBase}\\n' ;;
+      *rev-parse*) printf '4444444444444444444444444444444444444444\\n' ;;
+      *"branch --show-current"*) printf '%s\\n' '${environment.branch}' ;;
+    esac
+    ;;
+  start) exit 0 ;;
+esac
+`,
+          async (logs) => {
+            // A container Docker already forgot counts as removed.
+            await expect(
+              commands.get("recreate_environment")?.(
+                {
+                  environmentId: environment.id,
+                  intent: "discard",
+                  expectedContainerId: "container-old",
+                },
+                context,
+              ),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                environment: expect.objectContaining({ containerId: "container-new" }),
+              }),
+            );
+            const calls = await fs.readFile(logs.all, "utf8");
+            expect(calls).toContain("--prepare-only");
+          },
+        );
+      });
+
+      expect(environment.containerId).toBe("container-new");
+      expect(environment.setupOverride).toBe(false);
+      // Re-prepared from a fresh clone and reconciled to the immutable base.
+      expect(environment.delegationBaseCommit).toBe(delegationBase);
+      expect(environment.createdFromCommit).toBe(delegationBase);
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -2286,6 +2432,7 @@ esac
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     printf 'container-copy-created\\n'
@@ -2408,6 +2555,7 @@ exit 0
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     printf 'container-copy-fail\\n'
@@ -2477,6 +2625,7 @@ exit 0
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     printf 'container-symlink-fail\\n'
@@ -2954,6 +3103,7 @@ exit 0
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -3327,6 +3477,7 @@ exit 1
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   case "$*" in
@@ -3448,6 +3599,7 @@ exit 1
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   printf 'docker exec should not be called for a stopped container\\n' >&2

@@ -939,7 +939,21 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     const exec = path.join(root, "docker-exec.log");
     await fs.mkdir(binDir, { recursive: true });
     await fs.mkdir(home, { recursive: true });
-    await fs.writeFile(path.join(binDir, "docker"), scriptBody);
+    const scenario = path.join(binDir, "docker-scenario");
+    await fs.writeFile(scenario, scriptBody);
+    await fs.chmod(scenario, 0o755);
+    // Most command fixtures model pre-capability images. Their ad-hoc Docker
+    // scripts do not answer the boot probe; make that legacy contract explicit
+    // instead of letting empty output bypass production readiness checks.
+    await fs.writeFile(
+      path.join(binDir, "docker"),
+      `#!/bin/sh
+case "$*" in
+  *boot-status.json*) printf 'ORKESTRATOR_NO_BOOT_DIR\\n1\\n'; exit 0 ;;
+esac
+exec '${scenario}' "$@"
+`,
+    );
     await fs.chmod(path.join(binDir, "docker"), 0o755);
     await fs.writeFile(path.join(binDir, "security"), securityScriptBody);
     await fs.chmod(path.join(binDir, "security"), 0o755);
@@ -1307,10 +1321,30 @@ exec '${realGit}' "$@"
     return { promise, resolve, reject };
   }
 
+  /** Registry owner of the default fixture data directory. */
+  const FIXTURE_DOCKER_OWNER = dockerOwnerNamespace(
+    path.join(os.tmpdir(), "orkestrator-command-tests"),
+  );
+  /**
+   * Shell lines answering the lifecycle ownership probe (`owner\tstatus\tapp\tid`)
+   * for any container as owned by `owner` and in `state`. Insert them after a
+   * fake's logging line; other `inspect` formats fall through to the fake.
+   */
+  const ownedContainerInspect = (owner = FIXTURE_DOCKER_OWNER, state = "running") =>
+    `if [ "$1" = "inspect" ]; then
+  case "$*" in
+    *'index .Config.Labels "orkestrator-owner"'*)
+      printf '%s\\t%s\\torkestrator-v2\\t%s\\n' '${owner}' '${state}' "$4"
+      exit 0
+      ;;
+  esac
+fi`;
+
   // Fake `docker` that reports the container as running and succeeds on exec,
   // returning a deterministic HEAD commit for `git rev-parse`.
   const RUNNING_CONTAINER_DOCKER_SCRIPT = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -1377,6 +1411,8 @@ exit 0
     LOCAL_PROJECT_FOR_CREATE,
     LOOPED_REVIEW_WORKFLOW_VERSION,
     RUNNING_CONTAINER_DOCKER_SCRIPT,
+    FIXTURE_DOCKER_OWNER,
+    ownedContainerInspect,
     SETUP_DONE_OSC,
     SETUP_FAILED_OSC,
     TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS,

@@ -1371,7 +1371,8 @@ export function HierarchicalSidebar() {
                   ))}
                 </ul>
                 <p className="mt-2 text-orange-500">
-                  This action cannot be undone. Running environments will be stopped first.
+                  This action cannot be undone. Running environments will be stopped first, and
+                  their containers, persistent storage and recovery copies are deleted.
                 </p>
               </div>
             </AlertDialogDescription>

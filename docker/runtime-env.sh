@@ -322,6 +322,14 @@ orkestrator_source_runtime_env() {
         unset github_token
     fi
 
+    # A staged Claude key stays in a revocable bind-mounted file rather than
+    # Docker's immutable Config.Env. Every new shell reads the current file;
+    # revocation removes it and stops the existing bridge.
+    if [ -r /claude-config/.orkestrator-anthropic-key ]; then
+        ANTHROPIC_API_KEY="$(cat /claude-config/.orkestrator-anthropic-key 2>/dev/null || true)"
+        export ANTHROPIC_API_KEY
+    fi
+
     orkestrator_add_common_runtime_paths_floor
     orkestrator_promote_mise_shims
     orkestrator_ensure_bash_env

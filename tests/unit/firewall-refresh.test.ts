@@ -194,6 +194,18 @@ describe("firewall allowlist refresh and edits", () => {
     });
   });
 
+  test("adding to an empty stored list keeps the image defaults", () => {
+    withFixture((fixture) => {
+      fixtureScript(fixture.dir, "init-firewall.sh");
+      writeFileSync(join(fixture.dir, "policy", "allowed-domains"), "\n");
+      const result = fixture.run(["--add", "c.example"], "c.example 192.0.2.30 600\n");
+      expect(result.exitCode).toBe(0);
+      const stored = readFileSync(join(fixture.dir, "policy", "allowed-domains"), "utf8");
+      expect(stored).toContain("c.example");
+      expect(stored.split(",").length).toBeGreaterThan(2);
+    });
+  });
+
   test("a list with characters outside a domain name changes nothing", () => {
     withFixture((fixture) => {
       const result = fixture.run(["--set-domains", "a.example;rm -rf /"], "");

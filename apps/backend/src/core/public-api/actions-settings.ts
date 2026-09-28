@@ -359,7 +359,7 @@ const projectConfigSet: MutationActionHandler<SettingsPatch & { projectId: strin
 // ---------------------------------------------------------------------------
 // Environment scope
 
-async function environmentSnapshot(
+export async function environmentSnapshot(
   environment: Environment,
   context: PublicActionContext,
 ): Promise<PublicSettingsSnapshot> {
@@ -388,8 +388,10 @@ async function environmentSnapshot(
       return {
         key: descriptor.key,
         value: environment.allowedDomains ?? null,
-        effective: environment.allowedDomains ?? global ?? null,
-        source: environment.allowedDomains ? "environment" : global ? "global" : "unset",
+        effective: environment.allowedDomains?.length
+          ? environment.allowedDomains
+          : (global ?? null),
+        source: environment.allowedDomains?.length ? "environment" : global ? "global" : "unset",
         application: descriptor.application,
       };
     }

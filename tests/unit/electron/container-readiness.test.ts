@@ -52,6 +52,8 @@ describe("boot status probe", () => {
       failureCode: null,
     });
     expect(parseBootProbe("ORKESTRATOR_NO_BOOT_DIR\n1\n")).toEqual({ kind: "legacy" });
+    expect(parseBootProbe("\n1\n")).toEqual({ kind: "pending" });
+    expect(parseBootProbe("unexpected\n1\n")).toEqual({ kind: "pending" });
   });
 });
 
@@ -119,7 +121,7 @@ exit 0
     );
   });
 
-  test("a legacy image or an unanswered probe does not gate dispatch", async () => {
+  test("a legacy image bypasses readiness, while an unanswered probe remains gated", async () => {
     await withDockerScript(
       `#!/bin/sh
 [ "$1" = "exec" ] && printf 'ORKESTRATOR_NO_BOOT_DIR\\n1\\n'
@@ -129,9 +131,30 @@ exit 0
         expect(await ensureCurrentBootReady("container-1")).toBeNull();
       },
     );
-    await withDockerScript("#!/bin/sh\nexit 9\n", async () => {
-      expect(await ensureCurrentBootReady("container-1")).toBeNull();
-    });
+    await withDockerScript(
+      '#!/bin/sh\n[ "$1" = inspect ] && printf \'true\\n\'\n[ "$1" = exec ] && exit 9\n',
+      async () => {
+        await expect(
+          ensureCurrentBootReady("container-1", { timeoutMs: 20 }),
+        ).rejects.toBeInstanceOf(ContainerInitializationError);
+      },
+    );
+  });
+
+  test("a capable image with no boot directory is still gated", async () => {
+    await withDockerScript(
+      `#!/bin/sh
+case "$1:$2" in
+  exec:*) printf 'ORKESTRATOR_NO_BOOT_DIR\\n5000\\n' ;;
+  inspect:-f) case "$*" in *capabilities*) printf 'boot-status=1,staged-inputs=1\\n' ;; *) printf 'true\\n' ;; esac ;;
+esac
+`,
+      async () => {
+        await expect(
+          ensureCurrentBootReady("container-1", { timeoutMs: 20 }),
+        ).rejects.toBeInstanceOf(ContainerInitializationError);
+      },
+    );
   });
 });
 

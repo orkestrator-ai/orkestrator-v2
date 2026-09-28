@@ -12,13 +12,21 @@ import {
   advanceContainerOperation,
   beginContainerOperation,
   completeContainerOperation,
+  reconcileContainerOperation,
   reconcileContainerOperations,
   resetContainerOwnershipCache,
   resolveContainerOwnership,
   resolveNeedsAttentionOperation,
   runContainerOperation,
 } from "../../../apps/backend/src/core/container-lifecycle-service";
-import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
+import {
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+} from "../../../apps/backend/src/core/docker-ownership";
+import {
+  recreateEnvironmentOnce,
+  startEnvironmentOnce,
+} from "../../../apps/backend/src/core/commands-environment";
 import {
   REGISTRY_SCHEMA_MARKER_FILE,
   REGISTRY_WRITER_LEASE_FILE,
@@ -26,6 +34,10 @@ import {
   checkRegistrySchemaMarker,
   openRegistryWriter,
 } from "../../../apps/backend/src/core/registry-writer-lease";
+import {
+  currentRuntimeIdentity,
+  nextRuntimeGeneration,
+} from "../../../apps/backend/src/core/container-lifecycle-service";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -52,6 +64,162 @@ function record(environment: { containerLifecycle?: unknown }) {
 }
 
 describe("container lifecycle operations", () => {
+  test("interrupted discard clears clone and setup state before a new runtime starts", async () => {
+    const dir = await dataDir();
+    const owner = dockerOwnerNamespace(dir);
+    const operationId = createOperationId();
+    const environment = lifecycleEnvironment({
+      containerId: "discarded-container",
+      createdFromCommit: "abc123",
+      setupScriptsComplete: true,
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 2,
+        lastRuntimeGeneration: 1,
+        runtime: { containerId: "discarded-container", runtimeGeneration: 1, owner },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        operation: {
+          operationId,
+          kind: "discard",
+          status: "running",
+          phase: "removing",
+          source: { containerId: "discarded-container", runtimeGeneration: 1, owner },
+          startedAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        outcomes: [],
+      },
+    });
+    const { context, environments } = memoryLifecycleContext([environment], dir);
+    await withDockerScript("#!/bin/sh\necho 'No such object' >&2\nexit 1\n", async () => {
+      expect(await reconcileContainerOperation(context, environment)).toBe("settled");
+    });
+    const stored = environments.get(environment.id)!;
+    expect(stored.containerId).toBeNull();
+    expect(stored.createdFromCommit).toBeUndefined();
+    expect(stored.setupScriptsComplete).toBe(false);
+    expect(record(stored).storage.workspaceGeneration).toBe(2);
+  });
+  test("a successful start replay leaves running status unchanged", async () => {
+    const dir = await dataDir();
+    const owner = dockerOwnerNamespace(dir);
+    const operationId = createOperationId();
+    const environment = lifecycleEnvironment({
+      containerId: "runtime-1",
+      status: "running",
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 2,
+        lastRuntimeGeneration: 1,
+        runtime: { containerId: "runtime-1", runtimeGeneration: 1, owner },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        outcomes: [
+          {
+            operationId,
+            kind: "start",
+            status: "succeeded",
+            completedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    const { context, environments } = memoryLifecycleContext([environment], dir);
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n',
+      async (log) => {
+        const result = await startEnvironmentOnce(environment.id, context, () => undefined, {
+          operationId,
+        });
+        expect(result.environment.status).toBe("running");
+        expect(await log.read()).toBe("");
+      },
+    );
+    expect(environments.get(environment.id)?.status).toBe("running");
+  });
+
+  test("a failed rebuild replay does not reset setup or start the original", async () => {
+    const dir = await dataDir();
+    const owner = dockerOwnerNamespace(dir);
+    const operationId = createOperationId();
+    const environment = lifecycleEnvironment({
+      containerId: "runtime-1",
+      status: "running",
+      setupScriptsComplete: true,
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 2,
+        lastRuntimeGeneration: 1,
+        runtime: { containerId: "runtime-1", runtimeGeneration: 1, owner },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        outcomes: [
+          {
+            operationId,
+            kind: "migrate",
+            status: "failed",
+            failureCode: "resource-exhausted",
+            completedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    const { context, environments } = memoryLifecycleContext([environment], dir);
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n',
+      async (log) => {
+        await expect(
+          recreateEnvironmentOnce(
+            {
+              environmentId: environment.id,
+              intent: "preserve",
+              expectedContainerId: "runtime-1",
+              operationId,
+            },
+            context,
+            () => undefined,
+            () => undefined,
+          ),
+        ).rejects.toThrow("resource-exhausted");
+        expect(await log.read()).toBe("");
+      },
+    );
+    expect(environments.get(environment.id)?.setupScriptsComplete).toBe(true);
+  });
+  test("a blocked writer cannot reconcile and remove another writer's candidate", async () => {
+    const dir = await dataDir();
+    const owner = dockerOwnerNamespace(dir);
+    const environment = lifecycleEnvironment({
+      containerId: "source-container",
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 2,
+        lastRuntimeGeneration: 1,
+        runtime: { containerId: "source-container", runtimeGeneration: 1, owner },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        operation: {
+          operationId: createOperationId(),
+          kind: "migrate",
+          status: "running",
+          phase: "candidate-prepared",
+          startedAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+        outcomes: [],
+      },
+    });
+    const { context } = memoryLifecycleContext([environment], dir);
+    const holder = await openRegistryWriter(dir);
+    context.registryWriterLease = await openRegistryWriter(dir);
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n',
+      async (log) => {
+        await expect(beginContainerOperation(context, environment.id, "stop")).rejects.toThrow(
+          "operation-in-progress",
+        );
+        expect(await log.read()).toBe("");
+      },
+    );
+    await holder.release();
+  });
   test("persists intent before effects and deduplicates a repeated request", async () => {
     const { context, environments, events } = memoryLifecycleContext(
       [lifecycleEnvironment()],
@@ -381,6 +549,23 @@ esac
 });
 
 describe("registry writer lease", () => {
+  test("only one concurrent contender takes over a stale lease", async () => {
+    const dir = await dataDir();
+    const leasePath = path.join(dir, REGISTRY_WRITER_LEASE_FILE);
+    await fs.writeFile(
+      leasePath,
+      JSON.stringify({ token: "dead", pid: 1, acquiredAt: "2020-01-01T00:00:00Z" }),
+    );
+    const old = new Date(Date.now() - 120_000);
+    await fs.utimes(leasePath, old, old);
+    const results = await Promise.allSettled([
+      RegistryWriterLease.acquire(dir),
+      RegistryWriterLease.acquire(dir),
+    ]);
+    const winners = results.filter((result) => result.status === "fulfilled");
+    expect(winners).toHaveLength(1);
+    if (winners[0]?.status === "fulfilled") await winners[0].value.release();
+  });
   test("admits exactly one writer per data directory", async () => {
     const dir = await dataDir();
     const first = await openRegistryWriter(dir);
@@ -442,6 +627,20 @@ describe("registry writer lease", () => {
 });
 
 describe("runtime generation binding", () => {
+  test("a pre-upgrade runtime reserves generation one and its historical name", async () => {
+    const { context } = memoryLifecycleContext([], await dataDir());
+    const environment = lifecycleEnvironment({ containerId: "legacy-container" });
+    expect(currentRuntimeIdentity(environment, context)?.runtimeGeneration).toBe(1);
+    expect(nextRuntimeGeneration(environment)).toBe(2);
+    const owner = dockerOwnerNamespace(context.storage.getDataDir());
+    const previousName = dockerContainerRuntimeName(owner, environment.id);
+    const replacementName = dockerContainerRuntimeName(
+      owner,
+      environment.id,
+      nextRuntimeGeneration(environment),
+    );
+    expect(replacementName).toBe(`${previousName}-g2`);
+  });
   test("a handle for a replaced runtime conflicts instead of connecting", async () => {
     const dir = await dataDir();
     const { assertRuntimeGeneration } =

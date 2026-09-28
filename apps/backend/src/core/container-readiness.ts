@@ -44,10 +44,9 @@ export function parseBootProbe(output: string): BootObservation {
   const pid1Start = startLine.trim();
   const first = statusLine.trim();
   if (first === "ORKESTRATOR_NO_BOOT_STATUS") return { kind: "pending" };
-  // The probe prints either a sentinel or a JSON record. Anything else (no
-  // output, an unrelated line) is not this contract, so it gates nothing —
-  // exactly like an image without the boot-status capability.
-  if (first === "ORKESTRATOR_NO_BOOT_DIR" || !first.startsWith("{")) return { kind: "legacy" };
+  if (first === "ORKESTRATOR_NO_BOOT_DIR") return { kind: "legacy" };
+  // Empty, torn, or foreign output is never positive readiness evidence.
+  if (!first.startsWith("{")) return { kind: "pending" };
   if (statusLine.length > MAX_BOOT_STATUS_BYTES || !/^\d+$/.test(pid1Start)) {
     return { kind: "pending" };
   }
@@ -96,7 +95,28 @@ export async function observeContainerBoot(containerId: string): Promise<BootObs
       ],
       { timeoutMs: 10_000 },
     );
-    return parseBootProbe(stdout);
+    const observation = parseBootProbe(stdout);
+    if (observation.kind !== "legacy") return observation;
+    // A missing status directory is legacy only when the image does not
+    // advertise the boot-status contract. An initialized capable image can
+    // temporarily lose /run during restart.
+    try {
+      const { stdout: capabilities } = await runCommand(
+        "docker",
+        [
+          "inspect",
+          "-f",
+          '{{ index .Config.Labels "org.orkestrator.image.capabilities" }}',
+          containerId,
+        ],
+        { timeoutMs: 10_000 },
+      );
+      return /(?:^|,)boot-status=[1-9][0-9]*(?:,|$)/.test(capabilities.trim())
+        ? { kind: "pending" }
+        : observation;
+    } catch {
+      return { kind: "unreachable" };
+    }
   } catch {
     return { kind: "unreachable" };
   }
@@ -167,9 +187,7 @@ export async function ensureCurrentBootReady(
   options: { timeoutMs?: number } = {},
 ): Promise<string | null> {
   const observation = await observeContainerBoot(containerId);
-  // No contract, or no answer: the dispatch that follows reports its own
-  // failure. Only positive evidence of an unfinished boot is waited on.
-  if (observation.kind === "legacy" || observation.kind === "unreachable") return null;
+  if (observation.kind === "legacy") return null;
   if (observation.kind === "current" && observation.phase === "ready") return observation.bootId;
   return waitForContainerBoot(containerId, options);
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 
@@ -62,10 +63,19 @@ export class RegistryWriterLease {
     const heartbeatMs = options.heartbeatMs ?? Math.max(1_000, Math.floor(staleMs / 3));
     const now = options.now ?? Date.now;
     const leasePath = path.join(dataDir, REGISTRY_WRITER_LEASE_FILE);
+    const takeoverPath = `${leasePath}.takeover`;
     await fs.mkdir(dataDir, { recursive: true });
     const token = randomUUID();
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (
+        await fs.stat(takeoverPath).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        throw new RegistryWriterLeaseBusyError();
+      }
       try {
         const handle = await fs.open(leasePath, "wx", 0o600);
         const document: LeaseDocument = {
@@ -86,17 +96,26 @@ export class RegistryWriterLease {
         if (code !== "EEXIST") throw error;
         const stat = await fs.stat(leasePath).catch(() => null);
         if (stat && now() - stat.mtimeMs > staleMs) {
-          // The holder stopped heartbeating. Remove only the document we
-          // judged stale: a fresh lease written in between keeps its token.
-          const staleToken = await readToken(leasePath);
-          const current = await fs.stat(leasePath).catch(() => null);
-          if (
-            current &&
-            now() - current.mtimeMs > staleMs &&
-            staleToken === (await readToken(leasePath))
-          ) {
-            await fs.rm(leasePath, { force: true });
-            continue;
+          // Only one contender may remove a stale document. Leave an orphaned
+          // takeover lock fail-closed rather than risk two live writers.
+          try {
+            await fs.mkdir(takeoverPath, { mode: 0o700 });
+          } catch {
+            throw new RegistryWriterLeaseBusyError();
+          }
+          try {
+            const staleToken = await readToken(leasePath);
+            const current = await fs.stat(leasePath).catch(() => null);
+            if (
+              current &&
+              now() - current.mtimeMs > staleMs &&
+              staleToken === (await readToken(leasePath))
+            ) {
+              await fs.rm(leasePath, { force: true });
+              continue;
+            }
+          } finally {
+            await fs.rmdir(takeoverPath);
           }
         }
         throw new RegistryWriterLeaseBusyError();
@@ -120,7 +139,16 @@ export class RegistryWriterLease {
   }
 
   isHeld(): boolean {
-    return !this.released && !this.lost;
+    if (this.released || this.lost) return false;
+    try {
+      const parsed = JSON.parse(readFileSync(this.leasePath, "utf8")) as Partial<LeaseDocument>;
+      if (parsed.token === this.token) return true;
+    } catch {
+      // A missing or malformed lease is never proof of ownership.
+    }
+    this.lost = true;
+    clearInterval(this.heartbeat);
+    return false;
   }
 
   /** Throws unless this process still holds the lease. */

@@ -15,6 +15,8 @@ import {
 } from "../../../apps/backend/src/core/container-network";
 import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
 import { resetImageManifestCache } from "../../../apps/backend/src/core/docker-image";
+import { environmentSnapshot } from "../../../apps/backend/src/core/public-api/actions-settings";
+import { defaultConfig } from "../../../apps/backend/src/core/storage-shared";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -23,6 +25,16 @@ import {
 } from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];
+test("public environment settings report inherited domains when the saved list is empty", async () => {
+  const config = defaultConfig();
+  config.global.allowedDomains = ["global.example"];
+  const environment = lifecycleEnvironment({ allowedDomains: [] });
+  const snapshot = await environmentSnapshot(environment, {
+    command: { storage: { loadConfig: async () => config } },
+  } as never);
+  const domains = snapshot.settings.find((setting) => setting.key === "allowedDomains");
+  expect(domains).toMatchObject({ value: [], effective: ["global.example"], source: "global" });
+});
 afterEach(async () => {
   resetImageManifestCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));

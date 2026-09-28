@@ -9,6 +9,8 @@ import {
 } from "@orkestrator/protocol/container-lifecycle";
 import type { RecoveryCopy, RecoveryCopyList } from "@orkestrator/protocol/container-recovery";
 import {
+  DOCKER_LABEL_APP,
+  DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_OWNER,
   dockerOwnerNamespace,
@@ -262,8 +264,12 @@ export async function discardRecoveryCopy(
       if (probe.kind === "present") {
         const labels = await containerLabels(group.runtime.containerId);
         const environmentLabel = labels[DOCKER_LABEL_ENVIRONMENT_ID];
+        const retainedLegacy =
+          !context.strictDockerOwner &&
+          probe.labels[DOCKER_LABEL_OWNER] === undefined &&
+          probe.labels[DOCKER_LABEL_APP] === DOCKER_LABEL_APP_VALUE;
         if (
-          probe.labels[DOCKER_LABEL_OWNER] !== owner ||
+          (probe.labels[DOCKER_LABEL_OWNER] !== owner && !retainedLegacy) ||
           (environmentLabel !== undefined && environmentLabel !== environment.id)
         ) {
           keptContainer = group.runtime.containerId;
@@ -434,6 +440,12 @@ async function restoreRecoveryCopyUnfenced(
       "That recovery copy cannot be restored: some of its resources are missing, or it is an incomplete rebuild.",
     );
   }
+  if (environment.revokedInputProviders?.length) {
+    throw lifecycleError(
+      "needs-attention",
+      "Restore this recovery copy only after re-enabling the revoked providers; its saved runtime may still contain their credentials.",
+    );
+  }
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
   let reuseRuntime = false;
   if (group.runtime) {
@@ -452,6 +464,7 @@ async function restoreRecoveryCopyUnfenced(
   if (admission.kind === "replayed") return undefined;
   const { operationId } = admission.operation;
   let createdCandidate = false;
+  let committed = false;
   try {
     if (environment.containerId) {
       await advanceContainerOperation(context, environment.id, operationId, {
@@ -526,9 +539,18 @@ async function restoreRecoveryCopyUnfenced(
       boot: { phase: "stopped" },
       environment: { containerId: target.containerId, status: "stopped", lifecycleError: null },
     });
-    await context.storage.clearBackendTerminalSessionIds?.(environment.id);
+    committed = true;
+    await context.storage
+      .clearBackendTerminalSessionIds?.(environment.id)
+      .catch((error: unknown) => {
+        console.error(
+          "Could not clear terminal sessions after recovery restore",
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
     return { containerId: target.containerId };
   } catch (error) {
+    if (committed) throw error;
     if (createdCandidate) {
       // Only a runtime this operation created is removed; the copy's storage
       // and the original are never touched by the rollback.

@@ -939,7 +939,21 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     const exec = path.join(root, "docker-exec.log");
     await fs.mkdir(binDir, { recursive: true });
     await fs.mkdir(home, { recursive: true });
-    await fs.writeFile(path.join(binDir, "docker"), scriptBody);
+    const scenario = path.join(binDir, "docker-scenario");
+    await fs.writeFile(scenario, scriptBody);
+    await fs.chmod(scenario, 0o755);
+    // Most command fixtures model pre-capability images. Their ad-hoc Docker
+    // scripts do not answer the boot probe; make that legacy contract explicit
+    // instead of letting empty output bypass production readiness checks.
+    await fs.writeFile(
+      path.join(binDir, "docker"),
+      `#!/bin/sh
+case "$*" in
+  *boot-status.json*) printf 'ORKESTRATOR_NO_BOOT_DIR\\n1\\n'; exit 0 ;;
+esac
+exec '${scenario}' "$@"
+`,
+    );
     await fs.chmod(path.join(binDir, "docker"), 0o755);
     await fs.writeFile(path.join(binDir, "security"), securityScriptBody);
     await fs.chmod(path.join(binDir, "security"), 0o755);

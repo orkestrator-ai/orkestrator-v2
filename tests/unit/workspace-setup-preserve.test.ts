@@ -213,6 +213,35 @@ describe("workspace setup Git scan caches", () => {
 });
 
 describe("workspace setup attachment preservation (structure)", () => {
+  test("an interrupted volume clone keeps its marker while partial files are cleaned", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-volume-clone-"));
+    try {
+      const state = join(workspace, ".orkestrator");
+      mkdirSync(join(state, ".clone-in-progress"), { recursive: true });
+      writeFileSync(join(state, "storage-marker.json"), '{"environmentId":"env-1"}');
+      writeFileSync(join(state, ".clone-copy-in-progress"), "");
+      writeFileSync(join(workspace, "partial-file"), "partial");
+      const setup = read("docker/workspace-setup.sh");
+      const start = setup.indexOf("    # Clean /workspace");
+      const end = setup.indexOf("    print_workspace_disk_status", start);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const cleanup = setup.slice(start, end).replaceAll("/workspace", workspace);
+      const result = spawnSync(
+        "bash",
+        ["-c", `preserve_orkestrator_workspace_state() { :; }\n${cleanup}`],
+        {
+          env: { ...process.env, ORKESTRATOR_WORKSPACE_STORAGE: "volume-v1" },
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(existsSync(join(state, "storage-marker.json"))).toBe(true);
+      expect(existsSync(join(workspace, "partial-file"))).toBe(false);
+      expect(existsSync(join(state, ".clone-in-progress"))).toBe(false);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
   test("preserve/restore wrap workspace cleanup, in correct order", () => {
     const setup = read("docker/workspace-setup.sh");
 

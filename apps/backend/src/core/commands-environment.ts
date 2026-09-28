@@ -2,6 +2,7 @@ import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
   formatContainerLifecycleError,
+  isContainerLifecycleErrorCode,
   parseContainerLifecycle,
   setupCompletionIsCurrent,
   type ContainerLifecycleErrorCode,
@@ -1141,11 +1142,12 @@ export async function prepareEnvironmentForSetup(
   onPrepareOutput?: (chunk: string) => void,
   prepare: typeof ensureCreatedFromCommitBeforeSetup = ensureCreatedFromCommitBeforeSetup,
   reconcile: typeof reconcilePreparedContainerDelegation = reconcilePreparedContainerDelegation,
+  ensureReady: typeof ensureCurrentBootReady = ensureCurrentBootReady,
 ): Promise<Environment> {
   // Immediately before repository work runs in the container: if Docker
   // restarted it since the start was admitted, wait for the new boot.
   if (environment.environmentType === "containerized" && environment.containerId) {
-    await ensureCurrentBootReady(environment.containerId);
+    await ensureReady(environment.containerId);
   }
   const prepared = await prepare(environment, context, onPrepareOutput);
   // Container preparation owns the initial clone. Reconcile an explicit
@@ -1483,6 +1485,23 @@ export async function startEnvironmentOnce(
   // operation while a durable deletion tombstone was persisted.
   assertEnvironmentNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
+  if (identity.operationId && environment.environmentType === "containerized") {
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    const replay = parsed.supported
+      ? parsed.record.outcomes.find((entry) => entry.operationId === identity.operationId)
+      : undefined;
+    if (replay) {
+      if (replay.status !== "succeeded") {
+        throw containerLifecycleError(
+          isContainerLifecycleErrorCode(replay.failureCode)
+            ? replay.failureCode
+            : "operation-unknown",
+          "The earlier start did not succeed.",
+        );
+      }
+      return { setupStarted: false, environment };
+    }
+  }
   // Rolling back a worktree needs the repository it was added to and the branch
   // it created, not just the directory: `git worktree add -b` makes both.
   let unpersistedWorktree: { projectPath: string; path: string; branch: string } | null = null;
@@ -1857,7 +1876,25 @@ async function recreateEnvironmentOnceUnfenced(
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
   const environment = await context.storage.getEnvironment(request.environmentId);
-  if (!environment?.containerId) return;
+  if (!environment) return;
+  if (request.operationId) {
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    const replay = parsed.supported
+      ? parsed.record.outcomes.find((entry) => entry.operationId === request.operationId)
+      : undefined;
+    if (replay) {
+      if (replay.status !== "succeeded") {
+        throw containerLifecycleError(
+          isContainerLifecycleErrorCode(replay.failureCode)
+            ? replay.failureCode
+            : "operation-unknown",
+          "The earlier rebuild did not succeed.",
+        );
+      }
+      return { setupStarted: false, environment };
+    }
+  }
+  if (!environment.containerId) return;
   // Re-read under the lifecycle queue: the request may have waited behind a
   // start/recreate that replaced the runtime the user reviewed.
   assertEnvironmentNotDeleting(environment.id);

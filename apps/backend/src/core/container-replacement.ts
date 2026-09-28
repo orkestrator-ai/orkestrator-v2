@@ -252,7 +252,7 @@ function helperArguments(
  * deadline; the producer's "could not find" is reported as an absent path
  * (nothing to preserve), not a failure.
  */
-async function pipeContainerPath(
+export async function pipeContainerPath(
   containerId: string,
   sourcePath: string,
   consumerArgs: string[],
@@ -292,6 +292,7 @@ async function pipeContainerPath(
     });
     consumer.on("close", (code) => {
       consumerCode = code ?? 1;
+      if (producerCode === null) producer.kill("SIGKILL");
       finish();
     });
     producer.on("error", () => {
@@ -300,6 +301,7 @@ async function pipeContainerPath(
     });
     consumer.on("error", () => {
       consumerCode = 1;
+      if (producerCode === null) producer.kill("SIGKILL");
       finish();
     });
   });
@@ -494,6 +496,18 @@ export async function rollbackCandidate(
   operationId: string,
   candidateStorage: ContainerStorageIdentity | undefined,
 ): Promise<NonNullable<EnvironmentContainerLifecycle["retainedStorage"]>[number] | undefined> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  const parsed = parseContainerLifecycle(environment?.containerLifecycle);
+  if (parsed.supported) {
+    const record = parsed.record;
+    if (
+      record.runtime?.createdByOperationId === operationId ||
+      (candidateStorage?.storageSetId &&
+        record.storage.storageSetId === candidateStorage.storageSetId)
+    ) {
+      return undefined;
+    }
+  }
   const search = await findOperationContainers(context, operationId);
   const containerIds =
     search.kind === "one"
@@ -594,14 +608,24 @@ async function replaceRuntimePreservingStateUnfenced(
   request: ReplacementRequest,
   context: CommandContext,
 ): Promise<ReplacementOutcome | undefined> {
+  const environment = await context.storage.getEnvironment(request.environmentId);
+  if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
+  if (request.operationId) {
+    const parsed = readRecord(environment);
+    const replay = parsed.outcomes.find((entry) => entry.operationId === request.operationId);
+    if (replay) {
+      if (replay.status !== "succeeded") {
+        throw lifecycleError("operation-unknown", "The earlier rebuild did not succeed.");
+      }
+      return undefined;
+    }
+  }
   if (replacementAdmissionPaused()) {
     throw lifecycleError(
       "capability-unavailable",
       "New rebuilds and migrations are paused on this installation. Recovery copies can still be restored or discarded.",
     );
   }
-  const environment = await context.storage.getEnvironment(request.environmentId);
-  if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
   if (environment.environmentType !== "containerized" || !environment.containerId) return undefined;
   if (environment.containerId !== request.expectedContainerId) {
     throw lifecycleError(
@@ -645,6 +669,7 @@ async function replaceRuntimePreservingStateUnfenced(
 
   let candidateStorage: ContainerStorageIdentity | undefined;
   let sourceStopped = false;
+  let committed = false;
   try {
     // Preflight: read-only checks before anything is touched.
     await phase("preflight");
@@ -830,13 +855,22 @@ async function replaceRuntimePreservingStateUnfenced(
       boot: { phase: "stopped" },
       environment: { containerId: candidateId, status: "stopped", lifecycleError: null },
     });
+    committed = true;
     // The old generation's handles must not connect to the replacement.
-    await context.storage.clearBackendTerminalSessionIds?.(environment.id);
+    await context.storage
+      .clearBackendTerminalSessionIds?.(environment.id)
+      .catch((error: unknown) => {
+        console.error(
+          "Could not clear terminal sessions after container replacement",
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
     containerGitFetchPolicy.forgetContainer(sourceContainerId);
     cancellationRequests.delete(operationId);
     return { kind, containerId: candidateId, runtimeGeneration, files, bytes };
   } catch (error) {
     cancellationRequests.delete(operationId);
+    if (committed) throw error;
     const failedCandidate = await rollbackCandidate(
       context,
       environment.id,

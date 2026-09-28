@@ -4,6 +4,7 @@ import {
   boundDiagnosticTail,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
+import { mkdir, writeFile } from "node:fs/promises";
 import {
   os,
   path,
@@ -317,11 +318,6 @@ export async function createDockerContainer(
   const anthropicApiKey = allowClaudeCredentials
     ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
-  if (anthropicApiKey) {
-    dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
-    redactValues.push(anthropicApiKey);
-    args.push("-e", "ANTHROPIC_API_KEY");
-  }
   // Cursor's SDK accepts a headless API key in containers. The host-environment
   // fallback inside `resolveCursorApiKey` is deliberate for headless runs, and
   // the same helper reports its `source` to Settings so an inherited key is
@@ -372,6 +368,20 @@ export async function createDockerContainer(
           defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
         )
       : null;
+  if (anthropicApiKey && stagedInputs) {
+    const keyDir = path.join(stagedInputs.directory, "claude-config");
+    await mkdir(keyDir, { recursive: true, mode: 0o700 });
+    await writeFile(path.join(keyDir, ".orkestrator-anthropic-key"), anthropicApiKey, {
+      mode: 0o600,
+    });
+    if (!stagedInputs.mounts.some((mount) => mount.target === "/claude-config")) {
+      stagedInputs.mounts.push({ source: keyDir, target: "/claude-config" });
+    }
+  } else if (anthropicApiKey) {
+    dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
+    redactValues.push(anthropicApiKey);
+    args.push("-e", "ANTHROPIC_API_KEY");
+  }
   if (stagedInputs) {
     args.push(
       ...stagedInputMountArguments(stagedInputs),
@@ -766,6 +776,9 @@ export async function startContainerClaudeServer(
       }
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
+      if [ -r /claude-config/.orkestrator-anthropic-key ]; then
+        export ANTHROPIC_API_KEY="$(cat /claude-config/.orkestrator-anthropic-key)"
+      fi
       export ${CLAUDE_GITHUB_CREDENTIAL_FILE_ENV}=${quoteShell(CONTAINER_GITHUB_CREDENTIAL_FILE)}
       unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}

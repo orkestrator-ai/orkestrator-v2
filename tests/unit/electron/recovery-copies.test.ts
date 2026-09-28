@@ -145,6 +145,32 @@ exit 0
 });
 
 describe("discarding a recovery copy", () => {
+  test("a migrated pre-label runtime remains owned as a retained recovery copy", async () => {
+    const { dir, owner } = await dataDir();
+    const environment = recoveryEnvironment(owner);
+    const { context } = memoryLifecycleContext([environment], dir);
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  inspect:-f)
+    case "$*" in
+      *"json .Config.Labels"*) printf '{"environment-id":"env-lifecycle"}\\n' ;;
+      *) printf '<no value>\\texited\\torkestrator-v2\\tlegacy-container\\n' ;;
+    esac ;;
+esac
+exit 0
+`,
+      async (log) => {
+        const result = await discardRecoveryCopy(
+          { environmentId: environment.id, copyId: "legacy-container", expectedRevision: 9 },
+          context,
+        );
+        expect(result.discarded).toBe(true);
+        expect(await log.read()).toContain("rm -f legacy-container");
+      },
+    );
+  });
   test("removes the copy's container and volumes and releases the reference", async () => {
     const { dir, owner } = await dataDir();
     const { context, environments } = memoryLifecycleContext([recoveryEnvironment(owner)], dir);
@@ -238,6 +264,34 @@ exit 0
 });
 
 describe("restoring a recovery copy", () => {
+  test("a retained credentialed runtime cannot be restored after provider revocation", async () => {
+    const { dir, owner } = await dataDir();
+    const environment = recoveryEnvironment(owner);
+    environment.revokedInputProviders = ["claude"];
+    const { context } = memoryLifecycleContext([environment], dir);
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  inspect:-f) printf '${owner}\\texited\\torkestrator-v2\\tlegacy-container\\n' ;;
+esac
+exit 0
+`,
+      async (log) => {
+        await expect(
+          restoreRecoveryCopy(
+            {
+              environmentId: environment.id,
+              copyId: "legacy-container",
+              expectedContainerId: "current-container",
+            },
+            context,
+          ),
+        ).rejects.toThrow("needs-attention");
+        expect(await log.read()).not.toMatch(/^start /m);
+      },
+    );
+  });
   test("refuses a copy that cannot be restored before stopping anything", async () => {
     const { dir, owner } = await dataDir();
     const { context } = memoryLifecycleContext([recoveryEnvironment(owner)], dir);

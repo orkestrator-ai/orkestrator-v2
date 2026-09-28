@@ -157,6 +157,7 @@ export async function beginContainerOperation(
     now?: Date;
   } = {},
 ): Promise<OperationAdmission> {
+  context.registryWriterLease?.assertHeld();
   let environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   let record = readRecord(environment);
@@ -614,13 +615,20 @@ const ownedByLabel = new Map<string, string>();
 const OWNED_CACHE_LIMIT = 2_048;
 
 function referencedByEnvironment(environments: Environment[], containerId: string): boolean {
-  return environments.some(
-    (environment) =>
+  return environments.some((environment) => {
+    if (
       environment.containerId &&
       (environment.containerId === containerId ||
         environment.containerId.startsWith(containerId) ||
-        containerId.startsWith(environment.containerId)),
-  );
+        containerId.startsWith(environment.containerId))
+    )
+      return true;
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    if (!parsed.supported) return false;
+    return (parsed.record.retainedRuntimes ?? []).some(
+      (runtime) => runtime.containerId === containerId,
+    );
+  });
 }
 
 /**
@@ -696,6 +704,7 @@ export async function reconcileContainerOperation(
   context: LifecycleContext,
   environment: Environment,
 ): Promise<ReconcileResult> {
+  context.registryWriterLease?.assertHeld();
   const parsed = parseContainerLifecycle(environment.containerLifecycle);
   if (!parsed.supported) return "none";
   const operation = parsed.record.operation;
@@ -833,6 +842,13 @@ export async function reconcileContainerOperation(
       return "unreachable";
     }
     if (probe.kind === "missing" && environment.containerId === operation.source.containerId) {
+      const keepRecoveryCopy = operation.details?.keepRecoveryCopy === true;
+      const discardedStorage =
+        operation.kind === "discard" && parsed.record.storage.format === "volume-v1"
+          ? keepRecoveryCopy
+            ? parsed.record.storage.volumes
+            : await removeStorageVolumes(context, environment.id, parsed.record.storage)
+          : undefined;
       await completeContainerOperation(
         context,
         environment.id,
@@ -841,7 +857,44 @@ export async function reconcileContainerOperation(
         {
           failureCode: "interrupted",
           runtime: null,
-          environment: { containerId: null, status: "stopped" },
+          ...(operation.kind === "discard"
+            ? {
+                storage: {
+                  format: "legacy-layer" as const,
+                  workspaceGeneration: parsed.record.storage.workspaceGeneration + 1,
+                },
+              }
+            : {}),
+          ...(discardedStorage?.length
+            ? {
+                retainStorage: {
+                  storageSetId: parsed.record.storage.storageSetId ?? "unknown",
+                  workspaceGeneration: parsed.record.storage.workspaceGeneration,
+                  volumes: discardedStorage,
+                  retainedAt: new Date().toISOString(),
+                  reason: keepRecoveryCopy
+                    ? ("workspace-reset" as const)
+                    : ("failed-candidate" as const),
+                  operationId: operation.operationId,
+                },
+              }
+            : {}),
+          environment: {
+            containerId: null,
+            status: "stopped",
+            ...(operation.kind === "discard"
+              ? {
+                  setupScriptsComplete: false,
+                  setupPhase: "pending",
+                  setupOverride: false,
+                  setupSessionId: undefined,
+                  setupStartedAt: undefined,
+                  setupCompletedAt: undefined,
+                  createdFromCommit: undefined,
+                  hostEntryPort: undefined,
+                }
+              : {}),
+          },
         },
       );
       return "settled";
@@ -895,14 +948,23 @@ export function currentRuntimeIdentity(
   if (runtime && runtime.containerId === environment.containerId) return runtime;
   return {
     containerId: environment.containerId,
-    runtimeGeneration: parsed.supported ? parsed.record.lastRuntimeGeneration : 0,
+    runtimeGeneration: Math.max(1, parsed.supported ? parsed.record.lastRuntimeGeneration : 0),
     owner: dockerOwnerNamespace(context.storage.getDataDir()),
   };
 }
 
 export function nextRuntimeGeneration(environment: Environment): number {
   const parsed = parseContainerLifecycle(environment.containerLifecycle);
-  return (parsed.supported ? parsed.record.lastRuntimeGeneration : 0) + 1;
+  if (!parsed.supported) return environment.containerId ? 2 : 1;
+  const record = parsed.record;
+  return (
+    Math.max(
+      record.lastRuntimeGeneration,
+      record.runtime?.runtimeGeneration ?? 0,
+      ...(record.retainedRuntimes ?? []).map((runtime) => runtime.runtimeGeneration),
+      environment.containerId ? 1 : 0,
+    ) + 1
+  );
 }
 
 /**
@@ -916,6 +978,7 @@ export async function resolveNeedsAttentionOperation(
   operationId: string,
   resolution: { kind: "adopt"; containerId: string } | { kind: "release" },
 ): Promise<Environment | undefined> {
+  context.registryWriterLease?.assertHeld();
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const record = readRecord(environment);

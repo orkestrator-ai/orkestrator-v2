@@ -171,7 +171,6 @@ export function EnvironmentRebuildSection({
       toast.error("Rebuild did not complete", {
         description: `${lifecycle?.message ?? (err instanceof Error ? err.message : String(err))} The original container was kept.`,
         // Everything is re-checked against the container as it is now.
-        action: { label: "Review again", onClick: () => void openConfirm() },
       });
       try {
         onUpdate(await backend.syncEnvironmentStatus(environment.id));
@@ -189,6 +188,12 @@ export function EnvironmentRebuildSection({
     try {
       const result = await backend.cancelContainerOperation(environment.id, running.operationId);
       if (!result.cancelled) toast.info("The rebuild can no longer be cancelled.");
+    } catch (err) {
+      toast.error("Could not cancel the rebuild", {
+        description:
+          parseContainerLifecycleError(err)?.message ??
+          (err instanceof Error ? err.message : String(err)),
+      });
     } finally {
       setCancelling(false);
       void refreshSnapshot();

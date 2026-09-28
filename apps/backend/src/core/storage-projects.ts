@@ -1,4 +1,5 @@
 import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
+import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import * as shared from "./storage-shared.js";
 import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
@@ -532,6 +533,19 @@ export abstract class StorageProjects extends StorageBase {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
       const beforeJson = JSON.stringify(environment);
+
+      if ("containerResourceLimits" in updates) {
+        const value = updates.containerResourceLimits;
+        if (value === null || value === undefined) {
+          environment.containerResourceLimits = undefined;
+        } else {
+          if (!isRecord(value)) throw new Error("Invalid container resource limits");
+          const parsed = parseResourceLimits(value);
+          if (!parsed.ok)
+            throw new Error(`Invalid container resource limit: ${parsed.field} ${parsed.reason}`);
+          environment.containerResourceLimits = parsed.limits;
+        }
+      }
 
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;

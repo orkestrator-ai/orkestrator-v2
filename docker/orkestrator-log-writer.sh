@@ -21,7 +21,7 @@ case "$max$keep" in *[!0-9]*) echo "orkestrator-log-writer: sizes must be number
 [ "$keep" -ge 1 ] || keep=1
 # The exec session that launched the producer may end; that is not a reason
 # to stop draining.
-trap '' HUP
+trap '' HUP TERM
 umask 077
 # `fold` bounds a line before awk reads it: a producer that never writes a
 # newline would otherwise have awk hold its whole output in memory. It is

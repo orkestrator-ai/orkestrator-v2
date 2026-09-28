@@ -251,7 +251,7 @@ describe("provider selection", () => {
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
-  inspect) printf '${staged.revision}\\n' ;;
+  inspect) case "$*" in *Config.Env*) printf '[]\\n' ;; *) printf '${staged.revision}\\n' ;; esac ;;
 esac
 exit 0
 `,
@@ -304,6 +304,85 @@ exit 1
     const environment = environments.get("env-lifecycle")!;
     expect(environment.revokedInputProviders).toEqual(["claude"]);
     expect(providerCredentialsAllowed({}, ["claude"], environment, "claude")).toBe(false);
+  });
+
+  test("legacy immutable API keys require replacement after revocation", async () => {
+    const { dataDir, roots } = await fixtureHome();
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-lifecycle",
+      new Set(["claude"] as const),
+      roots,
+    );
+    const { context } = memoryLifecycleContext(
+      [lifecycleEnvironment({ containerId: "container-1" })],
+      dataDir,
+    );
+    await withDockerScript(
+      `#!/bin/sh
+case "$*" in
+  *Config.Env*) printf '["ANTHROPIC_API_KEY=old-secret"]\\n' ;;
+  *Config.Labels*) printf '${staged.revision}\\n' ;;
+esac
+exit 0
+`,
+      async () => {
+        const result = await revokeProviderCredentials("env-lifecycle", "claude", context);
+        expect(result.pendingRebuild).toBe(true);
+      },
+    );
+    expect(await fs.readdir(path.join(staged.directory, "claude-config"))).toEqual([]);
+  });
+
+  test("revocation scrubs staged credentials bound by retained runtimes", async () => {
+    const { dataDir, roots } = await fixtureHome();
+    const current = await stagePortableInputs(
+      dataDir,
+      "env-lifecycle",
+      new Set(["claude"] as const),
+      roots,
+    );
+    const retained = await stagePortableInputs(
+      dataDir,
+      "env-lifecycle",
+      new Set(["claude"] as const),
+      roots,
+    );
+    const environment = lifecycleEnvironment({
+      containerId: "current-container",
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 2,
+        lastRuntimeGeneration: 2,
+        runtime: { containerId: "current-container", runtimeGeneration: 2, owner: "owner" },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        retainedRuntimes: [
+          {
+            containerId: "retained-container",
+            runtimeGeneration: 1,
+            owner: "owner",
+            retainedAt: new Date().toISOString(),
+            retainedReason: "migrate-source",
+          },
+        ],
+        outcomes: [],
+      },
+    });
+    const { context } = memoryLifecycleContext([environment], dataDir);
+    await withDockerScript(
+      `#!/bin/sh
+case "$*" in
+  *Config.Env*) printf '[]\\n' ;;
+  *retained-container*) printf '${retained.revision}\\n' ;;
+  *current-container*) printf '${current.revision}\\n' ;;
+esac
+`,
+      async () => {
+        await revokeProviderCredentials(environment.id, "claude", context);
+      },
+    );
+    expect(await fs.readdir(path.join(current.directory, "claude-config"))).toEqual([]);
+    expect(await fs.readdir(path.join(retained.directory, "claude-config"))).toEqual([]);
   });
 
   test("a staging interrupted by a restart is never read and a new one is independent", async () => {

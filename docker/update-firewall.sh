@@ -116,7 +116,7 @@ default_domains_csv() {
 edit_domains() {
     local operation="$1" csv="$2" current entry
     local -a next=()
-    current=$(ork_revision_list "$(stored_domains)")
+    current=$(ork_revision_list "$(ork_effective_domains "$(stored_domains)")")
     ork_split_domains "$current"
     local -a existing=("${ORK_DOMAIN_LIST[@]}")
     ork_split_domains "$csv"

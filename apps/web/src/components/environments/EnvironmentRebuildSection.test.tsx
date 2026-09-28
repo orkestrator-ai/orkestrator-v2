@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import type {
   ContainerLifecycleSnapshot,
   RebuildPreview,
@@ -159,5 +160,43 @@ describe("environment rebuild section", () => {
       environmentId: environment.id,
       operationId: "op-1",
     });
+  });
+
+  test("reports a rejected cancellation", async () => {
+    const report = spyOn(toast, "error").mockImplementation(() => "toast-id");
+    try {
+      install({
+        get_container_lifecycle_snapshot: () =>
+          snapshot({
+            operationId: "op-2",
+            kind: "migrate",
+            status: "running",
+            phase: "copying",
+            startedAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+            failureCode: null,
+          }),
+        cancel_container_operation: () => Promise.reject(new Error("Connection lost")),
+      });
+      render(
+        <EnvironmentRebuildSection
+          environment={environment}
+          dockerAvailable
+          onRestart={async () => undefined}
+          beforeRebuild={async () => undefined}
+          onUpdate={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+      await screen.findByText(/Copying and verifying files/);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel rebuild" }));
+      await waitFor(() =>
+        expect(report).toHaveBeenCalledWith("Could not cancel the rebuild", {
+          description: "Connection lost",
+        }),
+      );
+    } finally {
+      report.mockRestore();
+    }
   });
 });

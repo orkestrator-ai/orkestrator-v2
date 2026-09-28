@@ -493,25 +493,30 @@ class ProviderCopier {
     await mkdir(path.join(destinationRoot, relative), { recursive: true, mode: 0o700 });
     let copied = 0;
     let copiedBytes = 0;
-    for (const entry of entries) {
-      const target = path.join(destinationRoot, relative, entry.relative);
-      if (entry.kind === "directory") {
-        await mkdir(target, { recursive: true, mode: 0o700 });
-        continue;
+    try {
+      for (const entry of entries) {
+        const target = path.join(destinationRoot, relative, entry.relative);
+        if (entry.kind === "directory") {
+          await mkdir(target, { recursive: true, mode: 0o700 });
+          continue;
+        }
+        try {
+          copiedBytes += await copyRegularFile(
+            path.join(source, entry.relative),
+            target,
+            this.limits.fileBytes,
+          );
+          copied += 1;
+          if (copiedBytes > this.limits.directoryBytes) throw new Skip("too-large");
+        } catch (error) {
+          // One file changing mid-copy skips that file, not its siblings.
+          if (error instanceof Skip && error.reason !== "too-large") this.skip(error.reason);
+          else throw error;
+        }
       }
-      try {
-        copiedBytes += await copyRegularFile(
-          path.join(source, entry.relative),
-          target,
-          this.limits.fileBytes,
-        );
-        copied += 1;
-        if (copiedBytes > this.limits.directoryBytes) throw new Skip("too-large");
-      } catch (error) {
-        // One file changing mid-copy skips that file, not its siblings.
-        if (error instanceof Skip && error.reason !== "too-large") this.skip(error.reason);
-        else throw error;
-      }
+    } catch (error) {
+      await rm(path.join(destinationRoot, relative), { recursive: true, force: true });
+      throw error;
     }
     this.record(copied, copiedBytes);
   }

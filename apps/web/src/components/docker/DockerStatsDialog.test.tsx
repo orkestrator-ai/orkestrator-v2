@@ -53,6 +53,13 @@ function install(stats: DockerSystemStats, containers: ContainerInfo[]) {
 }
 
 describe("Docker stats dialog", () => {
+  test("an unassigned pre-label container can be reattached", async () => {
+    install(unknownStats, [container({ isAssigned: false, cleanupExclusion: "legacy-unadopted" })]);
+    render(<DockerStatsDialog open onOpenChange={() => undefined} />);
+    expect(await screen.findByTitle("Reattach to project")).toBeTruthy();
+    expect(screen.getByText("Legacy")).toBeTruthy();
+    expect(screen.queryByText("Protected") === null).toBe(true);
+  });
   afterEach(() => {
     cleanup();
     invokeMock.mockImplementation(() => Promise.resolve());

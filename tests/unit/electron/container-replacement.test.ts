@@ -6,9 +6,11 @@ import {
   parseCopyOutput,
   candidateStartError,
   parseMeasureOutput,
+  pipeContainerPath,
   rebuildPreview,
   replaceRuntimePreservingState,
   replacementCopyPlan,
+  rollbackCandidate,
 } from "../../../apps/backend/src/core/container-replacement";
 import { reconcileContainerOperation } from "../../../apps/backend/src/core/container-lifecycle-service";
 import { planStorageSet } from "../../../apps/backend/src/core/container-storage";
@@ -35,6 +37,17 @@ afterEach(async () => {
 const OPERATION_ID = "01890000-0000-7000-8000-000000000001";
 
 describe("copy plan", () => {
+  test("stops a producer when the copy consumer exits early", async () => {
+    await withDockerScript(
+      "#!/bin/sh\nif [ \"$1\" = cp ]; then while :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'; done; else exit 1; fi\n",
+      async () => {
+        const started = Date.now();
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"]);
+        expect(result).toMatchObject({ absent: false, producerFailed: true });
+        expect(Date.now() - started).toBeLessThan(5_000);
+      },
+    );
+  });
   test("a legacy source copies the workspace and every provider path, relocating databases", () => {
     const plan = replacementCopyPlan("legacy-layer");
     expect(plan[0]).toEqual({
@@ -231,6 +244,42 @@ exit 0
 });
 
 describe("restart reconciliation", () => {
+  test("rollback refuses a candidate already committed as the current runtime", async () => {
+    const dir = await tempDir("ork-committed-rollback-");
+    cleanup.push(dir);
+    const owner = dockerOwnerNamespace(dir);
+    const storage = planStorageSet("env-lifecycle", owner, 2, "committed");
+    const environment = lifecycleEnvironment({
+      containerId: "candidate-container",
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 5,
+        lastRuntimeGeneration: 2,
+        runtime: {
+          containerId: "candidate-container",
+          runtimeGeneration: 2,
+          owner,
+          createdByOperationId: OPERATION_ID,
+        },
+        storage,
+        outcomes: [],
+      },
+    });
+    const { context, environments } = memoryLifecycleContext([environment], dir);
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n',
+      async (log) => {
+        expect(
+          await rollbackCandidate(context, environment.id, OPERATION_ID, storage),
+        ).toBeUndefined();
+        expect(
+          await rollbackCandidate(context, environment.id, OPERATION_ID, undefined),
+        ).toBeUndefined();
+        expect(await log.read()).toBe("");
+      },
+    );
+    expect(environments.get(environment.id)?.containerId).toBe("candidate-container");
+  });
   test("an interrupted replacement removes its candidate and keeps the original", async () => {
     const dir = await tempDir("ork-replacement-");
     cleanup.push(dir);

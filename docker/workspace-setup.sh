@@ -389,8 +389,10 @@ if [ -f /tmp/.workspace-setup-complete ]; then
     exit 0
 fi
 
-# Clone repository if GIT_URL is set and /workspace/.git doesn't exist
-if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
+# A clone interrupted while copying may already have a partial .git directory.
+if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] || \
+   { [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ] && \
+     [ -f /workspace/.orkestrator/.clone-copy-in-progress ]; }; }; then
     echo ""
     echo -e "${BLUE}>>> Cloning Repository <<<${NC}"
     echo -e "URL: ${GREEN}$GIT_URL${NC}"
@@ -414,12 +416,13 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
             exit 1
         fi
         STORAGE_MARKER=/workspace/.orkestrator/storage-marker.json
-        if [ ! -f "$STORAGE_MARKER" ] || [ -L "$STORAGE_MARKER" ] || \
+        if [ -L /workspace/.orkestrator ] || [ ! -f "$STORAGE_MARKER" ] || [ -L "$STORAGE_MARKER" ] || \
            [ "$(jq -r '.environmentId // empty' "$STORAGE_MARKER" 2>/dev/null)" != "${ORKESTRATOR_ENVIRONMENT_ID:-}" ]; then
             echo -e "${RED}The workspace volume has no valid storage marker for this environment; refusing to initialize it.${NC}"
             exit 1
         fi
-        if [ -n "$(find /workspace -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -print -quit 2>/dev/null)" ]; then
+        if [ -n "$(find /workspace -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -print -quit 2>/dev/null)" ] && \
+           [ ! -f /workspace/.orkestrator/.clone-copy-in-progress ]; then
             echo -e "${RED}The workspace volume holds files but no repository; refusing to overwrite them.${NC}"
             exit 1
         fi
@@ -427,10 +430,17 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
 
     # Clean /workspace
     echo "Preparing workspace..."
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        rm -rf /workspace/.orkestrator/.clone-in-progress
+    fi
     preserve_orkestrator_workspace_state
-    rm -rf /workspace/* 2>/dev/null || true
-    rm -rf /workspace/.* 2>/dev/null || true
-    find /workspace -mindepth 1 -delete 2>/dev/null || true
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        find /workspace -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -exec rm -rf -- {} +
+    else
+        rm -rf /workspace/* 2>/dev/null || true
+        rm -rf /workspace/.* 2>/dev/null || true
+        find /workspace -mindepth 1 -delete 2>/dev/null || true
+    fi
     print_workspace_disk_status
 
     # Prepare clone URL - inject token directly for more reliable auth
@@ -444,9 +454,19 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
         echo -e "${BLUE}Using token-authenticated URL${NC}"
     fi
 
-    # Clone directly into /workspace
+    # Keep the volume's storage marker in place throughout the clone. A
+    # partial clone is discarded on the next start without losing the marker.
+    CLONE_DEST=/workspace
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        CLONE_DEST=/workspace/.orkestrator/.clone-in-progress
+    fi
     echo "Cloning..."
-    if clone_repository "$CLONE_URL" /workspace; then
+    if clone_repository "$CLONE_URL" "$CLONE_DEST"; then
+        if [ "$CLONE_DEST" != /workspace ]; then
+            touch /workspace/.orkestrator/.clone-copy-in-progress || exit 1
+            cp -a -n "$CLONE_DEST"/. /workspace/ || exit 1
+            rm -rf "$CLONE_DEST"
+        fi
         echo -e "${GREEN}Clone successful!${NC}"
         cd /workspace
 
@@ -509,6 +529,9 @@ else
 fi
 
 restore_orkestrator_workspace_state
+if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ] && [ ! -L /workspace/.orkestrator ]; then
+    rm -f /workspace/.orkestrator/.clone-copy-in-progress
+fi
 add_workspace_artifacts_to_git_exclude
 enable_git_scan_caches
 

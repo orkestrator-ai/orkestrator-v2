@@ -16,6 +16,7 @@ import { pruneInputRevisions, readInputsManifest, scrubStagedProvider } from "./
 import { CONTAINER_CURSOR_API_KEY_FILE } from "./commands-runtime-state.js";
 import { CONTAINER_CURSOR_SDK_AUTH_FILE } from "./cursor-sdk-bridge.js";
 import { dockerExec } from "./commands-container-exec.js";
+import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 
 /**
  * Which providers' portable inputs a new container receives: the enabled
@@ -71,6 +72,28 @@ async function containerLabel(containerId: string, label: string): Promise<strin
     return value && value !== "<no value>" ? value : null;
   } catch {
     return null;
+  }
+}
+
+async function hasImmutableProviderSecret(
+  containerId: string,
+  provider: AgentPlatform,
+): Promise<boolean> {
+  if (provider !== "claude" && provider !== "cursor") return false;
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      ["inspect", "-f", "{{json .Config.Env}}", containerId],
+      { timeoutMs: 10_000 },
+    );
+    const values = JSON.parse(stdout) as unknown;
+    const prefix = provider === "claude" ? "ANTHROPIC_API_KEY=" : "CURSOR_API_KEY=";
+    return (
+      Array.isArray(values) &&
+      values.some((value) => typeof value === "string" && value.startsWith(prefix))
+    );
+  } catch {
+    return true;
   }
 }
 
@@ -212,6 +235,24 @@ export async function revokeProviderCredentials(
   const scrubbed = revision
     ? await scrubStagedProvider(context.storage.getDataDir(), environmentId, revision, provider)
     : false;
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  if (parsed.supported) {
+    for (const runtime of parsed.record.retainedRuntimes ?? []) {
+      const retainedRevision = await containerLabel(
+        runtime.containerId,
+        DOCKER_LABEL_INPUTS_REVISION,
+      );
+      if (retainedRevision) {
+        await scrubStagedProvider(
+          context.storage.getDataDir(),
+          environmentId,
+          retainedRevision,
+          provider,
+        );
+      }
+    }
+  }
+  const immutableSecret = await hasImmutableProviderSecret(environment.containerId, provider);
   const files = IMPORTED_CREDENTIAL_FILES[provider];
   let removed = false;
   try {
@@ -242,7 +283,12 @@ export async function revokeProviderCredentials(
   } catch {
     processesStopped = false;
   }
-  return { provider, removed, pendingRebuild: !scrubbed, processesStopped };
+  return {
+    provider,
+    removed,
+    pendingRebuild: !scrubbed || immutableSecret || !removed || !processesStopped,
+    processesStopped,
+  };
 }
 
 /**

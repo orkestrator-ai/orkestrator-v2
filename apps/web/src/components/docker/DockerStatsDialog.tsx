@@ -56,7 +56,11 @@ const STATS_STALE_MS = 15_000;
 /** A container nothing claims; older backends omit `cleanupExclusion`. */
 function isUnclaimedContainer(container: ContainerInfo): boolean {
   if (container.isAssigned) return false;
-  return container.cleanupExclusion === undefined || container.cleanupExclusion === null;
+  return (
+    container.cleanupExclusion === undefined ||
+    container.cleanupExclusion === null ||
+    container.cleanupExclusion === "legacy-unadopted"
+  );
 }
 
 export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps) {
@@ -350,7 +354,9 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                         </span>
                         {isOrphaned && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-400">
-                            Orphaned
+                            {container.cleanupExclusion === "legacy-unadopted"
+                              ? "Legacy"
+                              : "Orphaned"}
                           </span>
                         )}
                         {isLinked && (

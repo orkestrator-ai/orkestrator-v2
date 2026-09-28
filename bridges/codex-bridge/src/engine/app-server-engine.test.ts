@@ -1659,6 +1659,51 @@ describe("runtime health", () => {
     ).toMatchObject({ threadId: "t1", detail: "full" });
   });
 
+  test("reports each skill that failed to load as an error notice without its path", async () => {
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "skills/list": () => ({
+        data: [
+          {
+            cwd: "/private/workspace",
+            skills: [],
+            errors: [
+              {
+                path: "/private/workspace/.codex/skills/broken/SKILL.md",
+                message: "invalid frontmatter in /private/workspace/.codex/skills/broken/SKILL.md",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    await h.engine.start();
+
+    const health = (await h.engine.getRuntimeHealth("t1")) as {
+      notices: Array<Record<string, unknown>>;
+    };
+    expect(health.notices).toContainEqual(
+      expect.objectContaining({
+        method: "skill/load",
+        message: "Codex skill broken failed to load",
+        severity: "error",
+        id: "skill:broken",
+        subject: "broken",
+      }),
+    );
+    const notice = health.notices.find((entry) => entry.method === "skill/load");
+    expect(String(notice?.detail)).not.toContain("/private/workspace");
+  });
+
+  test("reports no skill notice once skills/list is clean", async () => {
+    const h = harness(HEALTH_HANDLERS);
+    await h.engine.start();
+    const health = (await h.engine.getRuntimeHealth("t1")) as {
+      notices: Array<{ method: string }>;
+    };
+    expect(health.notices.some((entry) => entry.method === "skill/load")).toBe(false);
+  });
+
   /**
    * `/global/health` is public and stripped, so the drift counters an operator
    * watches after a Codex bump live on this authenticated snapshot instead.

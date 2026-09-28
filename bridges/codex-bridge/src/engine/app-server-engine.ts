@@ -529,6 +529,50 @@ function mcpFailureReason(notice: RuntimeNotice): string | undefined {
   return reason || undefined;
 }
 
+/** Most skill load failures one health snapshot reports. */
+const MAX_SKILL_LOAD_NOTICES = 16;
+
+/**
+ * Skill load failures from a `skills/list` response, as runtime notices.
+ *
+ * The response is authoritative for the moment it was read, so these are
+ * derived per snapshot rather than retained: a skill that has since been fixed
+ * simply stops appearing. Named `skill/load` to match Pi's `extension/load` and
+ * Claude's `plugin/load`. The subject is the skill's directory name (the file
+ * is always `SKILL.md`); the full path stays out, as it does for every notice.
+ */
+function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthNotice[] {
+  const data = objectRecord(response).data;
+  if (!Array.isArray(data)) return [];
+  const notices: RuntimeHealthNotice[] = [];
+  for (const candidate of data) {
+    const errors = objectRecord(candidate).errors;
+    if (!Array.isArray(errors)) continue;
+    for (const candidateError of errors) {
+      if (notices.length >= MAX_SKILL_LOAD_NOTICES) return notices;
+      const error = objectRecord(candidateError);
+      const path = typeof error.path === "string" ? error.path : "";
+      const segments = path.split(/[\\/]/).filter(Boolean);
+      const file = segments.at(-1);
+      const subject = (/^skill\.md$/i.test(file ?? "") ? segments.at(-2) : file)?.slice(0, 128);
+      const detail =
+        typeof error.message === "string" && error.message.trim()
+          ? redactRuntimeNoticeDetail(error.message)
+          : undefined;
+      notices.push({
+        method: "skill/load",
+        message: subject ? `Codex skill ${subject} failed to load` : "A Codex skill failed to load",
+        severity: "error",
+        id: `skill:${subject ?? notices.length}`,
+        ...(subject ? { subject } : {}),
+        ...(detail ? { detail } : {}),
+        receivedAt,
+      });
+    }
+  }
+  return notices;
+}
+
 function mcpRuntimeNoticeMessage(
   notice: RuntimeNotice,
   inventoryStatus: string | null | undefined,
@@ -1285,6 +1329,10 @@ export class AppServerEngine implements CodexEngine {
             ...(notice.detail ? { detail: notice.detail } : {}),
             receivedAt: notice.receivedAt,
           })),
+        ...skillLoadNotices(
+          skills.status === "fulfilled" ? skills.value : undefined,
+          new Date().toISOString(),
+        ),
         ...(ordinaryUsageAllowed === false
           ? [
               {

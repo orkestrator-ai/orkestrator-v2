@@ -130,11 +130,11 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.280
-ARG CODEX_CLI_VERSION=0.155.1
-ARG OPENCODE_CLI_VERSION=1.18.32
+ARG CLAUDE_CLI_VERSION=2.1.283
+ARG CODEX_CLI_VERSION=0.158.0
+ARG OPENCODE_CLI_VERSION=1.18.33
 ARG GROK_BUILD_VERSION=1.0.41
-ARG PI_CLI_VERSION=0.87.0
+ARG PI_CLI_VERSION=0.87.1
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -146,8 +146,8 @@ ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 # Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=3046e0404fdc60fb80307e7a47824ba07477364178a4d09baa8548496dd6d43b ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=568461b7d4d8c19865c97e9a1102e613049c6039d01fe772154de873c1865840 ;; \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=e546123213ae47909a4268692aa4b94950d011afe9cac9938753a2194f1c16d5 ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=c63486624621924bf43be5c01abd252885661a734814224f6d70188a33aea858 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \
@@ -184,8 +184,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # apps/desktop/electron/toolchain-manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=f55d02652175cd3f22e6db8223c93ef97a087382abb51dc9ce130fc04de8f746 ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=1770ab1f71f6fe90ef9c6e233220d8e1420d60ffaa6b5cf137eaf8409ac75907 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=80d78dd62d50049a006b981d994c61255bcc10e730b0c278d4ea0a755909764c ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=364b4a9f8491450b27a4857d4e3c780dbaf696790821c176a873e860cbbc3b89 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \

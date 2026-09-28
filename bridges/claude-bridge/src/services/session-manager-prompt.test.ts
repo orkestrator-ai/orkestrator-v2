@@ -3509,6 +3509,35 @@ describe("sendPrompt", () => {
     expect(getSession(session.id)?.health?.advisories()).toEqual([]);
   });
 
+  test("records a failed plugin install as an error naming the plugin", async () => {
+    const session = createSession("system-plugin-install-failed");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "plugin_install",
+      status: "failed",
+      name: "helper@market",
+      error: "marketplace unreachable",
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const notices = getSession(session.id)?.health?.listNotices() ?? [];
+    expect(notices).toEqual([
+      expect.objectContaining({
+        message: "Claude plugin helper@market failed to install",
+        method: "plugin/install",
+        severity: "error",
+        source: "provider",
+      }),
+    ]);
+    expect(notices[0]?.occurrences?.[0]?.detail).toBe("marketplace unreachable");
+  });
+
   test("a merely informational system subtype stays out of the tab", async () => {
     const session = createSession("system-subtype-info");
     track(session.id);
@@ -3782,6 +3811,36 @@ describe("sendPrompt", () => {
       type: "status",
       severity: "warning",
       content: "Conversation cleared. The agent no longer has the earlier history.",
+    });
+  });
+
+  test.each([
+    ["clear", "Conversation cleared with /clear."],
+    ["fresh_session", "Started a fresh session to implement the approved plan."],
+    ["some_future_trigger", "Conversation cleared."],
+    ["constructor", "Conversation cleared."],
+  ])("words a %s conversation reset by its trigger", async (trigger, cause) => {
+    const session = createSession(`conversation-reset-${trigger}`);
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      uuid: "asst-1",
+      message: { model: "claude-sonnet-4-6", content: [{ type: "text", text: "earlier answer" }] },
+    });
+    call.push({ type: "conversation_reset", new_conversation_id: "new-id", trigger });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    // Whatever the trigger says, the transcript is cleared.
+    const stored = getSession(session.id)!;
+    expect(stored.messages).toHaveLength(1);
+    expect(stored.messages[0]?.parts[0]).toMatchObject({
+      type: "status",
+      content: `${cause} The agent no longer has the earlier history.`,
     });
   });
 
@@ -4460,7 +4519,11 @@ describe("sendPrompt", () => {
               { name: "local", status: "connected", tools: ["search"] },
               { name: "plugin:extra", status: "failed", error: "offline" },
             ],
-            plugins: [{ name: "plain", path: "/plain", status: "loaded" }],
+            // The SDK's plugin rows carry no status: listed means loaded.
+            plugins: [{ name: "plain", path: "/plain", source: "local" }],
+            plugin_errors: [
+              { plugin: "broken@market", type: "manifest-validation-error", message: "bad" },
+            ],
             slash_commands: ["/compact"],
           },
           { type: "system", subtype: "status", detail: "working" },
@@ -4516,8 +4579,17 @@ describe("sendPrompt", () => {
         plugins: [
           { name: "plugin:extra", status: "failed" },
           { name: "plain", status: "loaded" },
+          { name: "broken@market", status: "failed", error: "bad" },
         ],
       });
+      expect(getSession(session.id)?.health?.listNotices()).toContainEqual(
+        expect.objectContaining({
+          message: "Claude plugin broken@market failed to load",
+          method: "plugin/load",
+          severity: "error",
+          source: "provider",
+        }),
+      );
       expect(call.options.hooks).toMatchObject({
         PreCompact: [{ hooks: [expect.any(Function)] }],
         PostCompact: [{ hooks: [expect.any(Function)] }],

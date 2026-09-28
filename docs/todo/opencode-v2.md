@@ -2,7 +2,7 @@
 
 Status: Deferred — do not bump the OpenCode binary or SDK to 2.x.  
 Recorded: 2026-08-28; refreshed 2026-09-27 against OpenCode `v2.0.18`.  
-Orkestrator OpenCode SDK and CLI pin: `1.18.32` (`@opencode-ai/sdk`, `opencode-ai`)
+Orkestrator OpenCode SDK and CLI pin: `1.18.33` (`@opencode-ai/sdk`, `opencode-ai`)
 
 ## Summary
 

@@ -36,6 +36,25 @@ import {
 } from "./session-manager-catalog.js";
 
 describe("catalog discovery caching", () => {
+  test("passes the bridge marker to a metadata probe's Claude CLI environment", async () => {
+    const previousBridgeMarker = process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+    process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = "claude";
+    try {
+      resetClaudeCatalogCachesForTesting();
+      queryControlOverrides.accountInfo = mock(async () => ({}));
+      await readClaudeAuthStatus();
+      const probe = await nextQueryCall();
+      expect(probe.options).toMatchObject({
+        maxTurns: 0,
+        env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
+      });
+      expect(probe.isClosed()).toBe(true);
+    } finally {
+      if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+      else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
+    }
+  });
+
   test("backs off repeated failing authentication probes", async () => {
     resetClaudeCatalogCachesForTesting();
     const accountInfo = mock(async () => {

@@ -2083,27 +2083,35 @@ describe("rewindSessionFiles", () => {
   });
 
   test("opens a bounded, turnless query when no handle is live", async () => {
-    const state = await rewindableSession();
-    const rewindFiles = mock(async () => ({ canRewind: true }));
-    const returnSpy = mock(async () => ({ done: true, value: undefined }));
-    queryControlOverrides.rewindFiles = rewindFiles;
-    queryControlOverrides.return = returnSpy;
+    const previousBridgeMarker = process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+    process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = "claude";
+    try {
+      const state = await rewindableSession();
+      const rewindFiles = mock(async () => ({ canRewind: true }));
+      const returnSpy = mock(async () => ({ done: true, value: undefined }));
+      queryControlOverrides.rewindFiles = rewindFiles;
+      queryControlOverrides.return = returnSpy;
 
-    const rewindPromise = rewindSessionFiles(state.id, U1);
-    const call = await nextQueryCall();
-    call.push({ type: "system", subtype: "init" });
+      const rewindPromise = rewindSessionFiles(state.id, U1);
+      const call = await nextQueryCall();
+      call.push({ type: "system", subtype: "init" });
 
-    await expect(rewindPromise).resolves.toEqual({ canRewind: true });
-    expect(call.options).toMatchObject({
-      resume: PERSISTED_SDK_ID,
-      enableFileCheckpointing: true,
-      // Purely a control handle: a real turn would write to the rollout.
-      maxTurns: 0,
-    });
-    expect(call.options.abortController).toBeInstanceOf(AbortController);
-    expect(rewindFiles).toHaveBeenCalledWith(U1, { dryRun: false });
-    // The transient query is closed on every exit path.
-    expect(returnSpy).toHaveBeenCalled();
+      await expect(rewindPromise).resolves.toEqual({ canRewind: true });
+      expect(call.options).toMatchObject({
+        resume: PERSISTED_SDK_ID,
+        enableFileCheckpointing: true,
+        // Purely a control handle: a real turn would write to the rollout.
+        maxTurns: 0,
+        env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
+      });
+      expect(call.options.abortController).toBeInstanceOf(AbortController);
+      expect(rewindFiles).toHaveBeenCalledWith(U1, { dryRun: false });
+      // The transient query is closed on every exit path.
+      expect(returnSpy).toHaveBeenCalled();
+    } finally {
+      if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
+      else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
+    }
   });
 
   test("closes the transient query when the SDK cannot rewind", async () => {

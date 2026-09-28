@@ -538,6 +538,23 @@ export function isReviewPackagePreparationSession(
   return session.structuredRequestId !== undefined || session.structuredResultStatus !== undefined;
 }
 
+/** The active work in a build/fix phase that still holds a validation run. */
+export function reviewValidationStage(
+  pipeline: Pick<BuildPipeline, "validationRun" | "reviewPackage" | "reviewRetryRequested">,
+  phase: ResumableBuildPhase | undefined,
+): "validation" | "review-package" | null {
+  if (
+    !pipeline.validationRun ||
+    pipeline.reviewPackage ||
+    (phase !== "building" && phase !== "fixing")
+  ) {
+    return null;
+  }
+  return pipeline.reviewRetryRequested || pipeline.validationRun.status === "cancelled"
+    ? "review-package"
+    : "validation";
+}
+
 export interface PipelineInteractionTranscriptQuestion {
   prompt: string;
   options: string[];

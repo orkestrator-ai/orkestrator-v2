@@ -14,6 +14,8 @@ import type {
 
 import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { isReviewPackagePreparationSession } from "@orkestrator/protocol/build-pipeline";
+import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
+import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
@@ -283,6 +285,14 @@ async function withService(
       return testGeneratedReviewPackage(args) as T;
     }
     if (command === "verify_looped_review_package") return { valid: true } as T;
+    if (command === "cancel_review_validation") {
+      const run = args.run as NonNullable<BuildPipeline["validationRun"]>;
+      return { ...run, status: "cancelled" } as T;
+    }
+    if (command === "start_review_validation" || command === "status_review_validation") {
+      const run = args.run as NonNullable<BuildPipeline["validationRun"]>;
+      return { ...run, status: "running" } as T;
+    }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -1105,6 +1115,272 @@ describe("BuildPipelineService", () => {
         status: "running",
       });
       expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(session.sdkSessionId);
+    });
+  });
+
+  describe("restarting the current stage", () => {
+    const reviewSessionCount = (snapshot: BuildPipeline) =>
+      snapshot.sessions.filter((session) => session.phase === "review").length;
+
+    test("restarts a running default build even though it produces the package plan", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.runningPhases.add("build");
+        const { started, session } = await startBuilding(service, storage);
+        expect(session.producedReviewPackagePlan).toBe(true);
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(provider.aborted).toContain(session.sdkSessionId);
+        expect(restarted.phase).toBe("building");
+        expect(restarted.sessions.at(-1)).toMatchObject({
+          phase: "build",
+          label: "Build Session",
+          status: "running",
+        });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(session.sdkSessionId);
+      });
+    });
+
+    test("restarts a running default fix rather than review preparation", async () => {
+      await withService(async (service, storage, provider) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        const staged = await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.sessions.push({
+            phase: "fix",
+            agent: "claude",
+            iteration: snapshot.iteration,
+            sessionKey: "previous-fix",
+            sdkSessionId: "previous-fix",
+            status: "idle",
+            startedAt: new Date().toISOString(),
+            label: "Fix Session",
+          });
+          snapshot.verificationFeedback = "Repair the failed verification";
+        });
+        provider.runningPhases.add("fix");
+        const fixing = await service.restartStep(started.id, staged.sessions.at(-1)!.sdkSessionId);
+        const session = fixing.sessions.at(-1)!;
+        expect(session.producedReviewPackagePlan).toBe(true);
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(provider.aborted).toContain(session.sdkSessionId);
+        expect(restarted.phase).toBe("fixing");
+        expect(restarted.sessions.at(-1)).toMatchObject({
+          phase: "fix",
+          label: "Fix Session",
+          status: "running",
+        });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(session.sdkSessionId);
+      });
+    });
+
+    test.each(["planned", "running"] as const)(
+      "restarts the %s validation run instead of the agent turn",
+      async (status) => {
+        await withService(async (service, storage, provider, invocations) => {
+          const { started, session } = await startBuilding(service, storage);
+          const original = newReviewValidationRun("validation-original", {
+            headRef: "1".repeat(40),
+            commands: [],
+            limitations: ["No validation command is configured for this test"],
+          });
+          await mutateStored(storage, started.id, (snapshot) => {
+            snapshot.validationRun = { ...original, status };
+            snapshot.sessions[snapshot.currentSessionIndex]!.status = "idle";
+            snapshot.sessions[snapshot.currentSessionIndex]!.completedAt = new Date().toISOString();
+          });
+
+          const restarted = await service.restartCurrentStep(started.id);
+
+          expect(restarted.validationRun?.id).not.toBe(original.id);
+          expect(restarted.validationRun?.status).toBe("running");
+          expect(restarted.sessions.at(-1)?.sdkSessionId).toBe(session.sdkSessionId);
+          expect(provider.aborted).toEqual([]);
+          expect(invocations.some(({ command }) => command === "start_review_validation")).toBe(
+            true,
+          );
+        });
+      },
+    );
+
+    test.each(["cancelled", "retry"] as const)(
+      "regenerates review preparation after a %s validation run",
+      async (reason) => {
+        await withService(async (service, storage, _provider, invocations) => {
+          const { started } = await startBuilding(service, storage);
+          await mutateStored(storage, started.id, (snapshot) => {
+            snapshot.validationRun = {
+              ...newReviewValidationRun("validation-original", {
+                headRef: "1".repeat(40),
+                commands: [],
+                limitations: ["No validation command is configured for this test"],
+              }),
+              status: reason === "cancelled" ? "cancelled" : "planned",
+            };
+            if (reason === "retry") snapshot.reviewRetryRequested = true;
+          });
+
+          const restarted = await service.restartCurrentStep(started.id);
+
+          expect(restarted.phase).toBe("fixing");
+          expect(restarted.sessions.at(-1)).toMatchObject({
+            phase: "fix",
+            label: REVIEW_PACKAGE_SESSION_LABEL,
+            status: "running",
+          });
+          expect(restarted.validationRun).toBeUndefined();
+          expect(invocations.some(({ command }) => command === "start_review_validation")).toBe(
+            false,
+          );
+        });
+      },
+    );
+
+    test("restarts the dedicated review preparation session", async () => {
+      await withService(async (service, storage, provider) => {
+        const { started } = await startBuilding(service, storage, {
+          reviewPreparation: { agent: "claude" },
+        });
+        provider.runningPhases.add("fix");
+        await service.advanceNow(started.id);
+        const preparation = (await pipeline(storage, started.id)).sessions.at(-1)!;
+        expect(preparation.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(provider.aborted).toContain(preparation.sdkSessionId);
+        expect(restarted.sessions.at(-1)).toMatchObject({
+          phase: "fix",
+          label: REVIEW_PACKAGE_SESSION_LABEL,
+          status: "running",
+        });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(preparation.sdkSessionId);
+      });
+    });
+
+    test.each([
+      ["review", "reviewing"],
+      ["address", "addressing"],
+      ["pr", "creating-pr"],
+      ["resolve-conflicts", "resolving-conflicts"],
+    ] as const)("restarts the running %s session", async (sessionPhase, phase) => {
+      await withService(async (service, storage, provider) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        const staged = await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.phase = phase;
+          snapshot.sessions.push({
+            phase: sessionPhase,
+            agent: "claude",
+            iteration: snapshot.iteration,
+            sessionKey: `running-${sessionPhase}`,
+            sdkSessionId: `running-${sessionPhase}`,
+            status: "running",
+            startedAt: new Date().toISOString(),
+            label: `${sessionPhase} Session`,
+          });
+          snapshot.currentSessionIndex = snapshot.sessions.length - 1;
+        });
+        const previous = staged.sessions.at(-1)!;
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(provider.aborted).toContain(previous.sdkSessionId);
+        expect(restarted.phase).toBe(phase);
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: sessionPhase, status: "running" });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(previous.sdkSessionId);
+      });
+    });
+
+    test("restarts the verification it is on without re-running the review", async () => {
+      await withService(async (service, storage, provider) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        let completed = await pipeline(storage, started.id);
+        const verificationIndex = completed.sessions.findIndex(
+          (session) => session.phase === "verify",
+        );
+        completed = await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.phase = "verifying";
+          snapshot.currentSessionIndex = verificationIndex;
+          snapshot.sessions[verificationIndex]!.status = "running";
+          delete snapshot.sessions[verificationIndex]!.completedAt;
+        });
+        const verification = completed.sessions[verificationIndex]!;
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(provider.aborted).toContain(verification.sdkSessionId);
+        expect(restarted.phase).toBe("verifying");
+        expect(restarted.structuredReview).toEqual(completed.structuredReview);
+        expect(reviewSessionCount(restarted)).toBe(reviewSessionCount(completed));
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(verification.sdkSessionId);
+      });
+    });
+
+    test("restarts the stage a paused pipeline paused in", async () => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        let completed = await pipeline(storage, started.id);
+        const verificationIndex = completed.sessions.findIndex(
+          (session) => session.phase === "verify",
+        );
+        completed = await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.phase = "paused";
+          snapshot.pausedFromPhase = "verifying";
+          snapshot.currentSessionIndex = verificationIndex;
+        });
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(restarted.phase).toBe("verifying");
+        expect(restarted.pausedFromPhase).toBeUndefined();
+        expect(reviewSessionCount(restarted)).toBe(reviewSessionCount(completed));
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+      });
+    });
+
+    test("restarts the phase it has entered before that stage's session exists", async () => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        const completed = await mutateStored(storage, started.id, (snapshot) => {
+          // The previous stage's session is still current until the next tick
+          // opens the verification; restarting it would rewind the pipeline.
+          snapshot.phase = "verifying";
+          snapshot.currentSessionIndex =
+            snapshot.sessions.findIndex((session) => session.phase === "verify") - 1;
+        });
+        const previous = completed.sessions[completed.currentSessionIndex]!;
+        expect(previous.phase).not.toBe("verify");
+        const previousCount = completed.sessions.filter(
+          (session) => session.phase === previous.phase,
+        ).length;
+
+        const restarted = await service.restartCurrentStep(started.id);
+
+        expect(restarted.phase).toBe("verifying");
+        expect(
+          restarted.sessions.filter((session) => session.phase === previous.phase),
+        ).toHaveLength(previousCount);
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+      });
+    });
+
+    test("refuses a build with no running stage", async () => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("complete");
+
+        await expect(service.restartCurrentStep(started.id)).rejects.toThrow(
+          "This build has no running stage to restart",
+        );
+      });
     });
   });
 

@@ -53,6 +53,13 @@ let bridgeAuthToken = configuredBridgeAuthToken || randomBytes(32).toString("bas
 // SDK/CLI children. Capture it once and remove it before any later subprocess
 // can inherit the bridge credential through process.env.
 delete process.env[BRIDGE_TOKEN_ENV];
+// Every CLI this bridge spawns — turns and zero-turn probes alike — loads the
+// container's user settings, whose hooks feed the terminal-only
+// `/tmp/.claude-state` channel. A probe fires UserPromptSubmit and never
+// reaches Stop, which left native environments stuck on `working`. The
+// container hooks skip their write when this marker is inherited; native
+// activity is reported by the bridge itself. See docker/entrypoint.sh.
+process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = "claude";
 let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 
 function isBridgeAuthEnabled(): boolean {

@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import {
   isActiveBuildPhase,
   isReviewPackagePreparationSession,
+  reviewValidationStage,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewSlot,
@@ -119,6 +120,17 @@ const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
   fixing: "Retry Fix Stage",
   "creating-pr": "Retry PR Stage",
   "resolving-conflicts": "Retry Conflict Resolution",
+};
+
+/** Phases that run an agent stage, which is what the header's restart replaces. */
+const RESTART_STAGE_LABELS: Partial<Record<ResumableBuildPhase, string>> = {
+  building: "Restart Build Stage",
+  reviewing: "Restart Review Stage",
+  addressing: "Restart Address Stage",
+  verifying: "Restart Verification Stage",
+  fixing: "Restart Fix Stage",
+  "creating-pr": "Restart PR Stage",
+  "resolving-conflicts": "Restart Conflict Resolution",
 };
 
 /**
@@ -645,17 +657,17 @@ export function BuildChatTab({
     }
   };
 
-  const retryReview = async (): Promise<void> => {
+  const restartCurrentStage = async (): Promise<void> => {
     if (!pipeline || controlPending) return;
     setControlPending(true);
     try {
-      replacePipeline(await backend.retryBuildPipelineReview(pipeline.id));
-      // The retry starts a new review session; follow it rather than leaving
-      // the user on whichever stage they were reading.
+      replacePipeline(await backend.restartBuildPipelineCurrentStep(pipeline.id));
+      // The restart opens a new session; follow it rather than leaving the
+      // user on whichever stage they were reading.
       pinnedSessionRef.current = false;
-      toast.success("Review restarted");
+      toast.success(`${restartCurrentStageLabel?.replace(/^Restart /, "") ?? "Stage"} restarted`);
     } catch (error) {
-      toast.error("Failed to restart the review", {
+      toast.error("Failed to restart the stage", {
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -735,10 +747,30 @@ export function BuildChatTab({
     pipeline.phase === "failed" && pipeline.failureContext?.kind === "interactive-request";
   const canRetryStage =
     pipeline.phase === "failed" && Boolean(pipeline.failureContext) && !interactionFailure;
-  const canRetryReview =
-    pipeline.phase !== "complete" &&
-    pipeline.phase !== "failed" &&
-    !interactionFailure &&
+  // A paused pipeline's stage is the one it paused in; resuming via restart
+  // must not jump anywhere else.
+  const currentStagePhase =
+    pipeline.phase === "paused"
+      ? pipeline.pausedFromPhase
+      : isActiveBuildPhase(pipeline.phase)
+        ? (pipeline.phase as ResumableBuildPhase)
+        : undefined;
+  const validationRestartTarget = reviewValidationStage(pipeline, currentStagePhase);
+  const currentStageSession = pipeline.sessions[pipeline.currentSessionIndex];
+  const dedicatedPreparationRunning =
+    (currentStagePhase === "building" || currentStagePhase === "fixing") &&
+    currentStageSession?.phase === (currentStagePhase === "building" ? "build" : "fix") &&
+    currentStageSession.label === REVIEW_PACKAGE_SESSION_LABEL;
+  const restartCurrentStageLabel =
+    validationRestartTarget === "validation"
+      ? "Restart Validation"
+      : validationRestartTarget === "review-package" || dedicatedPreparationRunning
+        ? "Restart Review Preparation"
+        : currentStagePhase
+          ? RESTART_STAGE_LABELS[currentStagePhase]
+          : undefined;
+  const canRestartCurrentStage =
+    Boolean(restartCurrentStageLabel) &&
     pipeline.sessions.length > 0 &&
     Boolean(pipeline.environmentId);
   const canSendMessage =
@@ -810,13 +842,13 @@ export function BuildChatTab({
       onClick: () => void retryStage(),
     });
   }
-  if (canRetryReview) {
+  if (canRestartCurrentStage) {
     headerControls.push({
-      key: "retry-review",
-      label: "Retry Review",
+      key: "restart-stage",
+      label: restartCurrentStageLabel!,
       icon: RefreshCw,
       variant: "outline",
-      onClick: () => void retryReview(),
+      onClick: () => void restartCurrentStage(),
     });
   }
   if (active) {

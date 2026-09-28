@@ -837,6 +837,7 @@ export async function rewindViaTransientQuery(
     prompt: "",
     options: {
       cwd: currentWorkingDirectory(),
+      env: { ...process.env },
       ...claudeExecutableOptions(),
       resume: sdkSessionId,
       enableFileCheckpointing: true,

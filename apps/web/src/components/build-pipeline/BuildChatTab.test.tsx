@@ -84,9 +84,8 @@ const sendMessageMock = mock(async (pipelineId: string, text: string) => ({
   pendingUserMessages: [{ id: "queued-1", text, createdAt: "2026-07-29T00:02:00.000Z" }],
   backendRevision: 12,
 }));
-const retryReviewMock = mock(async (pipelineId: string) => ({
+const restartCurrentStepMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
-  phase: "reviewing" as const,
   backendRevision: 13,
 }));
 const retryStageMock = mock(async (pipelineId: string): Promise<BuildPipeline> => ({
@@ -121,7 +120,7 @@ mock.module("@/lib/backend", () => ({
   resumeBuildPipeline: resumeBuildPipelineMock,
   cancelBuildPipeline: cancelBuildPipelineMock,
   sendBuildPipelineMessage: sendMessageMock,
-  retryBuildPipelineReview: retryReviewMock,
+  restartBuildPipelineCurrentStep: restartCurrentStepMock,
   retryBuildPipelineStage: retryStageMock,
   restartBuildPipelineStep: restartStepMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
@@ -300,7 +299,7 @@ describe("BuildChatTab backend projection", () => {
     resumeBuildPipelineMock.mockClear();
     cancelBuildPipelineMock.mockClear();
     sendMessageMock.mockClear();
-    retryReviewMock.mockClear();
+    restartCurrentStepMock.mockClear();
     retryStageMock.mockClear();
     restartStepMock.mockClear();
     retryInteractionFailureMock.mockClear();
@@ -1125,8 +1124,8 @@ describe("BuildChatTab backend projection", () => {
       };
       render(<BuildChatTab data={data} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Retry Review" }));
-      await waitFor(() => expect(retryReviewMock).toHaveBeenCalledWith(pipeline.id));
+      fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
+      await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(pipeline.id));
       await waitFor(() =>
         expect((screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement).disabled).toBe(
           false,
@@ -1375,7 +1374,7 @@ describe("BuildChatTab backend projection", () => {
     expandStageGroups();
 
     expect(screen.getAllByText("Unexpected authorization")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Retry Review" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Restart/ }) === null).toBe(true);
     const retry = screen.getByRole("button", { name: "Retry failed build phase" });
     fireEvent.click(retry);
 
@@ -3434,7 +3433,7 @@ describe("BuildChatTab presentation", () => {
     // Only an interactive-request failure moves the message and the control
     // into the recovery banner; every other failure keeps both here.
     expect(screen.getAllByText("The prompt was never dispatched")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Retry Review" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Restart/ }) === null).toBe(true);
     const retry = screen.getByRole("button", { name: "Retry Build Stage" });
     expect(screen.queryByRole("button", { name: "Retry failed build phase" }) === null).toBe(true);
     fireEvent.click(retry);
@@ -4127,7 +4126,7 @@ describe("BuildChatTab agent messaging", () => {
   beforeEach(() => {
     cleanup();
     sendMessageMock.mockClear();
-    retryReviewMock.mockClear();
+    restartCurrentStepMock.mockClear();
     retryStageMock.mockClear();
     mockToastError.mockClear();
     useBuildPipelineStore.setState({
@@ -4342,15 +4341,120 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
   });
 
-  test("restarts the review through the backend", async () => {
+  test("restarts the current stage through the backend", async () => {
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
 
-    await waitFor(() => expect(retryReviewMock).toHaveBeenCalledWith(running.id));
+    await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
     await waitFor(() =>
-      expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("reviewing"),
+      expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.backendRevision).toBe(13),
     );
+    expect(mockToastSuccess).toHaveBeenCalledWith("Build Stage restarted");
+  });
+
+  test("names the stage the pipeline is on rather than the review", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase: "verifying",
+      backendRevision: 60,
+    });
+    renderTab();
+
+    expect(screen.queryByRole("button", { name: /^(Retry|Restart) Review/ }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Restart Verification Stage" }));
+
+    await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
+  });
+
+  test("restarts the stage a paused pipeline paused in", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase: "paused",
+      pausedFromPhase: "verifying",
+      backendRevision: 61,
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Verification Stage" })).toBeTruthy();
+  });
+
+  test.each([
+    ["reviewing", "Restart Review Stage"],
+    ["addressing", "Restart Address Stage"],
+    ["fixing", "Restart Fix Stage"],
+    ["creating-pr", "Restart PR Stage"],
+    ["resolving-conflicts", "Restart Conflict Resolution"],
+  ] as const)("names the %s header restart", (phase, label) => {
+    useBuildPipelineStore.getState().replacePipeline({ ...running, phase });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: label })).toBeTruthy();
+  });
+
+  test.each(["building", "fixing"] as const)("names validation during the %s phase", (phase) => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase,
+      validationRun: validationRun({ status: "running" }),
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Validation" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", {
+        name: `Restart ${phase === "building" ? "Build" : "Fix"} Stage`,
+      }) === null,
+    ).toBe(true);
+  });
+
+  test.each(["cancelled", "retry"] as const)(
+    "names review preparation after a %s validation run",
+    (reason) => {
+      useBuildPipelineStore.getState().replacePipeline({
+        ...running,
+        phase: "fixing",
+        validationRun: validationRun({ status: reason === "cancelled" ? "cancelled" : "running" }),
+        ...(reason === "retry" ? { reviewRetryRequested: true } : {}),
+      });
+      renderTab();
+
+      expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
+    },
+  );
+
+  test("names the dedicated preparation session during a fix", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase: "fixing",
+      sessions: [
+        ...running.sessions,
+        {
+          ...running.sessions[0]!,
+          phase: "fix",
+          sessionKey: "preparation-key",
+          sdkSessionId: "preparation-session",
+          status: "running",
+          label: REVIEW_PACKAGE_SESSION_LABEL,
+        },
+      ],
+      currentSessionIndex: 2,
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
+  });
+
+  test("offers review restart when a multi-review pipeline is paused", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      phase: "paused",
+      pausedFromPhase: "reviewing",
+      reviewers: [{ agent: "claude" }, { agent: "codex" }],
+    });
+    renderTab();
+
+    expect(screen.getByRole("button", { name: "Restart Review Stage" })).toBeTruthy();
   });
 
   test("reports a queue of more than one message as a queue", () => {
@@ -4407,45 +4511,45 @@ describe("BuildChatTab agent messaging", () => {
     expect(button.querySelector(".lucide-arrow-up")).toBeTruthy();
   });
 
-  test("re-enables the retry control when the backend refuses a review restart", async () => {
-    retryReviewMock.mockRejectedValueOnce(new Error("no review stage"));
+  test("re-enables the restart control when the backend refuses a stage restart", async () => {
+    restartCurrentStepMock.mockRejectedValueOnce(new Error("no running stage"));
     renderTab();
 
     const retry = screen.getByRole("button", {
-      name: /Retry Review/,
+      name: "Restart Build Stage",
     }) as HTMLButtonElement;
     fireEvent.click(retry);
 
-    await waitFor(() => expect(retryReviewMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(retry.disabled).toBe(false));
-    expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
-      description: "no review stage",
+    expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
+      description: "no running stage",
     });
     expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("building");
   });
 
-  test("formats a non-Error review restart rejection", async () => {
-    retryReviewMock.mockRejectedValueOnce("review provider offline");
+  test("formats a non-Error stage restart rejection", async () => {
+    restartCurrentStepMock.mockRejectedValueOnce("provider offline");
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
 
     await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
-        description: "review provider offline",
+      expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
+        description: "provider offline",
       });
     });
     expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("building");
   });
 
-  test("follows the restarted review instead of the stage the user was reading", async () => {
+  test("follows the restarted stage instead of the stage the user was reading", async () => {
     renderTab();
     fireEvent.click(screen.getByText("Build Session"));
     await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
 
     // A retry appends a new stage. Holding the pinned one would leave the user
     // watching a transcript that has stopped moving.
-    retryReviewMock.mockImplementationOnce(async (pipelineId: string) => {
+    restartCurrentStepMock.mockImplementationOnce(async (pipelineId: string) => {
       const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
       return {
         ...current,
@@ -4474,12 +4578,12 @@ describe("BuildChatTab agent messaging", () => {
       };
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
 
     await waitFor(() => expect(screen.getByText("Reviewing again")).toBeTruthy());
   });
 
-  test("does not offer a review retry before the first stage exists", () => {
+  test("does not offer a stage restart before the first stage exists", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([
         [
@@ -4495,7 +4599,7 @@ describe("BuildChatTab agent messaging", () => {
     });
     renderTab();
 
-    expect(screen.queryByRole("button", { name: /Retry Review/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Restart/ }) === null).toBe(true);
   });
 });
 

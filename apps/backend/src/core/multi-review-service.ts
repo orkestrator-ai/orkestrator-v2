@@ -1382,6 +1382,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         }
         const restartFixAfterConsolidation = fixStepHasStarted(workflow);
 
+        supersedePendingAutoPr(workflow);
+        this.autoPrRetryAt.delete(workflow.id);
+
         await this.supersedeRestartedResults(workflow, [reviewer]);
 
         await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
@@ -1515,6 +1518,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           restartedModel === undefined &&
           !workflow.reviewModel &&
           workflow.fixLaunch?.kind !== "custom";
+        // A new preparation or consolidation invalidates the Fix result that
+        // authorized an undelivered PR launch.
+        supersedePendingAutoPr(workflow);
+        this.autoPrRetryAt.delete(workflow.id);
         await this.supersedeRestartedResults(
           workflow,
           kind === "prepare" ? workflow.reviewers : [],
@@ -1764,12 +1771,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
-      if (isMultiReviewTerminalPhase(workflow.phase)) return workflow;
+      if (isMultiReviewTerminalPhase(workflow.phase) && !needsAutoPrLaunch(workflow)) {
+        await this.release(workflow, token);
+        return workflow;
+      }
       if (workflow.phase === "cancelling") {
         void this.advanceNow(workflowId);
         return workflow;
       }
       workflow.phase = "cancelling";
+      supersedePendingAutoPr(workflow);
+      this.autoPrRetryAt.delete(workflow.id);
       workflow.cancellingSince = nowIso();
       delete workflow.pausedFromPhase;
       delete workflow.pausedStep;
@@ -2318,7 +2330,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     )
       return;
     if (pendingAddress && (this.addressDispatchRetryAt.get(workflowId) ?? 0) > Date.now()) return;
-    if (!pendingAddress && pendingAutoPr && (this.autoPrRetryAt.get(workflowId) ?? 0) > Date.now())
+    if (
+      existingPhase === "completed" &&
+      existing.snapshot.fixResult?.complete === true &&
+      !pendingAddress &&
+      pendingAutoPr &&
+      (this.autoPrRetryAt.get(workflowId) ?? 0) > Date.now()
+    )
       return;
     const controlled = await this.loadControlled(workflowId);
     if (!controlled) return;
@@ -2337,10 +2355,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.advanceAddressPrompt(workflow, token);
     } else if (needsInteractiveFixObservation(workflow)) {
       await this.advanceInteractiveFix(workflow, token);
-    } else if (needsAutoPrLaunch(workflow)) {
-      await this.advanceAutoPrLaunch(workflow, token);
     } else if (workflow.phase === "cancelling") {
       await this.advanceCancellation(workflow, token);
+    } else if (needsAutoPrLaunch(workflow)) {
+      await this.advanceAutoPrLaunch(workflow, token);
     } else if (workflow.phase === "reviewing") {
       await this.advanceReviewers(workflow, token);
     } else if (
@@ -2496,6 +2514,16 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private async advanceAutoPrLaunch(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const launch = workflow.autoPrLaunch!;
     try {
+      if (workflow.phase !== "completed" || workflow.fixResult?.complete !== true) {
+        workflow.autoPrLaunch = {
+          state: "skipped",
+          requestId: launch.requestId,
+          message: "Automatic PR requires a completed structured Fix result",
+        };
+        this.autoPrRetryAt.delete(workflow.id);
+        await this.save(workflow, token);
+        return;
+      }
       let outcome: AutoPrLaunchOutcome;
       try {
         outcome = await launchMultiReviewAutoPr(
@@ -2719,8 +2747,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (observation.status === "idle") {
         session.status = "idle";
         delete session.error;
-        // Saved with the settlement, so a restart cannot lose or repeat it.
-        queueAutoPr(workflow);
+        // An interactive stop also reports idle. Only a structured Fix result
+        // proves completion strongly enough to authorize an automatic PR.
+        if (workflow.autoPr === true && !workflow.autoPrLaunch) {
+          workflow.autoPrLaunch = {
+            state: "skipped",
+            requestId: `multi-review-pr:${workflow.id}`,
+            message: "Review the interactive Fix, then use the PR button to create a pull request.",
+          };
+        }
       } else {
         session.status = "failed";
         session.error =
@@ -2743,6 +2778,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   private async advanceCancellation(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    // Old persisted cancelling records may still carry an undelivered intent.
+    supersedePendingAutoPr(workflow);
+    this.autoPrRetryAt.delete(workflow.id);
     const waiting: string[] = [];
     if (workflow.validationRun && ["planned", "running"].includes(workflow.validationRun.status)) {
       try {

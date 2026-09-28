@@ -349,7 +349,7 @@ export type MultiReviewFixSession = MultiReviewSession;
 export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
 
 /**
- * Durable intent to open the ordinary PR tab once the Fix turn settles.
+ * Durable intent to open the ordinary PR tab after a structured Fix proves completion.
  *
  * Recorded atomically with the Fix completion, so a restart cannot lose the
  * handoff; the supervisor retries delivery under the same request id, which
@@ -369,7 +369,7 @@ export interface MultiReviewAutoPrLaunch {
 export interface MultiReviewWorkflow {
   /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
-  /** Launch the ordinary PR tab after the Fix turn completes successfully; absent means off. */
+  /** Launch the ordinary PR tab after a structured Fix proves completion; absent means off. */
   autoPr?: boolean;
   /** Delivery state of the automatic PR launch; absent until the Fix turn completes. */
   autoPrLaunch?: MultiReviewAutoPrLaunch;

@@ -17,7 +17,7 @@ export const MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE =
   "A pull request already exists for this environment, so no PR agent was launched.";
 
 /**
- * Records the auto-PR intent in the same save as a successful Fix settlement.
+ * Records the auto-PR intent in the same save as a complete structured Fix result.
  *
  * A launch that already reached the agent is never repeated. A skipped or
  * failed one may be retried by a later successful Fix, because the condition
@@ -31,8 +31,8 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
 }
 
 /**
- * A new Fix turn supersedes an undelivered PR launch. Its own successful
- * completion queues the launch again, so the PR never races a running fix.
+ * A new Fix turn supersedes an undelivered PR launch. A later complete
+ * structured result may queue it again, so the PR never races a running fix.
  */
 export function supersedePendingAutoPr(workflow: MultiReviewWorkflow): void {
   if (workflow.autoPrLaunch?.state === "pending") delete workflow.autoPrLaunch;

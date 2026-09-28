@@ -98,7 +98,7 @@ export function needsAutoPrLaunch(workflow: MultiReviewWorkflow): boolean {
  * | `result-consumption` | `pendingResultConsumptions` non-empty, any phase | Durable consumption outbox. |
  * | `cancelling` | `cancelling` | Abort every running session and settle within the cancellation deadline. |
  * | `address-handoff` | `interactive` with `addressPromptPending` (and a dispatcher) | Durable interactive Fix handoff; retried with backoff until acknowledged. |
- * | `pr-handoff` | `autoPrLaunch.state` is `pending`, any phase | Durable auto-PR launch after a successful Fix; retried with backoff until acknowledged. |
+ * | `pr-handoff` | `autoPrLaunch.state` is `pending` | Deliver a proven Fix's PR launch, or retire a stale intent. |
  * | `paused-stop` | `paused` whose validation or session stop is not yet confirmed | Retry the stop. |
  * | `interactive-fix` | `interactive` Fix turn running/idle before its runtime settles | Observe interactive Fix completion and final usage. |
  * | `reviewers` | `reviewing` | Reviewer fan-out (its own concurrency budget), idle-result grace and final-usage probes. |

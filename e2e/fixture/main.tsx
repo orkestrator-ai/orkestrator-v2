@@ -471,6 +471,7 @@ function MultiReviewAutoFixFixture() {
   const [selection, setSelection] = useState<MultiReviewLaunchSelection>();
   const [consolidated, setConsolidated] = useState(false);
   const [fixed, setFixed] = useState(false);
+  const [prOpened, setPrOpened] = useState(false);
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
@@ -512,7 +513,12 @@ function MultiReviewAutoFixFixture() {
           Complete fix
         </button>
       )}
-      {fixed && selection?.autoPr && <div role="tab">PR</div>}
+      {fixed && selection?.autoPr && (
+        <button type="button" onClick={() => setPrOpened(true)}>
+          Create PR
+        </button>
+      )}
+      {prOpened && <div role="tab">PR</div>}
     </main>
   );
 }

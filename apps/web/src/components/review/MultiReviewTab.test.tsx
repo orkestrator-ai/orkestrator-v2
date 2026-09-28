@@ -257,6 +257,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         message: "A pull request already exists.",
       }),
     ).toEqual({ text: "A pull request already exists.", tone: "muted" });
+    expect(
+      autoPrLaunchNotice({
+        state: "skipped",
+        requestId,
+        message: "Review the interactive Fix, then use the PR button to create a pull request.",
+      }).text,
+    ).toContain("use the PR button");
     const failed = autoPrLaunchNotice({ state: "failed", requestId, message: "tab limit" });
     expect(failed.tone).toBe("warning");
     expect(failed.text).toContain(": tab limit");

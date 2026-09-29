@@ -2899,13 +2899,13 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(createTab).toHaveBeenCalledTimes(3);
     expect(createTab.mock.calls[0]?.[0]).toBe("claude");
     expect(createTab.mock.calls[0]?.[1]).toMatchObject({
-      tabId: "multi-review-review:multi-1",
+      tabId: "multi-review-review:multi-1:provider-review-coordinator",
       displayTitle: "Review preparation & consolidation",
       resumeSessionId: "provider-review-coordinator",
       hideStructuredOutput: true,
     });
     expect(createTab.mock.calls[1]?.[1]).toMatchObject({
-      tabId: "multi-review-review:multi-1",
+      tabId: "multi-review-review:multi-1:provider-review-coordinator",
       resumeSessionId: "provider-review-coordinator",
       hideStructuredOutput: true,
     });
@@ -2917,11 +2917,63 @@ describe("MultiReviewTab pipeline step cards", () => {
     });
   });
 
+  test("opens a consolidation restarted on another provider with that provider", () => {
+    const legacy = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...legacy,
+      phase: "consolidating",
+      reviewModel: { agent: "opencode", model: "opencode-go/deepseek-v4.1-flash" },
+      consolidationModel: { agent: "cursor", model: "grok-4.6" },
+      reviewSessionKey: "multi-review:multi-1:review:restart:1",
+      reviewSession: {
+        agent: "cursor",
+        model: "grok-4.6",
+        sessionKey: "multi-review:multi-1:review:restart:1",
+        providerSessionId: "provider-cursor-consolidation",
+        requestIds: ["consolidate-2"],
+        status: "running",
+        startedAt: "2026-08-14T00:04:00.000Z",
+      },
+      activeRequest: {
+        kind: "consolidate",
+        requestId: "consolidate-2",
+        state: "sent",
+        createdAt: "2026-08-14T00:04:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    activateReviewTile(screen.getByRole("button", { name: "Open consolidation session" }));
+
+    // The preparation provider's tab for the abandoned session must not be
+    // refocused or reused for the restarted consolidation.
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(createTab.mock.calls[0]?.[0]).toBe("cursor");
+    expect(createTab.mock.calls[0]?.[1]).toMatchObject({
+      tabId: "multi-review-review:multi-1:provider-cursor-consolidation",
+      resumeSessionId: "provider-cursor-consolidation",
+      initialAgentModel: "grok-4.6",
+      requireExistingResumeSession: true,
+    });
+  });
+
   test("keeps legacy preparation and fix tabs on the shared provider session", () => {
     const legacy = readyWorkflow();
 
     expect(multiReviewReviewSessionTabOptions(legacy)).toMatchObject({
-      tabId: "multi-review-review:multi-1",
+      tabId: "multi-review-review:multi-1:provider-fix",
       resumeSessionId: "provider-fix",
       initialAgentModel: "gpt-5.6",
       initialReasoningEffort: "high",

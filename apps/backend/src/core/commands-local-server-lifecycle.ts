@@ -26,6 +26,10 @@ import {
   openCodeAgentToolsConfigurations,
   terminateProcessTreeImpl,
 } from "./commands-runtime-state.js";
+import {
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
+} from "./agent-account-bridge-state.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -192,6 +196,8 @@ export function releaseLocalServerOwnership(
   localServerProcesses.delete(key);
   localServerWorkingDirectories.delete(key);
   localServerUnresponsiveSince.delete(key);
+  localAgentAccountIds.delete(key);
+  localAgentAccountTokenExpiry.delete(key);
   if (key.startsWith("codex:")) {
     localCodexBridgeTokens.delete(key.slice("codex:".length));
   } else if (key.startsWith("claude:")) {

@@ -113,6 +113,7 @@ import {
 import { pruneEnvironmentInputRevisions, selectedInputProviders } from "./portable-input-status.js";
 import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
+import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
@@ -314,7 +315,8 @@ export async function createDockerContainer(
     config.global.enabledAgentPlatforms,
     environment.revokedInputProviders ?? [],
   );
-  const allowClaudeCredentials = inputProviders.has("claude");
+  const allowClaudeCredentials =
+    inputProviders.has("claude") && config.global.useHostClaudeCredentials !== false;
   const anthropicApiKey = allowClaudeCredentials
     ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
@@ -361,12 +363,11 @@ export async function createDockerContainer(
     identity.imageId &&
     process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts" &&
     (await imageCapabilities(identity.imageId, context))?.["staged-inputs"]
-      ? await stagePortableInputs(
-          context.storage.getDataDir(),
-          environment.id,
-          inputProviders,
-          defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
-        )
+      ? await stagePortableInputs(context.storage.getDataDir(), environment.id, inputProviders, {
+          ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+          ...(await activeAgentAccountInputRoots(context)),
+          includeClaudeCredentials: allowClaudeCredentials,
+        })
       : null;
   if (anthropicApiKey && stagedInputs) {
     const keyDir = path.join(stagedInputs.directory, "claude-config");

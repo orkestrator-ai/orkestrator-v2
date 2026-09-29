@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
+    "./agent-accounts": "./src/agent-accounts.ts",
     "./agent-activity": "./src/agent-activity.ts",
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",

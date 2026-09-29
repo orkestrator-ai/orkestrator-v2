@@ -21,6 +21,12 @@ import {
   readPlanUsage,
 } from "./plan-usage.js";
 
+/** Storage for a runtime with no added agent accounts: reads use the host login. */
+const NO_AGENT_ACCOUNTS = {
+  loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
+  agentAccountsDirectory: () => "/tmp/orkestrator-plan-usage/agent-accounts",
+};
+
 function contextWithGlobal(
   global: Record<string, unknown> = {},
   extra: Record<string, unknown> = {},
@@ -29,6 +35,7 @@ function contextWithGlobal(
     storage: {
       loadConfig: async () => ({ global }),
       getDataDir: () => "/tmp/orkestrator-plan-usage",
+      ...NO_AGENT_ACCOUNTS,
     },
     ...extra,
   } as unknown as CommandContext;
@@ -762,6 +769,29 @@ describe("recordSessionWindows", () => {
 });
 
 describe("createPlanUsageReader refresh and cache lifetime", () => {
+  test("invalidating an account detaches an older in-flight read", async () => {
+    let releaseFirst!: (response: Response) => void;
+    const firstResponse = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return calls === 1
+        ? firstResponse
+        : jsonResponse({ usage: { rolling: { status: "ok", percent: 99 } } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+    const context = contextWithGlobal({ openCodeZenApiKey: "zen-key" });
+    const old = reader(context, "opencode");
+    reader.invalidate("opencode");
+    const fresh = await reader(context, "opencode");
+    expect(fresh.windows[0]?.usedPercent).toBe(99);
+    releaseFirst(jsonResponse({ usage: { rolling: { status: "ok", percent: 1 } } }));
+    await old;
+    expect((await reader(context, "opencode")).windows[0]?.usedPercent).toBe(99);
+    expect(calls).toBe(2);
+  });
   test("a forced read does not reuse an in-flight non-forced result", async () => {
     let releaseFirst!: (response: Response) => void;
     const firstResponse = new Promise<Response>((resolve) => {
@@ -900,7 +930,11 @@ describe("createPlanUsageReader credential resolution", () => {
       const context = contextWithGlobal(
         {},
         {
-          storage: { loadConfig: async () => ({ global: {} }), getDataDir: () => dir },
+          storage: {
+            loadConfig: async () => ({ global: {} }),
+            getDataDir: () => dir,
+            ...NO_AGENT_ACCOUNTS,
+          },
         },
       );
 
@@ -950,6 +984,49 @@ describe("createPlanUsageReader credential resolution", () => {
     }
   });
 
+  test("reads the active added Codex account instead of the host login", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ork-plan-usage-"));
+    const accountId = "11111111-2222-4333-8444-555555555555";
+    try {
+      const accountHome = path.join(dir, "agent-accounts", "codex", accountId);
+      await mkdir(accountHome, { recursive: true });
+      await writeFile(
+        path.join(accountHome, "auth.json"),
+        JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } }),
+      );
+      const seen: string[] = [];
+      const fetchImpl = (async (_url: string, init?: RequestInit) => {
+        seen.push(String((init?.headers as Record<string, string>)?.Authorization));
+        return jsonResponse({
+          rate_limits: { primary: { used_percent: 55, window_minutes: 300 } },
+        });
+      }) as unknown as typeof fetch;
+      const context = {
+        // An agent-test profile with no granted host login: only the added
+        // account can supply a credential.
+        runtimeFlavor: "agent-test",
+        credentialSources: new Set(),
+        storage: {
+          loadConfig: async () => ({ global: {} }),
+          getDataDir: () => dir,
+          loadAgentAccounts: async () => ({
+            version: 1,
+            accounts: [],
+            active: { codex: accountId },
+          }),
+          agentAccountsDirectory: () => path.join(dir, "agent-accounts"),
+        },
+      } as unknown as CommandContext;
+      const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+      const snapshot = await reader(context, "codex");
+      expect(snapshot.status).toBe("ok");
+      expect(snapshot.windows[0]?.usedPercent).toBe(55);
+      expect(seen).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("refuses host credentials an agent-test profile did not grant", async () => {
     let calls = 0;
     const fetchImpl = (async () => {
@@ -962,7 +1039,11 @@ describe("createPlanUsageReader credential resolution", () => {
       {
         runtimeFlavor: "agent-test",
         credentialSources: new Set(["claude"]),
-        storage: { loadConfig: async () => ({ global: {} }), getDataDir: () => "/nonexistent" },
+        storage: {
+          loadConfig: async () => ({ global: {} }),
+          getDataDir: () => "/nonexistent",
+          ...NO_AGENT_ACCOUNTS,
+        },
       },
     );
 

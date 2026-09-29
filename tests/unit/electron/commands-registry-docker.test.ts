@@ -673,7 +673,8 @@ exit 1
           : "";
         expect(input).not.toContain("claudeAiOauth");
         const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls).not.toContain("/home/node/.claude/.credentials.json");
+        // Opting out also removes a credential preserved by an older container.
+        expect(calls).toContain("rm -f /home/node/.claude/.credentials.json");
         expect(calls).not.toContain("sk-ant-oat01-opted-out");
         // The GitHub sync still runs, so this is an opt-out and not a start that
         // silently skipped credential delivery altogether.

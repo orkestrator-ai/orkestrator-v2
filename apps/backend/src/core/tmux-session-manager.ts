@@ -36,6 +36,7 @@ import {
   tmuxSessionName,
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
+import { terminalAccountHomes } from "./terminal-account-usage.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
   TranscriptTail,
@@ -56,6 +57,26 @@ import {
   workspaceHookPaths,
 } from "./tmux-hooks.js";
 type CommandContext = shared.CommandContext;
+
+/**
+ * Supplies the Claude configuration directory a local tmux launch should use.
+ * The agent-account owner registers it (see `commands-servers`): tmux does not
+ * depend on the account modules, whose imports lead back here.
+ */
+type LocalClaudeConfigDirectoryProvider = (context: CommandContext) => Promise<string | undefined>;
+let localClaudeConfigDirectory: LocalClaudeConfigDirectoryProvider = async () => undefined;
+
+export function setLocalClaudeConfigDirectoryProvider(
+  provider: LocalClaudeConfigDirectoryProvider,
+): void {
+  localClaudeConfigDirectory = provider;
+}
+
+export function localClaudeAccountPrefix(accountDirectory: string | undefined): string {
+  return accountDirectory
+    ? `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY; export CLAUDE_CONFIG_DIR=${shellArg(accountDirectory)}; `
+    : "";
+}
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
 type JsonRecord = shared.JsonRecord;
@@ -333,7 +354,12 @@ export class TmuxSession {
             ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; " +
               "orkestrator_source_runtime_env 2>/dev/null || true; "
             : "";
-        const wrapped = `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        // A local tmux server keeps the environment it was first started
+        // with, so the active Claude account is exported per session instead.
+        const accountDirectory =
+          this.backend.kind === "local" ? await localClaudeConfigDirectory(context) : undefined;
+        const accountPrefix = localClaudeAccountPrefix(accountDirectory);
+        const wrapped = `${runtimePrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
           "new-session",
@@ -349,6 +375,9 @@ export class TmuxSession {
           wrapped,
         ]);
         if (out.status !== 0) throw new Error(`tmux new-session failed: ${out.stderr}`);
+        if (accountDirectory) {
+          terminalAccountHomes.set(`tmux:${this.environmentId}:${this.tabId}`, accountDirectory);
+        }
       } catch (error) {
         if (agentMcpConfigPath) {
           await this.backend.removeFile(agentMcpConfigPath).catch(() => undefined);
@@ -627,6 +656,7 @@ export class TmuxSession {
               if (await this.tmuxAlive().catch(() => false)) return;
               removed = tmuxManager.removeIfSame(this.environmentId, this.tabId, this);
               if (!removed) return;
+              terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
               this.setBusyState(false);
               await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
               if (tmuxManager.sessionsInEnvironment(this.environmentId) === 0) {
@@ -1211,6 +1241,7 @@ export class TmuxSession {
       result && (result.status === 0 || isMissingTmuxSessionError(result.stderr)),
     );
     if (!stopped) return false;
+    terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
     this.stopRequested = true;
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
     return true;

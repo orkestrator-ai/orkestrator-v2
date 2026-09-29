@@ -28,6 +28,7 @@ import {
   type ProviderStatus,
 } from "./native-agent-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 
 import type { Environment } from "./models.js";
 
@@ -736,6 +737,26 @@ describe("NativeAgentService", () => {
   });
 
   describe("bridge connections", () => {
+    test("binds local usage to the account recorded at bridge launch", async () => {
+      const key = "codex:env-1";
+      localAgentAccountIds.set(key, "account-a");
+      try {
+        await withService(
+          {
+            prefix: "orkestrator-native-bridge-account-",
+            invoke: (async () => ({ port: 4123, authToken: "token" })) as Invoke,
+          },
+          async ({ storage, service }) => {
+            const environment = (await storage.getEnvironment("env-1"))!;
+            expect(
+              (await internals(service).bridgeConnection("codex", environment)).accountId,
+            ).toBe("account-a");
+          },
+        );
+      } finally {
+        localAgentAccountIds.delete(key);
+      }
+    });
     test.each([
       ["claude", "start_local_claude_server_cmd"],
       ["codex", "start_local_codex_server_cmd"],
@@ -760,6 +781,7 @@ describe("NativeAgentService", () => {
             agent,
             baseUrl: "http://127.0.0.1:4123",
             authToken: "token",
+            ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
             directory: "/tmp/env-1",
             model: "chosen-model",
             effort: "chosen-effort",
@@ -793,6 +815,7 @@ describe("NativeAgentService", () => {
             agent,
             baseUrl: "http://127.0.0.1:5123",
             authToken: "token",
+            ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
             model: undefined,
             effort: undefined,
           });

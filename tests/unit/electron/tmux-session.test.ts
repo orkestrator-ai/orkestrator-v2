@@ -33,6 +33,7 @@ import { tmuxSelectionPromptFingerprint } from "../../../packages/protocol/src/t
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { localClaudeAccountPrefix } from "../../../apps/backend/src/core/tmux-session-manager";
 
 import {
   createHandlers,
@@ -63,6 +64,15 @@ test("fast-mode pane parsing surfaces visible command rejections", () => {
     "/fast requires Claude Code 2.1",
   );
   expect(fastModeRejectionFromPane("Fast mode ON")).toBeUndefined();
+});
+
+test("local Claude tmux launches export the selected account and clear inherited keys", () => {
+  expect(localClaudeAccountPrefix(undefined)).toBe("");
+  const prefix = localClaudeAccountPrefix("/tmp/Claude account");
+  expect(prefix).toContain(
+    "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY",
+  );
+  expect(prefix).toContain("export CLAUDE_CONFIG_DIR='/tmp/Claude account'");
 });
 
 test("Claude tmux agent MCP config uses Claude's mcpServers document shape", () => {

@@ -11,7 +11,6 @@ import {
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
 import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
 import { containerLogService } from "./container-log-service.js";
-import { providerCredentialsAllowed } from "./portable-input-status.js";
 
 /** Largest `get_container_logs` answer, in UTF-8 bytes. */
 const CONTAINER_LOG_TAIL_MAX_BYTES = 512 * 1024;
@@ -69,7 +68,6 @@ import {
   getHostPort,
   resolveContainerGitHubToken,
   syncContainerGitHubCredential,
-  syncContainerClaudeCredentialBestEffort,
   ensureContainerProjectFilesAccess,
   createDockerContainer,
   enqueueEnvironmentLifecycleOperation,
@@ -78,6 +76,7 @@ import {
   stopEnvironmentTask,
   resolveOperationImage,
 } from "./commands-helpers.js";
+import { syncContainerAgentAccountsOnStart } from "./agent-accounts-containers.js";
 
 const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
 
@@ -256,16 +255,7 @@ export function registerDockerCommands(
     if (context.runtimeFlavor !== "agent-test") {
       await syncContainerGitHubCredential(id, await resolveContainerGitHubToken(config.global));
     }
-    if (
-      providerCredentialsAllowed(
-        context,
-        config.global.enabledAgentPlatforms,
-        assigned ?? null,
-        "claude",
-      )
-    ) {
-      await syncContainerClaudeCredentialBestEffort(id, config.global);
-    }
+    await syncContainerAgentAccountsOnStart(context, assigned ?? null, id, config.global);
   });
   register("docker_stop_container", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");

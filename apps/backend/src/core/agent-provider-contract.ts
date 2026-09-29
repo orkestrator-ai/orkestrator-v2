@@ -754,6 +754,7 @@ export interface ProviderRuntimeHealth {
 
 export interface BridgeConnection {
   agent: ProviderAgent;
+  accountId?: string;
   baseUrl: string;
   authToken: string;
   directory?: string;

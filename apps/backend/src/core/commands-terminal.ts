@@ -34,6 +34,7 @@ import {
   MAX_RETAINED_TERMINAL_OUTPUT_BUFFERS,
   TERMINAL_ACTIVITY_SETTLE_MS,
 } from "./commands-runtime-state.js";
+import { terminalAccountHomes } from "./terminal-account-usage.js";
 import { containerIdMatches } from "./commands-review.js";
 import type {
   TerminalSessionConfig,
@@ -725,6 +726,9 @@ export function cleanupTerminalSession(id: string, options: { explicit?: boolean
   terminalActivityCompletions.delete(id);
   if (options.explicit) cancelTrackedTerminalCompletions(id);
   terminalProcesses.delete(id);
+  for (const key of Array.from(terminalAccountHomes.keys())) {
+    if (key.startsWith(`${id}:`)) terminalAccountHomes.delete(key);
+  }
   const stableKey = terminalStableKeysBySessionId.get(id);
   const retainStableState =
     !options.explicit && stableKey !== undefined && terminalSessionConfigs.has(id);

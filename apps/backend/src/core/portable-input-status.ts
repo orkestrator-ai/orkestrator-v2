@@ -61,7 +61,7 @@ export function providerCredentialsAllowed(
   ).has(provider);
 }
 
-async function containerLabel(containerId: string, label: string): Promise<string | null> {
+export async function containerLabel(containerId: string, label: string): Promise<string | null> {
   try {
     const { stdout } = await runCommand(
       "docker",

@@ -91,6 +91,16 @@ export interface InputSourceRoots {
   xdgConfigHome?: string;
   xdgDataHome?: string;
   xdgStateHome?: string;
+  /**
+   * The active added account's configuration directory, when it is not the
+   * host login. Only the login itself is read from here — everything else in
+   * an account directory is a link back to the host's, and staging never
+   * follows links.
+   */
+  claudeAccountHome?: string;
+  /** An explicit container credential opt-out excludes both host and added logins. */
+  includeClaudeCredentials?: boolean;
+  codexAccountHome?: string;
 }
 
 export function defaultInputSourceRoots(
@@ -122,6 +132,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
   const join = (base: string | undefined, ...parts: string[]) =>
     base ? path.join(base, ...parts) : null;
   const configHome = agentTest ? roots.xdgConfigHome : path.join(home, ".config");
+  const { claudeAccountHome, codexAccountHome } = roots;
   const dataHome = agentTest ? roots.xdgDataHome : path.join(home, ".local", "share");
   const stateHome = agentTest ? roots.xdgStateHome : path.join(home, ".local", "state");
   return [
@@ -132,7 +143,13 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           stage: "claude-config",
           target: "/claude-config",
           root: agentTest ? (roots.claudeConfigDir ?? null) : path.join(home, ".claude"),
-          files: ["CLAUDE.md", "settings.local.json", ".credentials.json"],
+          files: [
+            "CLAUDE.md",
+            "settings.local.json",
+            ...(claudeAccountHome || roots.includeClaudeCredentials === false
+              ? []
+              : [".credentials.json"]),
+          ],
           directories: [
             { path: "commands", mode: "entries" },
             { path: "agents", mode: "entries" },
@@ -140,12 +157,26 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             { path: "plugins", mode: "entries" },
           ],
         },
+        ...(claudeAccountHome && roots.includeClaudeCredentials !== false
+          ? [
+              {
+                stage: "claude-config",
+                target: "/claude-config",
+                root: claudeAccountHome,
+                files: [".credentials.json"],
+              },
+            ]
+          : []),
       ],
       files: [
         {
           stage: "claude.json",
           target: "/claude-config.json",
-          source: join(hostHome, ".claude.json"),
+          // An account's `.claude.json` names its own login (`oauthAccount`)
+          // and already carries the host's MCP servers.
+          source: claudeAccountHome
+            ? path.join(claudeAccountHome, ".claude.json")
+            : join(hostHome, ".claude.json"),
         },
       ],
     },
@@ -186,7 +217,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           target: "/codex-home",
           root: agentTest ? (roots.codexHome ?? null) : path.join(home, ".codex"),
           files: [
-            "auth.json",
+            ...(codexAccountHome ? [] : ["auth.json"]),
             "config.toml",
             "AGENTS.md",
             "hooks.json",
@@ -204,6 +235,16 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             { path: "plugins/cache", mode: "tree" },
           ],
         },
+        ...(codexAccountHome
+          ? [
+              {
+                stage: "codex-home",
+                target: "/codex-home",
+                root: codexAccountHome,
+                files: ["auth.json"],
+              },
+            ]
+          : []),
       ],
       files: [],
     },
@@ -562,6 +603,16 @@ function portableInputsDirectory(dataDir: string, environmentId: string): string
   return environmentStateDirectory(dataDir, "portable-inputs", environmentId);
 }
 
+/** One revision's directory. Callers validate the revision name first. */
+export function portableInputRevisionDirectory(
+  dataDir: string,
+  environmentId: string,
+  revision: string,
+): string {
+  if (!/^r[0-9a-z]+-[0-9a-f]{8}$/.test(revision)) throw new Error("Invalid input revision");
+  return path.join(portableInputsDirectory(dataDir, environmentId), revision);
+}
+
 /**
  * Stages the allowlisted inputs of `providers` into a new revision for one
  * environment and returns the bind mounts that expose it. Only staged
@@ -607,7 +658,11 @@ export async function stagePortableInputs(
             () => false,
           )
         ) {
-          mounts.push({ source: path.join(directory, source.stage), target: source.target });
+          // Two sources may feed one stage (an account's login beside the
+          // host's configuration); the stage is still one mount.
+          if (!mounts.some((mount) => mount.target === source.target)) {
+            mounts.push({ source: path.join(directory, source.stage), target: source.target });
+          }
         }
       }
       for (const file of spec.files) {
@@ -779,4 +834,68 @@ export async function readInputsManifest(
   } catch {
     return null;
   }
+}
+
+/**
+ * Replace one staged file inside an existing revision, e.g. the login after
+ * the active agent account changed. The entrypoint imports from these mounts
+ * on every start, so this is what a restarted container picks up.
+ *
+ * `relative` names a file under the revision (`codex-home/auth.json`). A file
+ * inside a staged directory is swapped atomically; a file that is itself a
+ * bind mount (`inPlace`) must keep its inode, so it is rewritten in place and
+ * only when it already exists. `undefined` contents remove (or, in place,
+ * truncate) the file. Returns false when nothing could be written: the
+ * revision or its stage does not exist.
+ */
+export async function replaceStagedInputFile(
+  dataDir: string,
+  environmentId: string,
+  revision: string,
+  relative: string,
+  contents: string | undefined,
+  options: { inPlace?: boolean } = {},
+): Promise<boolean> {
+  if (!/^r[0-9a-z]+-[0-9a-f]{8}$/.test(revision)) return false;
+  const parts = relative.split("/");
+  if (parts.length < 2 || parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("Staged input path is not valid");
+  }
+  const directory = path.join(portableInputsDirectory(dataDir, environmentId), revision);
+  try {
+    await assertNoSymlinkAncestry(directory, relative);
+  } catch {
+    return false;
+  }
+  const target = path.join(directory, relative);
+  const current = await lstat(target).catch(() => null);
+  if (current?.isSymbolicLink()) return false;
+  if (options.inPlace) {
+    if (!current?.isFile()) return false;
+    const handle = await open(
+      target,
+      fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+    );
+    try {
+      if (contents !== undefined) await handle.writeFile(contents, "utf8");
+    } finally {
+      await handle.close();
+    }
+    return true;
+  }
+  if (contents === undefined) {
+    await rm(target, { force: true });
+    return true;
+  }
+  const temporary = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${randomUUID()}.tmp`,
+  );
+  try {
+    await writeFile(temporary, contents, { mode: 0o600, flag: "wx" });
+    await rename(temporary, target);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+  return true;
 }

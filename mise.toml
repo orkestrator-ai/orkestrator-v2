@@ -141,6 +141,11 @@ run = "bun scripts/download-agent.ts grok"
 description = "Download the pinned Pi CLI"
 run = "bun scripts/download-agent.ts pi"
 
+[tasks."toolchain:install"]
+description = "Download and verify every pinned agent binary this data directory needs (same as `orkestrator toolchain install`)"
+raw_args = true
+run = "bun scripts/toolchain-install.ts"
+
 [tasks."download:binaries"]
 description = "Download the desktop-bundled runtime and agent binaries"
 run = [

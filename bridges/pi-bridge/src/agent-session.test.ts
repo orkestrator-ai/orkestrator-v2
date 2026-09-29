@@ -775,9 +775,12 @@ describe("Pi SDK lifecycle", () => {
       finish = resolve;
     });
     const fake = fakeSession({
-      prompt: async (text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: async (
+        text: string,
+        options: { preflightResult?: (disposition: string) => void },
+      ) => {
         promptedWith = text;
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         await run;
       },
       abort: async () => undefined,
@@ -1595,8 +1598,11 @@ describe("command catalogue", () => {
     const fake = commandSession({
       templates: [reviewTemplate()],
       overrides: {
-        prompt: async (_text: string, options: { preflightResult?: (ok: boolean) => void }) => {
-          options.preflightResult?.(true);
+        prompt: async (
+          _text: string,
+          options: { preflightResult?: (disposition: string) => void },
+        ) => {
+          options.preflightResult?.("started");
           await new Promise<void>((resolve) => {
             finish = resolve;
           });

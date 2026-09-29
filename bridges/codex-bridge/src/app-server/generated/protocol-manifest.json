@@ -1,8 +1,8 @@
 {
-  "codexVersion": "0.158.0",
-  "typescriptDigest": "sha256:c7f68b2111e18528af8578f75b399722dede63f61b962b6871cf0b8b2cd915e5",
-  "schemaDigest": "sha256:15c3c4553ac38e95e6be8f7e8cd6f88b938658bd0e8b8ba61fa474862a799d71",
-  "typescriptFileCount": 732,
+  "codexVersion": "0.159.0",
+  "typescriptDigest": "sha256:9376611845790b81c93085acb22e3a485290e9850142ede13a29ab043b8242c6",
+  "schemaDigest": "sha256:47cbbe5096104c73285a7c5781f22e52d6fdb0a093c096393d1e4b2a9e921ece",
+  "typescriptFileCount": 734,
   "schemaFileCount": 314,
   "clientRequestMethods": [
     "account/gatewayOAuth/cancel",

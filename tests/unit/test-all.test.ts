@@ -107,7 +107,7 @@ function createDependencies(
   };
 }
 
-const WORKSPACE = "workspace (web, backend, desktop, web-public, cli, protocol)";
+const WORKSPACE = "workspace (web, backend, desktop, web-public, cli, protocol, toolchain)";
 const ROOT = "root and agent-support tests";
 const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";

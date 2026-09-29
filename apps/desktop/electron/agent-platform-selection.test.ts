@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   applyAgentTestPlatformSelection,
-  loadAgentPlatformSelection,
   saveAgentPlatformSelection,
 } from "./agent-platform-selection";
-import { pinnedArtifactsForPlatforms } from "./toolchain-manifest";
+import { loadAgentPlatformSelection } from "@orkestrator/toolchain/platform-selection";
+import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 
 const directories: string[] = [];
 afterEach(async () => {

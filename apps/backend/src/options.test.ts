@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   assertSupportedPlatform,
@@ -155,6 +157,22 @@ describe("standalone backend options", () => {
         ORKESTRATOR_TOOLCHAIN_BIN: "/opt/orkestrator-tools",
       }).toolchainBinDir,
     ).toBe("/opt/orkestrator-tools");
+  });
+
+  test("prefers the installed toolchain set once `toolchain install` has pointed current at one", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-options-"));
+    try {
+      const binRoot = path.join(dataDir, "toolchains", "bin");
+      await mkdir(path.join(binRoot, "set-a"), { recursive: true });
+      // No link yet: the directory that was always searched.
+      expect(parseOptions(["--data-dir", dataDir], {}).toolchainBinDir).toBe(binRoot);
+      await symlink("set-a", path.join(binRoot, "current"), "dir");
+      expect(parseOptions(["--data-dir", dataDir], {}).toolchainBinDir).toBe(
+        path.join(binRoot, "current"),
+      );
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   test("reads allowed origins from the environment and lets CLI values take precedence", () => {

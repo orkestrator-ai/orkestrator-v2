@@ -3,7 +3,7 @@ import {
   applyToolchainProgress,
   toolchainProgressFraction,
 } from "../../../apps/desktop/electron/toolchain-bootstrap-progress";
-import type { ToolchainProgress } from "../../../apps/desktop/electron/toolchain-manager";
+import type { ToolchainProgress } from "@orkestrator/toolchain/manager";
 
 function progress(overrides: Partial<ToolchainProgress> = {}): ToolchainProgress {
   return {

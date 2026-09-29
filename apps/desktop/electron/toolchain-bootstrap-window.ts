@@ -1,7 +1,7 @@
 import type { BrowserWindow as BrowserWindowType, BrowserWindowConstructorOptions } from "electron";
 import path from "node:path";
 import { PRODUCT_NAME } from "./app-constants.js";
-import type { ToolchainProgress } from "./toolchain-manager.js";
+import type { ToolchainProgress } from "@orkestrator/toolchain/manager";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindowType;

@@ -14,7 +14,7 @@ import {
   type ToolchainArchitecture,
   type ToolchainName,
   type ToolchainPlatform,
-} from "../apps/desktop/electron/toolchain-manifest";
+} from "@orkestrator/toolchain/manifest";
 
 export type Digest = {
   size: number;
@@ -216,7 +216,7 @@ const MAX_BUNDLE_ENTRIES = 20_000;
 const MAX_BUNDLE_EXPANSION_RATIO = 6;
 
 /**
- * Reproduce the bundle digest `toolchain-manager.ts` checks on every startup.
+ * Reproduce the bundle digest `manager.ts` checks on every startup.
  *
  * It has to agree byte for byte with `bundleTreeEntries` and `bundleTreeDigest`
  * there, including the two details that are easy to lose: the primary
@@ -550,7 +550,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
   }
   log(
     emit
-      ? `Hashed ${selected.length} artifact(s); paste the values into toolchain-manifest.ts`
+      ? `Hashed ${selected.length} artifact(s); paste the values into packages/toolchain/src/manifest.ts`
       : `Verified ${selected.length} pinned toolchain artifact(s)`,
   );
 }

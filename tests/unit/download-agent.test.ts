@@ -17,7 +17,7 @@ import path from "node:path";
 import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
-} from "../../apps/desktop/electron/toolchain-manifest";
+} from "@orkestrator/toolchain/manifest";
 import {
   downloadAgent,
   hostTarget,

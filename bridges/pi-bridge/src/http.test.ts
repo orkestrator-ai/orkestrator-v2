@@ -126,8 +126,8 @@ function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession
     promptTemplates: [],
     subscribe: () => () => undefined,
     dispose: () => undefined,
-    prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-      options.preflightResult?.(true);
+    prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+      options.preflightResult?.("started");
       return Promise.resolve();
     },
     abort: async () => undefined,
@@ -938,9 +938,9 @@ describe("successful lifecycle routes", () => {
     const state = seedSession();
     const prompts: string[] = [];
     state.session = fakeAgentSession({
-      prompt: (text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: (text: string, options: { preflightResult?: (disposition: string) => void }) => {
         prompts.push(text);
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         return Promise.resolve();
       },
     });
@@ -1628,8 +1628,8 @@ describe("steering", () => {
     let queued = 0;
     let clears = 0;
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(true);
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
         return new Promise<void>((resolve) => {
           finishRun = resolve;
         });
@@ -1683,8 +1683,8 @@ describe("steering", () => {
     let queued = 0;
     let clears = 0;
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(true);
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
         return new Promise<void>((resolve) => {
           finishRun = resolve;
         });
@@ -1739,8 +1739,8 @@ describe("steering", () => {
     let finishRun: () => void = () => undefined;
     let clearAttempts = 0;
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(true);
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
         return new Promise<void>((resolve) => {
           finishRun = resolve;
         });
@@ -1784,7 +1784,6 @@ describe("steering", () => {
 
   test("refuses steering while the initial prompt is still in preflight", async () => {
     const state = seedSession();
-    let announcePreflight: (accepted: boolean) => void = () => undefined;
     let rejectFirstRun: (error: unknown) => void = () => undefined;
     let promptCalls = 0;
     let steerCalls = 0;
@@ -1792,13 +1791,12 @@ describe("steering", () => {
       rejectFirstRun = reject;
     });
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
         promptCalls += 1;
         if (promptCalls === 1) {
-          announcePreflight = options.preflightResult ?? (() => undefined);
           return firstRun;
         }
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         return Promise.resolve();
       },
       steer: async () => {
@@ -1823,7 +1821,6 @@ describe("steering", () => {
     expect(await steer.json()).toEqual({ outcome: "idle" });
     expect(steerCalls).toBe(0);
 
-    announcePreflight(false);
     rejectFirstRun(new Error("preflight rejected"));
     expect((await firstPrompt).status).toBe(500);
     expect(state.pendingSteerDeliveries).toEqual([]);
@@ -1972,9 +1969,9 @@ describe("provider-owned follow-ups", () => {
     let queued = 0;
     const queuedAtLaterPrompt: number[] = [];
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
         promptCalls += 1;
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         if (promptCalls === 1) {
           return new Promise<void>((resolve) => {
             finishRun = resolve;
@@ -2197,14 +2194,14 @@ describe("at-most-once dispatch", () => {
       const state = seedSession();
       let journalAtDispatch: unknown;
       state.session = {
-        prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
           const persisted = JSON.parse(readFileSync(join(directory, "state.json"), "utf8"));
           journalAtDispatch = persisted.sessions
             .find((entry: { id: string }) => entry.id === state.id)
             ?.promptJournal.find(
               (entry: { requestId: string }) => entry.requestId === "req-durable",
             );
-          options.preflightResult?.(true);
+          options.preflightResult?.("started");
           return Promise.resolve();
         },
         abort: async () => undefined,
@@ -2267,9 +2264,8 @@ describe("at-most-once dispatch", () => {
   test("removes the optimistic user message when Pi rejects preflight", async () => {
     const state = seedSession();
     state.session = {
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(false);
-        return Promise.resolve();
+      prompt: (_text: string) => {
+        return Promise.reject(new Error("Pi refused the prompt"));
       },
       setModel: async () => undefined,
       setThinkingLevel: () => undefined,
@@ -2514,10 +2510,10 @@ function commandSeed(options: CommandSeedOptions = {}) {
     isIdle: true,
     prompt: (
       text: string,
-      opts: { expandPromptTemplates?: boolean; preflightResult?: (ok: boolean) => void },
+      opts: { expandPromptTemplates?: boolean; preflightResult?: (disposition: string) => void },
     ) => {
       prompts.push({ text, expandPromptTemplates: opts.expandPromptTemplates });
-      opts.preflightResult?.(true);
+      opts.preflightResult?.("started");
       return Promise.resolve();
     },
     ...options.overrides,

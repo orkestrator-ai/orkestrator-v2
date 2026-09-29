@@ -394,6 +394,11 @@ function applyToolExecution(
   closeTextParts(state);
   const part = upsertToolPart(state, message, toolCallId);
 
+  // Pi 0.99: a call another tool made through `ctx.executeTool()` carries that
+  // tool's call id. The id is the whole link, so it is stamped once and kept.
+  if (nonBlank(event.parentToolCallId) && event.parentToolCallId !== toolCallId) {
+    part.parentTaskUseId = event.parentToolCallId;
+  }
   part.toolName = rendered.toolName;
   part.content = rendered.toolTitle
     ? boundText(rendered.toolTitle, MAX_TOOL_TITLE_BYTES)

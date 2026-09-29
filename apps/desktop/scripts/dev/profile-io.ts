@@ -30,11 +30,8 @@ import {
   type RuntimeProfileRoots,
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
-import { pinnedArtifactDirectory } from "../../electron/toolchain-manager.js";
-import {
-  pinnedToolchainArtifacts,
-  type ToolchainArtifact,
-} from "../../electron/toolchain-manifest.js";
+import { pinnedArtifactDirectory } from "@orkestrator/toolchain/manager";
+import { pinnedToolchainArtifacts, type ToolchainArtifact } from "@orkestrator/toolchain/manifest";
 
 const MAX_MODEL_CACHE_BYTES = 16 * 1024 * 1024;
 const MODEL_CACHE_COPY_CHUNK_BYTES = 64 * 1024;

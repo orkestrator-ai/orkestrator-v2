@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ToolchainArtifact } from "../../apps/desktop/electron/toolchain-manifest";
+import type { ToolchainArtifact } from "@orkestrator/toolchain/manifest";
 import {
   expectDigest,
   fetchArtifact,
@@ -402,7 +402,7 @@ describe("verify-toolchain-artifacts", () => {
   });
 
   test("emit mode prints manifest-shaped digests instead of asserting them", async () => {
-    // These lines are pasted straight into toolchain-manifest.ts during a
+    // These lines are pasted straight into packages/toolchain/src/manifest.ts during a
     // version bump, so the `_` separators and field names are a contract.
     const root = await mkdtemp(join(tmpdir(), "ork-artifact-test-"));
     const log = spyOn(console, "log").mockImplementation(() => undefined);
@@ -776,7 +776,9 @@ describe("verify-toolchain-artifacts", () => {
       });
 
       expect(emitFlags).toEqual([true, true]);
-      expect(logged).toEqual(["Hashed 2 artifact(s); paste the values into toolchain-manifest.ts"]);
+      expect(logged).toEqual([
+        "Hashed 2 artifact(s); paste the values into packages/toolchain/src/manifest.ts",
+      ]);
     });
 
     test("removes the scratch root even when an artifact fails mid-run", async () => {

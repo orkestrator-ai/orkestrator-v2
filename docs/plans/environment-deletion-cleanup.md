@@ -34,7 +34,7 @@ caused it to exist. Those applications manage their own retention.
   images, networks, or volumes (see "Docker" below).
 - Development-tooling state: `~/.config/orkestrator-v2-dev/profiles/*`
   (`mise run dev:reset` owns it), `.turbo` caches, and agent toolchain versions,
-  which `toolchain-manager.ts` already prunes after 14 days.
+  which `manager.ts` already prunes after 14 days.
 - Worktrees and branches that Orkestrator did not create, even when they live
   in the workspaces root (for example a hand-made `wa-integration` worktree).
 

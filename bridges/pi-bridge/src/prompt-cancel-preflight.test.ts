@@ -2,11 +2,11 @@
  * Cancellation while Pi's own prompt preflight is pending (INC-05).
  *
  * `AgentSession.prompt` reports acceptance through `preflightResult`, and the
- * bridge has no run to cancel until then. Pi 0.87's `abort()` during preflight
+ * bridge has no run to cancel until then. Pi 0.99's `abort()` during preflight
  * cancels an auto-compaction in progress but cannot pre-empt the run:
  * `_runAgentPrompt` resets the abort request when the run starts. So a cancel
  * during preflight is applied twice over — at once (reaching any compaction)
- * and again the moment Pi accepts, because `preflightResult(true)` is called
+ * and again the moment Pi accepts, because `preflightResult` reports a disposition
  * synchronously just before the run is created. These cases hold preflight
  * with a deferred gate and prove that the cancel is retained, applied once per
  * phase, scoped to its own turn, and never leaves an approval waiting.
@@ -128,13 +128,16 @@ function preflightSession(
     promptTemplates: [],
     subscribe: () => () => undefined,
     dispose: () => undefined,
-    prompt: (_text: string, promptOptions: { preflightResult?: (accepted: boolean) => void }) => {
+    prompt: (_text: string, promptOptions: { preflightResult?: (disposition: string) => void }) => {
       counts.prompts += 1;
       const run = deferred();
       runs.push(run);
+      // Pi 0.99 reports a disposition only for an accepted prompt; a refusal
+      // is the run rejecting, never a `false` callback.
       const announce = (ok: boolean) => {
-        if (ok) accepted += 1;
-        promptOptions.preflightResult?.(ok);
+        if (!ok) return;
+        accepted += 1;
+        promptOptions.preflightResult?.("started");
       };
       if (options.holdPreflight) preflights.push(announce);
       else announce(true);

@@ -21,15 +21,12 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { gzipSync } from "node:zlib";
 import * as tar from "../../../apps/desktop/node_modules/tar-stream";
-import {
-  ensurePinnedToolchains,
-  type ToolchainProgress,
-} from "../../../apps/desktop/electron/toolchain-manager";
+import { ensurePinnedToolchains, type ToolchainProgress } from "@orkestrator/toolchain/manager";
 import {
   pinnedToolchainArtifacts,
   type ToolchainArtifact,
   type ToolchainCompanion,
-} from "../../../apps/desktop/electron/toolchain-manifest";
+} from "@orkestrator/toolchain/manifest";
 
 const ZIP_FIXTURE = Buffer.from(
   "UEsDBAoAAAAAADMD8VyEaD1TIAAAACAAAAAEAAAAdG9vbCMhL2Jpbi9zaApwcmludGYgInRvb2wgMS4yLjNcbiIKUEsBAh4DCgAAAAAAMwPxXIRoPVMgAAAAIAAAAAQAAAAAAAAAAQABAECBAAAAAHRvb2xQSwUGAAAAAAEAAQAyAAAAQgAAAAAA",

@@ -135,11 +135,11 @@ function controlledSession(options: { abortGate?: Promise<void> } = {}) {
     subscribe: () => () => undefined,
     dispose: () => undefined,
     bindExtensions: async () => undefined,
-    prompt: (_text: string, promptOptions: { preflightResult?: (accepted: boolean) => void }) => {
+    prompt: (_text: string, promptOptions: { preflightResult?: (disposition: string) => void }) => {
       counts.prompts += 1;
       const run = deferred();
       runs.push(run);
-      promptOptions.preflightResult?.(true);
+      promptOptions.preflightResult?.("started");
       return run.promise;
     },
     followUp: async () => {
@@ -722,7 +722,7 @@ describe("a provider abort that hangs", () => {
 });
 
 /**
- * Pi's follow-up queue is the SDK's, not the bridge's. Pinned SDK 0.87.1:
+ * Pi's follow-up queue is the SDK's, not the bridge's. Pinned SDK 0.99.0:
  * `followUp()` pushes onto `AgentSession._followUpMessages` and the agent's
  * queue, and `abort()` (`abortRetry`/`abortCompaction`/`agent.abort()`) never
  * clears either — only `clearQueue()` does, which the bridge calls solely for

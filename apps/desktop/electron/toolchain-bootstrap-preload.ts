@@ -1,6 +1,6 @@
 import { ipcRenderer } from "electron";
 import { applyToolchainProgress } from "./toolchain-bootstrap-progress.js";
-import type { ToolchainProgress } from "./toolchain-manager.js";
+import type { ToolchainProgress } from "@orkestrator/toolchain/manager";
 
 let latestProgress: ToolchainProgress | null = null;
 

@@ -28,9 +28,9 @@ import {
   type ToolchainArtifact,
   type ToolchainCompanion,
   type ToolchainName,
-} from "./toolchain-manifest.js";
+} from "./manifest.js";
+import { TOOLCHAIN_DIRECTORY, toolchainRootDir } from "./layout.js";
 
-const TOOLCHAIN_DIRECTORY = "toolchains";
 const INSTALL_LOCK = ".install.lock";
 const LEASE_DIRECTORY = ".leases";
 const LOCK_STALE_AFTER_MS = 10 * 60 * 1_000;
@@ -111,10 +111,7 @@ function artifactDirectory(rootDir: string, artifact: ToolchainArtifact): string
   );
 }
 
-/** The toolchain root this module owns inside a given data directory. */
-export function toolchainRootDir(dataDir: string): string {
-  return path.join(dataDir, TOOLCHAIN_DIRECTORY);
-}
+export { toolchainRootDir };
 
 /**
  * Where a pinned artifact is installed under `dataDir`.

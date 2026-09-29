@@ -26,6 +26,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/web-public/package.json apps/web-public/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
+COPY packages/toolchain/package.json packages/toolchain/package.json
 COPY bridges/claude-bridge/package.json bridges/claude-bridge/package.json
 COPY bridges/codex-bridge/package.json bridges/codex-bridge/package.json
 COPY bridges/acp-bridge/package.json bridges/acp-bridge/package.json
@@ -179,7 +180,7 @@ ENV EDITOR=nano
 ENV VISUAL=nano
 
 # Every agent version in the next block must equal PINNED_TOOLCHAIN_VERSIONS in
-# apps/desktop/electron/toolchain-manifest.ts, and the SHA literals further down
+# packages/toolchain/src/manifest.ts, and the SHA literals further down
 # must equal that manifest's linux digests. The image cannot read the manifest,
 # so these are a second copy; `every shipped agent, uniformly` in
 # tests/unit/version-drift.test.ts is what stops the two drifting.
@@ -189,10 +190,10 @@ ENV VISUAL=nano
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.284
-ARG CODEX_CLI_VERSION=0.158.0
+ARG CODEX_CLI_VERSION=0.159.0
 ARG OPENCODE_CLI_VERSION=1.18.33
-ARG GROK_BUILD_VERSION=1.0.41
-ARG PI_CLI_VERSION=0.87.1
+ARG GROK_BUILD_VERSION=1.0.44
+ARG PI_CLI_VERSION=0.99.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -227,8 +228,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407 ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=7c0b8c973af6a78e2037f19ed93033471b8c5e722f9ff04b86b092e066e60d74 ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=f76431873efc5c8a50892d1e1247eaee23f6664bca385fbd55a06a8e7d3caedc ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=a31506d73b4454bbf70c3c2821e41a042fa7838058ba1b271b009a926d175239 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
@@ -239,11 +240,11 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # examples and a native helper module from beside itself, so the tree is kept
 # intact rather than reduced to a single binary. Pinned and hash verified like
 # the two above; the digests match the ones in
-# apps/desktop/electron/toolchain-manifest.ts for the same version.
+# packages/toolchain/src/manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=80d78dd62d50049a006b981d994c61255bcc10e730b0c278d4ea0a755909764c ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=364b4a9f8491450b27a4857d4e3c780dbaf696790821c176a873e860cbbc3b89 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=2d51edb25b264d0418ac889a3452cb8235ba1721e063d8d9dc8dfb4826586447 ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=42dbacde2192afb91fd066eb41df74aba2593a90508e9f0fbcfbc9c22c5c38b0 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \

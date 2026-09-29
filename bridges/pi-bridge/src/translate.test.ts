@@ -106,6 +106,50 @@ describe("streaming text", () => {
 });
 
 describe("tool cards", () => {
+  test("links a call another tool made to its parent under the shared name", () => {
+    const state = running();
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "codemode-1",
+      toolName: "codemode",
+      args: { code: "await tools.bash({ command: 'echo hi' })" },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "nested-1",
+      parentToolCallId: "codemode-1",
+      toolName: "bash",
+      args: { command: "echo hi" },
+    });
+    // A self-reference is no link; a later frame for the same call keeps its own.
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "loop-1",
+      parentToolCallId: "loop-1",
+      toolName: "bash",
+      args: { command: "true" },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "nested-1",
+      parentToolCallId: "codemode-1",
+      toolName: "bash",
+      args: { command: "echo hi" },
+      result: { content: [{ type: "text", text: "hi" }] },
+      isError: false,
+    });
+
+    const byId = new Map(
+      (parts(state) as BridgeToolPart[]).map((part) => [part.toolUseId, part] as const),
+    );
+    expect(byId.get("codemode-1")?.parentTaskUseId).toBeUndefined();
+    expect(byId.get("nested-1")).toMatchObject({
+      parentTaskUseId: "codemode-1",
+      toolState: "success",
+    });
+    expect(byId.get("loop-1")?.parentTaskUseId).toBeUndefined();
+  });
+
   test("patches one card across start, update and end", () => {
     const state = running();
     applySessionEvent(state, {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   orkestratorMcpServer,
@@ -138,6 +138,56 @@ describe("Pi MCP config", () => {
       "user:docs",
     ]);
     expect(container.find((server) => server.id === "local")?.command).toBe("from-project");
+  });
+
+  test("reads Pi's own mcp.json spellings: enabled, ${NAME} values, ~/ and cwd", async () => {
+    const root = await tempRoot("pi-mcp-native-");
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(agentDir, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          off: { command: "nope", enabled: false },
+          on: { command: "~/bin/server", args: ["~/data", "--flag"], cwd: "sub", enabled: true },
+          docs: {
+            url: "https://docs.example/mcp",
+            headers: { Authorization: "Bearer ${DOCS_TOKEN}", "X-Literal": "$$5 $!important" },
+          },
+          stdio: { command: "run", env: { KEY: "$API_KEY", PLAIN: "value" } },
+          missing: { url: "https://x.example/mcp", headers: { Authorization: "${UNSET_VAR}" } },
+          command: { url: "https://y.example/mcp", headers: { Authorization: "!echo secret" } },
+          leak: {
+            url: "https://z.example/mcp",
+            headers: { Authorization: "${ORKESTRATOR_AGENT_MCP_TOKEN}" },
+          },
+        },
+      }),
+    );
+
+    const servers = await resolvePiMcpServers({
+      agentDir,
+      cwd: root,
+      projectResources: false,
+      env: {
+        DOCS_TOKEN: "abc",
+        API_KEY: "k",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "bridge-secret",
+      },
+    });
+
+    expect(servers.map((server) => server.id).sort()).toEqual(["docs", "on", "stdio"]);
+    const byId = new Map(servers.map((server) => [server.id, server]));
+    expect(byId.get("on")).toMatchObject({
+      command: join(homedir(), "bin/server"),
+      args: [join(homedir(), "data"), "--flag"],
+      cwd: "sub",
+    });
+    expect(byId.get("docs")?.headers).toEqual({
+      Authorization: "Bearer abc",
+      "X-Literal": "$5 !important",
+    });
+    expect(byId.get("stdio")?.env).toEqual({ KEY: "k", PLAIN: "value" });
   });
 
   test("keeps the reserved Orkestrator server when the cap is full", async () => {

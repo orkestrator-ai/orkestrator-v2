@@ -20,7 +20,7 @@ import {
   resolveRuntimeProfile,
   statusManifestPath,
 } from "../../electron/runtime-profile.js";
-import type { ToolchainArtifact } from "../../electron/toolchain-manifest.js";
+import type { ToolchainArtifact } from "@orkestrator/toolchain/manifest";
 import {
   atomicWriteJson,
   initializeProfile,

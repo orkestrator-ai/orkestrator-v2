@@ -27,7 +27,7 @@ measured through `docker system df` rather than walked.
 | Per-environment bridge state, worktrees, local branches | Environment deletion and its reconciler | See [environment-deletion-cleanup.md](../plans/environment-deletion-cleanup.md) |
 | Empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend start-up sweep | At start-up; branches at most daily per project |
 | Test temporary directories in the system temp dir | The next test run | Once the creating process has exited and the directory is over an hour old |
-| Managed agent toolchains | `toolchain-manager.ts` | Superseded versions after 14 days |
+| Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
 
 ## What you clean yourself
 

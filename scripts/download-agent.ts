@@ -32,7 +32,7 @@ import {
   type ToolchainArtifact,
   type ToolchainName,
   type ToolchainPlatform,
-} from "../apps/desktop/electron/toolchain-manifest";
+} from "@orkestrator/toolchain/manifest";
 import {
   fetchArtifact,
   verifyDownloadedArchive,

@@ -103,7 +103,7 @@ function groupArgs(name: string): string[] {
 
 /** The packages the aggregate runner's workspace group actually schedules. */
 function filteredPackages(): string[] {
-  return groupArgs("workspace (web, backend, desktop, web-public, cli, protocol)")
+  return groupArgs("workspace (web, backend, desktop, web-public, cli, protocol, toolchain)")
     .filter((argument) => argument.startsWith("--filter="))
     .map((argument) => argument.slice("--filter=".length));
 }

@@ -728,25 +728,37 @@ export class AppServerSupervisor {
       return { restarted: false, fingerprint };
     }
 
+    await this.restartWhenIdle("runtime environment changed", options);
+    return { restarted: true, fingerprint };
+  }
+
+  /**
+   * Replace the child, but only after in-flight turns settle (bounded by the
+   * caller's `waitForIdle`). Joins a drain that is already running rather than
+   * starting a second one.
+   */
+  async restartWhenIdle(
+    reason: string,
+    options: { hasActiveTurns: () => boolean; waitForIdle: () => Promise<void> },
+  ): Promise<void> {
     if (this.drainPromise) {
       await this.drainPromise;
-      return { restarted: true, fingerprint };
+      return;
     }
 
     const drain = (async () => {
-      this.setState("draining", "runtime environment changed");
+      this.setState("draining", reason);
       if (options.hasActiveTurns()) {
         // Let in-flight turns settle rather than killing work mid-command.
         await options.waitForIdle();
       }
-      await this.restartNow("runtime environment changed");
+      await this.restartNow(reason);
     })();
 
     this.drainPromise = drain.finally(() => {
       this.drainPromise = null;
     });
     await this.drainPromise;
-    return { restarted: true, fingerprint };
   }
 
   /** Stops the current child and starts a fresh generation. */

@@ -508,6 +508,12 @@ export type EngineEvent = EngineEventMeta &
      */
     | { kind: "engine.generation"; generation: EngineGeneration; previous: EngineGeneration }
     | { kind: "unknown.protocol"; method: string }
+    /**
+     * The app-server reports the account signed out, yet the login stored in
+     * `CODEX_HOME` looks usable — another process rotated the token. The
+     * runtime owns turn tracking, so it decides when the child can be replaced.
+     */
+    | { kind: "account.reload.requested" }
   );
 
 export type EngineEventListener = (event: EngineEvent) => void;

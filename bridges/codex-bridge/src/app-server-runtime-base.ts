@@ -704,6 +704,8 @@ export abstract class AppServerRuntimeBase {
   protected accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
   protected abstract onEngineEvent(event: EngineEvent): void;
+  /** Replace the app-server between turns so it loads the login stored on disk. */
+  protected abstract reloadStoredAccountLogin(): Promise<void>;
   protected abstract enqueueAfterMessageFlush(
     threadId: string,
     publish: () => void,

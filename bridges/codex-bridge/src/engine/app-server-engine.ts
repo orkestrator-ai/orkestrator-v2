@@ -21,6 +21,8 @@
  *     `clientUserMessageId`; after an ambiguous failure the engine reconciles
  *     against persisted turns rather than retrying blind.
  */
+import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   AppServerSupervisor,
   type AppServerHealth,
@@ -615,6 +617,30 @@ function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
   );
 }
 
+/**
+ * A fingerprint of the login stored in `CODEX_HOME`, or undefined when there is
+ * none worth reloading.
+ *
+ * Several Codex processes share one `auth.json` and refresh tokens rotate, so
+ * another process can replace the login while this app-server keeps a token the
+ * server has already retired. Only shape and file identity are read; nothing
+ * from the file leaves this function.
+ */
+async function readStoredLoginFingerprint(codexHome: string): Promise<string | undefined> {
+  try {
+    const path = join(codexHome, "auth.json");
+    const [raw, info] = await Promise.all([readFile(path, "utf8"), stat(path)]);
+    const root = objectRecord(JSON.parse(raw));
+    const tokens = objectRecord(root.tokens);
+    const usable =
+      (typeof tokens.refresh_token === "string" && tokens.refresh_token.length > 0) ||
+      (typeof root.OPENAI_API_KEY === "string" && root.OPENAI_API_KEY.length > 0);
+    return usable ? `${info.mtimeMs}:${info.size}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function mcpRuntimeNoticeMessage(
   notice: RuntimeNotice,
   inventoryStatus: string | null | undefined,
@@ -669,6 +695,12 @@ export class AppServerEngine implements CodexEngine {
    * with a stale token that the normal refresh would have replaced.
    */
   private accountSignInRequired = false;
+  /**
+   * The stored login a reload was already requested for. A confirmed sign-out
+   * that persists after the reload must not trigger another one, so a login that
+   * is genuinely dead costs one restart rather than a loop.
+   */
+  private accountReloadFingerprint?: string;
   /** Orders overlapping account reads by request and successful response. */
   private accountCheckSequence = 0;
   private accountAppliedSequence = 0;
@@ -1040,7 +1072,11 @@ export class AppServerEngine implements CodexEngine {
       return;
     this.accountAppliedSequence = sequence;
     const signedIn = this.recordAccount(response);
-    if (!signedIn || !this.runtimeNotices.some(isCodexAccountAuthFailure)) return;
+    if (!signedIn) {
+      await this.requestAccountReloadFromStoredLogin(sequence, generation);
+      return;
+    }
+    if (!this.runtimeNotices.some(isCodexAccountAuthFailure)) return;
     if (!accountChanged && this.accountConnectorRetryGeneration === generation) return;
     this.accountConnectorRetryGeneration = generation;
     this.accountConnectorRetrySequence = sequence;
@@ -1056,6 +1092,42 @@ export class AppServerEngine implements CodexEngine {
       }
       throw error;
     }
+  }
+
+  /**
+   * The app-server says signed out while `auth.json` still holds a login: its
+   * in-memory token was retired by another process and it will not re-read the
+   * file on its own. Ask the runtime to replace the child between turns so it
+   * loads the stored login.
+   */
+  private async requestAccountReloadFromStoredLogin(
+    sequence: number,
+    generation: EngineGeneration,
+  ): Promise<void> {
+    if (!this.accountSignInRequired) return;
+    const fingerprint = await readStoredLoginFingerprint(this.options.codexHome);
+    if (
+      !fingerprint ||
+      fingerprint === this.accountReloadFingerprint ||
+      sequence < this.accountAppliedSequence ||
+      generation !== this.supervisor.getGeneration()
+    ) {
+      return;
+    }
+    this.accountReloadFingerprint = fingerprint;
+    this.emit({ kind: "account.reload.requested", engineGeneration: generation });
+  }
+
+  /**
+   * Replace the child so it reads the login stored in `CODEX_HOME`. The
+   * replacement re-checks the account itself (`handleGenerationChange`), which
+   * clears the sign-out when the stored login is good.
+   */
+  async reloadAccountFromStoredLogin(gate: {
+    hasActiveTurns: () => boolean;
+    waitForIdle: () => Promise<void>;
+  }): Promise<void> {
+    await this.supervisor.restartWhenIdle("stored account login changed", gate);
   }
 
   /** Record an `account/read` answer; true when an account is signed in. */

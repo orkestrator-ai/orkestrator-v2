@@ -1408,6 +1408,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     );
   }
 
+  protected async reloadStoredAccountLogin(): Promise<void> {
+    if (this.stopping) return;
+    const generation = this.options.engine.info().generation;
+    await this.options.engine.reloadAccountFromStoredLogin({
+      hasActiveTurns: () => this.hasActiveWorkOtherThan(null),
+      waitForIdle: () => this.waitForAllThreadsIdle(generation),
+    });
+    // The replacement child announces its generation; never serve a prompt
+    // against a thread the dead child still owned.
+    await this.generationRecovery;
+  }
+
   /** Active work anywhere except the thread asking, which never waits on itself. */
   protected hasActiveWorkOtherThan(threadId: string | null | undefined): boolean {
     return this.registry

@@ -808,6 +808,15 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       return;
     }
     if (event.kind === "unknown.protocol") return;
+    if (event.kind === "account.reload.requested") {
+      void this.reloadStoredAccountLogin().catch((error: unknown) => {
+        console.warn(
+          "[codex-bridge] Reloading the stored account login failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+      return;
+    }
     if (event.kind === "account.rateLimits.updated") {
       /**
        * `account/rateLimits/updated` is a **sparse rolling update**, not a

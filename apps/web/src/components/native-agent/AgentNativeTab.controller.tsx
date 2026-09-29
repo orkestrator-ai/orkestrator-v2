@@ -55,6 +55,7 @@ import {
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
+  openInBrowser,
   recoverMultiReviewFixSession,
   writeCoordinatorAttachment,
 } from "@/lib/backend";
@@ -794,6 +795,18 @@ export function SharedNativeAgentController({
     projection?.auth?.signIn?.kind === "device-code";
   const [signInPending, setSignInPending] = useState(false);
   const [signInUrl, setSignInUrl] = useState<string | null>(null);
+  // The desktop shell denies window.open and target=_blank, so links must go
+  // through the app's own opener (Electron shell / browser client / backend).
+  const openSignInUrl = useCallback(
+    (url: string) => {
+      void openInBrowser(url).catch((error: unknown) => {
+        toast.error(
+          `Could not open the ${label} sign-in link: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    },
+    [label],
+  );
   const startSignIn = useCallback(() => {
     setSignInPending(true);
     setSignInUrl(null);
@@ -809,7 +822,7 @@ export function SharedNativeAgentController({
             throw new Error("The sign-in URL is invalid");
           }
           setSignInUrl(url.href);
-          window.open(url.href, "_blank", "noopener,noreferrer");
+          openSignInUrl(url.href);
         }
         if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
         else if (result.url) toast.info(`Finish signing in to ${label} in your browser`);
@@ -820,7 +833,7 @@ export function SharedNativeAgentController({
         );
       })
       .finally(() => setSignInPending(false));
-  }, [data.environmentId, label, platform, sessionKey]);
+  }, [data.environmentId, label, openSignInUrl, platform, sessionKey]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -2101,6 +2114,10 @@ export function SharedNativeAgentController({
                 href={signInUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(event) => {
+                  event.preventDefault();
+                  openSignInUrl(signInUrl);
+                }}
                 className="underline underline-offset-2"
               >
                 Open sign-in link

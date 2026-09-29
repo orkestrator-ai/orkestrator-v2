@@ -150,26 +150,35 @@ export function multiReviewFixSessionTabOptions(
   };
 }
 
+/** The shared preparation/consolidation session, which records its own provider. */
+export function multiReviewReviewSession(
+  workflow: MultiReviewWorkflow,
+): MultiReviewWorkflow["reviewSession"] {
+  return (
+    workflow.reviewSession ??
+    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+  );
+}
+
 /** Opens the shared preparation/consolidation conversation, never the Fix tab. */
 export function multiReviewReviewSessionTabOptions(
   workflow: MultiReviewWorkflow,
 ): CreateTabOptions | null {
-  const session =
-    workflow.reviewSession ??
-    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession);
-  const selection =
-    session ?? workflow.consolidationModel ?? workflow.reviewModel ?? workflow.fixModel;
+  const session = multiReviewReviewSession(workflow);
   if (!session?.providerSessionId) return null;
   return {
-    tabId: `multi-review-review:${workflow.id}`,
+    // A restarted step (possibly on another provider) gets a new provider
+    // session, so the tab identity follows it instead of refocusing a tab that
+    // is still attached to the abandoned session.
+    tabId: `multi-review-review:${workflow.id}:${session.providerSessionId}`,
     activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
     displayTitle: MULTI_REVIEW_REVIEW_TAB_TITLE,
     isReviewTab: true,
     hideStructuredOutput: true,
-    initialAgentModel: selection.model === "default" ? undefined : selection.model,
-    initialReasoningEffort: selection.reasoningEffort,
+    initialAgentModel: session.model === "default" ? undefined : session.model,
+    initialReasoningEffort: session.reasoningEffort,
     initialConversationMode: "plan",
     ...(session.status === "running" ? { requireExistingResumeSession: true } : {}),
   };
@@ -899,8 +908,9 @@ function MultiReviewOverviewTab({
         setError("The review preparation session is no longer available");
         return;
       }
+      const session = multiReviewReviewSession(target);
       const options = multiReviewReviewSessionTabOptions(target);
-      if (!options) {
+      if (!session || !options) {
         setError("The review preparation session is no longer available");
         return;
       }
@@ -908,8 +918,9 @@ function MultiReviewOverviewTab({
         setError("The environment is not ready to open the review preparation session.");
         return;
       }
-      const selection = target.reviewModel ?? target.fixModel;
-      if (!createTab(selection.agent, options)) {
+      // Consolidation may run on its own provider (Restart in…), so open the
+      // tab with the agent that owns the session rather than the prepare model.
+      if (!createTab(session.agent, options)) {
         setError(
           "The review preparation tab could not be opened. Close another tab if the workspace is at its limit, then try again.",
         );

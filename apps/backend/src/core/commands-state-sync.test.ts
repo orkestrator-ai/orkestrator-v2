@@ -1034,7 +1034,11 @@ describe("native agent model catalogue command", () => {
       await storage.cacheAgentModelCatalog("claude", entries);
       const native = (await invoke("get_native_agent_model_catalog", {
         environmentId: "e1",
-      })) as Array<{ id: string; parameters?: Array<{ id: string }> }>;
+      })) as Array<{
+        id: string;
+        parameters?: Array<{ id: string }>;
+        reasoning?: Array<{ id: string }>;
+      }>;
       const launch = await cachedLaunchModels(
         <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
           invoke(command, args ?? {}) as Promise<T>,
@@ -1043,8 +1047,12 @@ describe("native agent model catalogue command", () => {
       for (const models of [native, launch]) {
         const ids = (id: string) =>
           models.find((model) => model.id === id)?.parameters?.map((parameter) => parameter.id);
-        expect(ids("sonnet")).toEqual(["thinking", "context1m", "ultracode"]);
+        const reasoning = (id: string) =>
+          models.find((model) => model.id === id)?.reasoning?.map((option) => option.id);
+        expect(ids("sonnet")).toEqual(["thinking", "context1m"]);
         expect(ids("haiku")).toEqual(["thinking"]);
+        expect(reasoning("sonnet")).toEqual(["low", "xhigh", "ultracode"]);
+        expect(reasoning("haiku")).not.toContain("ultracode");
       }
     });
   });

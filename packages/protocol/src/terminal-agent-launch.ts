@@ -25,7 +25,10 @@ export function buildTerminalAgentLaunchCommand(options: {
   if (tabType === "claude") {
     const args = ["claude", "--dangerously-skip-permissions"];
     if (hasExplicitModel) args.push("--model", shellArg(model));
-    if (reasoningEffort) args.push("--effort", shellArg(reasoningEffort));
+    // Ultracode is a native-session level; the CLI's `--effort` has no such value.
+    if (reasoningEffort) {
+      args.push("--effort", shellArg(reasoningEffort === "ultracode" ? "high" : reasoningEffort));
+    }
     if (typeof fastMode === "boolean") {
       args.push("--settings", shellArg(JSON.stringify({ fastMode })));
     }

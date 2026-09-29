@@ -11,6 +11,7 @@ import {
 } from "./session-manager-test-harness.js";
 import { configureClaudeSession } from "./session-manager.js";
 import {
+  resolveUltracodeEffort,
   ultracodeFlagSetting,
   ultracodeRuntimeState,
   ultracodeUnavailableNotice,
@@ -23,6 +24,30 @@ import {
  * turn starts, live settings changes, and the runtime read that tells the user
  * when the CLI declined it.
  */
+
+describe("resolveUltracodeEffort", () => {
+  test("the ultracode level runs at high effort with the flag on", () => {
+    expect(resolveUltracodeEffort("ultracode", { thinking: "adaptive" })).toEqual({
+      effort: "high",
+      parameterValues: { thinking: "adaptive", ultracode: true },
+    });
+  });
+
+  test("a real effort level turns the flag off explicitly", () => {
+    expect(resolveUltracodeEffort("xhigh", undefined)).toEqual({
+      effort: "xhigh",
+      parameterValues: { ultracode: false },
+    });
+  });
+
+  test("no level leaves effort and parameters untouched", () => {
+    const parameterValues = { ultracode: true };
+    expect(resolveUltracodeEffort(undefined, parameterValues)).toEqual({
+      effort: undefined,
+      parameterValues,
+    });
+  });
+});
 
 describe("ultracodeFlagSetting", () => {
   test("an explicit toggle is sent as given", () => {

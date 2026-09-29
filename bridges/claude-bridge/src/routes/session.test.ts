@@ -1462,8 +1462,22 @@ describe("session routes", () => {
         includeLocalSettings: undefined,
         promptSuggestions: undefined,
         outputSchema: undefined,
-        parameterValues: undefined,
+        // A real effort level switches Ultracode off explicitly.
+        parameterValues: { ultracode: false },
         requestId: undefined,
+      });
+    });
+
+    test("maps the ultracode reasoning level to high effort with the flag on", async () => {
+      await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "test",
+        effort: "ultracode",
+        parameterValues: { thinking: "adaptive" },
+      });
+
+      expect(mockSendPrompt.mock.calls[0]?.[2]).toMatchObject({
+        effort: "high",
+        parameterValues: { thinking: "adaptive", ultracode: true },
       });
     });
 

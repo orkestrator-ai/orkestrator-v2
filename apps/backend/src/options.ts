@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -59,7 +59,7 @@ function valueAfter(args: string[], name: string): string | undefined {
  */
 export function defaultToolchainBinDir(dataDir: string): string {
   const current = currentToolchainBinDir(dataDir);
-  return existsSync(current) ? current : path.join(toolchainRootDir(dataDir), "bin");
+  return existsSync(current) ? realpathSync(current) : path.join(toolchainRootDir(dataDir), "bin");
 }
 
 export function defaultTailscaleExecutable(
@@ -141,13 +141,16 @@ export function parseOptions(
   const credentialSources = parseCredentialSources(
     valueAfter(args, "--credential-source") ?? env.ORKESTRATOR_CREDENTIAL_SOURCE,
   );
+  const requestedToolchainBinDir = path.resolve(
+    valueAfter(args, "--toolchain-bin-dir") ??
+      env.ORKESTRATOR_TOOLCHAIN_BIN ??
+      defaultToolchainBinDir(dataDir),
+  );
   return {
     dataDir,
-    toolchainBinDir: path.resolve(
-      valueAfter(args, "--toolchain-bin-dir") ??
-        env.ORKESTRATOR_TOOLCHAIN_BIN ??
-        defaultToolchainBinDir(dataDir),
-    ),
+    toolchainBinDir: existsSync(requestedToolchainBinDir)
+      ? realpathSync(requestedToolchainBinDir)
+      : requestedToolchainBinDir,
     appRoot,
     resourceRoot: path.resolve(
       valueAfter(args, "--resource-root") ?? env.ORKESTRATOR_RESOURCE_ROOT ?? appRoot,

@@ -1557,6 +1557,45 @@ describe("steering", () => {
     expect(steerCalls).toBe(1);
   });
 
+  test("removes a steer handled by an extension before a later delivery", async () => {
+    const state = seedSession();
+    let calls = 0;
+    state.session = fakeAgentSession({
+      steer: async () => (++calls === 1 ? "handled" : undefined),
+    });
+    state.status = "running";
+    state.promptSequence = 6;
+    const expectedRunId = piRunId(state);
+    const handled = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "extension command",
+        requestId: "handled-steer",
+        expectedRunId,
+      }),
+    });
+    expect(handled.status).toBe(503);
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("handled-steer")?.state).toBe("ambiguous");
+
+    const later = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ input: "real instruction", requestId: "real-steer", expectedRunId }),
+    });
+    expect(later.status).toBe(202);
+    applySessionEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "real instruction" }],
+        timestamp: Date.now(),
+      },
+    });
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("handled-steer")?.state).toBe("ambiguous");
+    expect(state.steerJournal.get("real-steer")?.state).toBe("delivered");
+  });
+
   test("rejects a steer pinned to a replaced run without entering Pi", async () => {
     let steerCalls = 0;
     const state = seedSession();

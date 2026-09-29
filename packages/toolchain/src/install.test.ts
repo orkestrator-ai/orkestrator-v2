@@ -40,7 +40,9 @@ function fakeEnsure(setId = "set-a") {
     for (const artifact of options.artifacts ?? []) {
       executables[artifact.name] = path.join(binDir, artifact.name);
     }
-    return { rootDir, binDir, executables };
+    const result = { rootDir, binDir, executables };
+    await options.onActivated?.(result);
+    return result;
   };
   return { ensure, calls };
 }
@@ -137,11 +139,13 @@ describe("installPinnedToolchains", () => {
     const ensureSet = (setId: string) => async (options: EnsurePinnedToolchainsOptions) => {
       const names = (options.artifacts ?? []).map((artifact) => artifact.name);
       const binDir = await link(setId, names);
-      return {
+      const result = {
         rootDir: path.join(directory, "toolchains"),
         binDir,
         executables: {} as Record<ToolchainName, string>,
       };
+      await options.onActivated?.(result);
+      return result;
     };
     const first = await installPinnedToolchains({
       dataDir: directory,
@@ -172,6 +176,60 @@ describe("installPinnedToolchains", () => {
     expect(await readlink(second.currentBinDir)).toBe("set-b");
   });
 
+  test("publishes concurrent selections in manager lock order and reports each predecessor", async () => {
+    const directory = await dataDir();
+    const rootDir = path.join(directory, "toolchains");
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      firstEntered = resolve;
+    });
+    let tail = Promise.resolve();
+    let calls = 0;
+    const ensure = async (
+      options: EnsurePinnedToolchainsOptions,
+    ): Promise<PinnedToolchainResult> => {
+      const previous = tail;
+      let releaseLock!: () => void;
+      tail = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      await previous;
+      try {
+        const id = ++calls;
+        const binDir = path.join(rootDir, "bin", `set-${id}`);
+        await mkdir(binDir, { recursive: true });
+        for (const artifact of options.artifacts ?? []) {
+          await writeFile(path.join(binDir, artifact.name), "");
+        }
+        const result = { rootDir, binDir, executables: {} as Record<ToolchainName, string> };
+        if (id === 1) {
+          firstEntered();
+          await firstGate;
+        }
+        await options.onActivated?.(result);
+        return result;
+      } finally {
+        releaseLock();
+      }
+    };
+    const first = installPinnedToolchains({
+      dataDir: directory,
+      tools: ["claude", "codex"],
+      ensure,
+    });
+    await entered;
+    const second = installPinnedToolchains({ dataDir: directory, tools: ["pi"], ensure });
+    releaseFirst();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.dropped).toEqual([]);
+    expect(secondResult.dropped).toEqual(["claude", "codex"]);
+    expect(await readlink(currentToolchainBinDir(directory))).toBe("set-2");
+  });
+
   test("never replaces something at that name that is not a symlink", async () => {
     const directory = await dataDir();
     await mkdir(path.join(directory, "toolchains", "bin", CURRENT_TOOLCHAIN_LINK), {
@@ -193,11 +251,15 @@ describe("installPinnedToolchains", () => {
       installPinnedToolchains({
         dataDir: directory,
         tools: ["claude"],
-        ensure: async () => ({
-          rootDir: path.join(directory, "toolchains"),
-          binDir: path.join(elsewhere, "bin", "set-x"),
-          executables: {} as Record<ToolchainName, string>,
-        }),
+        ensure: async (options) => {
+          const result = {
+            rootDir: path.join(directory, "toolchains"),
+            binDir: path.join(elsewhere, "bin", "set-x"),
+            executables: {} as Record<ToolchainName, string>,
+          };
+          await options.onActivated?.(result);
+          return result;
+        },
       }),
     ).rejects.toThrow("not directly inside");
   });

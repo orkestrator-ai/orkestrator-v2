@@ -17,7 +17,12 @@ function requestedTools(parsed: ParsedCommand): string[] | undefined {
   const raw = parsed.options.tool;
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   // `--tool claude,codex` and `--tool claude --tool codex` are the same request.
-  return raw.flatMap((value) => String(value).split(",")).filter((value) => value.length > 0);
+  const tools = raw
+    .flatMap((value) => String(value).split(","))
+    .filter((value) => value.length > 0);
+  if (tools.length === 0)
+    throw new CliError("invalid-input", "--tool requires at least one tool name");
+  return tools;
 }
 
 export const toolchainCommands: CommandSpec[] = [

@@ -23,6 +23,7 @@ import { createGunzip } from "node:zlib";
 import * as tar from "tar-stream";
 import yauzl from "yauzl";
 import {
+  PINNED_TOOLCHAIN_VERSIONS,
   pinnedToolchainArtifacts,
   type ToolchainArchive,
   type ToolchainArtifact,
@@ -90,6 +91,8 @@ export type EnsurePinnedToolchainsOptions = {
   processExistsForTests?: (pid: number) => boolean;
   skipVersionLeaseForTests?: boolean;
   beforeFinalVerificationForTests?: () => void | Promise<void>;
+  /** Publish a verified activation while the install lock is still held. */
+  onActivated?: (result: PinnedToolchainResult) => void | Promise<void>;
 };
 
 export type PinnedToolchainResult = {
@@ -371,7 +374,21 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     // pinned in the manifest. The cache is reusable only through the separately
     // retained, manifest-pinned upstream executable. The runnable copy is
     // regenerated from it under the install lock on every startup.
-    return isValidUpstreamExecutable(rootDir, artifact);
+    if (!(await isValidUpstreamExecutable(rootDir, artifact))) return false;
+    for (const bundled of artifact.archive.bundleFiles ?? []) {
+      if (
+        !(await isValidFile(
+          path.join(artifactDirectory(rootDir, artifact), ...bundled.path.split("/")),
+          bundled,
+        ))
+      ) {
+        return false;
+      }
+    }
+    return (
+      !artifact.archive.bundleIntegrity ||
+      hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact)
+    );
   }
   const executablePath = artifactExecutablePath(rootDir, artifact);
   try {
@@ -1487,7 +1504,7 @@ function versionLeaseDirectory(rootDir: string, name: ToolchainName, version: st
 
 async function acquireVersionLease(
   rootDir: string,
-  artifact: ToolchainArtifact,
+  artifact: Pick<ToolchainArtifact, "name" | "version">,
   openLeaseFile: typeof open,
 ): Promise<void> {
   const leaseKey = `${rootDir}\0${artifact.name}\0${artifact.version}`;
@@ -1519,6 +1536,38 @@ async function acquireVersionLease(
   }
   await handle.close();
   processVersionLeases.set(leaseKey, leasePath);
+}
+
+/** Protect the versions behind a backend's startup-pinned activation set. */
+export async function leaseActivatedToolchainSet(dataDir: string, binDir: string): Promise<void> {
+  const rootDir = toolchainRootDir(dataDir);
+  if (path.dirname(binDir) !== path.join(rootDir, "bin")) return;
+  const entries = await readdir(binDir, { withFileTypes: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return [];
+      throw error;
+    },
+  );
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) continue;
+    if (!Object.hasOwn(PINNED_TOOLCHAIN_VERSIONS, entry.name)) continue;
+    const link = path.join(binDir, entry.name);
+    const target = path.resolve(binDir, await readlink(link));
+    const parts = path.relative(rootDir, target).split(path.sep);
+    if (parts.length !== 4 || parts[0] !== entry.name || !parts[1]) continue;
+    if (
+      !(await stat(target).then(
+        (file) => file.isFile(),
+        () => false,
+      ))
+    )
+      continue;
+    await acquireVersionLease(
+      rootDir,
+      { name: entry.name as ToolchainName, version: parts[1] },
+      open,
+    );
+  }
 }
 
 async function versionHasLiveLease(
@@ -1905,6 +1954,7 @@ export async function ensurePinnedToolchains(
         ),
       );
     }
+    await options.onActivated?.(result);
     await pruneSupersededVersions(
       rootDir,
       artifacts,

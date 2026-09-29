@@ -20,8 +20,12 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { gzipSync } from "node:zlib";
-import * as tar from "../../../apps/desktop/node_modules/tar-stream";
-import { ensurePinnedToolchains, type ToolchainProgress } from "@orkestrator/toolchain/manager";
+import * as tar from "tar-stream";
+import {
+  ensurePinnedToolchains,
+  leaseActivatedToolchainSet,
+  type ToolchainProgress,
+} from "@orkestrator/toolchain/manager";
 import {
   pinnedToolchainArtifacts,
   type ToolchainArtifact,
@@ -517,6 +521,16 @@ describe("pinned desktop toolchain cache", () => {
 
     await install();
     expect(downloads).toBe(1);
+
+    const bundleDirectory = path.dirname(installedPath);
+    for (const damaged of ["node", "chunks/lazy.js"]) {
+      await rm(path.join(bundleDirectory, damaged));
+      await install();
+      expect(downloads).toBe(damaged === "node" ? 2 : 3);
+      expect(await readFile(path.join(bundleDirectory, damaged))).toEqual(
+        damaged === "node" ? runtime : lazyChunk,
+      );
+    }
   });
 
   test("installs ZIP and tar.gz artifacts once, activates them, and reuses verified files", async () => {
@@ -557,6 +571,54 @@ describe("pinned desktop toolchain cache", () => {
     });
     expect(reordered.binDir).toBe(first.binDir);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps the install lock through activation publication", async () => {
+    const dataDir = await createDataDir();
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      firstEntered = resolve;
+    });
+    let secondPublished = false;
+    const first = ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[0]],
+      fetchImpl: createFetch(),
+      skipExecutableProbeForTests: true,
+      onActivated: async () => {
+        firstEntered();
+        await gate;
+      },
+    });
+    await entered;
+    let secondWaiting!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      secondWaiting = resolve;
+    });
+    const second = ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[1]],
+      fetchImpl: createFetch(),
+      skipExecutableProbeForTests: true,
+      onProgress: (progress) => {
+        if (progress.phase === "waiting") secondWaiting();
+      },
+      onActivated: () => {
+        secondPublished = true;
+      },
+    });
+    try {
+      await waiting;
+      expect(secondPublished).toBe(false);
+    } finally {
+      releaseFirst();
+    }
+    await Promise.all([first, second]);
+    expect(secondPublished).toBe(true);
   });
 
   test("redownloads a cached executable that no longer matches the signed manifest", async () => {
@@ -1729,6 +1791,29 @@ describe("pinned desktop toolchain cache", () => {
         lstat(path.join(dataDir, "toolchains", artifact.name, "1.2.2")),
       ).resolves.toBeDefined();
     }
+  });
+
+  test("a backend lease protects the versions behind its pinned activation set", async () => {
+    const dataDir = await createDataDir();
+    const older = [{ ...artifacts[0], version: "1.2.2" }];
+    const previous = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: older,
+      fetchImpl: createFetch(),
+      skipExecutableProbeForTests: true,
+      skipVersionLeaseForTests: true,
+    });
+    await leaseActivatedToolchainSet(dataDir, previous.binDir);
+    const leaseDir = path.join(dataDir, "toolchains", ".leases", "codex", "1.2.2");
+    expect((await readdir(leaseDir)).length).toBe(1);
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[0]],
+      fetchImpl: createFetch(),
+      skipExecutableProbeForTests: true,
+      timingsForTests: { retainSupersededMs: 0 },
+    });
+    await expect(lstat(path.join(dataDir, "toolchains", "codex", "1.2.2"))).resolves.toBeDefined();
   });
 
   test("cleans a partial lease and releases the install lock when lease metadata cannot be written", async () => {

@@ -66,7 +66,8 @@ export async function resolveToolchainSelection(options: {
   tools?: readonly string[];
 }): Promise<ToolchainSelection> {
   const known = Object.keys(PINNED_TOOLCHAIN_VERSIONS) as ToolchainName[];
-  if (options.tools !== undefined && options.tools.length > 0) {
+  if (options.tools !== undefined) {
+    if (options.tools.length === 0) throw new Error("At least one tool must be selected");
     const unknown = options.tools.filter((tool) => !isToolchainName(tool));
     if (unknown.length > 0) {
       throw new Error(`Unknown tool: ${unknown.join(", ")}. Expected: ${known.join(", ")}`);
@@ -138,6 +139,8 @@ export async function installPinnedToolchains(
     );
   }
   const ensure = options.ensure ?? ensurePinnedToolchains;
+  let dropped: ToolchainName[] | undefined;
+  let currentBinDir: string | undefined;
   const installed = await ensure({
     dataDir: options.dataDir,
     artifacts: plan.artifacts,
@@ -145,12 +148,18 @@ export async function installPinnedToolchains(
     ...(options.architecture ? { architecture: options.architecture } : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    onActivated: async (result) => {
+      const before = await toolsInCurrent(result.rootDir);
+      currentBinDir = await pointCurrentAt(result.rootDir, result.binDir);
+      const chosen = new Set<string>(plan.tools);
+      dropped = before.filter((tool) => !chosen.has(tool));
+    },
   });
-  const before = await toolsInCurrent(installed.rootDir);
-  const currentBinDir = await pointCurrentAt(installed.rootDir, installed.binDir);
-  const chosen = new Set<string>(plan.tools);
+  if (currentBinDir === undefined || dropped === undefined) {
+    throw new Error("Toolchain manager did not publish the activation");
+  }
   return {
-    dropped: before.filter((tool) => !chosen.has(tool)),
+    dropped,
     tools: plan.tools,
     source: plan.source,
     dataDir: options.dataDir,

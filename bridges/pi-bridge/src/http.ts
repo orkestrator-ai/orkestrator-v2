@@ -921,12 +921,27 @@ async function handleSteer(
   // first, so the run can settle (and `settleTurn` clear Pi's queue) before
   // the instruction is queued at all. That window is closed after the await.
   state.pendingSteerDeliveries.push({ requestId, text, expectedRunId });
+  let disposition: Awaited<ReturnType<AgentSession["steer"]>>;
   try {
-    await session.steer(
+    disposition = await session.steer(
       text,
       images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
     );
   } catch {
+    const pendingIndex = state.pendingSteerDeliveries.findIndex(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (pendingIndex >= 0) state.pendingSteerDeliveries.splice(pendingIndex, 1);
+    setSteerJournal(state, { ...prepared, state: "ambiguous" });
+    await persistBarrier();
+    return json(response, 503, { outcome: "unknown", requestId });
+  }
+  if (disposition === "handled") {
+    // Since 0.99 Pi says when an extension's `input` handler consumed the
+    // instruction instead of queueing it. No delivery event will ever follow,
+    // so leaving the entry in the FIFO would credit the next real delivery to
+    // this request. It also never reached the model, so it is not `applied`;
+    // `unknown` keeps the backend from resending it as a fresh prompt.
     const pendingIndex = state.pendingSteerDeliveries.findIndex(
       (candidate) => candidate.requestId === requestId,
     );

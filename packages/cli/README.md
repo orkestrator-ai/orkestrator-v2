@@ -52,6 +52,26 @@ curl -fsSL https://orkestrator.dev/install.sh | \
 macOS and Linux are supported. Docker is required for container environments;
 Tailscale is required only for tailnet access and Tailscale Serve.
 
+## Agent binaries
+
+The desktop app downloads the pinned Claude, Codex, OpenCode, Grok and Pi
+binaries when it starts. A backend run this way does not, and without them it
+falls back to whatever is on `PATH`. Install the exact pinned versions once, and
+again after each upgrade:
+
+```bash
+orkestrator toolchain install             # what this data directory enables
+orkestrator toolchain install --dry-run   # show what would be fetched
+```
+
+Every download is checked against its pinned size and SHA-256 before use, into
+`<data-dir>/toolchains`. Which tools are installed follows the data directory's
+enabled agent platforms (all of them when nothing is configured yet); `--tool`
+installs exactly the tools you name instead. On success `toolchains/bin/current`
+points at the installed set and the service uses it by default for that data
+directory — restart a running service to pick up a new one. Pass `--data-dir`
+when the service does, and see `orkestrator toolchain install --help`.
+
 ## Client commands
 
 Select the backend explicitly. A running backend publishes a private

@@ -4,8 +4,8 @@ import type {
   EnsurePinnedToolchainsOptions,
   PinnedToolchainResult,
   ToolchainProgress,
-} from "./toolchain-manager.js";
-import type { ToolchainArtifact } from "./toolchain-manifest.js";
+} from "@orkestrator/toolchain/manager";
+import type { ToolchainArtifact } from "@orkestrator/toolchain/manifest";
 
 type ProgressWindow = Pick<BrowserWindow, "close" | "isDestroyed" | "once">;
 

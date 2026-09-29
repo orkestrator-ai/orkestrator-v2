@@ -126,8 +126,8 @@ function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession
     promptTemplates: [],
     subscribe: () => () => undefined,
     dispose: () => undefined,
-    prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-      options.preflightResult?.(true);
+    prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+      options.preflightResult?.("started");
       return Promise.resolve();
     },
     abort: async () => undefined,
@@ -938,9 +938,9 @@ describe("successful lifecycle routes", () => {
     const state = seedSession();
     const prompts: string[] = [];
     state.session = fakeAgentSession({
-      prompt: (text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: (text: string, options: { preflightResult?: (disposition: string) => void }) => {
         prompts.push(text);
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         return Promise.resolve();
       },
     });
@@ -1557,6 +1557,45 @@ describe("steering", () => {
     expect(steerCalls).toBe(1);
   });
 
+  test("removes a steer handled by an extension before a later delivery", async () => {
+    const state = seedSession();
+    let calls = 0;
+    state.session = fakeAgentSession({
+      steer: async () => (++calls === 1 ? "handled" : undefined),
+    });
+    state.status = "running";
+    state.promptSequence = 6;
+    const expectedRunId = piRunId(state);
+    const handled = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "extension command",
+        requestId: "handled-steer",
+        expectedRunId,
+      }),
+    });
+    expect(handled.status).toBe(503);
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("handled-steer")?.state).toBe("ambiguous");
+
+    const later = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ input: "real instruction", requestId: "real-steer", expectedRunId }),
+    });
+    expect(later.status).toBe(202);
+    applySessionEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "real instruction" }],
+        timestamp: Date.now(),
+      },
+    });
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("handled-steer")?.state).toBe("ambiguous");
+    expect(state.steerJournal.get("real-steer")?.state).toBe("delivered");
+  });
+
   test("rejects a steer pinned to a replaced run without entering Pi", async () => {
     let steerCalls = 0;
     const state = seedSession();
@@ -1628,8 +1667,8 @@ describe("steering", () => {
     let queued = 0;
     let clears = 0;
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(true);
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
         return new Promise<void>((resolve) => {
           finishRun = resolve;
         });
@@ -1683,8 +1722,8 @@ describe("steering", () => {
     let queued = 0;
     let clears = 0;
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(true);
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
         return new Promise<void>((resolve) => {
           finishRun = resolve;
         });
@@ -1739,8 +1778,8 @@ describe("steering", () => {
     let finishRun: () => void = () => undefined;
     let clearAttempts = 0;
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(true);
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
         return new Promise<void>((resolve) => {
           finishRun = resolve;
         });
@@ -1784,7 +1823,6 @@ describe("steering", () => {
 
   test("refuses steering while the initial prompt is still in preflight", async () => {
     const state = seedSession();
-    let announcePreflight: (accepted: boolean) => void = () => undefined;
     let rejectFirstRun: (error: unknown) => void = () => undefined;
     let promptCalls = 0;
     let steerCalls = 0;
@@ -1792,13 +1830,12 @@ describe("steering", () => {
       rejectFirstRun = reject;
     });
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
         promptCalls += 1;
         if (promptCalls === 1) {
-          announcePreflight = options.preflightResult ?? (() => undefined);
           return firstRun;
         }
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         return Promise.resolve();
       },
       steer: async () => {
@@ -1823,7 +1860,6 @@ describe("steering", () => {
     expect(await steer.json()).toEqual({ outcome: "idle" });
     expect(steerCalls).toBe(0);
 
-    announcePreflight(false);
     rejectFirstRun(new Error("preflight rejected"));
     expect((await firstPrompt).status).toBe(500);
     expect(state.pendingSteerDeliveries).toEqual([]);
@@ -1972,9 +2008,9 @@ describe("provider-owned follow-ups", () => {
     let queued = 0;
     const queuedAtLaterPrompt: number[] = [];
     state.session = fakeAgentSession({
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
         promptCalls += 1;
-        options.preflightResult?.(true);
+        options.preflightResult?.("started");
         if (promptCalls === 1) {
           return new Promise<void>((resolve) => {
             finishRun = resolve;
@@ -2197,14 +2233,14 @@ describe("at-most-once dispatch", () => {
       const state = seedSession();
       let journalAtDispatch: unknown;
       state.session = {
-        prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
           const persisted = JSON.parse(readFileSync(join(directory, "state.json"), "utf8"));
           journalAtDispatch = persisted.sessions
             .find((entry: { id: string }) => entry.id === state.id)
             ?.promptJournal.find(
               (entry: { requestId: string }) => entry.requestId === "req-durable",
             );
-          options.preflightResult?.(true);
+          options.preflightResult?.("started");
           return Promise.resolve();
         },
         abort: async () => undefined,
@@ -2267,9 +2303,8 @@ describe("at-most-once dispatch", () => {
   test("removes the optimistic user message when Pi rejects preflight", async () => {
     const state = seedSession();
     state.session = {
-      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
-        options.preflightResult?.(false);
-        return Promise.resolve();
+      prompt: (_text: string) => {
+        return Promise.reject(new Error("Pi refused the prompt"));
       },
       setModel: async () => undefined,
       setThinkingLevel: () => undefined,
@@ -2514,10 +2549,10 @@ function commandSeed(options: CommandSeedOptions = {}) {
     isIdle: true,
     prompt: (
       text: string,
-      opts: { expandPromptTemplates?: boolean; preflightResult?: (ok: boolean) => void },
+      opts: { expandPromptTemplates?: boolean; preflightResult?: (disposition: string) => void },
     ) => {
       prompts.push({ text, expandPromptTemplates: opts.expandPromptTemplates });
-      opts.preflightResult?.(true);
+      opts.preflightResult?.("started");
       return Promise.resolve();
     },
     ...options.overrides,

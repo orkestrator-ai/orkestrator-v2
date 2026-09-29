@@ -128,7 +128,7 @@ Measured against the current inventory of our OpenCode usage (no
 
 ## Operational changes
 
-- **Distribution.** `toolchain-manifest.ts` and `docker/Dockerfile` download
+- **Distribution.** `manifest.ts` and `docker/Dockerfile` download
   GitHub Release archives. 2.x has no GitHub Releases; artifacts must come
   from `@opencode/cli-<platform>` npm tarballs, with new digests.
 - **Auth.** A password is always required (generated and printed if unset).

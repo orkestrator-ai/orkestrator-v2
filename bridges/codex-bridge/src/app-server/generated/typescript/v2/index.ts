@@ -514,6 +514,8 @@ export type { ThreadInjectItemsParams } from "./ThreadInjectItemsParams.js";
 export type { ThreadInjectItemsResponse } from "./ThreadInjectItemsResponse.js";
 export type { ThreadItem } from "./ThreadItem.js";
 export type { ThreadItemEntry } from "./ThreadItemEntry.js";
+export type { ThreadItemsListAnchor } from "./ThreadItemsListAnchor.js";
+export type { ThreadItemsListCursor } from "./ThreadItemsListCursor.js";
 export type { ThreadItemsListParams } from "./ThreadItemsListParams.js";
 export type { ThreadItemsListResponse } from "./ThreadItemsListResponse.js";
 export type { ThreadListParams } from "./ThreadListParams.js";

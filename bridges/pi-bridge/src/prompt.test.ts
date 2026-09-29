@@ -58,8 +58,13 @@ function stubSession(
   });
 
   const session = {
-    prompt: (_text: string, opts: { preflightResult?: (ok: boolean) => void }) => {
-      announce = opts.preflightResult ?? (() => undefined);
+    prompt: (_text: string, opts: { preflightResult?: (disposition: string) => void }) => {
+      const report = opts.preflightResult ?? (() => undefined);
+      // Pi 0.99 reports a disposition only for an accepted prompt; a refusal
+      // is the run rejecting, so `accept(false)` reports nothing.
+      announce = (accepted) => {
+        if (accepted) report("started");
+      };
       if (options.autoAccept !== false) queueMicrotask(() => announce(true));
       return run;
     },
@@ -211,7 +216,7 @@ describe("dispatchPrompt", () => {
     const stub = stubSession({ autoAccept: false });
     queueMicrotask(() => {
       stub.accept(false);
-      stub.finish();
+      stub.fail(new Error("no credential"));
     });
 
     await expect(dispatchPrompt(state, stub.session, input())).rejects.toThrow();
@@ -622,7 +627,7 @@ function recordingSession(options: { acceptAtPreflight?: boolean; idle?: () => b
       opts: {
         expandPromptTemplates?: boolean;
         source?: string;
-        preflightResult?: (ok: boolean) => void;
+        preflightResult?: (disposition: string) => void;
       },
     ) => {
       prompts.push({
@@ -630,10 +635,11 @@ function recordingSession(options: { acceptAtPreflight?: boolean; idle?: () => b
         expandPromptTemplates: opts.expandPromptTemplates,
         source: opts.source,
       });
-      if (options.acceptAtPreflight !== false) queueMicrotask(() => opts.preflightResult?.(true));
+      if (options.acceptAtPreflight !== false)
+        queueMicrotask(() => opts.preflightResult?.("started"));
       return new Promise<void>((resolve) => {
         settle = () => {
-          if (options.acceptAtPreflight === false) opts.preflightResult?.(true);
+          if (options.acceptAtPreflight === false) opts.preflightResult?.("started");
           resolve();
         };
       });

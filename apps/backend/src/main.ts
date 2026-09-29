@@ -14,6 +14,7 @@ import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
+import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
 import {
   installStandaloneBackendLogging,
   stopStandaloneBackendLogging,
@@ -39,6 +40,7 @@ if (
   throw new Error(`${mode} requires --host 127.0.0.1`);
 }
 await mkdir(options.dataDir, { recursive: true });
+await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // Installed before startup logs anything worth keeping. A no-op under Electron,
 // which already records this process's output.
 const standaloneLogging = installStandaloneBackendLogging(options);

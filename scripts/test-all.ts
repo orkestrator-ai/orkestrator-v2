@@ -653,7 +653,7 @@ export function buildConcurrentGroups(
   const changedArguments = affected ? ["--changed=main", "--pass-with-no-tests"] : [];
   return [
     {
-      name: "workspace (web, backend, desktop, web-public, cli, protocol)",
+      name: "workspace (web, backend, desktop, web-public, cli, protocol, toolchain)",
       workers: workers.workspace * workers.workspaceConcurrency,
       command: "bunx",
       args: [
@@ -669,6 +669,7 @@ export function buildConcurrentGroups(
         "--filter=@orkestrator/web-public",
         "--filter=orkestrator",
         "--filter=@orkestrator/protocol",
+        "--filter=@orkestrator/toolchain",
         `--concurrency=${workers.workspaceConcurrency}`,
         "--output-logs=new-only",
         "--summarize",

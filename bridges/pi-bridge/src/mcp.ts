@@ -8,14 +8,19 @@
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { agentDirectory, workingDirectory } from "./config.js";
-import { resolvePiMcpServers, sanitizeMcpName, type ResolvedMcpServer } from "./mcp-config.js";
+import {
+  BRIDGE_SECRET_ENV,
+  resolvePiMcpServers,
+  sanitizeMcpName,
+  type ResolvedMcpServer,
+} from "./mcp-config.js";
 import { getAgentDir } from "./pi-sdk.js";
 import { isObject, type JsonObject, type SessionState } from "./state.js";
 import { withTimeout } from "./timeout.js";
@@ -39,7 +44,6 @@ const MAX_MCP_TOOLS = 128;
 const MAX_MCP_RESULT_BYTES = 50_000;
 const MAX_MCP_DESCRIPTION_BYTES = 4_000;
 const MAX_MCP_SCHEMA_BYTES = 20_000;
-const STDIO_SECRET_ENV = new Set(["ORKESTRATOR_AGENT_MCP_TOKEN", "PI_BRIDGE_TOKEN"]);
 
 /**
  * The Orkestrator MCP tools the coordinator read-only gate may exempt.
@@ -562,7 +566,7 @@ const defaultTransport: PiMcpTransport = {
             ...(server.args ? { args: server.args } : {}),
             env: stdioEnvironment(server.env),
             stderr: "ignore",
-            cwd: workingDirectory,
+            cwd: server.cwd ? resolvePath(workingDirectory, server.cwd) : workingDirectory,
           });
     try {
       await client.connect(transport);
@@ -606,7 +610,7 @@ const defaultTransport: PiMcpTransport = {
 export function stdioEnvironment(overlay?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined || STDIO_SECRET_ENV.has(key)) continue;
+    if (value === undefined || BRIDGE_SECRET_ENV.has(key)) continue;
     env[key] = value;
   }
   return { ...env, ...overlay };

@@ -29,8 +29,8 @@ import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
 import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
-import { ensurePinnedToolchains } from "./toolchain-manager.js";
-import { pinnedArtifactsForPlatforms } from "./toolchain-manifest.js";
+import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
+import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
   chooseAgentPlatforms,
   createMacOsPermissionSplashWindow,
@@ -40,9 +40,9 @@ import {
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
 import {
   applyAgentTestPlatformSelection,
-  loadAgentPlatformSelection,
   saveAgentPlatformSelection,
 } from "./agent-platform-selection.js";
+import { loadAgentPlatformSelection } from "@orkestrator/toolchain/platform-selection";
 import type {
   BrowserPreviewManager,
   BrowserPreviewServiceTransport,

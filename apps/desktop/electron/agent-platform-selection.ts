@@ -1,14 +1,15 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
-  LEGACY_ENABLED_AGENT_PLATFORMS,
   firstEnabledAgentPlatform,
   normalizeAgentPlatforms,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-
-const SELECTION_FILE = "agent-platforms.json";
-const CONFIG_FILE = "config.json";
+import {
+  AGENT_CONFIG_FILE,
+  AGENT_PLATFORM_SELECTION_FILE,
+  readJsonFile,
+} from "@orkestrator/toolchain/platform-selection";
 
 type StoredSelection = {
   version: 1;
@@ -24,52 +25,6 @@ async function writeJsonAtomically(filePath: string, value: unknown): Promise<vo
   await fs.rename(temporary, filePath);
 }
 
-async function readJson(filePath: string): Promise<unknown> {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    return undefined;
-  }
-}
-
-/**
- * Resolve the pre-backend platform selection. CLI-backed platforms use it to
- * decide which toolchains are downloaded; SDK-only platforms still use it for
- * product availability. A sidecar exists because this decision happens before
- * the backend (and therefore config storage) starts.
- */
-export async function loadAgentPlatformSelection(dataDir: string): Promise<{
-  enabled: AgentPlatform[];
-  needsFirstRunChoice: boolean;
-}> {
-  const config = await readJson(path.join(dataDir, "config.json"));
-  if (config && typeof config === "object" && !Array.isArray(config)) {
-    const global = (config as { global?: unknown }).global;
-    if (global && typeof global === "object" && !Array.isArray(global)) {
-      const explicit = (global as { enabledAgentPlatforms?: unknown }).enabledAgentPlatforms;
-      if (explicit !== undefined) {
-        const enabled = normalizeAgentPlatforms(explicit, []);
-        if (enabled.length > 0) return { enabled, needsFirstRunChoice: false };
-      }
-    }
-    // An installation that predates platform selection keeps exactly the
-    // systems it previously had instead of unexpectedly downloading two more.
-    return {
-      enabled: [...LEGACY_ENABLED_AGENT_PLATFORMS],
-      needsFirstRunChoice: false,
-    };
-  }
-
-  const sidecar = await readJson(path.join(dataDir, SELECTION_FILE));
-  if (sidecar && typeof sidecar === "object" && !Array.isArray(sidecar)) {
-    const enabled = normalizeAgentPlatforms((sidecar as { enabled?: unknown }).enabled, []);
-    if (enabled.length > 0) return { enabled, needsFirstRunChoice: false };
-  }
-
-  return { enabled: [], needsFirstRunChoice: true };
-}
-
 export async function saveAgentPlatformSelection(
   dataDir: string,
   enabledValue: readonly AgentPlatform[],
@@ -77,7 +32,7 @@ export async function saveAgentPlatformSelection(
   const enabled = normalizeAgentPlatforms(enabledValue, []);
   if (enabled.length === 0) throw new Error("Select at least one agent platform");
   const payload: StoredSelection = { version: 1, enabled };
-  await writeJsonAtomically(path.join(dataDir, SELECTION_FILE), payload);
+  await writeJsonAtomically(path.join(dataDir, AGENT_PLATFORM_SELECTION_FILE), payload);
 }
 
 /**
@@ -105,8 +60,8 @@ export async function applyAgentTestPlatformSelection(
   if (enabled.length === 0) return;
   await saveAgentPlatformSelection(dataDir, enabled);
 
-  const configPath = path.join(dataDir, CONFIG_FILE);
-  const config = await readJson(configPath);
+  const configPath = path.join(dataDir, AGENT_CONFIG_FILE);
+  const config = await readJsonFile(configPath);
   if (!config || typeof config !== "object" || Array.isArray(config)) return;
   const record = config as { global?: unknown };
   const global =

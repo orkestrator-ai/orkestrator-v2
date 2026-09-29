@@ -87,7 +87,11 @@ rather than a name, and "signed in" is one answer per provider.
   when the execution policy opts into project resources. A session records
   a fingerprint of the MCP files it was built from and rebuilds at the next
   turn start when they change (never mid-turn), which is how saved edits from
-  the MCP servers settings reach a live session. Settings-pane
+  the MCP servers settings reach a live session. `mcp-config.ts` reads that
+  file as Pi's own format (`enabled: false`, `$NAME`/`${NAME}` values, `~/`,
+  `cwd`) and never runs a `!command` value — an entry needing one is skipped,
+  and the bridge's own secret variables cannot be named by a `${…}` reference.
+  Settings-pane
   discovery still reports an empty MCP list (pre-session fallback). The
   composer reports `mode: false` because plan/build is still something an
   extension adds. `agentMailCapabilities("agent-native", "pi")` is on;

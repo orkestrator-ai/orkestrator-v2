@@ -107,7 +107,7 @@ export function setStartupTimeoutForTests(timeoutMs?: number): void {
 /**
  * Apply a cancel to a prompt Pi has not accepted yet.
  *
- * Pinned SDK 0.87.1 (`dist/core/agent-session.js`): `abort()` calls
+ * Pinned SDK 0.99.0 (`dist/core/agent-session.js`): `abort()` calls
  * `abortCompaction()`, which aborts the auto-compaction `prompt()` may be
  * running in preflight (`_checkCompaction`), and waits for idle. It cannot
  * pre-empt the run itself — `_runAgentPrompt` resets `_agentRunAbortRequested`
@@ -206,7 +206,10 @@ export async function dispatchPrompt(
       // Not "interactive": a person typed this, but there is no terminal behind
       // it, so an extension that would draw a dialog has to know it cannot.
       source: "rpc",
-      preflightResult: (success) => announceAccepted(success),
+      // Pi 0.99 reports how it dispatched an accepted prompt (`started`,
+      // `queued` or `handled`) and never calls this for a refused one, so any
+      // disposition means accepted; refusal arrives as the rejection below.
+      preflightResult: () => announceAccepted(true),
     });
   } catch (error) {
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;

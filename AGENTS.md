@@ -95,7 +95,8 @@ handler. A guard log line every turn is still a bug.
 
 React 19, TypeScript, Tailwind CSS v4, shadcn/ui and Zustand in `apps/web`;
 Electron in `apps/desktop`; the standalone Bun backend in `apps/backend`
-(`src/core/`); shared contracts in `packages/protocol`; the published
+(`src/core/`); shared contracts in `packages/protocol`; the pinned agent toolchain
+(manifest, installer) in `packages/toolchain`; the published
 `orkestrator` CLI in `packages/cli`; native-mode bridge servers in `bridges/`;
 the container image in `docker/`.
 

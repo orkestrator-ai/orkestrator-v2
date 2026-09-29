@@ -89,6 +89,13 @@ export interface BridgeToolPart {
   toolError?: string;
   toolDiff?: BridgeToolDiff;
   /**
+   * The tool call that made this one, when Pi ran it on that call's behalf
+   * (`ctx.executeTool()`, which is how a `codemode` script calls its tools).
+   * Named as every other bridge names the same link, so the renderer's
+   * grouping needs nothing Pi-specific.
+   */
+  parentTaskUseId?: string;
+  /**
    * What a shell call changed in the worktree, measured around it by
    * `command-changes.ts`. Only set when something changed; persisted with the
    * transcript and journaled so a resumed session gets it back.
@@ -346,7 +353,7 @@ export interface SessionState {
   /**
    * The abort path for a prompt Pi has been handed but has not yet accepted.
    *
-   * Pi 0.87's `session.prompt()` runs a preflight (input hooks, auth, a
+   * Pi 0.99's `session.prompt()` runs a preflight (input hooks, auth, a
    * possible auto-compaction, `before_agent_start`) before it creates the run,
    * and only the run has a cancel handle. `abort()` during preflight still
    * cancels an auto-compaction in progress, so a cancel recorded then is

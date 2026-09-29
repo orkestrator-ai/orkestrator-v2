@@ -8,18 +8,20 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.284`, Anthropic SDK `0.129.0`, CLI `2.1.284` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.158.0` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.159.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.33` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.32` (latest stable, verified 2026-09-28) |
-| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.41` (stable channel; verified 2026-09-28) |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.87.1` |
+| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.44` (stable channel; verified 2026-09-29) |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.99.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-09-28.
+Verified against upstream stable releases on 2026-09-29.
 
 ## What is enforced, and what is not
 
-`apps/desktop/electron/toolchain-manifest.ts` is the single source of truth for
+`packages/toolchain/src/manifest.ts` (the `@orkestrator/toolchain` workspace
+package, which also holds the installer the desktop app, the CLI and the mise
+tasks share) is the single source of truth for
 every agent. Two things read it directly and therefore cannot drift from it:
 `scripts/download-agent.ts` and `scripts/verify-toolchain-artifacts.ts`.
 
@@ -78,12 +80,12 @@ enable raw SDK logs as a substitute for the bounded observer.
 
 ## How binaries reach a running environment
 
-There are three delivery paths. An upgrade is incomplete until every applicable
+There are four delivery paths. An upgrade is incomplete until every applicable
 path has been updated.
 
 ### Local desktop environments
 
-`apps/desktop/electron/toolchain-manifest.ts` is the authoritative artifact
+`packages/toolchain/src/manifest.ts` is the authoritative artifact
 manifest for the five CLI-backed agents — Claude, Codex, OpenCode, Grok, and
 Pi. It contains one entry per supported platform and architecture:
 
@@ -123,7 +125,7 @@ At application startup:
 1. `apps/desktop/electron/main.ts` calls `preparePinnedToolchains()`.
 2. `apps/desktop/electron/toolchain-startup.ts` presents retry/quit UI around
    installation.
-3. `apps/desktop/electron/toolchain-manager.ts` downloads through Electron's
+3. `packages/toolchain/src/manager.ts` downloads through Electron's
    network stack, enforces HTTPS and the host allowlist, verifies sizes and
    hashes, extracts under an install lock, probes each executable, and activates
    a complete version set through a generated `bin` directory.
@@ -141,6 +143,52 @@ The managed toolchain is downloaded on first startup; agent executables are not
 currently embedded in the Electron package. The root `package` script downloads
 only Bun, and `build.extraResources` includes only `binaries/bun` from the
 `binaries/` directory.
+
+### Backend-only hosts
+
+A backend that runs without the desktop app (`orkestrator serve`, a server, a
+service manager) has no startup step of its own: nothing fetches the pinned
+binaries for it, and without one it silently uses whatever `claude`, `codex` or
+`opencode` is on `PATH`. Its step is explicit, and it is the desktop's installer
+run headlessly, so it has the same guarantees (HTTPS and host allowlists, size
+and digest checks, an install lock, an executable probe, activation only after
+the whole set verified):
+
+```bash
+orkestrator toolchain install            # published CLI
+mise run toolchain:install               # from a checkout, no build needed
+mise run toolchain:install --dry-run     # show what would be fetched
+orkestrator toolchain install --data-dir /srv/orkestrator --tool claude --tool codex
+```
+
+Both run the same code: `packages/toolchain/src/install.ts`, driven by
+`packages/cli/src/client/commands/toolchain.ts`. After an upgrade, re-run it on
+every backend-only host, then restart the service.
+
+- **What is installed** follows the data directory's own configuration — the
+  `enabledAgentPlatforms` in `config.json`, read by the same
+  `loadAgentPlatformSelection` the desktop uses — so a host that enabled two
+  platforms does not download five. A directory nobody has configured yet gets
+  every pinned tool, and platforms with no binary (Cursor) drop out. `--tool`
+  overrides this, and the installed set then becomes *exactly* that list: tools
+  left out stop being found after a restart, and the command warns when that
+  happens.
+- **Where it goes.** The manager activates each verified set in a directory named
+  by a digest of its contents, so a running build keeps the layout it started
+  with. The command then points `<data-dir>/toolchains/bin/current` at it, and a
+  backend uses that as its default `--toolchain-bin-dir` when it exists (falling
+  back to the plain `toolchains/bin` a hand-filled directory uses).
+  `ORKESTRATOR_TOOLCHAIN_BIN` or `--toolchain-bin-dir` still win, and
+  `orkestrator toolchain install --output id` prints the path.
+- **It is idempotent and self-repairing.** Verified installs are reused (a repeat
+  run takes about two seconds), and a binary that no longer matches its digest is
+  fetched again.
+- **A running backend does not notice.** The default is chosen at startup, and
+  bridges already launched keep the executable they resolved, so restart after
+  installing.
+- **Nothing runs it for you.** A backend-only host never updates its toolchain on
+  its own; a release that changes a pin needs the command run again. Wire it into
+  the host's deploy or service-start step (`ExecStartPre=` under systemd works).
 
 ### Container environments
 
@@ -198,7 +246,7 @@ below.
 1. Choose an exact stable version and read its upstream release notes. Confirm
    that all four repository targets are published before changing pins.
 2. Change the provider's version in
-   `apps/desktop/electron/toolchain-manifest.ts` and `docker/Dockerfile`.
+   `packages/toolchain/src/manifest.ts` and `docker/Dockerfile`.
    The shared downloader reads the manifest and has no version mirror. Codex
    has an additional source of truth described below. OpenCode also has SDK pins that must match its CLI.
 3. Refresh all four artifact records with the live verifier:
@@ -213,7 +261,7 @@ below.
 
    Paste the emitted archive and executable sizes and SHA-256 values into the
    matching platform/architecture entries in
-   `apps/desktop/electron/toolchain-manifest.ts`. Do not copy the previous
+   `packages/toolchain/src/manifest.ts`. Do not copy the previous
    version's hashes and do not verify only the development machine's target.
    During iteration, `--platform=darwin|linux` and `--arch=arm64|x64` can narrow
    the download.
@@ -323,7 +371,7 @@ under `bypassPermissions`.
 4. Update the CLI in all three mirrors:
 
    - `PINNED_TOOLCHAIN_VERSIONS.claude` in
-     `apps/desktop/electron/toolchain-manifest.ts`
+     `packages/toolchain/src/manifest.ts`
    - `CLAUDE_CLI_VERSION` in `docker/Dockerfile`
 
    Nothing else mirrors the CLI version. `scripts/download-agent.ts` reads the
@@ -427,7 +475,7 @@ hermetic `codex exec` exception.
 2. Mirror that exact value into:
 
    - `PINNED_TOOLCHAIN_VERSIONS.codex` in
-     `apps/desktop/electron/toolchain-manifest.ts`
+     `packages/toolchain/src/manifest.ts`
    - `CODEX_CLI_VERSION` in `docker/Dockerfile`
 
 3. Refresh and verify all four Codex artifact records using the shared binary
@@ -534,7 +582,7 @@ OpenCode's SDK and CLI are intentionally kept at the same exact version.
 - `@opencode-ai/sdk` in `apps/web/package.json`
 - `@opencode-ai/sdk` in `apps/backend/package.json`
 - `PINNED_TOOLCHAIN_VERSIONS.opencode` in
-  `apps/desktop/electron/toolchain-manifest.ts`
+  `packages/toolchain/src/manifest.ts`
 - `OPENCODE_CLI_VERSION` in `docker/Dockerfile`
 
 Both code paths import `@opencode-ai/sdk/v2/client`; do not change them to the v1
@@ -625,12 +673,12 @@ published two ways:
   packages it exposes types from (`@earendil-works/pi-ai` and
   `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
   `0.85.0` public entry point imported without declaring. Since `0.85.1` no
-  published SDK file imports it — as of `0.87.1` pi-coding-agent lists it only
+  published SDK file imports it — as of `0.99.0` pi-coding-agent lists it only
   as a devDependency — so nothing at runtime needs it. It stays pinned and
   vendored as a runtime root anyway: dropping it means changing the vendor
   script, its test and the drift test together, for no behavioural gain. Check
   on each bump that the SDK still does not import it.
-- `apps/desktop/electron/toolchain-manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
+- `packages/toolchain/src/manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.
 
@@ -641,6 +689,12 @@ Dockerfile pins the same archive digests the manifest does.
 
 1. Bump the four SDK dependencies in `bridges/pi-bridge/package.json`, then
    `bun install`.
+
+   Pin all four SDK packages at the **CLI's** version even when npm has a newer
+   patch for some of them: `pi-ai`, `pi-agent-core` and `pi-server` sometimes
+   publish an extra patch (0.99.1) with no matching `pi-coding-agent` or `pi`
+   release, and `pi-coding-agent` depends on them by `^` range. An exact pin keeps
+   the SDK and the shipped binary on the set the release was tested with.
 2. Bump `PINNED_TOOLCHAIN_VERSIONS.pi` and `ARG PI_CLI_VERSION` to the same
    version.
 3. Refresh the four artifact records. Unlike the single-file agents, Pi ships a
@@ -671,7 +725,33 @@ Dockerfile pins the same archive digests the manifest does.
    level that is not in `THINKING_LEVELS` is simply never offered. Remember the
    rule is asymmetric: `xhigh` and `max` need an *explicit* mapping, while every
    other level is included unless mapped to `null`.
-7. Rebuild the vendored bridge and run its suite. Like the Claude and Cursor SDK
+7. Re-verify the three SDK behaviours the bridge depends on, in
+   `dist/core/agent-session.js`, rather than trusting the version in a comment:
+
+   - **Preflight.** `prompt()` reports an accepted prompt through
+     `preflightResult(disposition)` with `started`, `queued` or `handled` (0.99;
+     0.87 passed a boolean and also called it with `false` before rethrowing). It
+     is never called for a refusal, so refusal is only the rejected promise.
+     `prompt.ts` treats any disposition as accepted.
+   - **Steer and follow-up.** `steer()` and `followUp()` resolve to
+     `queued` or `handled`. `handled` means an extension's `input` handler
+     consumed the instruction, so no delivery event will follow; `handleSteer`
+     removes its FIFO entry rather than let the next delivery be credited to it.
+   - **Nested tool calls.** A call another tool made through `ctx.executeTool()`
+     (how `codemode` scripts call tools) carries `parentToolCallId`, which
+     `translate.ts` stamps as the shared `parentTaskUseId`.
+
+   The `mcp.json` the bridge reads is Pi's own file, so `src/mcp-config.ts` must
+   follow Pi's documented format (the `mcp.md` guide shipped inside the SDK package): `enabled: false`, `$NAME` /
+   `${NAME}` values, `~/` and `cwd`. `resolveConfigValue` is not a public SDK
+   export, so the bridge re-implements the variable rules and deliberately does
+   **not** run `!command` values: an entry that needs one is skipped, as Pi skips
+   an entry it cannot resolve. Pi's built-in `mcp`, `codemode` and `tool-search`
+   extensions are loaded only by its CLI (`main.js`), never by an SDK session, so
+   they do not collide with the bridge's own `orkestrator-mcp` extension. Confirm
+   that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`
+   on each bump.
+8. Rebuild the vendored bridge and run its suite. Like the Claude and Cursor SDK
    bridges, the build keeps the SDK external and a `vendor` step copies it into
    `dist/node_modules` — the SDK compiles extension TypeScript with jiti and
    reads themes and templates from files inside its own package, neither of
@@ -684,7 +764,7 @@ Dockerfile pins the same archive digests the manifest does.
    bun test bridges/pi-bridge/src --parallel
    ```
 
-8. Smoke-test one interactive Pi tab and one terminal tab, including a model
+9. Smoke-test one interactive Pi tab and one terminal tab, including a model
    switch, a compaction, and the inactive-environment path. Because Pi fronts
    the user's own providers, also confirm that the per-provider sign-in status
    still reports correctly for at least one signed-in and one signed-out
@@ -805,7 +885,7 @@ Upstream reference: [`@cursor/sdk` on npm](https://www.npmjs.com/package/@cursor
 ### Where the CLI contract lives
 
 This section covers the `grok` CLI the ACP bridge spawns. It is pinned in
-`apps/desktop/electron/toolchain-manifest.ts` and `docker/Dockerfile` and has no
+`packages/toolchain/src/manifest.ts` and `docker/Dockerfile` and has no
 SDK: the ACP bridge speaks ACP with the CLI over stdio. That makes its
 **command-line flags a versioned contract**, and it is the part of an upgrade
 nothing in CI can check. See
@@ -824,9 +904,13 @@ still accepts the flags:
 # The flag must still be listed as a global option, not a subcommand option.
 grok --help | rg -- '--always-approve'
 
-# Each must start and wait for JSON-RPC rather than exiting on an argv error.
-# No output plus a process that stays alive is the passing result.
-grok --always-approve agent stdio </dev/null
+# It must start and wait for JSON-RPC rather than exiting on an argv error.
+# Hold stdin open: at EOF it exits 0 at once, which proves nothing. Exit 124
+# (killed by the timeout, still alive) is the passing result.
+(sleep 4 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
+
+# Then prove the handshake and a real `session/new` with the bridge's own params
+# (typed `headers` array, `additionalDirectories: []`). 1.0.44 answers both.
 ```
 
 Run these against the pinned version, not whatever is on `PATH` — compare
@@ -838,7 +922,7 @@ default.
 ### How to upgrade Grok
 
 1. Set the exact version in `PINNED_TOOLCHAIN_VERSIONS.grok` in
-   `apps/desktop/electron/toolchain-manifest.ts`. Grok has no release page;
+   `packages/toolchain/src/manifest.ts`. Grok has no release page;
    the installer reads a channel pointer, so take the version from
    `curl -fsSL https://storage.googleapis.com/grok-build-public-artifacts/cli/stable`.
    The same bucket also publishes `alpha` builds under identical URLs, so a
@@ -852,6 +936,11 @@ default.
 5. Confirm the argv contract by hand using the checks above. This is the
    step nothing else covers.
 6. Smoke-test an interactive tab, including the inactive-environment path.
+
+The `stable` pointer, not the binary, decides the channel. `grok --version` for
+1.0.44 prints `[alpha]` although `…/cli/stable` names it; a build can be promoted
+without being rebuilt, so the label is not evidence that the pin is wrong. Compare
+against the pointer (and `…/cli/alpha`, which may already be ahead) instead.
 
 ## Repository-wide validation
 

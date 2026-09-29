@@ -9,7 +9,7 @@ import {
   PINNED_TOOLCHAIN_VERSIONS,
   pinnedToolchainArtifacts,
   selectPinnedToolchainArtifacts,
-} from "../../apps/desktop/electron/toolchain-manifest";
+} from "@orkestrator/toolchain/manifest";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 

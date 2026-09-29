@@ -1,11 +1,13 @@
-import { existsSync } from "node:fs";
-import os from "node:os";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { APP_SLUG } from "./core/constants.js";
+import { currentToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain/layout";
+import { assertSupportedPlatform, defaultDataDir } from "./data-dir.js";
 import { parseGatewayCompressionMode, type GatewayCompressionMode } from "./gateway.js";
+
+export { assertSupportedPlatform, defaultDataDir };
 
 export const MACOS_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
@@ -38,12 +40,6 @@ export type BackendOptions = {
   credentialSources: AgentPlatform[];
 };
 
-export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
-  if (platform === "win32") {
-    throw new Error("Orkestrator does not support Windows. Use macOS or Linux.");
-  }
-}
-
 function valueAfter(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   if (index < 0) return undefined;
@@ -52,14 +48,18 @@ function valueAfter(args: string[], name: string): string | undefined {
   return value;
 }
 
-export function defaultDataDir(
-  platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
-  home: string = os.homedir(),
-): string {
-  assertSupportedPlatform(platform);
-  if (platform === "darwin") return path.join(home, "Library", "Application Support", APP_SLUG);
-  return path.join(env.XDG_CONFIG_HOME ?? path.join(home, ".config"), APP_SLUG);
+/**
+ * Where a backend looks for the pinned agent binaries when nothing says.
+ *
+ * `orkestrator toolchain install` leaves `toolchains/bin/current` pointing at the
+ * set it verified, so that is preferred once it exists. Before that, and for a
+ * directory someone filled by hand, the plain `toolchains/bin` is what was always
+ * searched. The choice is made at startup: a backend that was already running
+ * when a new set was installed keeps the executables it resolved until restarted.
+ */
+export function defaultToolchainBinDir(dataDir: string): string {
+  const current = currentToolchainBinDir(dataDir);
+  return existsSync(current) ? realpathSync(current) : path.join(toolchainRootDir(dataDir), "bin");
 }
 
 export function defaultTailscaleExecutable(
@@ -141,13 +141,16 @@ export function parseOptions(
   const credentialSources = parseCredentialSources(
     valueAfter(args, "--credential-source") ?? env.ORKESTRATOR_CREDENTIAL_SOURCE,
   );
+  const requestedToolchainBinDir = path.resolve(
+    valueAfter(args, "--toolchain-bin-dir") ??
+      env.ORKESTRATOR_TOOLCHAIN_BIN ??
+      defaultToolchainBinDir(dataDir),
+  );
   return {
     dataDir,
-    toolchainBinDir: path.resolve(
-      valueAfter(args, "--toolchain-bin-dir") ??
-        env.ORKESTRATOR_TOOLCHAIN_BIN ??
-        path.join(dataDir, "toolchains", "bin"),
-    ),
+    toolchainBinDir: existsSync(requestedToolchainBinDir)
+      ? realpathSync(requestedToolchainBinDir)
+      : requestedToolchainBinDir,
     appRoot,
     resourceRoot: path.resolve(
       valueAfter(args, "--resource-root") ?? env.ORKESTRATOR_RESOURCE_ROOT ?? appRoot,

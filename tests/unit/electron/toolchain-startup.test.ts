@@ -3,7 +3,7 @@ import {
   createToolchainProgressController,
   preparePinnedToolchains,
 } from "../../../apps/desktop/electron/toolchain-startup";
-import type { ToolchainProgress } from "../../../apps/desktop/electron/toolchain-manager";
+import type { ToolchainProgress } from "@orkestrator/toolchain/manager";
 
 function progress(phase: ToolchainProgress["phase"]): ToolchainProgress {
   return { phase, completedTools: 0, totalTools: 3, overallFraction: 0, message: phase };

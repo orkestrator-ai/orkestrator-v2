@@ -9,6 +9,7 @@
  *   from `<cwd>/.pi/mcp.json`. A cloned repo must not spawn stdio on the host.
  */
 import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { isObject, nonBlank } from "./state.js";
 
@@ -22,6 +23,14 @@ const MAX_MCP_NAME_LENGTH = 64;
 const MAX_HEADER_ENTRIES = 16;
 const MAX_ARG_ENTRIES = 32;
 const ORKESTRATOR_HOSTS = new Set(["127.0.0.1", "localhost", "host.docker.internal"]);
+/**
+ * Bridge-process variables no MCP server may receive: not through the stdio
+ * environment, and not by naming them in a `${NAME}` reference in `mcp.json`.
+ */
+export const BRIDGE_SECRET_ENV: ReadonlySet<string> = new Set([
+  AGENT_MCP_TOKEN_ENV,
+  "PI_BRIDGE_TOKEN",
+]);
 
 export type McpScope = "orkestrator" | "user" | "project";
 export type McpTransport = "http" | "stdio";
@@ -40,6 +49,8 @@ export interface ResolvedMcpServer {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Working directory as written; relative paths resolve against the session's. */
+  cwd?: string;
 }
 
 export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | undefined {
@@ -83,6 +94,7 @@ export function orkestratorMcpServer(
 export async function loadMcpConfigFile(
   path: string,
   scope: Exclude<McpScope, "orkestrator">,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedMcpServer[]> {
   try {
     const stat = await fs.stat(path);
@@ -96,7 +108,7 @@ export async function loadMcpConfigFile(
       if (servers.length >= MAX_MCP_SERVERS) break;
       const id = sanitizeMcpName(name);
       if (!id || id === ORKESTRATOR_MCP_SERVER_NAME) continue;
-      const server = normalizeMcpServer(id, scope, value);
+      const server = normalizeMcpServer(id, scope, value, env);
       if (server) servers.push(server);
     }
     return servers;
@@ -112,9 +124,10 @@ export async function resolvePiMcpServers(input: {
   agentMcp?: AgentMcpConnection;
   env?: NodeJS.ProcessEnv;
 }): Promise<ResolvedMcpServer[]> {
-  const user = await loadMcpConfigFile(join(input.agentDir, "mcp.json"), "user");
+  const env = input.env ?? process.env;
+  const user = await loadMcpConfigFile(join(input.agentDir, "mcp.json"), "user", env);
   const project = input.projectResources
-    ? await loadMcpConfigFile(join(input.cwd, ".pi", "mcp.json"), "project")
+    ? await loadMcpConfigFile(join(input.cwd, ".pi", "mcp.json"), "project", env)
     : [];
   const merged = new Map<string, ResolvedMcpServer>();
   for (const server of user) merged.set(server.id, server);
@@ -141,20 +154,28 @@ function normalizeMcpServer(
   id: string,
   scope: Exclude<McpScope, "orkestrator">,
   value: unknown,
+  env: NodeJS.ProcessEnv,
 ): ResolvedMcpServer | undefined {
-  if (!isObject(value) || value.disabled === true) return undefined;
+  // `disabled: true` is the Claude/Cursor spelling; `enabled: false` is Pi's own
+  // (`pi mcp`, the `/mcp` manager), and both files are the same `mcp.json`.
+  if (!isObject(value) || value.disabled === true || value.enabled === false) return undefined;
   const transport = readTransport(value);
   if (transport === "http") {
     if (!nonBlank(value.url) || typeof value.url !== "string") return undefined;
     try {
       const url = new URL(value.url.trim());
       if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+      const headers = isStringRecord(value.headers, MAX_HEADER_ENTRIES)
+        ? resolveConfigValues(value.headers, env)
+        : undefined;
+      // A header that cannot be resolved would be sent as its literal template.
+      if (headers === null) return undefined;
       return {
         id,
         scope,
         transport: "http",
         url: url.toString(),
-        ...(isStringRecord(value.headers, MAX_HEADER_ENTRIES) ? { headers: value.headers } : {}),
+        ...(headers ? { headers } : {}),
       };
     } catch {
       return undefined;
@@ -163,16 +184,69 @@ function normalizeMcpServer(
   if (transport !== "stdio" || !nonBlank(value.command) || typeof value.command !== "string") {
     return undefined;
   }
+  const serverEnv = isStringRecord(value.env, 32) ? resolveConfigValues(value.env, env) : undefined;
+  if (serverEnv === null) return undefined;
   return {
     id,
     scope,
     transport: "stdio",
-    command: value.command,
+    command: expandHome(value.command),
     ...(Array.isArray(value.args) && value.args.every((entry) => typeof entry === "string")
-      ? { args: value.args.slice(0, MAX_ARG_ENTRIES) }
+      ? { args: value.args.slice(0, MAX_ARG_ENTRIES).map(expandHome) }
       : {}),
-    ...(isStringRecord(value.env, 32) ? { env: value.env } : {}),
+    ...(serverEnv ? { env: serverEnv } : {}),
+    ...(nonBlank(value.cwd) && typeof value.cwd === "string" ? { cwd: expandHome(value.cwd) } : {}),
   };
+}
+
+/** `~` and `~/…` name the home directory, as Pi's MCP client reads them. */
+function expandHome(value: string): string {
+  if (value === "~") return homedir();
+  return value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
+}
+
+const CONFIG_VALUE_REFERENCE =
+  /\$(?:(\$)|(!)|\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+
+/**
+ * Resolve one `mcp.json` value the way Pi's own config values resolve:
+ * `$NAME` and `${NAME}` read the environment, `$$` and `$!` escape a literal
+ * `$` and `!`. A leading `!` means "run this shell command"; the bridge does not
+ * execute config-supplied commands, so such a value is unresolvable, and so is
+ * a variable that is unset or reserved for the bridge itself.
+ */
+function resolveConfigValue(value: string, env: NodeJS.ProcessEnv): string | undefined {
+  if (value.startsWith("!")) return undefined;
+  let unresolved = false;
+  const resolved = value.replace(
+    CONFIG_VALUE_REFERENCE,
+    (_match, dollar?: string, bang?: string, braced?: string, bare?: string) => {
+      if (dollar) return "$";
+      if (bang) return "!";
+      const name = braced ?? bare ?? "";
+      const replacement = BRIDGE_SECRET_ENV.has(name) ? undefined : env[name];
+      if (replacement === undefined) {
+        unresolved = true;
+        return "";
+      }
+      return replacement;
+    },
+  );
+  return unresolved ? undefined : resolved;
+}
+
+/** `null` when any value cannot be resolved: Pi skips such an entry and reports it. */
+function resolveConfigValues(
+  values: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+): Record<string, string> | null {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) {
+    const next = resolveConfigValue(value, env);
+    if (next === undefined) return null;
+    resolved[key] = next;
+  }
+  return resolved;
 }
 
 function readTransport(value: Record<string, unknown>): McpTransport | undefined {

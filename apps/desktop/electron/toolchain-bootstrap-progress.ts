@@ -1,4 +1,4 @@
-import type { ToolchainProgress } from "./toolchain-manager.js";
+import type { ToolchainProgress } from "@orkestrator/toolchain/manager";
 
 type ProgressElement = {
   textContent: string | null;

@@ -55,6 +55,59 @@ async function runBin(argv: string[], env: Record<string, string>, timeoutMs = 2
 }
 
 describe("packaged client entrypoint", () => {
+  test("toolchain dry runs parse repeated and comma-separated tools and reject empty selections", async () => {
+    const root = await scratch();
+    const env = {
+      ORKESTRATOR_DATA_DIR: path.join(root, "from-env"),
+      XDG_CONFIG_HOME: path.join(root, "xdg"),
+      HOME: root,
+    };
+    const named = await runBin(
+      [
+        "toolchain",
+        "install",
+        "--dry-run",
+        "--json",
+        "--tool",
+        "claude,codex",
+        "--tool",
+        "pi",
+        "--data-dir",
+        path.join(root, "from-flag"),
+      ],
+      env,
+    );
+    expect(named.code).toBe(0);
+    expect(JSON.parse(named.stdout).result).toMatchObject({
+      dryRun: true,
+      dataDir: path.join(root, "from-flag"),
+      source: "explicit",
+    });
+    expect(
+      JSON.parse(named.stdout)
+        .result.tools.map((tool: { tool: string }) => tool.tool)
+        .sort(),
+    ).toEqual(["claude", "codex", "pi"]);
+    const fromEnv = await runBin(["toolchain", "install", "--dry-run", "--json"], env);
+    expect(JSON.parse(fromEnv.stdout).result.dataDir).toBe(path.join(root, "from-env"));
+    const fromDefault = await runBin(["toolchain", "install", "--dry-run", "--json"], {
+      XDG_CONFIG_HOME: path.join(root, "xdg"),
+      HOME: root,
+    });
+    expect(JSON.parse(fromDefault.stdout).result.dataDir).toBe(
+      process.platform === "darwin"
+        ? path.join(root, "Library", "Application Support", "orkestrator-v2")
+        : path.join(root, "xdg", "orkestrator-v2"),
+    );
+    for (const value of [",", ",,", "unknown"]) {
+      const invalid = await runBin(["toolchain", "install", "--json", "--tool", value], env);
+      expect(invalid.code).toBe(2);
+      expect(JSON.parse(invalid.stdout).error.code).toBe("invalid-input");
+    }
+    await expect(stat(path.join(root, "from-flag"))).rejects.toThrow();
+    await expect(stat(path.join(root, "from-env"))).rejects.toThrow();
+  });
+
   test("help, version and client errors never initialise a backend", async () => {
     const root = await scratch();
     const dataDir = path.join(root, "would-be-data");

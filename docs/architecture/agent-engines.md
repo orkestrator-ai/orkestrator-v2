@@ -46,7 +46,7 @@ lists are the reason these engines are built the way they are. In short:
    depending on an event it never received.
 5. **Approvals fail closed.** Timeout, disconnect, a malformed answer, or the
    death of the process that asked all deny. None of them approve.
-6. **Managed executables are pinned and hash-verified.** `apps/desktop/electron/toolchain-manifest.ts`
+6. **Managed executables are pinned and hash-verified.** `packages/toolchain/src/manifest.ts`
    pins each managed binary; the backend passes the resolved path down
    (`CLAUDE_CLI_PATH`, `CODEX_PATH`, `ACP_AGENT_PATH`) so a packaged app never
    depends on a `PATH` lookup. See [`docs/development/upgrade-agents.md`](../development/upgrade-agents.md)

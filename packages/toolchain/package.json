@@ -1,0 +1,30 @@
+{
+  "name": "@orkestrator/toolchain",
+  "version": "2.19.4",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./install": "./src/install.ts",
+    "./layout": "./src/layout.ts",
+    "./manager": "./src/manager.ts",
+    "./manifest": "./src/manifest.ts",
+    "./platform-selection": "./src/platform-selection.ts"
+  },
+  "scripts": {
+    "test": "bun test --preload ../../tests/setup-node.ts src --parallel",
+    "test:workspace": "bun test --preload ../../tests/setup-node.ts src --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/toolchain.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@orkestrator/protocol": "workspace:*",
+    "tar-stream": "3.2.1",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "~1.4.2",
+    "@types/node": "^25.9.7",
+    "@types/tar-stream": "3.1.4",
+    "@types/yauzl": "3.4.0",
+    "typescript": "~5.9.3"
+  }
+}

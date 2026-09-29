@@ -142,7 +142,7 @@ turns, assistant turns and thinking parts. Listing keeps working while a session
 is live on the bridge. So the whole path (capability table → UI →
 `listResumableSessions`/`resumeSession` → bridge → vendor) is verified for both
 shipping builds. The Grok row was promoted to full when the pin moved to 1.0.10
-and that exact binary — the one in `toolchain-manifest.ts` and
+and that exact binary — the one in `manifest.ts` and
 `docker/Dockerfile` — was probed directly, which is what the earlier 1.0.4 probe
 could not establish.
 

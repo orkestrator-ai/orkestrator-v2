@@ -2,8 +2,8 @@
  * Claude Code's Ultracode: standing dynamic-workflow orchestration for a
  * session. The composer offers it as a reasoning level (`ultracode`), which
  * `resolveUltracodeEffort` splits into `high` effort plus the internal
- * `parameterValues.ultracode` flag; this module is the only place that knows how
- * the CLI spells it.
+ * `parameterValues.ultracode` flag. The shared catalogue also provides the
+ * CLI effort mapping used by terminal launches.
  *
  * Since Claude Code 2.1.284 (Agent SDK 0.3.284) Ultracode is independent of
  * effort: it no longer forces `xhigh` and stays on at any level. Two CLI rules
@@ -16,7 +16,7 @@
  *   change to keep it on.
  */
 
-import { CLAUDE_ULTRACODE_REASONING_ID } from "@orkestrator/protocol/claude-model-catalog";
+import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { sessionHealth, type ClaudeQueryControl, type SessionState } from "../types/index.js";
 
 /** The bridge-internal flag `resolveUltracodeEffort` sets and the rest of this module reads. */
@@ -38,9 +38,9 @@ export function resolveUltracodeEffort(
   parameterValues: Record<string, string | boolean> | undefined;
 } {
   if (effort === undefined) return { effort, parameterValues };
-  const ultracode = effort === CLAUDE_ULTRACODE_REASONING_ID;
+  const { effort: cliEffort, ultracode } = claudeCliReasoningSelection(effort);
   return {
-    effort: ultracode ? "high" : effort,
+    effort: cliEffort,
     parameterValues: { ...parameterValues, [ULTRACODE_PARAMETER_ID]: ultracode },
   };
 }

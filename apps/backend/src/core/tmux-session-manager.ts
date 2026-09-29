@@ -1,4 +1,5 @@
 import * as shared from "./tmux-shared.js";
+import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import * as hooks from "./tmux-hooks.js";
 import {
   CLAUDE_TMUX_EVENT,
@@ -473,16 +474,25 @@ export class TmuxSession {
     agentMcpConfigPath?: string,
   ): string {
     let command = shellArg(claudeCommand);
+    const claudeReasoning = claudeCliReasoningSelection(effort?.trim());
     if (model?.trim()) command += ` --model ${shellArg(model)}`;
-    if (effort?.trim()) {
+    if (claudeReasoning.effort) {
       if (helpText.includes("--effort")) {
-        command += ` --effort ${shellArg(effort)}`;
+        command += ` --effort ${shellArg(claudeReasoning.effort)}`;
       } else {
         console.warn("[tmux] claude CLI does not support --effort; launching without it");
       }
     }
-    if (fastMode) {
-      command += ` --settings ${shellArg(JSON.stringify({ fastMode: true }))}`;
+    if (fastMode || claudeReasoning.ultracode) {
+      if (!helpText.includes("--settings")) {
+        throw new Error("Installed claude CLI does not support --settings for Ultracode");
+      }
+      command += ` --settings ${shellArg(
+        JSON.stringify({
+          ...(fastMode ? { fastMode: true } : {}),
+          ...(claudeReasoning.ultracode ? { ultracode: true } : {}),
+        }),
+      )}`;
     }
     // Opus 4.7 and newer default adaptive thinking display to "omitted", which
     // writes thinking blocks to the transcript with an empty `thinking` string
@@ -985,6 +995,9 @@ export class TmuxSession {
   async switchEffort(effort: string): Promise<void> {
     const trimmed = effort.trim();
     if (!trimmed) throw new Error("effort level cannot be empty");
+    if (claudeCliReasoningSelection(trimmed).ultracode) {
+      throw new Error("Ultracode can only be selected when starting a Claude terminal session");
+    }
     await this.inputMutex.runExclusive(async () => {
       await this.submitUnlocked(`/effort ${trimmed}`);
       await this.waitForCommandIdle();

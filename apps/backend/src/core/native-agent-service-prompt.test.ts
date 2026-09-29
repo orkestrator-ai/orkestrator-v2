@@ -372,6 +372,74 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("preserves a saved legacy Ultracode toggle on the next Claude prompt", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [
+            {
+              platform: "claude",
+              id: "sonnet",
+              label: "Sonnet",
+              reasoning: [
+                { id: "high", label: "High" },
+                { id: "ultracode", label: "Ultracode" },
+              ],
+            },
+          ],
+          selectedModelId: "sonnet",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-claude-legacy-ultracode-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:legacy-ultracode",
+        };
+        await service.ensureSession(identity);
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        const session = await storage.getNativeAgentSession(key);
+        await storage.updateNativeAgentSessionControls(key, session!.providerSessionId, {
+          modelId: "sonnet",
+          reasoningId: "high",
+          parameterValues: { ultracode: true },
+        });
+        await expect(service.getProjection(identity)).resolves.toMatchObject({
+          composer: { selectedReasoningId: "ultracode" },
+        });
+        await service.dispatchIntent({ ...identity, prompt: "Continue", requestId: "legacy-1" });
+        expect(stub.send).toHaveBeenLastCalledWith(
+          "provider-session",
+          "Continue",
+          expect.objectContaining({ effort: "ultracode", parameterValues: { ultracode: true } }),
+        );
+
+        await service.updateProjectionControls({ ...identity, update: { reasoningId: "high" } });
+        expect(
+          (await storage.getNativeAgentSession(key))?.controls?.parameterValues?.ultracode,
+        ).toBeUndefined();
+        await expect(service.getProjection(identity)).resolves.toMatchObject({
+          composer: { selectedReasoningId: "high" },
+        });
+      },
+    );
+  });
+
   test("drops model-specific parameters when the selected model changes", async () => {
     const stub = createProviderStub("cursor", {
       interactiveSnapshot: async () => ({

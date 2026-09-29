@@ -23,6 +23,46 @@ import {
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux launch flags and interactive controls", () => {
+  test("starts Claude Ultracode with high effort and its CLI setting", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        {
+          tabId: "tab-ultracode",
+          environmentId: environment.id,
+          model: "sonnet",
+          effort: "ultracode",
+        },
+        context,
+      );
+      const launchLog = await fs.readFile(log, "utf8");
+      expect(launchLog).toContain(" --effort 'high'");
+      expect(launchLog).toContain(" --settings '{\"ultracode\":true}'");
+      expect(launchLog).not.toContain("--effort 'ultracode'");
+      await expect(
+        invoke(handlers, "claude_tmux_switch_effort", {
+          tabId: "tab-ultracode",
+          environmentId: environment.id,
+          effort: "ultracode",
+        }),
+      ).rejects.toThrow("Ultracode can only be selected when starting");
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-ultracode", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
   test("starts local Claude sessions with the managed toolchain binary", async () => {
     const handlers = createHandlers();
 

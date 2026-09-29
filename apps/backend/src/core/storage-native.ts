@@ -605,7 +605,13 @@ export abstract class StorageNative extends StorageReviews {
           )
         : Object.fromEntries(
             Object.entries(existing.controls?.parameterValues ?? {}).filter(
-              ([id]) => id !== "permissionMode" || update.mode === undefined,
+              ([id]) =>
+                (id !== "permissionMode" || update.mode === undefined) &&
+                !(
+                  existing.agent === "claude" &&
+                  id === "ultracode" &&
+                  update.reasoningId !== undefined
+                ),
             ),
           );
       const controls = {

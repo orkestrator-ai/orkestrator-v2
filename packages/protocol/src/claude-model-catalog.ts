@@ -66,6 +66,23 @@ export const CLAUDE_FALLBACK_MODEL_CATALOG: readonly ClaudeFallbackModel[] = [
  */
 export const CLAUDE_ULTRACODE_REASONING_ID = "ultracode";
 
+/** Convert the composer selection to Claude CLI effort and flag settings. */
+export function claudeCliReasoningSelection(reasoningId: string | undefined): {
+  effort: string | undefined;
+  ultracode: boolean;
+} {
+  const ultracode = reasoningId === CLAUDE_ULTRACODE_REASONING_ID;
+  return { effort: ultracode ? "high" : reasoningId, ultracode };
+}
+
+/** Preserve sessions saved when Ultracode was a separate toggle. */
+export function claudeReasoningSelection(
+  reasoningId: string | undefined,
+  parameterValues: Record<string, string | boolean> | undefined,
+): string | undefined {
+  return parameterValues?.ultracode === true ? CLAUDE_ULTRACODE_REASONING_ID : reasoningId;
+}
+
 /** The fields of a Claude catalogue entry its parameters depend on. */
 export interface ClaudeParameterModel {
   id: string;

@@ -63,6 +63,7 @@ import {
 } from "@orkestrator/protocol/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
+import { resolveUltracodeEffort } from "../services/ultracode.js";
 import { registerSessionCloseRoute } from "./session-close.js";
 import { readSessionActivityObservation } from "./session-activity.js";
 import { registerSessionTranscriptRoutes } from "./session-transcript.js";
@@ -395,12 +396,14 @@ session.post("/:id/config", async (c) => {
   if (Object.hasOwn(body, "policy") && !isNativeAgentExecutionPolicy(body.policy)) {
     return c.json({ error: "Invalid execution policy" }, 400);
   }
-  const parameterValues =
+  const { effort, parameterValues } = resolveUltracodeEffort(
+    typeof body.reasoningId === "string" ? body.reasoningId : undefined,
     body.parameterValues &&
-    typeof body.parameterValues === "object" &&
-    !Array.isArray(body.parameterValues)
+      typeof body.parameterValues === "object" &&
+      !Array.isArray(body.parameterValues)
       ? (body.parameterValues as Record<string, string | boolean>)
-      : undefined;
+      : undefined,
+  );
   const rawPermissionMode = parameterValues?.permissionMode;
   const permissionMode =
     typeof rawPermissionMode === "string" &&
@@ -414,7 +417,7 @@ session.post("/:id/config", async (c) => {
   try {
     await configureClaudeSession(sessionData, {
       ...(typeof body.model === "string" ? { model: body.model } : {}),
-      ...(typeof body.reasoningId === "string" ? { effort: body.reasoningId } : {}),
+      ...(effort !== undefined ? { effort } : {}),
       ...(typeof body.fastMode === "boolean" ? { fastMode: body.fastMode } : {}),
       ...(permissionMode ? { permissionMode } : {}),
       ...(parameterValues ? { parameterValues } : {}),
@@ -602,9 +605,9 @@ session.post("/:id/prompt", async (c) => {
     }
     const model = body.model as string | undefined;
     const rawEffort = body.effort as string | undefined;
-    const effort =
-      rawEffort && ["low", "medium", "high", "xhigh", "max"].includes(rawEffort)
-        ? (rawEffort as "low" | "medium" | "high" | "xhigh" | "max")
+    const requestedEffort =
+      rawEffort && ["low", "medium", "high", "xhigh", "max", "ultracode"].includes(rawEffort)
+        ? rawEffort
         : undefined;
     const rawPermissionMode = body.permissionMode as string | undefined;
     const readOnly = body.readOnly;
@@ -639,12 +642,15 @@ session.post("/:id/prompt", async (c) => {
       typeof body.includeLocalSettings === "boolean" ? body.includeLocalSettings : undefined;
     const promptSuggestions =
       typeof body.promptSuggestions === "boolean" ? body.promptSuggestions : undefined;
-    const parameterValues =
+    const { effort: resolvedEffort, parameterValues } = resolveUltracodeEffort(
+      requestedEffort,
       body.parameterValues &&
-      typeof body.parameterValues === "object" &&
-      !Array.isArray(body.parameterValues)
+        typeof body.parameterValues === "object" &&
+        !Array.isArray(body.parameterValues)
         ? (body.parameterValues as Record<string, string | boolean>)
-        : undefined;
+        : undefined,
+    );
+    const effort = resolvedEffort as "low" | "medium" | "high" | "xhigh" | "max" | undefined;
     const outputSchema = body.outputSchema;
     const agentMcpRecord =
       body.agentMcp && typeof body.agentMcp === "object" && !Array.isArray(body.agentMcp)

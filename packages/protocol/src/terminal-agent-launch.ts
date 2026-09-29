@@ -1,4 +1,5 @@
 import type { AgentPlatform } from "./agent-platforms.js";
+import { claudeCliReasoningSelection } from "./claude-model-catalog.js";
 
 export type TerminalAgentTabType = AgentPlatform | "plain";
 
@@ -24,10 +25,21 @@ export function buildTerminalAgentLaunchCommand(options: {
 
   if (tabType === "claude") {
     const args = ["claude", "--dangerously-skip-permissions"];
+    const claudeReasoning = claudeCliReasoningSelection(reasoningEffort);
     if (hasExplicitModel) args.push("--model", shellArg(model));
-    if (reasoningEffort) args.push("--effort", shellArg(reasoningEffort));
-    if (typeof fastMode === "boolean") {
-      args.push("--settings", shellArg(JSON.stringify({ fastMode })));
+    if (claudeReasoning.effort) {
+      args.push("--effort", shellArg(claudeReasoning.effort));
+    }
+    if (typeof fastMode === "boolean" || claudeReasoning.ultracode) {
+      args.push(
+        "--settings",
+        shellArg(
+          JSON.stringify({
+            ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+            ...(claudeReasoning.ultracode ? { ultracode: true } : {}),
+          }),
+        ),
+      );
     }
     if (initialPrompt) args.push(shellArg(initialPrompt));
     return args.join(" ");

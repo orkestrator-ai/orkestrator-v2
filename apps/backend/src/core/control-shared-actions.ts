@@ -11,7 +11,10 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
-import { claudeModelParameters } from "@orkestrator/protocol/claude-model-catalog";
+import {
+  claudeModelParameters,
+  claudeModelReasoningIds,
+} from "@orkestrator/protocol/claude-model-catalog";
 
 export type ControlMcpInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Invokes a registered backend command. */
@@ -226,7 +229,15 @@ export async function cachedLaunchModels(
   };
   const claude = catalogModels("claude").flatMap((model): AgentModel[] => {
     if (typeof model.id !== "string" || typeof model.name !== "string") return [];
-    const reasoning = reasoningOptions(model.supportedEffortLevels ?? ["low", "medium", "high"]);
+    const efforts = reasoningOptions(model.supportedEffortLevels ?? ["low", "medium", "high"]);
+    const parameterModel = {
+      id: model.id,
+      ...(typeof model.resolvedModel === "string" ? { resolvedModel: model.resolvedModel } : {}),
+      supportedEffortLevels: efforts.map(({ id }) => id),
+    };
+    const reasoning = reasoningOptions(
+      claudeModelReasoningIds(parameterModel, parameterModel.supportedEffortLevels),
+    );
     return [
       {
         platform: "claude",
@@ -235,13 +246,7 @@ export async function cachedLaunchModels(
         providerLabel: "Claude",
         reasoning,
         defaultReasoningId: reasoning.some(({ id }) => id === "high") ? "high" : reasoning[0]?.id,
-        parameters: claudeModelParameters({
-          id: model.id,
-          ...(typeof model.resolvedModel === "string"
-            ? { resolvedModel: model.resolvedModel }
-            : {}),
-          supportedEffortLevels: reasoning.map(({ id }) => id),
-        }),
+        parameters: claudeModelParameters(parameterModel),
         supportsSpeed: model.supportsFastMode !== false,
         supportsMode: true,
       },

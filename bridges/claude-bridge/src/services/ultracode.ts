@@ -1,8 +1,9 @@
 /**
  * Claude Code's Ultracode: standing dynamic-workflow orchestration for a
- * session. It arrives through the provider-neutral model-parameter channel
- * (`parameterValues.ultracode`), so the composer renders it like any other
- * model toggle; this module is the only place that knows how the CLI spells it.
+ * session. The composer offers it as a reasoning level (`ultracode`), which
+ * `resolveUltracodeEffort` splits into `high` effort plus the internal
+ * `parameterValues.ultracode` flag. The shared catalogue also provides the
+ * CLI effort mapping used by terminal launches.
  *
  * Since Claude Code 2.1.284 (Agent SDK 0.3.284) Ultracode is independent of
  * effort: it no longer forces `xhigh` and stays on at any level. Two CLI rules
@@ -15,8 +16,34 @@
  *   change to keep it on.
  */
 
-import { CLAUDE_ULTRACODE_PARAMETER_ID as ULTRACODE_PARAMETER_ID } from "@orkestrator/protocol/claude-model-catalog";
+import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { sessionHealth, type ClaudeQueryControl, type SessionState } from "../types/index.js";
+
+/** The bridge-internal flag `resolveUltracodeEffort` sets and the rest of this module reads. */
+const ULTRACODE_PARAMETER_ID = "ultracode";
+
+/**
+ * Split a requested reasoning level into what the CLI understands.
+ *
+ * The `ultracode` level runs at `high` effort with the flag on. Any real effort
+ * level turns the flag off explicitly, so leaving Ultracode for another level
+ * is not undone by the carry-over in `ultracodeFlagSetting`. No level leaves
+ * both untouched.
+ */
+export function resolveUltracodeEffort(
+  effort: string | undefined,
+  parameterValues: Record<string, string | boolean> | undefined,
+): {
+  effort: string | undefined;
+  parameterValues: Record<string, string | boolean> | undefined;
+} {
+  if (effort === undefined) return { effort, parameterValues };
+  const { effort: cliEffort, ultracode } = claudeCliReasoningSelection(effort);
+  return {
+    effort: cliEffort,
+    parameterValues: { ...parameterValues, [ULTRACODE_PARAMETER_ID]: ultracode },
+  };
+}
 
 /** Whether this turn's parameters ask for Ultracode. */
 export function requestsUltracode(

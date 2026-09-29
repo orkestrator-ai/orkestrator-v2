@@ -60,8 +60,28 @@ export const CLAUDE_FALLBACK_MODEL_CATALOG: readonly ClaudeFallbackModel[] = [
   },
 ];
 
-/** The Claude bridge reads `parameterValues[CLAUDE_ULTRACODE_PARAMETER_ID]`. */
-export const CLAUDE_ULTRACODE_PARAMETER_ID = "ultracode";
+/**
+ * Ultracode is offered as a reasoning level, after the effort levels. The
+ * Claude bridge turns it into the CLI's `ultracode` flag plus `high` effort.
+ */
+export const CLAUDE_ULTRACODE_REASONING_ID = "ultracode";
+
+/** Convert the composer selection to Claude CLI effort and flag settings. */
+export function claudeCliReasoningSelection(reasoningId: string | undefined): {
+  effort: string | undefined;
+  ultracode: boolean;
+} {
+  const ultracode = reasoningId === CLAUDE_ULTRACODE_REASONING_ID;
+  return { effort: ultracode ? "high" : reasoningId, ultracode };
+}
+
+/** Preserve sessions saved when Ultracode was a separate toggle. */
+export function claudeReasoningSelection(
+  reasoningId: string | undefined,
+  parameterValues: Record<string, string | boolean> | undefined,
+): string | undefined {
+  return parameterValues?.ultracode === true ? CLAUDE_ULTRACODE_REASONING_ID : reasoningId;
+}
 
 /** The fields of a Claude catalogue entry its parameters depend on. */
 export interface ClaudeParameterModel {
@@ -83,13 +103,29 @@ export function claudeModelSupportsUltracode(model: ClaudeParameterModel): boole
 }
 
 /**
+ * The reasoning level ids a native Claude model offers: its effort levels, plus
+ * Ultracode where the model can run it.
+ *
+ * The single definition for every backend catalogue projection. Terminal
+ * launches and the raw catalogue keep the plain effort levels, since the CLI's
+ * `--effort` flag has no Ultracode value.
+ */
+export function claudeModelReasoningIds(
+  model: ClaudeParameterModel,
+  efforts: readonly string[] = model.supportedEffortLevels ?? [],
+): string[] {
+  return claudeModelSupportsUltracode(model)
+    ? [...efforts, CLAUDE_ULTRACODE_REASONING_ID]
+    : [...efforts];
+}
+
+/**
  * Provider-neutral parameter descriptors for one Claude model.
  *
  * The single definition for every backend catalogue projection, so a control
  * cannot exist on one read of the catalogue and be missing from another.
  * `thinking` and `context1m` are settings-backed defaults the input bar
- * suppresses (`SUPPRESSED_COMPOSER_PARAMETERS`); Ultracode is a per-session
- * toggle the input bar renders like any other model parameter.
+ * suppresses (`SUPPRESSED_COMPOSER_PARAMETERS`).
  */
 export function claudeModelParameters(model: ClaudeParameterModel): AgentModelParameter[] {
   return [
@@ -111,17 +147,6 @@ export function claudeModelParameters(model: ClaudeParameterModel): AgentModelPa
           {
             id: "context1m",
             label: "1M context beta",
-            kind: "toggle" as const,
-            defaultValue: false,
-            scope: "session" as const,
-          },
-        ]
-      : []),
-    ...(claudeModelSupportsUltracode(model)
-      ? [
-          {
-            id: CLAUDE_ULTRACODE_PARAMETER_ID,
-            label: "Ultracode",
             kind: "toggle" as const,
             defaultValue: false,
             scope: "session" as const,

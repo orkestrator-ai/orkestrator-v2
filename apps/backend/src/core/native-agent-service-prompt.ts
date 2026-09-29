@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
@@ -760,7 +761,15 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 includeLocalSettings: input.includeLocalSettings,
                 promptSuggestions: input.promptSuggestions,
                 model: preparation.model ?? input.model,
-                effort: preparation.effort ?? input.reasoningEffort,
+                effort:
+                  durable.agent === "claude"
+                    ? claudeReasoningSelection(
+                        preparation.effort ??
+                          input.reasoningEffort ??
+                          durable.controls?.reasoningId,
+                        durable.controls?.parameterValues,
+                      )
+                    : (preparation.effort ?? input.reasoningEffort),
                 parameterValues: durable.controls?.parameterValues,
                 persistDefaults: durable.controls?.persistDefaults,
                 agentMcp,

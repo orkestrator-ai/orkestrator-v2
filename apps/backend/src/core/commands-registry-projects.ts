@@ -38,7 +38,10 @@ import {
   pruneTerminalHistoryStorage,
 } from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
-import { claudeModelParameters } from "@orkestrator/protocol/claude-model-catalog";
+import {
+  claudeModelParameters,
+  claudeModelReasoningIds,
+} from "@orkestrator/protocol/claude-model-catalog";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./commands-runtime-state.js";
 import {
@@ -101,7 +104,7 @@ function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): Age
       id: model.id,
       label: model.name,
       providerLabel: "Claude",
-      reasoning: reasoningOptions(efforts),
+      reasoning: reasoningOptions(claudeModelReasoningIds(model, efforts)),
       defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
       parameters: claudeModelParameters(model),
       supportsSpeed: model.supportsFastMode !== false,

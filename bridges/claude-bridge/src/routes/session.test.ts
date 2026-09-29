@@ -39,7 +39,7 @@ sessionTaskRegistry.apply(
   "Task #1 created successfully: Rehydrated task",
 );
 
-const mockGetSession = mock((id: string) =>
+const defaultGetSession = (id: string) =>
   id === "s-1" || id === "s-tasks"
     ? {
         id,
@@ -49,8 +49,8 @@ const mockGetSession = mock((id: string) =>
         lastActivity: new Date("2026-01-01"),
         taskRegistry: id === "s-tasks" ? sessionTaskRegistry : undefined,
       }
-    : undefined,
-);
+    : undefined;
+const mockGetSession = mock(defaultGetSession);
 const runtimeHealth = new RuntimeHealthRecorder();
 runtimeHealth.recordUnknown("future-event");
 runtimeHealth.recordNotice({
@@ -296,7 +296,8 @@ afterAll(() => {
 
 describe("session routes", () => {
   beforeEach(() => {
-    mockGetSession.mockClear();
+    mockGetSession.mockReset();
+    mockGetSession.mockImplementation(defaultGetSession);
     mockPeekSession.mockClear();
     mockCreateSession.mockClear();
     mockCreateOrRecoverSession.mockReset();
@@ -307,11 +308,12 @@ describe("session routes", () => {
       createdAt: new Date("2026-01-01"),
       lastActivity: new Date("2026-01-01"),
     }));
-    mockGetSession.mockClear();
     mockListSessions.mockClear();
     mockGetSessionMessages.mockClear();
     mockSendPrompt.mockReset();
     mockSendPrompt.mockImplementation(successfulPromptStart);
+    mockConfigureClaudeSession.mockReset();
+    mockConfigureClaudeSession.mockImplementation(async () => undefined);
     mockAbortSession.mockClear();
     mockGracefulInterruptClaudeSession.mockReset();
     mockGracefulInterruptClaudeSession.mockImplementation(async () => ({
@@ -370,6 +372,34 @@ describe("session routes", () => {
       policy: { ...policy, approvals: "approve-everything" },
     });
     expect(rejected.status).toBe(400);
+  });
+
+  test("applies Ultracode on and off through the live config route", async () => {
+    const applyFlagSettings = mock(async (_settings: Record<string, unknown>) => undefined);
+    const session = {
+      id: "s-1",
+      title: "Test",
+      status: "idle" as const,
+      createdAt: new Date("2026-01-01"),
+      lastActivity: new Date("2026-01-01"),
+      queryControl: { applyFlagSettings },
+    };
+    mockGetSession.mockImplementation((id) => (id === "s-1" ? (session as never) : undefined));
+    mockConfigureClaudeSession.mockImplementation(
+      realSessionManagerSnapshot.configureClaudeSession,
+    );
+
+    const enabled = await jsonRequest("POST", "/session/s-1/config", {
+      reasoningId: "ultracode",
+    });
+    expect({ status: enabled.status, body: await jsonBody(enabled) }).toMatchObject({
+      status: 200,
+    });
+    expect(applyFlagSettings).toHaveBeenLastCalledWith({ ultracode: true, effortLevel: "high" });
+
+    const disabled = await jsonRequest("POST", "/session/s-1/config", { reasoningId: "low" });
+    expect(disabled.status).toBe(200);
+    expect(applyFlagSettings).toHaveBeenLastCalledWith({ ultracode: false, effortLevel: "low" });
   });
 
   test("runtime health reads without touching or resolving the session", async () => {
@@ -1462,8 +1492,22 @@ describe("session routes", () => {
         includeLocalSettings: undefined,
         promptSuggestions: undefined,
         outputSchema: undefined,
-        parameterValues: undefined,
+        // A real effort level switches Ultracode off explicitly.
+        parameterValues: { ultracode: false },
         requestId: undefined,
+      });
+    });
+
+    test("maps the ultracode reasoning level to high effort with the flag on", async () => {
+      await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "test",
+        effort: "ultracode",
+        parameterValues: { thinking: "adaptive" },
+      });
+
+      expect(mockSendPrompt.mock.calls[0]?.[2]).toMatchObject({
+        effort: "high",
+        parameterValues: { thinking: "adaptive", ultracode: true },
       });
     });
 

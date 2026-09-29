@@ -343,8 +343,10 @@ under `bypassPermissions`.
    catalog calls.
 
    Re-check Ultracode against the new CLI too. It reaches the bridge as the
-   provider-neutral model parameter `ultracode` (`claudeModelParameters()` in
-   `packages/protocol/src/claude-model-catalog.ts`), and
+   `ultracode` reasoning level (`claudeModelReasoningIds()` in
+   `packages/protocol/src/claude-model-catalog.ts`), which
+   `resolveUltracodeEffort()` turns into `high` effort plus an internal
+   `ultracode` flag, and
    `bridges/claude-bridge/src/services/ultracode.ts` owns three CLI rules that
    no type captures: it is a flag-layer setting each turn's query must be
    started with; since 2.1.284 an `applyFlagSettings` effort change without an

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { fileURLToPath } from "node:url";
 import * as shared from "./native-agent-service-shared.js";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
@@ -3650,7 +3651,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           .catch(() => undefined);
       }
     }
-    const selectedReasoningId =
+    const storedReasoningId =
       providerControls?.reasoningId ??
       session.controls?.reasoningId ??
       (openCodeHints
@@ -3667,6 +3668,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         selectedModel?.defaultReasoningId,
       ) ??
       selectedModel?.defaultReasoningId;
+    const selectedReasoningId =
+      input.agent === "claude"
+        ? claudeReasoningSelection(storedReasoningId, session.controls?.parameterValues)
+        : storedReasoningId;
     const capabilities = nativeCapabilities(input.agent);
     // The compose bar renders `fastModeAvailable` directly, so the table has to
     // be consulted here and not only in `nativeComposerControls`. Without it a

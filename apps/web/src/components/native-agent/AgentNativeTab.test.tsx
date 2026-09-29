@@ -418,6 +418,7 @@ afterEach(() => {
   adoptNativeAgentSessionMock.mockClear();
   beginNativeAgentSignInMock.mockClear();
   openInBrowserMock.mockClear();
+  openInBrowserMock.mockImplementation(async () => undefined);
   beginNativeAgentSignInMock.mockImplementation(async () => ({
     url: "https://auth.example.test/login",
   }));
@@ -1188,6 +1189,28 @@ describe("AgentNativeTab", () => {
     openInBrowserMock.mockClear();
     expect(fireEvent.click(link)).toBe(false);
     expect(openInBrowserMock).toHaveBeenCalledWith("https://auth.example.test/login");
+  });
+
+  test("reports when the Codex sign-in link cannot be opened", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
+      auth: { state: "needs-auth" as const, signIn: { kind: "browser-url" as const } },
+    }));
+    openInBrowserMock.mockImplementation(async () => {
+      throw new Error("browser unavailable");
+    });
+    render(<AgentNativeTab tabId="tab-codex-open-failure" data={identity("codex")} isActive />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Could not open the Codex sign-in link: browser unavailable",
+      ),
+    );
+    expect(openInBrowserMock).toHaveBeenCalledWith("https://auth.example.test/login");
+    expect(screen.getByRole("link", { name: "Open sign-in link" })).toBeTruthy();
   });
 
   test("keeps a delayed Codex sign-in link available when the popup is blocked", async () => {

@@ -1,4 +1,4 @@
-import { afterEach, describe, test, expect } from "bun:test";
+import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2945,7 +2945,10 @@ describe("account sign-in", () => {
     const UNAUTHORIZED_TURN = {
       threadId: "t1",
       turnId: "turn-1",
-      error: { message: "Your access token could not be refreshed.", codexErrorInfo: "unauthorized" },
+      error: {
+        message: "Your access token could not be refreshed.",
+        codexErrorInfo: "unauthorized",
+      },
       willRetry: false,
     };
     const gate = { hasActiveTurns: () => false, waitForIdle: async () => undefined };
@@ -2997,7 +3000,10 @@ describe("account sign-in", () => {
     });
 
     test("does not restart when no login is stored", async () => {
-      const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: await homeWith(undefined) });
+      const h = harness(
+        { "account/read": () => SIGNED_OUT },
+        { codexHome: await homeWith(undefined) },
+      );
       await h.engine.start();
       h.child().notify("error", UNAUTHORIZED_TURN);
       await flush(h);
@@ -3036,12 +3042,64 @@ describe("account sign-in", () => {
       expect(reloadRequests(h)).toBe(1);
     });
 
+    test.each([{ tokens: { refresh_token: "dead" } }, { OPENAI_API_KEY: "test-api-key" }])(
+      "identical credential rewrites cannot loop replacement children: %j",
+      async (auth) => {
+        const home = await homeWith(auth);
+        const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+        await h.engine.start();
+        h.child().notify("error", UNAUTHORIZED_TURN);
+        await untilReloadRequests(h, 1);
+        await h.engine.reloadAccountFromStoredLogin(gate);
+        await flush(h);
+        await writeFile(join(home, "auth.json"), JSON.stringify(auth));
+        await h.engine.readAccount();
+        await flush(h);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(reloadRequests(h)).toBe(1);
+        expect(h.children).toHaveLength(2);
+
+        // Metadata and formatting changes are also the same credential identity.
+        await writeFile(
+          join(home, "auth.json"),
+          JSON.stringify({ ...auth, last_refresh: "new" }, null, 2),
+        );
+        await h.engine.readAccount();
+        await flush(h);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(reloadRequests(h)).toBe(1);
+      },
+    );
+
+    test("a failed restart releases the unchanged credential for another request", async () => {
+      const home = await homeWith({ tokens: { refresh_token: "retry" } });
+      const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+      await h.engine.start();
+      await h.engine.readAccount();
+      await untilReloadRequests(h, 1);
+      const restart = spyOn(h.engine.getSupervisor(), "restartWhenIdle").mockRejectedValueOnce(
+        new Error("spawn failed"),
+      );
+      try {
+        await expect(h.engine.reloadAccountFromStoredLogin(gate)).rejects.toThrow("spawn failed");
+      } finally {
+        restart.mockRestore();
+      }
+      await h.engine.readAccount();
+      await untilReloadRequests(h, 2);
+      expect(reloadRequests(h)).toBe(2);
+      await h.engine.reloadAccountFromStoredLogin(gate);
+      expect(h.children).toHaveLength(2);
+    });
+
     test("a login replaced on disk since the last reload is tried again", async () => {
       const home = await homeWith({ auth_mode: "chatgpt", tokens: { refresh_token: "first" } });
       const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
       await h.engine.start();
       h.child().notify("error", UNAUTHORIZED_TURN);
       await untilReloadRequests(h, 1);
+      await h.engine.reloadAccountFromStoredLogin(gate);
+      await flush(h);
       await writeFile(
         join(home, "auth.json"),
         JSON.stringify({ auth_mode: "chatgpt", tokens: { refresh_token: "second-and-longer" } }),

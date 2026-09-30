@@ -1,45 +1,12 @@
 import {
-  RuntimeSseEvent,
-  AppServerRuntimeOptions,
-  OrderedRuntimeEvent,
   SteerOrdering,
-  HistoricalAssistantSegmentState,
   MAX_HISTORICAL_ASSISTANT_SEGMENTS,
-  ThreadRuntimeState,
-  MAX_PENDING_EVENTS_PER_TURN,
-  MAX_PENDING_TURNS,
-  MAX_ORDERED_EVENTS_PER_THREAD,
-  MAX_ORDERED_EVENT_BYTES_PER_THREAD,
-  LARGE_MESSAGE_CHARS,
-  VERY_LARGE_MESSAGE_CHARS,
-  ORDERED_EVENT_ESTIMATE_MAX_DEPTH,
-  ORDERED_EVENT_ESTIMATE_NODE_BYTES,
-  DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
-  estimateOrderedEventBytes,
-  messageSnapshotIntervalMs,
-  isSamePublishedPart,
-  normalizedMessageSnapshotChars,
-  DEFAULT_THREAD_IDLE_MS,
   DEFAULT_SESSION_RETENTION_MS,
-  DEFAULT_SWEEP_INTERVAL_MS,
   DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS,
-  DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS,
-  DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS,
-  MAX_RECOVERED_CONTEXT_CHARS,
-  IDLE_WAIT_POLL_MS,
-  AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
-  AmbiguousDispatchResolution,
-  mergeRateLimitWindows,
   mergeAccountUsage,
   accountUsageFromLimits,
-  isJsonObject,
   DEFAULT_COMPACTION_TIMEOUT_MS,
   MAX_STEER_REQUESTS,
-  codexStructuredOutputFailure,
-  parseCodexStructuredOutput,
-  buildRecoveredContextPrompt,
-  PromptAcceptedResult,
-  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
 import { inheritCommandChanges } from "./sessions/command-changes.js";
 import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
@@ -48,91 +15,30 @@ import {
   CODEX_SIGN_IN_REQUIRED_MESSAGE,
   type AppServerEngine,
 } from "./engine/app-server-engine.js";
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  ApprovalResolution,
-} from "./app-server/approvals.js";
+
+import type { EngineThread, EngineUsageSnapshot } from "./engine/types.js";
 import {
-  isInteractionAnswerMap,
-  type InteractionAnswer,
-  type InteractionRequest,
-  type InteractionResolution,
-} from "./app-server/interactions.js";
-import type {
-  EngineEvent,
-  EngineGeneration,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-  EngineThread,
-  EngineTurnConfig,
-  EngineUsageSnapshot,
-  EngineUserInput,
-} from "./engine/types.js";
-import {
-  OverlappingTurnError,
-  ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
   CODEX_RESTARTED_MID_TURN_MESSAGE,
-  type PromptAttachmentInput,
   type SessionPhase,
-  type SessionTitleSource,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-  type AssistantSegment,
-} from "./sessions/turn-accumulator.js";
-import {
-  compareDispatchRecordsNewestFirst,
-  DispatchJournal,
-  DispatchJournalAdmissionError,
-} from "./sessions/dispatch-journal.js";
-import { BridgeSessionStore } from "./sessions/persistence.js";
-import {
-  beginTurnRenderState,
-  createTurnRenderState,
-  releaseTurnRenderState,
-  renderTurn,
-  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-  type TurnRenderState,
-} from "./messages/render-turn.js";
-import { UpdateCoalescer } from "./messages/coalescer.js";
-import { describeDiffBudget } from "./messages/diff-budget.js";
-import { getTranscriptCacheStats } from "./transcript-cache.js";
-import {
-  createMessageId,
-  createSessionId,
-  type MessagePatchEventData,
-  type NormalizedMessage,
-  type NormalizedPart,
-} from "./messages/types.js";
-import { appendAttachmentTags } from "./messages/attachment-tags.js";
+import { TurnAccumulator } from "./sessions/turn-accumulator.js";
+
+import { beginTurnRenderState } from "./messages/render-turn.js";
+
+import { createMessageId, createSessionId, type NormalizedMessage } from "./messages/types.js";
+
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
-  getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
-  listPersistedSessionsWithTitlesForCwd,
-  type PersistedSessionMeta,
 } from "./history/rollout.js";
-import {
-  buildFallbackSessionTitle,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
-  type PersistedSessionTitleSource,
-} from "./session-titles.js";
+
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
-import type { BridgeModel } from "./models-cache.js";
-import {
-  structuredOutputFailure,
-  tryParseStructuredOutputText,
-  type JsonSchema,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
+
+import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 /** Fixed, content-free refusal for work arriving while a tab close is retiring the session. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
@@ -856,6 +762,17 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     | { outcome: "unavailable" }
     | { outcome: "closing" }
   > {
+    try {
+      return await this.withDispatchAdmission(() => this.dispatchNativeReview(sessionId, target));
+    } catch {
+      return { outcome: "unavailable" };
+    }
+  }
+
+  private async dispatchNativeReview(
+    sessionId: string,
+    target: Parameters<AppServerRuntimeSessions["startNativeReview"]>[1],
+  ): ReturnType<AppServerRuntimeSessions["startNativeReview"]> {
     const session = this.registry.getSession(sessionId);
     if (!session?.threadId) return { outcome: "not-found" };
     if (this.sessionAdmissionClosed(session)) return { outcome: "closing" };

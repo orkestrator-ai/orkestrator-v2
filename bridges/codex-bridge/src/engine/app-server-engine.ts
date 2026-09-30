@@ -21,7 +21,8 @@
  *     `clientUserMessageId`; after an ambiguous failure the engine reconciles
  *     against persisted turns rather than retrying blind.
  */
-import { readFile, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   AppServerSupervisor,
@@ -623,19 +624,32 @@ function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
  *
  * Several Codex processes share one `auth.json` and refresh tokens rotate, so
  * another process can replace the login while this app-server keeps a token the
- * server has already retired. Only shape and file identity are read; nothing
- * from the file leaves this function.
+ * server has already retired. Only a digest of usable credential fields leaves
+ * this function; file rewrites and metadata changes keep the same identity.
  */
 async function readStoredLoginFingerprint(codexHome: string): Promise<string | undefined> {
   try {
-    const path = join(codexHome, "auth.json");
-    const [raw, info] = await Promise.all([readFile(path, "utf8"), stat(path)]);
+    const file = await open(join(codexHome, "auth.json"), "r");
+    let raw: string;
+    try {
+      // Read a bounded snapshot, including one byte to detect overflow.
+      const bytes = Buffer.alloc(65_537);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      if (bytesRead > 65_536) return undefined;
+      raw = bytes.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await file.close();
+    }
     const root = objectRecord(JSON.parse(raw));
     const tokens = objectRecord(root.tokens);
-    const usable =
-      (typeof tokens.refresh_token === "string" && tokens.refresh_token.length > 0) ||
-      (typeof root.OPENAI_API_KEY === "string" && root.OPENAI_API_KEY.length > 0);
-    return usable ? `${info.mtimeMs}:${info.size}` : undefined;
+    const refreshToken = typeof tokens.refresh_token === "string" ? tokens.refresh_token : "";
+    const apiKey = typeof root.OPENAI_API_KEY === "string" ? root.OPENAI_API_KEY : "";
+    if (!refreshToken && !apiKey) return undefined;
+    // Only credential identity matters; rewriting formatting, timestamps or
+    // account metadata must not start another replacement child. Never log it.
+    return createHash("sha256")
+      .update(JSON.stringify([refreshToken, apiKey]))
+      .digest("hex");
   } catch {
     return undefined;
   }
@@ -696,11 +710,12 @@ export class AppServerEngine implements CodexEngine {
    */
   private accountSignInRequired = false;
   /**
-   * The stored login a reload was already requested for. A confirmed sign-out
+   * The stored login successfully loaded by a replacement child. A confirmed sign-out
    * that persists after the reload must not trigger another one, so a login that
    * is genuinely dead costs one restart rather than a loop.
    */
   private accountReloadFingerprint?: string;
+  private pendingAccountReloadFingerprint?: string;
   /** Orders overlapping account reads by request and successful response. */
   private accountCheckSequence = 0;
   private accountAppliedSequence = 0;
@@ -1109,12 +1124,13 @@ export class AppServerEngine implements CodexEngine {
     if (
       !fingerprint ||
       fingerprint === this.accountReloadFingerprint ||
+      this.pendingAccountReloadFingerprint !== undefined ||
       sequence < this.accountAppliedSequence ||
       generation !== this.supervisor.getGeneration()
     ) {
       return;
     }
-    this.accountReloadFingerprint = fingerprint;
+    this.pendingAccountReloadFingerprint = fingerprint;
     this.emit({ kind: "account.reload.requested", engineGeneration: generation });
   }
 
@@ -1127,7 +1143,18 @@ export class AppServerEngine implements CodexEngine {
     hasActiveTurns: () => boolean;
     waitForIdle: () => Promise<void>;
   }): Promise<void> {
-    await this.supervisor.restartWhenIdle("stored account login changed", gate);
+    const fingerprint = this.pendingAccountReloadFingerprint;
+    try {
+      await this.supervisor.restartWhenIdle("stored account login changed", gate);
+      if (this.supervisor.isReady()) this.accountReloadFingerprint = fingerprint;
+    } finally {
+      this.cancelStoredAccountReload();
+    }
+  }
+
+  /** A failed or shutdown-abandoned reload remains eligible for the same login. */
+  cancelStoredAccountReload(): void {
+    this.pendingAccountReloadFingerprint = undefined;
   }
 
   /** Record an `account/read` answer; true when an account is signed in. */

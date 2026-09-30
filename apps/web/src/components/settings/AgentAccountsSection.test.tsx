@@ -20,6 +20,7 @@ const usage: PlanUsageSnapshot = {
   windows: [{ window: "primary", label: "5-hour limit", usedPercent: 40 }],
   fetchedAt: new Date(0).toISOString(),
 };
+let usageResult: PlanUsageSnapshot = usage;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
@@ -28,7 +29,7 @@ mock.module("@/lib/native/backend", () => ({
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
       case "get_agent_account_usage":
-        return Promise.resolve(usage);
+        return Promise.resolve(usageResult);
       case "get_agent_account_login":
         return Promise.resolve(login);
       case "start_agent_account_login":
@@ -87,6 +88,7 @@ const ADDED_ID = "11111111-2222-4333-8444-555555555555";
 
 beforeEach(() => {
   calls.length = 0;
+  usageResult = usage;
   login = { state: "idle" };
   snapshot = {
     active: { claude: "default", codex: "default" },
@@ -109,13 +111,43 @@ afterEach(() => {
   resetReadCoordinatorForTests();
 });
 
-async function mount(onActiveAccountChange?: () => void) {
+async function mount() {
   await act(async () => {
-    render(<AgentAccountsSection platform="codex" onActiveAccountChange={onActiveAccountChange} />);
+    render(<AgentAccountsSection platform="codex" />);
   });
 }
 
+function accountOrder(): string[] {
+  return screen.getAllByRole("listitem").map((item) => item.getAttribute("aria-label") ?? "");
+}
+
 describe("AgentAccountsSection", () => {
+  test("forces a Claude usage reread when the credential refresh token changes", async () => {
+    const view = render(<AgentAccountsSection platform="claude" reloadToken={0} />);
+    await screen.findByText("5-hour limit");
+    expect(calls.filter((call) => call.command === "get_agent_account_usage")).toEqual([
+      { command: "get_agent_account_usage", args: { platform: "claude", accountId: "default" } },
+    ]);
+    usageResult = {
+      ...usage,
+      platform: "claude",
+      status: "unavailable",
+      windows: [],
+      message: "Host Claude credentials are disabled.",
+    };
+    view.rerender(<AgentAccountsSection platform="claude" reloadToken={1} />);
+    await screen.findByText("Host Claude credentials are disabled.");
+    expect(calls.filter((call) => call.command === "get_agent_account_usage").at(-1)?.args).toEqual(
+      {
+        platform: "claude",
+        accountId: "default",
+        force: true,
+      },
+    );
+    expect(screen.queryByText("5-hour limit") === null).toBe(true);
+    view.rerender(<AgentAccountsSection platform="claude" reloadToken={1} />);
+    expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(2);
+  });
   test("lists only this platform's accounts with their identity and usage", async () => {
     await mount();
     const host = await screen.findByRole("listitem", { name: "Host login" });
@@ -128,19 +160,32 @@ describe("AgentAccountsSection", () => {
     expect(screen.queryAllByRole("listitem")).toHaveLength(2);
   });
 
-  test("switching asks the backend and tells the pane to re-read usage", async () => {
-    const onChange = mock(() => undefined);
-    await mount(onChange);
+  test("lists the active account first, then the rest alphabetically", async () => {
+    snapshot.accounts.push(
+      account({ id: "b", label: "bravo", isDefault: false, isActive: false }),
+      account({ id: "a", label: "Alpha", isDefault: false, isActive: false }),
+    );
+    await mount();
+    await screen.findByRole("listitem", { name: "Host login" });
+    expect(accountOrder()).toEqual(["Host login", "Alpha", "bravo", "second@example.com"]);
+  });
+
+  test("switching asks the backend, moves the account to the top and re-reads usage", async () => {
+    await mount();
     const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    await waitFor(() => expect(screen.getAllByText("5-hour limit")).toHaveLength(2));
+    const usageReads = () => calls.filter((c) => c.command === "get_agent_account_usage").length;
+    const readsBefore = usageReads();
 
     fireEvent.click(within(added).getByRole("button", { name: "Use" }));
 
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(added).getByText("Active")).toBeTruthy());
     expect(calls.find((c) => c.command === "set_active_agent_account")?.args).toEqual({
       platform: "codex",
       accountId: ADDED_ID,
     });
-    expect(within(added).getByText("Active")).toBeTruthy();
+    expect(accountOrder()).toEqual(["second@example.com", "Host login"]);
+    await waitFor(() => expect(usageReads()).toBeGreaterThan(readsBefore));
     // The host login is no longer active, so it can be switched back to.
     const host = screen.getByRole("listitem", { name: "Host login" });
     expect(within(host).getByRole("button", { name: "Use" })).toBeTruthy();

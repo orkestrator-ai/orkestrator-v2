@@ -38,6 +38,10 @@ import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
+  CLAUDE_PLAN_WINDOW_LABELS,
+  claudeModelWeeklyWindow,
+} from "@orkestrator/protocol/plan-usage";
+import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
@@ -472,13 +476,14 @@ export function extractContextUsageFromUnknown(
   return null;
 }
 
-export const STRUCTURED_RATE_LIMIT_WINDOWS = [
-  ["five_hour", "Five Hour"],
-  ["seven_day", "Weekly"],
-  ["seven_day_oauth_apps", "Weekly (OAuth Apps)"],
-  ["seven_day_opus", "Weekly (Opus)"],
-  ["seven_day_sonnet", "Weekly (Sonnet)"],
-] as const;
+/**
+ * Structured `/usage` window keys, labelled from the shared Claude window table
+ * so a session's rate limits and the settings pane's OAuth read name each
+ * window the same way.
+ */
+export const STRUCTURED_RATE_LIMIT_WINDOWS = (
+  ["five_hour", "seven_day", "seven_day_oauth_apps", "seven_day_opus", "seven_day_sonnet"] as const
+).map((key) => [key, CLAUDE_PLAN_WINDOW_LABELS[key]!.label] as const);
 
 const STRUCTURED_RATE_LIMIT_LABELS: Record<string, string> = Object.fromEntries(
   STRUCTURED_RATE_LIMIT_WINDOWS,
@@ -659,10 +664,8 @@ export function rateLimitsFromStructuredUsage(
         sawMalformedWindow = true;
         continue;
       }
-      const window = structuredRateLimitWindow(
-        modelWindow,
-        `Weekly (${modelWindow.display_name.trim()})`,
-      );
+      const identity = claudeModelWeeklyWindow(modelWindow.display_name);
+      const window = identity ? structuredRateLimitWindow(modelWindow, identity.label) : undefined;
       if (window) {
         addWindow(window);
       } else {

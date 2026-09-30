@@ -12,6 +12,7 @@ import type {
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
+import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   claudeExecutableOptions,
@@ -370,7 +371,10 @@ export async function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
   }
 }
 
+/** The id the backend's OAuth read gives the same window, so the two merge. */
 function claudeWindowId(label: string): string {
+  const known = claudePlanWindowFromLabel(label);
+  if (known) return known.id;
   const slug = label
     .trim()
     .toLowerCase()

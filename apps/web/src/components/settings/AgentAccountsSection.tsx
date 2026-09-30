@@ -49,6 +49,15 @@ function describeIdentity(account: AgentAccountSummary): string {
     .join(" · ");
 }
 
+/** The active account first, then the rest alphabetically by name. */
+function sortAccounts(accounts: AgentAccountSummary[]): AgentAccountSummary[] {
+  return [...accounts].sort(
+    (a, b) =>
+      Number(b.isActive) - Number(a.isActive) ||
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+  );
+}
+
 function AccountUsage({
   platform,
   accountId,
@@ -56,11 +65,13 @@ function AccountUsage({
 }: {
   platform: AgentAccountPlatform;
   accountId: string;
-  reloadToken: number;
+  reloadToken: string;
 }) {
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const seenReloadTokenRef = useRef(reloadToken);
+  // A credential can change while the general settings pane is visible. A
+  // newly mounted account row must also bypass the pre-change cache then.
+  const seenReloadTokenRef = useRef("0:0");
 
   useEffect(() => {
     let current = true;
@@ -111,7 +122,7 @@ function AccountRow({
 }: {
   account: AgentAccountSummary;
   busy: boolean;
-  usageReloadToken: number;
+  usageReloadToken: string;
   onUse: () => void;
   onRename: (label: string) => Promise<void>;
   onRemove: () => void;
@@ -350,11 +361,10 @@ function LoginPanel({
 
 export function AgentAccountsSection({
   platform,
-  onActiveAccountChange,
+  reloadToken = 0,
 }: {
   platform: AgentAccountPlatform;
-  /** Fired after a switch so the platform's usage card re-reads past its cache. */
-  onActiveAccountChange?: () => void;
+  reloadToken?: number;
 }) {
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [login, setLogin] = useState<AgentAccountLoginProgress>({ state: "idle" });
@@ -420,10 +430,7 @@ export function AgentAccountsSection({
       const next = await operation();
       if (!mounted.current) return;
       setSnapshot(next);
-      if (activeChanged) {
-        setUsageReloadToken((token) => token + 1);
-        onActiveAccountChange?.();
-      }
+      if (activeChanged) setUsageReloadToken((token) => token + 1);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));
     } finally {
@@ -448,7 +455,9 @@ export function AgentAccountsSection({
     await refreshLogin();
   };
 
-  const accounts = snapshot?.accounts.filter((account) => account.platform === platform) ?? [];
+  const accounts = sortAccounts(
+    snapshot?.accounts.filter((account) => account.platform === platform) ?? [],
+  );
   const otherLoginPending = login.state === "pending" && !loginHere;
 
   return (
@@ -517,7 +526,7 @@ export function AgentAccountsSection({
               key={account.id}
               account={account}
               busy={busy}
-              usageReloadToken={usageReloadToken}
+              usageReloadToken={`${reloadToken}:${usageReloadToken}`}
               onUse={() => void run(() => setActiveAgentAccount(platform, account.id), true)}
               onRename={(label) => run(() => renameAgentAccount(platform, account.id, label))}
               onRemove={() => void run(() => removeAgentAccount(platform, account.id))}

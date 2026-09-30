@@ -15,7 +15,7 @@ import type {
   NativeAgentRateLimitWindow,
 } from "@orkestrator/protocol/native-agent";
 import {
-  claudePlanWindowIdFromLabel,
+  claudePlanWindowFromLabel,
   isPlanUsagePlatform,
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
@@ -73,8 +73,12 @@ function mergeSessionWindows(
   const merged = existing.map((row) => ({ ...row }));
   for (const window of incoming) {
     const index = merged.findIndex((row) => row.window === window.window);
-    if (index >= 0) merged[index] = { ...window };
-    else merged.push({ ...window });
+    if (index >= 0) {
+      const definedFields = Object.fromEntries(
+        Object.entries(window).filter(([, value]) => value !== undefined),
+      );
+      merged[index] = { ...merged[index]!, ...definedFields };
+    } else merged.push({ ...window });
   }
   return merged;
 }
@@ -112,7 +116,7 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
       const at = now();
       entries.set(platform, {
         expiresAt: at + CACHE_TTL_MS,
-        snapshot: okSnapshot(platform, merged, new Date(at).toISOString()),
+        snapshot: okSnapshot(platform, merged, new Date(at).toISOString(), cached?.snapshot.plan),
       });
     },
     invalidate(platform) {
@@ -141,23 +145,26 @@ export function initializeActivePlanUsageAccount(
 
 /**
  * Claude reports its plan windows per session as rate limits, not as account
- * rows, so the same quota arrives under a different key. Known labels map onto
- * the canonical ids the direct OAuth read emits, so a window a session reports
- * updates the same cached row rather than sitting beside it under a slug.
+ * rows, so the same quota arrives under a different key. Known labels — and
+ * the "Five Hour" / "Weekly" wording older bridges used — map onto the
+ * canonical id and label the direct OAuth read emits, so a window a session
+ * reports updates the same cached row rather than sitting beside it.
  */
 function accountWindowsFromRateLimits(
   limits: NativeAgentRateLimitWindow[],
   agent: AgentPlatform,
 ): NativeAgentAccountUsageWindow[] {
-  return limits.map((limit) => ({
-    window:
-      (agent === "claude" ? claudePlanWindowIdFromLabel(limit.label) : undefined) ??
-      sessionWindowId(limit.label),
-    label: limit.label,
-    ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
-    ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
-    ...(limit.windowMinutes !== undefined ? { windowMinutes: limit.windowMinutes } : {}),
-  }));
+  return limits.map((limit) => {
+    const known = agent === "claude" ? claudePlanWindowFromLabel(limit.label) : undefined;
+    const windowMinutes = limit.windowMinutes ?? known?.windowMinutes;
+    return {
+      window: known?.id ?? sessionWindowId(limit.label),
+      label: known?.label ?? limit.label,
+      ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
+      ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
+      ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+    };
+  });
 }
 
 function sessionWindowId(label: string): string {

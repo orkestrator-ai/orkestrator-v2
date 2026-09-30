@@ -3,9 +3,12 @@ import {
   CACHE_TTL_MS,
   contextUsageWithPlanUsage,
   createPlanUsageCache,
+  okSnapshot,
   sharedPlanUsageCache,
   setActivePlanUsageAccount,
 } from "./plan-usage-cache.js";
+import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
+import { claudePlanWindows } from "./plan-usage.js";
 
 // `contextUsageWithPlanUsage` always writes the process-wide singleton, which
 // the HTTP bridge suites also read. Reset it around every test so a cached
@@ -21,6 +24,40 @@ afterEach(() => {
 });
 
 describe("createPlanUsageCache", () => {
+  test("patches defined fields and preserves matched window metadata and plan", () => {
+    const cache = createPlanUsageCache(() => 1_700_000_000_000);
+    const original = {
+      window: "five_hour",
+      label: "5-hour limit",
+      usedPercent: 10,
+      resetsAt: "2026-10-01T00:00:00.000Z",
+      windowMinutes: 300,
+      limitUsd: 100,
+    };
+    cache.store(
+      "claude",
+      okSnapshot("claude", [original], new Date(0).toISOString(), "max"),
+      CACHE_TTL_MS,
+    );
+    cache.recordSessionWindows("claude", [
+      {
+        window: "five_hour",
+        usedPercent: 42,
+        resetsAt: undefined,
+        windowMinutes: undefined,
+        label: undefined,
+      },
+    ]);
+    expect(cache.peek("claude")?.windows).toEqual([{ ...original, usedPercent: 42 }]);
+    expect(cache.peek("claude")?.plan).toBe("max");
+    cache.recordSessionWindows("claude", [
+      { window: "five_hour", resetsAt: "2026-10-02T00:00:00.000Z", windowMinutes: 600 },
+    ]);
+    expect(cache.peek("claude")?.windows).toEqual([
+      { ...original, usedPercent: 42, resetsAt: "2026-10-02T00:00:00.000Z", windowMinutes: 600 },
+    ]);
+    expect(original.usedPercent).toBe(10);
+  });
   test("serves a stored snapshot until its time-to-live passes", () => {
     let clock = 1_700_000_000_000;
     const cache = createPlanUsageCache(() => clock);
@@ -78,6 +115,45 @@ describe("createPlanUsageCache", () => {
 });
 
 describe("contextUsageWithPlanUsage", () => {
+  test("folds usage-report windows into OAuth rows and preserves a sparse row's reset", () => {
+    const windows = claudePlanWindows({
+      five_hour: { utilization: 10, resets_at: "2026-10-01T00:00:00Z" },
+      seven_day: { utilization: 20 },
+      seven_day_opus: { utilization: 30 },
+    });
+    sharedPlanUsageCache.store(
+      "claude",
+      okSnapshot("claude", windows, new Date(0).toISOString()),
+      CACHE_TTL_MS,
+    );
+    contextUsageWithPlanUsage("claude", {
+      usedTokens: 1,
+      rateLimits: ["session", "weekly_all", "weekly_scoped"].map((kind, index) => ({
+        label: claudePlanWindowFromKind(kind, "Opus")!.label,
+        usedPercent: 40 + index,
+      })),
+    });
+    expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual(
+      windows.map((row, index) => ({
+        ...row,
+        usedPercent: 40 + index,
+      })),
+    );
+  });
+
+  test("uses slug identities for unknown labels, including an empty slug", () => {
+    contextUsageWithPlanUsage("claude", {
+      usedTokens: 1,
+      rateLimits: [
+        { label: " New Quota! ", usedPercent: 5 },
+        { label: "???", usedPercent: 6 },
+      ],
+    });
+    expect(sharedPlanUsageCache.peek("claude")?.windows.map((row) => row.window)).toEqual([
+      "new-quota",
+      "window",
+    ]);
+  });
   test("an old bridge cannot report quota into the newly active account", () => {
     setActivePlanUsageAccount("claude", "account-b");
     contextUsageWithPlanUsage(
@@ -121,6 +197,47 @@ describe("contextUsageWithPlanUsage", () => {
       rateLimits: [{ label: "Weekly limit", usedPercent: 5 }],
     });
     expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.window).toBe("seven_day");
+  });
+
+  test("folds an older bridge's Claude labels into the canonical rows", () => {
+    const sharedWindow = "2026-10-06T10:00:00.000Z";
+    sharedPlanUsageCache.store(
+      "claude",
+      okSnapshot(
+        "claude",
+        [
+          { window: "five_hour", label: "5-hour limit", usedPercent: 10, windowMinutes: 300 },
+          { window: "seven_day", label: "Weekly limit", usedPercent: 5, windowMinutes: 10_080 },
+          { window: "seven_day_fable", label: "Weekly Fable limit", usedPercent: 0 },
+        ],
+        new Date(0).toISOString(),
+      ),
+      60_000,
+    );
+    contextUsageWithPlanUsage("claude", {
+      usedTokens: 1,
+      rateLimits: [
+        { label: "Five Hour", usedPercent: 11 },
+        { label: "Weekly", usedPercent: 6, resetsAt: sharedWindow },
+        { label: "Weekly (Fable)", usedPercent: 1 },
+      ],
+    });
+    expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual([
+      { window: "five_hour", label: "5-hour limit", usedPercent: 11, windowMinutes: 300 },
+      {
+        window: "seven_day",
+        label: "Weekly limit",
+        usedPercent: 6,
+        resetsAt: sharedWindow,
+        windowMinutes: 10_080,
+      },
+      {
+        window: "seven_day_fable",
+        label: "Weekly Fable limit",
+        usedPercent: 1,
+        windowMinutes: 10_080,
+      },
+    ]);
   });
 
   test("does not apply Claude's ids to another platform's rate limits", () => {

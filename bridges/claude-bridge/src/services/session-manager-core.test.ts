@@ -398,12 +398,12 @@ describe("rate_limit_event", () => {
         data: {
           rateLimits: [
             {
-              label: "Five Hour",
+              label: "5-hour limit",
               usedPercent: 17,
               resetsAt: "2026-07-28T22:30:00.000Z",
             },
             {
-              label: "Weekly",
+              label: "Weekly limit",
               usedPercent: 29,
               resetsAt: "2026-08-04T10:00:00.000Z",
             },
@@ -496,7 +496,7 @@ describe("rate_limit_event", () => {
       await waitFor(() => created.inProgressUsage?.rateLimits?.[0]?.usedPercent === 47);
       expect(created.inProgressUsage).toMatchObject({
         sessionTokens: 105,
-        rateLimits: [{ label: "Five Hour", usedPercent: 47 }],
+        rateLimits: [{ label: "5-hour limit", usedPercent: 47 }],
       });
     } finally {
       call.finish();
@@ -582,7 +582,7 @@ describe("rate_limit_event", () => {
       });
       await waitFor(() => created.rateLimits?.[0]?.resetsAt === "2026-08-05T10:00:00.000Z");
       expect(created.rateLimits).toEqual([
-        { label: "Weekly", usedPercent: 13, resetsAt: "2026-08-05T10:00:00.000Z" },
+        { label: "Weekly limit", usedPercent: 13, resetsAt: "2026-08-05T10:00:00.000Z" },
       ]);
       await waitFor(() => getStructuredUsage.mock.calls.length === 2);
     } finally {
@@ -647,8 +647,8 @@ describe("rate_limit_event", () => {
       await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 44);
       expect(getStructuredUsage).toHaveBeenCalledTimes(2);
       expect(getSession(created.id)?.rateLimits).toEqual([
-        { label: "Five Hour", usedPercent: 44 },
-        { label: "Weekly", usedPercent: 55 },
+        { label: "5-hour limit", usedPercent: 44 },
+        { label: "Weekly limit", usedPercent: 55 },
       ]);
     } finally {
       call.finish();
@@ -748,7 +748,7 @@ describe("rate_limit_event", () => {
       expect(getStructuredUsage).toHaveBeenCalledTimes(2);
       expect(getSession(created.id)?.rateLimits).toEqual([
         {
-          label: "Five Hour",
+          label: "5-hour limit",
           usedPercent: 42,
           resetsAt: "2026-07-28T22:30:00.000Z",
         },
@@ -946,17 +946,17 @@ describe("rate_limit_event", () => {
 
     expect(session.rateLimits).toEqual([
       {
-        label: "Five Hour",
+        label: "5-hour limit",
         usedPercent: 11,
         resetsAt: "2026-07-28T22:30:00.000Z",
       },
       {
-        label: "Weekly",
+        label: "Weekly limit",
         usedPercent: 13,
         resetsAt: "2026-08-04T10:00:00.000Z",
       },
       {
-        label: "Weekly (Fable)",
+        label: "Weekly Fable limit",
         usedPercent: 0,
         resetsAt: "2026-08-04T10:00:00.000Z",
       },
@@ -1018,7 +1018,7 @@ describe("rate_limit_event", () => {
     expect(session.status).toBe("idle");
     expect(session.rateLimits).toEqual([
       {
-        label: "Five Hour",
+        label: "5-hour limit",
         usedPercent: 42,
         resetsAt: "2026-07-28T22:30:00.000Z",
       },
@@ -1040,7 +1040,7 @@ describe("rate_limit_event", () => {
     expect(performance.now() - startedAt).toBeLessThan(STRUCTURED_USAGE_REQUEST_TIMEOUT_MS + 1_000);
     expect(session.status).toBe("idle");
     expect(session.rateLimits?.[0]).toMatchObject({
-      label: "Five Hour",
+      label: "5-hour limit",
       usedPercent: 42,
     });
     // The SDK has no cancellation primitive for get_usage. Once this turn's
@@ -1077,7 +1077,7 @@ describe("rate_limit_event", () => {
       const { session } = await runPromptWithMessages([sparseFiveHourEvent, successfulUsageResult]);
       expect(session.rateLimits).toEqual([
         {
-          label: "Five Hour",
+          label: "5-hour limit",
           usedPercent: 42,
           resetsAt: "2026-07-28T22:30:00.000Z",
         },
@@ -1116,11 +1116,11 @@ describe("rate_limit_event", () => {
 
     expect(session.rateLimits).toEqual([
       {
-        label: "Five Hour",
+        label: "5-hour limit",
         usedPercent: 25,
       },
       {
-        label: "Weekly",
+        label: "Weekly limit",
         resetsAt: "2026-08-04T10:00:00.000Z",
       },
     ]);
@@ -1149,12 +1149,12 @@ describe("rate_limit_event", () => {
     const { session } = await runPromptWithMessages([successfulUsageResult]);
 
     expect(session.rateLimits).toEqual([
-      { label: "Five Hour", usedPercent: 1 },
-      { label: "Weekly", usedPercent: 2 },
-      { label: "Weekly (OAuth Apps)", usedPercent: 3 },
-      { label: "Weekly (Opus)", usedPercent: 4 },
-      { label: "Weekly (Sonnet)", usedPercent: 5 },
-      { label: "Weekly (Fable)", usedPercent: 6 },
+      { label: "5-hour limit", usedPercent: 1 },
+      { label: "Weekly limit", usedPercent: 2 },
+      { label: "Weekly apps limit", usedPercent: 3 },
+      { label: "Weekly Opus limit", usedPercent: 4 },
+      { label: "Weekly Sonnet limit", usedPercent: 5 },
+      { label: "Weekly Fable limit", usedPercent: 6 },
     ]);
   });
 
@@ -1182,7 +1182,7 @@ describe("rate_limit_event", () => {
     expect(session.usage).toBeUndefined();
     expect(session.rateLimits).toEqual([
       {
-        label: "Five Hour",
+        label: "5-hour limit",
         usedPercent: 42,
         resetsAt: "2026-07-26T18:00:00.000Z",
       },
@@ -1212,7 +1212,7 @@ describe("rate_limit_event", () => {
     // Above the 1e12 threshold no real reset instant is ambiguous, so a future
     // SDK that switches units does not silently produce year-33658 timestamps.
     expect(session.rateLimits).toEqual([
-      { label: "Weekly", usedPercent: 12, resetsAt: "2026-07-26T18:00:00.000Z" },
+      { label: "Weekly limit", usedPercent: 12, resetsAt: "2026-07-26T18:00:00.000Z" },
     ]);
   });
 
@@ -1223,7 +1223,7 @@ describe("rate_limit_event", () => {
         rate_limit_info: { rateLimitType: "five_hour", resetsAt: Number.MAX_SAFE_INTEGER },
       },
     ]);
-    expect(session.rateLimits).toEqual([{ label: "Five Hour" }]);
+    expect(session.rateLimits).toEqual([{ label: "5-hour limit" }]);
   });
 
   test("deduplicates by label and keeps distinct windows", async () => {
@@ -1243,8 +1243,8 @@ describe("rate_limit_event", () => {
     ]);
 
     expect(session.rateLimits).toEqual([
-      { label: "Weekly", usedPercent: 20 },
-      { label: "Five Hour", usedPercent: 55 },
+      { label: "Weekly limit", usedPercent: 20 },
+      { label: "5-hour limit", usedPercent: 55 },
     ]);
   });
 
@@ -1276,10 +1276,10 @@ describe("rate_limit_event", () => {
     ]);
 
     expect(session.rateLimits).toEqual([
-      { label: "Weekly", usedPercent: 89 },
-      { label: "Five Hour", usedPercent: 29 },
-      { label: "Weekly (Opus)", usedPercent: 100 },
-      { label: "Weekly (Sonnet)", usedPercent: 100 },
+      { label: "Weekly limit", usedPercent: 89 },
+      { label: "5-hour limit", usedPercent: 29 },
+      { label: "Weekly Opus limit", usedPercent: 100 },
+      { label: "Weekly Sonnet limit", usedPercent: 100 },
       { label: "Overage" },
     ]);
   });
@@ -1291,7 +1291,7 @@ describe("rate_limit_event", () => {
         rate_limit_info: { rateLimitType: "seven_day", status: "rejected", utilization: 1.03 },
       },
     ]);
-    expect(session.rateLimits).toEqual([{ label: "Weekly", usedPercent: 100 }]);
+    expect(session.rateLimits).toEqual([{ label: "Weekly limit", usedPercent: 100 }]);
   });
 
   test.each([
@@ -1335,8 +1335,8 @@ describe("rate_limit_event", () => {
     ]);
 
     expect(session.rateLimits).toEqual([
-      { label: "Weekly", usedPercent: 89, resetsAt: "2026-09-28T21:00:00.000Z" },
-      { label: "Five Hour", usedPercent: 10, resetsAt: "2026-09-28T17:10:00.000Z" },
+      { label: "Weekly limit", usedPercent: 89, resetsAt: "2026-09-28T21:00:00.000Z" },
+      { label: "5-hour limit", usedPercent: 10, resetsAt: "2026-09-28T17:10:00.000Z" },
     ]);
   });
 
@@ -1357,7 +1357,7 @@ describe("rate_limit_event", () => {
     ]);
 
     expect(session.rateLimits).toEqual([
-      { label: "Weekly", usedPercent: 89, resetsAt: "2026-09-28T21:00:00.000Z" },
+      { label: "Weekly limit", usedPercent: 89, resetsAt: "2026-09-28T21:00:00.000Z" },
     ]);
   });
 
@@ -1375,7 +1375,7 @@ describe("rate_limit_event", () => {
           rate_limit_info: { rateLimitType: "seven_day", utilization: 0.89, unifiedWindows },
         },
       ]);
-      expect(session.rateLimits).toEqual([{ label: "Weekly", usedPercent: 89 }]);
+      expect(session.rateLimits).toEqual([{ label: "Weekly limit", usedPercent: 89 }]);
     }
   });
 
@@ -1404,7 +1404,7 @@ describe("rate_limit_event", () => {
       },
     ]);
 
-    expect(session.usage?.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
+    expect(session.usage?.rateLimits).toEqual([{ label: "5-hour limit", usedPercent: 42 }]);
   });
 
   test("merges a window into an existing snapshot without dropping it", async () => {
@@ -1430,7 +1430,7 @@ describe("rate_limit_event", () => {
     });
     await waitFor(() => (getSession(session.id)?.rateLimits?.length ?? 0) > 0);
     expect(getSession(session.id)?.usage?.rateLimits).toEqual([
-      { label: "Five Hour", usedPercent: 88 },
+      { label: "5-hour limit", usedPercent: 88 },
     ]);
     secondCall.finish();
     await second;

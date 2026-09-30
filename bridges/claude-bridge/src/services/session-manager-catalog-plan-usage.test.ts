@@ -27,7 +27,7 @@ describe("readClaudePlanUsage", () => {
     await expect(readClaudePlanUsage()).resolves.toEqual([]);
   });
 
-  test("maps the structured windows to slugged account windows", async () => {
+  test("maps the structured windows to the canonical account windows", async () => {
     const getStructuredUsage = mock(async () => ({
       rate_limits_available: true,
       rate_limits: {
@@ -48,12 +48,12 @@ describe("readClaudePlanUsage", () => {
     expect(getStructuredUsage).toHaveBeenCalledWith({ skipBehaviors: true });
     expect(windows).toEqual([
       {
-        window: "five-hour",
-        label: "Five Hour",
+        window: "five_hour",
+        label: "5-hour limit",
         usedPercent: 31,
         resetsAt: "2026-09-11T18:32:00.000Z",
       },
-      { window: "weekly", label: "Weekly", usedPercent: 12 },
+      { window: "seven_day", label: "Weekly limit", usedPercent: 12 },
     ]);
   });
 });

@@ -83,6 +83,7 @@ import {
   recordInitCommandInventory,
 } from "./session-manager-commands.js";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
 import { commandChangeHooks, commandChangeProbe } from "./command-changes.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
@@ -127,14 +128,22 @@ export function applyClaudeUsageReport(
   report: SDKUsageReport,
 ): SessionUsageSnapshot {
   const previous = session.inProgressUsage ?? session.usage;
-  const limits = report.rate_limits?.limits?.map((limit) => ({
-    label:
-      limit.scope?.model?.display_name ??
-      limit.scope?.surface?.display_name ??
-      limit.kind.replaceAll("_", " "),
-    usedPercent: Math.max(0, Math.min(100, limit.percent)),
-    ...(limit.resets_at ? { resetsAt: limit.resets_at } : {}),
-  }));
+  const limits = report.rate_limits?.limits?.flatMap((limit) => {
+    const identity = claudePlanWindowFromKind(limit.kind, limit.scope?.model?.display_name);
+    if (!Number.isFinite(limit.percent) || limit.percent < 0) return [];
+    return [
+      {
+        label:
+          identity?.label ??
+          limit.scope?.model?.display_name ??
+          limit.scope?.surface?.display_name ??
+          limit.kind.replaceAll("_", " "),
+        ...(identity ? { windowMinutes: identity.windowMinutes } : {}),
+        usedPercent: Math.max(0, Math.min(100, limit.percent)),
+        ...(limit.resets_at ? { resetsAt: limit.resets_at } : {}),
+      },
+    ];
+  });
   if (limits) session.rateLimits = limits;
 
   const extra = report.rate_limits?.extra_usage;

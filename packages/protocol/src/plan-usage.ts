@@ -55,24 +55,83 @@ export function isPlanUsageSnapshot(value: unknown): value is PlanUsageSnapshot 
   return typeof candidate.fetchedAt === "string";
 }
 
+const WEEK_MINUTES = 7 * 24 * 60;
+
 /**
- * Claude's known OAuth usage window ids, their friendly labels and period.
+ * Claude's known plan window ids, their labels and period.
  *
- * Shared so a window a session reports as a rate limit and the same window read
- * straight from the OAuth endpoint resolve to one identity.
+ * The single naming for Claude windows, and the same "5-hour limit" / "Weekly
+ * limit" wording Codex windows get. Both the OAuth read and the bridge's
+ * session rate limits label from here, so one quota is never shown twice under
+ * two names.
  */
 export const CLAUDE_PLAN_WINDOW_LABELS: Record<string, { label: string; windowMinutes: number }> = {
   five_hour: { label: "5-hour limit", windowMinutes: 300 },
-  seven_day: { label: "Weekly limit", windowMinutes: 7 * 24 * 60 },
-  seven_day_opus: { label: "Weekly Opus limit", windowMinutes: 7 * 24 * 60 },
-  seven_day_oauth_apps: { label: "Weekly apps limit", windowMinutes: 7 * 24 * 60 },
+  seven_day: { label: "Weekly limit", windowMinutes: WEEK_MINUTES },
+  seven_day_opus: { label: "Weekly Opus limit", windowMinutes: WEEK_MINUTES },
+  seven_day_sonnet: { label: "Weekly Sonnet limit", windowMinutes: WEEK_MINUTES },
+  seven_day_oauth_apps: { label: "Weekly apps limit", windowMinutes: WEEK_MINUTES },
 };
 
-/** The canonical window id for a Claude rate-limit label, when it is a known one. */
-export function claudePlanWindowIdFromLabel(label: string): string | undefined {
-  const normalized = label.trim().toLowerCase();
-  for (const [id, meta] of Object.entries(CLAUDE_PLAN_WINDOW_LABELS)) {
-    if (meta.label.toLowerCase() === normalized) return id;
+export interface ClaudePlanWindowIdentity {
+  id: string;
+  label: string;
+  windowMinutes: number;
+}
+
+/** A weekly limit that applies to one model, e.g. "Weekly Fable limit". */
+export function claudeModelWeeklyWindow(modelName: string): ClaudePlanWindowIdentity | undefined {
+  const name = modelName.trim();
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!slug) return undefined;
+  const id = `seven_day_${slug}`;
+  const known = CLAUDE_PLAN_WINDOW_LABELS[id];
+  return { id, label: known?.label ?? `Weekly ${name} limit`, windowMinutes: WEEK_MINUTES };
+}
+
+/** Identity from Claude's named OAuth limits and in-session `/usage` reports. */
+export function claudePlanWindowFromKind(
+  kind: unknown,
+  modelName?: unknown,
+): ClaudePlanWindowIdentity | undefined {
+  if (kind === "session") return { id: "five_hour", ...CLAUDE_PLAN_WINDOW_LABELS.five_hour! };
+  if (kind === "weekly_all") return { id: "seven_day", ...CLAUDE_PLAN_WINDOW_LABELS.seven_day! };
+  if (kind === "weekly_scoped" && typeof modelName === "string") {
+    return claudeModelWeeklyWindow(modelName);
   }
   return undefined;
+}
+
+/**
+ * Labels older Claude bridges gave session rate limits, taken from Claude
+ * Code's own `/usage` screen. A container can run an older bridge than the
+ * app, so these still resolve to the canonical window.
+ */
+const LEGACY_CLAUDE_WINDOW_LABELS: Record<string, string> = {
+  "five hour": "five_hour",
+  session: "five_hour",
+  weekly: "seven_day",
+  "weekly all": "seven_day",
+  "weekly (oauth apps)": "seven_day_oauth_apps",
+};
+
+/** The canonical identity for a Claude rate-limit label, when it names a known window. */
+export function claudePlanWindowFromLabel(label: string): ClaudePlanWindowIdentity | undefined {
+  const normalized = label.trim().toLowerCase();
+  const legacyId = LEGACY_CLAUDE_WINDOW_LABELS[normalized];
+  for (const [id, meta] of Object.entries(CLAUDE_PLAN_WINDOW_LABELS)) {
+    if (id === legacyId || meta.label.toLowerCase() === normalized) return { id, ...meta };
+  }
+  // "Weekly (Fable)" from an older bridge, or "Weekly Fable limit".
+  const model =
+    label.trim().match(/^weekly \((.+)\)$/i)?.[1] ??
+    label.trim().match(/^weekly (.+) limit$/i)?.[1];
+  if (!model) return undefined;
+  const known = Object.entries(CLAUDE_PLAN_WINDOW_LABELS).find(
+    ([id]) => id === `seven_day_${model.trim().toLowerCase()}`,
+  );
+  return known ? { id: known[0], ...known[1] } : claudeModelWeeklyWindow(model);
 }

@@ -29,12 +29,24 @@ liveTest(
     const tools = new AgentToolsServer(new StorageService(root), "127.0.0.1", results);
     const resultKey = crypto.randomUUID();
     const selected = openCodeWorkflowResultToolId("submit_validation_plan");
+    const validation = openCodeWorkflowResultToolId("validate_workflow_result");
     const inventories: string[][] = [];
+    const validationSchemas: unknown[] = [];
     let capability = "";
     const plan = {
       headRef: "a".repeat(40),
-      commands: [],
-      limitations: ["No validation commands are defined for this isolated fixture."],
+      commands: [
+        {
+          id: "format",
+          command: "mise run format:check",
+          cwd: ".",
+          dependsOn: [],
+          resources: ["workspace:repo"],
+          weight: 1,
+          timeoutMs: 60_000,
+        },
+      ],
+      limitations: [],
     };
     const model = Bun.serve({
       port: 0,
@@ -42,9 +54,23 @@ liveTest(
       async fetch(request) {
         if (!new URL(request.url).pathname.endsWith("/chat/completions"))
           return new Response(null, { status: 404 });
-        const body = (await request.json()) as { tools?: Array<{ function: { name: string } }> };
+        const body = (await request.json()) as {
+          tools?: Array<{ function: { name: string; parameters?: unknown } }>;
+        };
         inventories.push(body.tools?.map((tool) => tool.function.name) ?? []);
-        const first = inventories.length === 1;
+        const validationSchema = body.tools?.find((tool) => tool.function.name === validation)
+          ?.function.parameters;
+        validationSchemas.push(validationSchema);
+        // Mirror the provider rejection that originally made recursive z.json()
+        // unusable, against the schema OpenCode actually sends to the model.
+        if (/"\$(?:ref|defs)"/.test(JSON.stringify(validationSchema))) {
+          return Response.json(
+            { error: { message: "Recursive JSON schemas are not currently supported" } },
+            { status: 400 },
+          );
+        }
+        const toolName =
+          inventories.length === 1 ? validation : inventories.length === 2 ? selected : null;
         const chunk = {
           id: "chatcmpl-lifecycle",
           object: "chat.completion.chunk",
@@ -57,16 +83,16 @@ liveTest(
             choices: [
               {
                 index: 0,
-                delta: first
+                delta: toolName
                   ? {
                       role: "assistant",
                       tool_calls: [
                         {
                           index: 0,
-                          id: "call_submit",
+                          id: toolName === validation ? "call_validate" : "call_submit",
                           type: "function",
                           function: {
-                            name: selected,
+                            name: toolName,
                             arguments: JSON.stringify({ resultKey, capability, result: plan }),
                           },
                         },
@@ -79,7 +105,7 @@ liveTest(
           },
           {
             ...chunk,
-            choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }],
+            choices: [{ index: 0, delta: {}, finish_reason: toolName ? "tool_calls" : "stop" }],
           },
         ]);
       },
@@ -197,7 +223,7 @@ liveTest(
         ).toBe("allow");
         return promptAsync(...args);
       }) as typeof promptAsync;
-      await owner.send(sessionId, "Submit the validation plan.", options);
+      await owner.send(sessionId, "Validate the nested plan, then submit it.", options);
       client.session.promptAsync = promptAsync;
       await observer.dispose();
       await owner.dispose();
@@ -208,18 +234,30 @@ liveTest(
         await Bun.sleep(25);
       }
       expect(inventories[0]).toContain(selected);
-      expect(inventories[0]).toContain(openCodeWorkflowResultToolId("validate_workflow_result"));
+      expect(inventories[0]).toContain(validation);
       expect(inventories[0]).not.toContain(openCodeWorkflowResultToolId("submit_review_report"));
+      expect(validationSchemas[0]).toMatchObject({
+        type: "object",
+        properties: { result: { type: "object" } },
+      });
+      expect(JSON.stringify(validationSchemas[0])).not.toContain('"$ref"');
       const messages = await client.session.messages({ sessionID: sessionId });
+      const completedWorkflowCalls: string[] = [];
       for (const message of messages.data ?? []) {
         if (message.info.role === "assistant") expect(message.info.error).toBeUndefined();
         for (const part of message.parts) {
-          if (part.type === "tool" && part.tool === selected) {
+          if (part.type === "tool" && (part.tool === validation || part.tool === selected)) {
             expect(part.state.status === "error" ? part.state.error : undefined).toBeUndefined();
             expect(part.state.status).toBe("completed");
+            if (part.state.status === "completed" && part.tool === validation) {
+              expect(part.state.input).toMatchObject({ resultKey, capability, result: plan });
+              expect(part.state.output).toContain('"ok":true');
+            }
+            completedWorkflowCalls.push(part.tool);
           }
         }
       }
+      expect(completedWorkflowCalls).toEqual([validation, selected]);
       expect(await results.projection(resultKey)).toBe("received");
       expect(await results.structured(resultKey)).toMatchObject({ ok: true, value: plan });
       const settled = await client.session.get({ sessionID: sessionId });

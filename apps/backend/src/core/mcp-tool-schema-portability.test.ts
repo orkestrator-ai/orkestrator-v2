@@ -104,6 +104,43 @@ async function listTools(url: string, token: string): Promise<ListedTool[]> {
   return tools;
 }
 
+async function callTool(
+  url: string,
+  token: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ structuredContent?: Record<string, unknown>; isError?: boolean }> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  });
+  expect(response.status).toBe(200);
+  const body = await response.text();
+  const payload = response.headers.get("content-type")?.startsWith("text/event-stream")
+    ? body
+        .split("\n")
+        .find((line) => line.startsWith("data: "))
+        ?.slice("data: ".length)
+    : body;
+  return (
+    (
+      JSON.parse(payload ?? "{}") as {
+        result?: { structuredContent?: Record<string, unknown>; isError?: boolean };
+      }
+    ).result ?? {}
+  );
+}
+
 function expectPortable(surface: string, tools: ListedTool[]): void {
   const failures = tools.flatMap((tool) =>
     portabilityIssues(tool.inputSchema).map((issue) => `${surface}/${tool.name} ${issue}`),
@@ -261,6 +298,46 @@ describe("published MCP tool schemas are provider-portable", () => {
       ]),
     );
     expectPortable("orkestrator_workflow_result", tools);
+
+    const plan = {
+      headRef: "a".repeat(40),
+      commands: [
+        {
+          id: "format",
+          command: "mise run format:check",
+          cwd: ".",
+          dependsOn: [],
+          resources: ["workspace:repo"],
+          weight: 1,
+          timeoutMs: 60_000,
+        },
+      ],
+      limitations: [],
+    };
+    const args = { resultKey, capability: connection.workflowResultCapability!, result: plan };
+    const invalid = await callTool(
+      connection.url,
+      connection.token,
+      WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+      {
+        ...args,
+        result: { ...plan, commands: [{ ...plan.commands[0], timeoutMs: 100 }] },
+      },
+    );
+    expect(invalid.isError).toBe(true);
+    expect(invalid.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "invalid_result", nextAction: "correct" },
+    });
+    const valid = await callTool(
+      connection.url,
+      connection.token,
+      WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+      args,
+    );
+    expect(valid.isError).toBeUndefined();
+    expect(valid.structuredContent).toMatchObject({ ok: true });
+    expect(await workflowResults.projection(resultKey)).toBe("preparing");
   });
 
   test.each([...WORKFLOW_RESULT_KINDS])(

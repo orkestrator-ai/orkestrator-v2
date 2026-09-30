@@ -232,6 +232,10 @@ export class OpenCodeStreamState {
     ];
   }
 
+  turnFailure(sessionId: string): NativeAgentNotice | undefined {
+    return this.sessions.get(sessionId)?.turnFailure;
+  }
+
   /** Record dispatch before a renderer has to observe the turn. */
   beginTurn(sessionId: string, startedAt: number): void {
     const state = this.session(sessionId);
@@ -287,6 +291,7 @@ export class OpenCodeStreamState {
     if (!state) return;
     delete state.turnStartedAt;
     delete state.turnConfirmed;
+    delete state.retryNotice;
   }
 
   /**
@@ -342,12 +347,11 @@ export class OpenCodeStreamState {
           // the user — an exhausted usage allowance whose reset can be days
           // away. Its TUI opens a dialog; here the turn fails and is aborted,
           // rather than showing "thinking" until the allowance resets.
-          const firstObservation = state.turnFailure === undefined;
           delete state.retryNotice;
           state.turnFailure = { kind: "error", message: failure };
           this.endTurn(sessionId);
           this.bump(state);
-          return { sessionId, status: "running", ...(firstObservation ? { abortTurn: true } : {}) };
+          return { sessionId, status: "running", abortTurn: true };
         }
         const attempt =
           typeof statusRecord?.attempt === "number" ? statusRecord.attempt : undefined;
@@ -378,8 +382,7 @@ export class OpenCodeStreamState {
       return { sessionId, status: "idle" };
     }
     if (event.type === "session.deleted") {
-      this.endTurn(sessionId);
-      state.messagesCurrent = false;
+      this.forget(sessionId);
       return { sessionId, status: "missing" };
     }
     if (event.type === "permission.replied") {
@@ -428,6 +431,9 @@ export class OpenCodeStreamState {
       if (state.turnFailure && nonEmptyString(error?.name) === "MessageAbortedError") {
         return { sessionId };
       }
+      // The persisted assistant message supplies the user-stop marker. The
+      // stream's generic "Aborted" text must not turn it into a failure.
+      if (nonEmptyString(error?.name) === "MessageAbortedError") return { sessionId };
       const data = asRecord(error?.data);
       const message =
         nonEmptyString(data?.message) ??

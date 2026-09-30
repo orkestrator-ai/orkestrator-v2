@@ -20,6 +20,10 @@ import {
 } from "./opencode-provider-helpers.js";
 import { openCodeMessageFinishReason } from "./opencode-turn-recovery.js";
 import { closeOpenCodeSessionRetaining } from "./opencode-session-close.js";
+import {
+  metadataWithOpenCodeActionFailure,
+  openCodeActionFailureForMessage,
+} from "./opencode-action-failures.js";
 
 const TURN_METADATA_KEY = "orkestrator.workflowResultTurn";
 class MissingOpenCodeSessionError extends Error {}
@@ -191,6 +195,29 @@ export class OpenCodeWorkflowResultBroker {
     return typeof owner?.requestId === "string" ? owner.requestId : undefined;
   }
 
+  /** Caller holds the dispatch lock so a later begin cannot overwrite this record. */
+  async recordActionFailure(sessionId: string, message: string): Promise<void> {
+    const session = await this.read(sessionId);
+    const requestId = this.owner(session)?.requestId;
+    if (typeof requestId !== "string") return;
+    const response = await this.client.session.update(
+      {
+        sessionID: sessionId,
+        directory: this.directory,
+        metadata: metadataWithOpenCodeActionFailure(session, requestId, message),
+      },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode action failure update");
+    const persisted = await this.read(sessionId);
+    const matchingMessage = {
+      info: { parentID: openCodeRequestMarker(requestId), error: { name: "MessageAbortedError" } },
+    };
+    if (openCodeActionFailureForMessage(persisted, matchingMessage) !== message) {
+      throw new Error("OpenCode action failure update was not persisted");
+    }
+  }
+
   async settleCompleted(
     sessionId: string,
     requestId: string,
@@ -249,7 +276,7 @@ export class OpenCodeWorkflowResultBroker {
     sessionId: string,
     endTurn: () => void,
     restoreReviewer: () => Promise<unknown>,
-    options: { missingIsGone?: boolean } = {},
+    options: { missingIsGone?: boolean; alreadyLocked?: boolean } = {},
   ): Promise<"aborted" | "missing"> {
     try {
       // Interrupt transport immediately. Cleanup is serialized afterwards so
@@ -265,10 +292,12 @@ export class OpenCodeWorkflowResultBroker {
       }
       assertSdkResponse(response, "OpenCode abort");
       endTurn();
-      await this.runExclusive(sessionId, async () => {
+      const settle = async () => {
         const requestId = await this.requestId(sessionId);
         if (requestId) await this.settle(sessionId, requestId, restoreReviewer);
-      });
+      };
+      if (options.alreadyLocked) await settle();
+      else await this.runExclusive(sessionId, settle);
       return "aborted";
     } catch (error) {
       if (options.missingIsGone && error instanceof MissingOpenCodeSessionError) return "missing";

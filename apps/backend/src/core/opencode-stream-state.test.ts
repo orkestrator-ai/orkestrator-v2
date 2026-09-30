@@ -224,8 +224,12 @@ describe("OpenCodeStreamState turn clock", () => {
     });
     expect(state.turnStartedAt("session")).toBeUndefined();
     expect(state.notices("session")).toEqual([failure]);
-    // Only the first observation asks for the abort.
-    expect(state.apply(retry)).toEqual({ sessionId: "session", status: "running" });
+    // The provider coalesces in-flight aborts; a later event can retry a failed one.
+    expect(state.apply(retry)).toEqual({
+      sessionId: "session",
+      status: "running",
+      abortTurn: true,
+    });
 
     state.apply({
       type: "session.error",
@@ -242,6 +246,50 @@ describe("OpenCodeStreamState turn clock", () => {
     expect(state.notices("session")).toEqual([failure]);
 
     state.beginTurn("session", 2_000);
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("reconciliation clears a retry advisory after an SSE gap", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "retry", message: "temporary" } },
+    } as never);
+    state.markGap();
+    state.endTurn("session");
+    state.replaceMessages("session", []);
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("a renewed busy status clears an action failure", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: {
+        sessionID: "session",
+        status: { type: "retry", action: { title: "Limit reached" } },
+      },
+    } as never);
+    expect(state.turnFailure("session")?.message).toBe("Limit reached");
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "busy" } },
+    } as never);
+    expect(state.turnFailure("session")).toBeUndefined();
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("session deletion discards the action failure and all cached notices", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: {
+        sessionID: "session",
+        status: { type: "retry", action: { title: "Limit reached" } },
+      },
+    } as never);
+    state.apply({ type: "session.deleted", properties: { sessionID: "session" } } as never);
+    expect(state.turnFailure("session")).toBeUndefined();
     expect(state.notices("session")).toEqual([]);
   });
 

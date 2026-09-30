@@ -373,6 +373,7 @@ function resetReviewerForRestart(
   delete reviewer.resultTransport;
   delete reviewer.resultSubmission;
   delete reviewer.schemaRepairAttempts;
+  delete reviewer.resultReminderSent;
   delete reviewer.schemaRepairPrompt;
   delete reviewer.continuationPrompt;
   delete reviewer.idleResultPolls;
@@ -1125,6 +1126,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.requestId;
           delete reviewer.dispatchState;
           delete reviewer.schemaRepairAttempts;
+          delete reviewer.resultReminderSent;
           delete reviewer.schemaRepairPrompt;
           delete reviewer.idleResultPolls;
           delete reviewer.progressAt;
@@ -1222,6 +1224,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.requestId;
             delete reviewer.dispatchState;
             delete reviewer.schemaRepairAttempts;
+            delete reviewer.resultReminderSent;
             delete reviewer.schemaRepairPrompt;
             delete reviewer.idleResultPolls;
             delete reviewer.progressAt;

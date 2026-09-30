@@ -67,8 +67,16 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   /** Durable correction turn for a rejected structured report. */
   schemaRepairAttempts?: number;
   schemaRepairPrompt?: string;
-  /** User-requested continuation turn after aborting a wedged reviewer. */
+  /**
+   * Continuation turn sent in the same session: user-requested after aborting a
+   * wedged reviewer, or the automatic result reminder.
+   */
   continuationPrompt?: string;
+  /**
+   * The one automatic reminder to call the result tool was already spent. It
+   * survives a restart so a reviewer that ignores it fails instead of looping.
+   */
+  resultReminderSent?: boolean;
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
   progressAt?: string;
@@ -231,6 +239,7 @@ const REVIEWER_KEYS = [
   "schemaRepairAttempts",
   "schemaRepairPrompt",
   "continuationPrompt",
+  "resultReminderSent",
   "error",
   "tokenCount",
   "usageFinalizationPolls",
@@ -265,6 +274,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
     optionalString(value.continuationPrompt, 4_096) &&
+    (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
     (value.tokenCount === undefined ||

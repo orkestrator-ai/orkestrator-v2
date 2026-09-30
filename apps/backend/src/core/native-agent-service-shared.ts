@@ -625,8 +625,6 @@ export const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 export const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
 export const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;
 export const NATIVE_SLASH_COMMAND_CACHE_LIMIT = 256;
-export const NATIVE_AUTH_STATUS_TTL_MS = 15_000;
-export const NATIVE_AUTH_STATUS_CACHE_LIMIT = 128;
 /** Prevent a failed optional discovery endpoint from being retried every poll. */
 export const NATIVE_DISCOVERY_RETRY_MS = 5_000;
 

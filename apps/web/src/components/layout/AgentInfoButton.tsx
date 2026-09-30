@@ -65,7 +65,9 @@ import {
   beginNativeAgentSignIn,
   forkNativeAgentSession,
   getBuildPipelineSessionProjection,
+  getNativeAgentAuthStatus,
   getNativeAgentProjection,
+  openInBrowser,
   performNativeAgentSessionAction,
   performNativeAgentMcpAction,
   signOutNativeAgent,
@@ -83,6 +85,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
   nativeAgentSteerRejectionMessage,
+  type NativeAgentAuthStatus,
   type NativeAgentControlUpdate,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -603,6 +606,48 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       cancelled = true;
     };
   }, [activeSession, currentSessionId, open]);
+
+  // Read when the panel opens rather than carried by the projection: an
+  // account read is not free, and only this panel shows the account.
+  const accountEnvironmentId = activeSession?.environmentId;
+  const accountAgent = activeSession?.provider;
+  const accountSessionKey = activeSession?.sessionKey;
+  const accountKey =
+    accountEnvironmentId && accountAgent && accountSessionKey
+      ? `${accountEnvironmentId}\0${accountAgent}\0${accountSessionKey}`
+      : null;
+  const [accountStatus, setAccountStatus] = useState<{
+    key: string;
+    status: NativeAgentAuthStatus | null;
+  } | null>(null);
+  const refreshAccountStatus = useCallback(() => {
+    if (!accountKey || !accountEnvironmentId || !accountAgent || !accountSessionKey) {
+      return () => undefined;
+    }
+    let cancelled = false;
+    void getNativeAgentAuthStatus({
+      environmentId: accountEnvironmentId,
+      agent: accountAgent,
+      logicalSessionKey: accountSessionKey,
+    })
+      .then((status) => {
+        if (cancelled) return;
+        // Unvalidated invoke result: show nothing rather than a half account.
+        setAccountStatus({
+          key: accountKey,
+          status: typeof status?.state === "string" ? status : null,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
+  useEffect(() => {
+    if (!open) return;
+    return refreshAccountStatus();
+  }, [open, refreshAccountStatus]);
+  const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
 
   const openForkTab = (
     sessionId: string,
@@ -1784,22 +1829,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     ) : null}
                   </div>
                 ) : null}
-                {neutralProjection?.auth ? (
+                {auth ? (
                   <div className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="font-medium text-foreground">
-                          {neutralProjection.auth.account?.label ?? activeSession.providerLabel}
+                          {auth.account?.label ?? activeSession.providerLabel}
                         </div>
                         <div className="mt-0.5 text-muted-foreground">
-                          {neutralProjection.auth.state.replaceAll("-", " ")}
-                          {neutralProjection.auth.account?.plan
-                            ? ` · ${neutralProjection.auth.account.plan}`
-                            : ""}
+                          {auth.state.replaceAll("-", " ")}
+                          {auth.account?.plan ? ` · ${auth.account.plan}` : ""}
                         </div>
                       </div>
-                      {neutralProjection.auth.state === "signed-in" &&
-                      neutralProjection.auth.signOut ? (
+                      {auth.state === "signed-in" && auth.signOut ? (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1813,13 +1855,13 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                 logicalSessionKey: activeSession.sessionKey,
                               });
                               toast.success(`Signed out of ${activeSession.providerLabel}`);
+                              refreshAccountStatus();
                             })
                           }
                         >
                           Sign out
                         </Button>
-                      ) : neutralProjection.auth.signIn?.kind !== "none" &&
-                        neutralProjection.auth.signIn?.kind !== "terminal" ? (
+                      ) : auth.signIn?.kind !== "none" && auth.signIn?.kind !== "terminal" ? (
                         <Button
                           size="sm"
                           className="h-7"
@@ -1831,9 +1873,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
                               });
-                              if (result.url) {
-                                window.open(result.url, "_blank", "noopener,noreferrer");
-                              }
+                              // The desktop shell denies window.open.
+                              if (result.url) await openInBrowser(result.url);
                               if (result.code) toast.info(`Device code: ${result.code}`);
                             })
                           }
@@ -1842,10 +1883,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                         </Button>
                       ) : null}
                     </div>
-                    {neutralProjection.auth.signIn?.hint &&
-                    neutralProjection.auth.state !== "signed-in" ? (
+                    {auth.signIn?.hint && auth.state !== "signed-in" ? (
                       <p className="mt-2 leading-relaxed text-muted-foreground">
-                        {neutralProjection.auth.signIn.hint}
+                        {auth.signIn.hint}
                       </p>
                     ) : null}
                   </div>

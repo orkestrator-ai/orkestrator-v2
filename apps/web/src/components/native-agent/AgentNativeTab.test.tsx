@@ -14,6 +14,7 @@ import {
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
+  NativeAgentAuthStatus,
   NativeAgentDispatchOutcome,
   NativeAgentSessionProjection,
   NativeAgentTabData,
@@ -162,6 +163,13 @@ const beginNativeAgentSignInMock = mock(
   }),
 );
 const openInBrowserMock = mock(async (_url: string) => undefined);
+const getNativeAgentAuthStatusMock = mock(
+  async (_input: {
+    environmentId: string;
+    agent: string;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentAuthStatus | null> => null,
+);
 const defaultEnsureNativeAgentSession = async (input: {
   agent: string;
   logicalSessionKey: string;
@@ -341,6 +349,7 @@ mock.module("@/lib/backend", () => ({
   awaitBridgeReady: awaitBridgeReadyMock,
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   beginNativeAgentSignIn: beginNativeAgentSignInMock,
+  getNativeAgentAuthStatus: getNativeAgentAuthStatusMock,
   openInBrowser: openInBrowserMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   recoverMultiReviewFixSession: recoverMultiReviewFixSessionMock,
@@ -417,6 +426,8 @@ afterEach(() => {
   }));
   adoptNativeAgentSessionMock.mockClear();
   beginNativeAgentSignInMock.mockClear();
+  getNativeAgentAuthStatusMock.mockClear();
+  getNativeAgentAuthStatusMock.mockImplementation(async () => null);
   openInBrowserMock.mockClear();
   openInBrowserMock.mockImplementation(async () => undefined);
   beginNativeAgentSignInMock.mockImplementation(async () => ({
@@ -1160,11 +1171,21 @@ describe("AgentNativeTab", () => {
         state: "authentication-required" as const,
         message: "You've been signed out of Codex. Sign in again to keep working.",
       },
-      auth: { state: "needs-auth" as const, signIn: { kind: "browser-url" as const } },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "needs-auth" as const,
+      signIn: { kind: "browser-url" as const },
     }));
     render(<AgentNativeTab tabId="tab-codex-signed-out" data={identity("codex")} isActive />);
 
     expect(await screen.findByText(/signed out of Codex/)).toBeTruthy();
+    // Asked only because sign-in is required; the projection no longer carries it.
+    await screen.findByRole("button", { name: "Sign in to Codex" });
+    expect(getNativeAgentAuthStatusMock.mock.calls[0]?.[0]).toMatchObject({
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: createSessionKey("env-1", "tab-codex-signed-out"),
+    });
     expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
     const send = screen.getByTitle("Sign in to Codex before sending") as HTMLButtonElement;
     expect(send.disabled).toBe(true);
@@ -1195,7 +1216,10 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
-      auth: { state: "needs-auth" as const, signIn: { kind: "browser-url" as const } },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "needs-auth" as const,
+      signIn: { kind: "browser-url" as const },
     }));
     openInBrowserMock.mockImplementation(async () => {
       throw new Error("browser unavailable");
@@ -1217,7 +1241,10 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
-      auth: { state: "needs-auth" as const, signIn: { kind: "browser-url" as const } },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "needs-auth" as const,
+      signIn: { kind: "browser-url" as const },
     }));
     let resolveSignIn!: (value: { url: string }) => void;
     beginNativeAgentSignInMock.mockImplementation(
@@ -1239,7 +1266,10 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
-      auth: { state: "needs-auth" as const, signIn: { kind: "device-code" as const } },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "needs-auth" as const,
+      signIn: { kind: "device-code" as const },
     }));
     beginNativeAgentSignInMock.mockImplementationOnce(async () => ({
       url: "https://auth.example.test/device",

@@ -1171,7 +1171,6 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.providerConnections.clear();
     this.modelCatalogCache.clear();
     this.commandCatalogues.clear();
-    this.authStatusCache.clear();
     this.modelCatalogRefreshes.clear();
     this.projectionCache.clear();
     this.projectionSync.clear();

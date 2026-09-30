@@ -681,7 +681,7 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("projects sign-in metadata without blocking a new unauthenticated session", async () => {
+  test("reads the account on demand instead of on every projection", async () => {
     const stub = createProviderStub("cursor", {
       authStatus: async () => ({
         state: "signed-out",
@@ -691,44 +691,31 @@ describe("NativeAgentService", () => {
     });
     await withService(
       {
-        prefix: "orkestrator-native-auth-bootstrap-",
+        prefix: "orkestrator-native-auth-on-demand-",
         provider: async () => stub.provider,
       },
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",
           agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-auth-bootstrap",
+          logicalSessionKey: "env-env-1:tab-auth-on-demand",
         };
+        // An unauthenticated provider still gets a session to sign in from.
         await expect(service.ensureSession(identity)).resolves.toMatchObject({
           providerSessionId: "provider-session",
         });
-        await expect(service.getProjection(identity)).resolves.toMatchObject({
-          auth: { state: "signed-out", signIn: { kind: "browser-url" } },
-        });
-      },
-    );
-  });
+        const projection = await service.getProjection(identity);
+        await service.getProjection(identity);
+        expect(projection).not.toHaveProperty("auth");
+        expect(stub.authStatus).not.toHaveBeenCalled();
 
-  test("caches authentication discovery across projection refreshes", async () => {
-    const stub = createProviderStub("cursor", {
-      authStatus: async () => ({ state: "signed-in", signOut: true }),
-    });
-    await withService(
-      {
-        prefix: "orkestrator-native-auth-cache-",
-        provider: async () => stub.provider,
-      },
-      async ({ service }) => {
-        const identity = {
-          environmentId: "env-1",
-          agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-auth-cache",
-        };
-        await service.ensureSession(identity);
-        await service.getProjection(identity);
-        await service.getProjection(identity);
-        expect(stub.authStatus).toHaveBeenCalledTimes(1);
+        await expect(service.readProjectionAuthStatus(identity)).resolves.toEqual({
+          state: "signed-out",
+          signIn: { kind: "browser-url" },
+          signOut: false,
+        });
+        await service.readProjectionAuthStatus(identity);
+        expect(stub.authStatus).toHaveBeenCalledTimes(2);
       },
     );
   });

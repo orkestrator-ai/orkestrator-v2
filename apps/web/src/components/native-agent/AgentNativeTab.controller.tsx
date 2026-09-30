@@ -55,6 +55,7 @@ import {
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
+  getNativeAgentAuthStatus,
   openInBrowser,
   recoverMultiReviewFixSession,
   writeCoordinatorAttachment,
@@ -789,10 +790,29 @@ export function SharedNativeAgentController({
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
+  // Asked only while sign-in is required: the account read is not free, so it
+  // is not part of the projection.
+  const [signInKind, setSignInKind] = useState<string | null>(null);
+  useEffect(() => {
+    if (!authenticationRequired) return;
+    let cancelled = false;
+    void getNativeAgentAuthStatus({
+      environmentId: data.environmentId,
+      agent: platform,
+      logicalSessionKey: sessionKey,
+    })
+      .then((status) => {
+        if (!cancelled) setSignInKind(status?.signIn?.kind ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSignInKind(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticationRequired, data.environmentId, platform, sessionKey]);
   // Only flows the app can drive itself; a terminal login is explained in settings.
-  const inlineSignInAvailable =
-    projection?.auth?.signIn?.kind === "browser-url" ||
-    projection?.auth?.signIn?.kind === "device-code";
+  const inlineSignInAvailable = signInKind === "browser-url" || signInKind === "device-code";
   const [signInPending, setSignInPending] = useState(false);
   const [signInUrl, setSignInUrl] = useState<string | null>(null);
   // The desktop shell denies window.open and target=_blank, so links must go

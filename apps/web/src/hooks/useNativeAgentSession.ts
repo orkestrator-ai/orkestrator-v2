@@ -1630,7 +1630,6 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(current?.runtimeHealthAuthoritative === undefined
           ? {}
           : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }),
-        ...(current?.auth ? { auth: current.auth } : {}),
         ...(current?.notices ? { notices: current.notices } : {}),
         ...(hasAuthoritativeState && current.recoverableDispatch
           ? { recoverableDispatch: current.recoverableDispatch }
@@ -1779,7 +1778,6 @@ export function useNativeAgentSession<TMessage = unknown>({
             ? {}
             : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }
           : { runtimeHealthAuthoritative: value.runtimeHealthAuthoritative }),
-        ...(current?.auth ? { auth: current.auth } : {}),
         notices: value.notices,
         ...(value.recoverableDispatch ? { recoverableDispatch: value.recoverableDispatch } : {}),
         ...(value.backgroundTasks ? { backgroundTasks: value.backgroundTasks } : {}),
@@ -1836,7 +1834,6 @@ export function useNativeAgentSession<TMessage = unknown>({
         const commands = value.sections.commands?.value;
         const commandCatalogue = value.sections.commands?.catalogue;
         const mcp = value.sections.mcp?.value;
-        const auth = value.sections.auth?.value;
         const runtime = value.sections.runtime?.value;
         const next: NativeAgentSessionProjection<TMessage> = {
           ...current,
@@ -1867,7 +1864,6 @@ export function useNativeAgentSession<TMessage = unknown>({
                 },
               }
             : {}),
-          ...(auth !== undefined ? { auth: auth ?? undefined } : {}),
           revision: current.revision + 1,
         };
         applyProjection(next);
@@ -2188,7 +2184,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           void getNativeAgentDiscoveryUpdate({
             ...identity,
             viewVersion: 1,
-            sections: ["models", "commands", "mcp", "auth", "runtime"],
+            sections: ["models", "commands", "mcp", "runtime"],
             ...(progressiveDiscoveryTokenRef.current
               ? { knownToken: progressiveDiscoveryTokenRef.current }
               : {}),

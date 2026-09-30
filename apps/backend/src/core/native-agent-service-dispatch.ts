@@ -27,6 +27,7 @@ type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolution = shared.AgentInteractionResolution;
 type AgentModel = shared.AgentModel;
+type NativeAgentAuthStatus = shared.NativeAgentAuthStatus;
 type NativeAgentCapabilities = shared.NativeAgentCapabilities;
 type NativeAgentComposerControl = shared.NativeAgentComposerControl;
 type NativeAgentComposerState = shared.NativeAgentComposerState;
@@ -736,13 +737,24 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     return outcome;
   }
 
+  /**
+   * Read the provider's account on demand. Deliberately uncached and absent from
+   * the projection: an account read can reach the provider's auth service, and
+   * the projection is rebuilt on every session change.
+   */
+  async readProjectionAuthStatus(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentAuthStatus | null> {
+    const provider = await this.provider(input);
+    return provider.authStatus ? provider.authStatus() : null;
+  }
+
   async beginProjectionSignIn(
     input: NativeAgentProjectionInput,
   ): Promise<{ url?: string; code?: string }> {
     const provider = await this.provider(input);
     if (!provider.beginSignIn) throw new Error(`${input.agent} does not support sign-in here`);
     const outcome = await provider.beginSignIn();
-    this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
     this.invalidateProjection(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );
@@ -753,7 +765,6 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     const provider = await this.provider(input);
     if (!provider.signOut) throw new Error(`${input.agent} does not support sign-out here`);
     await provider.signOut();
-    this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
     this.invalidateProjection(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );

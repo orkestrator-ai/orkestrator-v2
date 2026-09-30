@@ -5723,6 +5723,31 @@ describe("AgentInfoButton ACP agents", () => {
       .map(([, input]) => input as { serverId?: string; action?: string });
   }
 
+  test("reads the account when the panel opens and again after signing out", async () => {
+    const accountReads = () =>
+      nativeInvokeMock.mock.calls.filter(([command]) => command === "get_native_agent_auth_status")
+        .length;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status") {
+        return accountReads() === 1
+          ? { state: "signed-in", account: { label: "dev@example.test" }, signOut: true }
+          : { state: "signed-out", signIn: { kind: "browser-url" } };
+      }
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    // Not part of the projection: nothing asks until the account is shown.
+    expect(accountReads()).toBe(0);
+
+    open();
+    expect(await screen.findByText("dev@example.test")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(accountReads()).toBe(2);
+  });
+
   test("collapses the MCP inventory into a tool total that expands and reconnects on click", async () => {
     // A session with a dozen servers used to render a dozen cards; the popover
     // now leads with the tool total and only expands the dense list on demand,

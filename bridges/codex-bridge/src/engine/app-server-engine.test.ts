@@ -2903,6 +2903,40 @@ describe("account sign-in", () => {
     expect(h.engine.isAccountSignInRequired()).toBe(true);
   });
 
+  test("only a refused turn forces a token refresh", async () => {
+    const h = harness({
+      "account/read": () => SIGNED_IN,
+      "config/mcpServer/reload": () => ({}),
+    });
+    await h.engine.start();
+    const forced = () =>
+      h
+        .child()
+        .requests.filter((request) => request.method === "account/read")
+        .map((request) => request.params.refreshToken);
+
+    // A rejected forced refresh makes app-server report no account for the
+    // rest of its life, so routine reads and connector failures never force one.
+    await h.engine.readAccount();
+    h.child().notify("account/updated", {});
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+    expect(forced()).toEqual([false, false, false]);
+
+    h.child().notify("error", {
+      threadId: "t1",
+      turnId: "turn-1",
+      error: { message: "Unauthorized", codexErrorInfo: "unauthorized" },
+      willRetry: false,
+    });
+    await flush(h);
+    expect(forced()).toEqual([false, false, false, true]);
+  });
+
   test("a third-party server's 401 stays an MCP failure", async () => {
     const h = harness({ "account/read": () => SIGNED_OUT });
     await h.engine.start();

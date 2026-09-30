@@ -1712,7 +1712,6 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   runtime?: NativeAgentRuntimeSummary;
   /** False when optional runtime health was unavailable for this projection. */
   runtimeHealthAuthoritative?: boolean;
-  auth?: NativeAgentAuthStatus;
   notices?: NativeAgentNotice[];
   /** Content-free marker for an idempotent backend-owned retry. */
   recoverableDispatch?: NativeAgentRecoverableDispatch;
@@ -1807,13 +1806,7 @@ export interface NativeAgentSessionStateView {
   title?: string;
 }
 
-export const NATIVE_AGENT_DISCOVERY_SECTIONS = [
-  "models",
-  "commands",
-  "mcp",
-  "auth",
-  "runtime",
-] as const;
+export const NATIVE_AGENT_DISCOVERY_SECTIONS = ["models", "commands", "mcp", "runtime"] as const;
 export type NativeAgentDiscoverySection = (typeof NATIVE_AGENT_DISCOVERY_SECTIONS)[number];
 export type NativeAgentDiscoveryAvailability = "loading" | "ready" | "stale" | "unavailable";
 
@@ -1835,7 +1828,6 @@ export interface NativeAgentDiscoveryView {
       catalogue?: NativeAgentCommandCatalogueState;
     };
     mcp?: NativeAgentDiscoverySectionState<NativeAgentMcpServer[]>;
-    auth?: NativeAgentDiscoverySectionState<NativeAgentAuthStatus | null>;
     runtime?: NativeAgentDiscoverySectionState<{
       summary: NativeAgentRuntimeSummary;
       notices: NativeAgentRuntimeNotice[];

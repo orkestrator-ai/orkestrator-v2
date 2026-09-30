@@ -34,8 +34,6 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
-  NATIVE_AUTH_STATUS_CACHE_LIMIT,
-  NATIVE_AUTH_STATUS_TTL_MS,
   NATIVE_MISSING_SESSION_GRACE_MS,
   NATIVE_MODEL_CATALOG_CACHE_LIMIT,
   NATIVE_MODEL_CATALOG_TTL_MS,
@@ -156,7 +154,6 @@ type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
 type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
 type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
-type NativeAgentAuthStatus = shared.NativeAgentAuthStatus;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
@@ -2976,8 +2973,6 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           return provider.mcpServers
             ? (await provider.mcpServers(providerSessionId)).slice(0, 512)
             : [];
-        case "auth":
-          return provider.authStatus ? await provider.authStatus() : null;
         case "runtime": {
           const health = provider.runtimeHealth
             ? await provider.runtimeHealth(providerSessionId)
@@ -3852,45 +3847,6 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return withSessionActionSlashCommands(snapshot.commands, nativeCapabilities(input.agent));
   }
 
-  protected async projectionAuthStatus(
-    input: NativeAgentProjectionInput,
-    provider: NativeAgentRuntimeProvider,
-  ): Promise<NativeAgentAuthStatus | undefined> {
-    if (!provider.authStatus) return undefined;
-    const key = `${input.environmentId}\0${input.agent}`;
-    const cached = this.authStatusCache.get(key);
-    if (cached) {
-      if (cached.expiresAt <= this.now()) {
-        cached.expiresAt = this.now() + NATIVE_AUTH_STATUS_TTL_MS;
-        void Promise.resolve()
-          .then(() => provider.authStatus!())
-          .then((status) => {
-            this.authStatusCache.set(key, {
-              status,
-              expiresAt: this.now() + NATIVE_AUTH_STATUS_TTL_MS,
-            });
-            if (!this.stopped) {
-              this.storage.announceNativeAgentSessionProjection(input.environmentId);
-            }
-          })
-          .catch(() => {
-            cached.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
-          });
-      }
-      return cached.status;
-    }
-    const status = await provider.authStatus().catch(() => undefined);
-    if (this.authStatusCache.size >= NATIVE_AUTH_STATUS_CACHE_LIMIT) {
-      const oldest = this.authStatusCache.keys().next().value as string | undefined;
-      if (oldest) this.authStatusCache.delete(oldest);
-    }
-    this.authStatusCache.set(key, {
-      status,
-      expiresAt: this.now() + NATIVE_AUTH_STATUS_TTL_MS,
-    });
-    return status;
-  }
-
   protected invalidateProjection(key: string): void {
     this.stopNotices.delete(key);
     const keys = [key, `${key}\0sync-v1`];
@@ -4122,24 +4078,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const mcpPromise =
         resolved.provider.mcpServers?.(resolved.session.providerSessionId).catch(() => []) ??
         Promise.resolve([]);
-      const authPromise = this.projectionAuthStatus(input, resolved.provider);
-      const [
-        snapshot,
-        interactionSnapshot,
-        queue,
-        commandCatalogue,
-        steerSupported,
-        mcpServers,
-        auth,
-      ] = await Promise.all([
-        snapshotPromise,
-        interactionSnapshotPromise,
-        queuePromise,
-        slashCommandsPromise,
-        steerSupportedPromise,
-        mcpPromise,
-        authPromise,
-      ]);
+      const [snapshot, interactionSnapshot, queue, commandCatalogue, steerSupported, mcpServers] =
+        await Promise.all([
+          snapshotPromise,
+          interactionSnapshotPromise,
+          queuePromise,
+          slashCommandsPromise,
+          steerSupportedPromise,
+          mcpPromise,
+        ]);
       const steerQualified =
         !advertisedCapabilities.actions?.steer || steerSupported
           ? advertisedCapabilities
@@ -4519,7 +4466,6 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ),
         composer,
         ...(snapshot.readiness ? { readiness: snapshot.readiness } : {}),
-        ...(auth ? { auth } : {}),
         capabilities,
         ...(slashCommands.length > 0 ? { slashCommands } : {}),
         slashCommandCatalogue: commandCatalogue.state,

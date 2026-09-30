@@ -430,6 +430,13 @@ When touching the app-server engine:
 - Idle threads are detached (`thread/unsubscribe` + state freed) and re-attached
   transparently on the next request. Detaching an **unmaterialized** thread must
   clear its id: it has no rollout, so `thread/resume` would fail forever.
+- Never rely on `thread/resume` to change a **loaded** thread's configuration.
+  app-server rejoins it and ignores every override, `mcp_servers.*` included, so
+  the thread keeps the previous attempt's workflow-result MCP credential.
+  `reloadThread` unsubscribes first so the resume rebuilds it from its rollout;
+  an unmaterialized thread is replaced instead. A result turn whose thread
+  still does not list its submit tool is refused with 424 before journaling.
+  Verified against codex 0.158.0.
 - Never poll a tab-facing route from a background reconciler. `/session/:id` and
   `/session/:id/status` are liveness touches — the codex bridge refreshes
   `lastAccessed` (which is what `detachableThreads` reads) and the claude bridge

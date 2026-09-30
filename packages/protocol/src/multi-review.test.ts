@@ -296,6 +296,20 @@ describe("multi review protocol", () => {
         fixSession: { ...session, observedRunning: "yes" },
       }),
     ).toBe(false);
+    // Consolidation moves to its own session and keeps preparation's aside.
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        reviewSession: { ...session, openedFor: "consolidate" },
+        preparationSession: { ...session, openedFor: "prepare" },
+      }),
+    ).toBe(true);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, openedFor: "review" } }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, preparationSession: { ...session, status: "done" } }),
+    ).toBe(false);
   });
 
   test("validates per-step runtimes and cumulative fix-session usage", () => {

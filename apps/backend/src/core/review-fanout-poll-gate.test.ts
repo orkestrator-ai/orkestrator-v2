@@ -10,7 +10,11 @@ import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
 import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
 
 /** A reviewer whose turn went idle without a structured report. */
-function harness(trigger: () => PollTrigger, time: ManualTime) {
+function harness(
+  trigger: () => PollTrigger,
+  time: ManualTime,
+  options: { toolTransport?: boolean; finalText?: string } = {},
+) {
   const reviewer: ReviewerRecord = {
     id: "reviewer-1",
     agent: "claude",
@@ -20,7 +24,7 @@ function harness(trigger: () => PollTrigger, time: ManualTime) {
     providerSessionId: "review-session",
     requestId: "review-request",
     dispatchState: "sent",
-    resultTransport: "structured-output-v1",
+    resultTransport: options.toolTransport ? "tool-v1" : "structured-output-v1",
   };
   let status: "idle" | "running" = "idle";
   const provider = {
@@ -28,7 +32,9 @@ function harness(trigger: () => PollTrigger, time: ManualTime) {
       return status;
     },
     async messages() {
-      return [];
+      return options.finalText === undefined
+        ? []
+        : [{ role: "assistant", parts: [{ type: "text", content: options.finalText }] }];
     },
     async structured() {
       return null;
@@ -51,6 +57,9 @@ function harness(trigger: () => PollTrigger, time: ManualTime) {
     async resolveUnattendedInteractions() {},
     async abandonSession() {},
     progress: new MultiReviewProgressTracker(),
+    ...(options.toolTransport
+      ? { projectResult: async () => "preparing" as const, readResult: async () => null }
+      : {}),
     pollGate: {
       count: (scope) => gate.count(scope, trigger()),
       exhausted: (scope, count, limit) => gate.exhausted(scope, count, limit),
@@ -82,6 +91,21 @@ describe("reviewer idle-result grace under wakeups", () => {
     }
     expect(reviewer.status).toBe("failed");
     expect(reviewer.error).toContain("idle without returning");
+  });
+
+  test("a tool-transport reviewer that pasted its report is failed with that explanation", async () => {
+    const time = new ManualTime(0);
+    const { reviewer, runner } = harness(() => "periodic", time, {
+      toolTransport: true,
+      finalText: '{"issues":[]}',
+    });
+    await runner.advanceReviewers([reviewer]);
+    time.jump(10_000);
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.status).toBe("failed");
+    expect(reviewer.error).toBe(
+      "The reviewer replied with its structured report as text instead of calling submit_review_report",
+    );
   });
 
   test("a slowed cadence ends the grace after the duration it stands for", async () => {

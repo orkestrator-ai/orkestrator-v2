@@ -47,6 +47,7 @@ import {
   workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
+import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
 import type { AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -276,8 +277,10 @@ function beginStepRuntime(
   const runtimes = (workflow.stepRuntimes ??= {});
   runtimes[kind] = {
     startedAt: session.startedAt,
+    // A session serving only this step has spent nothing before it, even
+    // when its counter has not been read yet.
     ...(session.tokenCount === undefined
-      ? kind === "prepare"
+      ? kind === "prepare" || session.requestIds.length <= 1
         ? { tokenBaseline: 0 }
         : {}
       : { tokenBaseline: session.tokenCount }),
@@ -1844,6 +1847,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                 },
               ]
             : []),
+          ...(workflow.preparationSession?.providerSessionId
+            ? [
+                {
+                  selection: workflow.preparationSession,
+                  sessionId: workflow.preparationSession.providerSessionId,
+                },
+              ]
+            : []),
         ];
         const uniqueTargets = [
           ...new Map(
@@ -1876,6 +1887,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             try {
               await provider.closeSession(sessionId);
             } catch (closeError) {
+              // Retained preparation conversations remain reachable outside the
+              // active step. An abort alone would leave them registered and
+              // able to resume after the workflow loses its ownership record.
+              if (
+                workflow.preparationSession?.providerSessionId === sessionId &&
+                workflow.preparationSession.agent === selection.agent
+              ) {
+                throw closeError;
+              }
               try {
                 await provider.abort(sessionId);
                 await confirmStopped();
@@ -3390,14 +3410,45 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const provider = await this.provider(workflow, selection);
     await this.assertFence(workflow.id, token);
     let session = coordinating ? reviewSession(workflow) : workflow.fixSession;
-    if (session && coordinating && !sameModelSelection(session, selection)) {
-      await this.abandonSession(workflow, session, session.providerSessionId);
+    // Consolidation only merges the reviewer reports, so it gains nothing from
+    // preparation's context and should not carry its tokens. A fresh session
+    // also gets the consolidation turn's own configuration: Codex keeps a
+    // loaded thread's MCP servers when it is resumed.
+    const leavingPreparation =
+      session?.openedFor === "prepare" &&
+      workflow.phase === "consolidating" &&
+      !workflow.activeRequest;
+    const modelChanged = session !== undefined && !sameModelSelection(session, selection);
+    if (session && coordinating && (leavingPreparation || modelChanged)) {
+      // An idle preparation session only moves aside; aborting it would not
+      // change anything and its provider is the one consolidation is about to use.
+      if (modelChanged || session.status === "running") {
+        await this.abandonSession(workflow, session, session.providerSessionId);
+      }
       this.progress.forget(session.providerSessionId);
+      if (leavingPreparation) workflow.preparationSession = session;
       clearReviewSession(workflow);
       session = undefined;
       await this.save(workflow, token);
     }
     if (!session) {
+      if (preparing && workflow.preparationSession) {
+        const retained = workflow.preparationSession;
+        const retainedProvider = await this.provider(workflow, retained);
+        if (retainedProvider.closeSession) {
+          await retainedProvider.closeSession(retained.providerSessionId);
+        } else {
+          await retainedProvider.abort(retained.providerSessionId);
+          const observed = await readProviderStatus(retainedProvider, retained.providerSessionId);
+          if (observed.status === "running" || observed.status === "blocked") {
+            throw new Error(`Preparation session remained ${observed.status} after abort`);
+          }
+        }
+        await this.assertFence(workflow.id, token);
+        this.progress.forget(retained.providerSessionId);
+        delete workflow.preparationSession;
+        await this.save(workflow, token);
+      }
       const sessionKey = separateReviewSession
         ? (workflow.reviewSessionKey ?? reviewSessionKey(workflow.id))
         : (workflow.fixSessionKey ?? fixSessionKey(workflow.id));
@@ -3426,6 +3477,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         ...selection,
         sessionKey,
         providerSessionId,
+        openedFor: preparing
+          ? "prepare"
+          : workflow.phase === "consolidating"
+            ? "consolidate"
+            : "fix",
         requestIds: [],
         status: "running",
         startedAt: nowIso(),
@@ -3719,7 +3775,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
         this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
       ) {
-        throw new Error(`The ${modelLabel} model became idle without returning its ${resultLabel}`);
+        if (request.resultTransport !== "tool-v1") {
+          throw new Error(
+            `The ${modelLabel} model became idle without returning its ${resultLabel}`,
+          );
+        }
+        const finalText = await provider
+          .messages(session.providerSessionId, { limit: 2 })
+          .then(lastAssistantText, () => undefined);
+        throw new Error(
+          missingWorkflowResultMessage({
+            subject: `The ${modelLabel} model`,
+            resultLabel,
+            toolName: workflowResultToolName(this.stepResultKind(request.kind)),
+            submission: request.resultSubmission,
+            finalText,
+          }),
+        );
       }
       return;
     }

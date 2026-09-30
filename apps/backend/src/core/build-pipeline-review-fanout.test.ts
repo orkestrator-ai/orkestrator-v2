@@ -1715,6 +1715,20 @@ describe("build pipeline multi-model review", () => {
     );
   });
 
+  test("a tool-v1 consolidation that never submits says which call was missing", async () => {
+    await withPipeline(
+      async ({ service, read }) => {
+        const started = await service.start(startInput(fourReviewers()));
+        const failed = await advanceUntil(service, read, started.id, "failed", 30);
+        expect(failed.reviewFanout?.consolidation?.resultTransport).toBe("tool-v1");
+        expect(failed.error).toContain(
+          "The consolidation session finished without calling submit_consolidated_review to submit its consolidated report",
+        );
+      },
+      { toolMode: true },
+    );
+  });
+
   test("a container reviewer whose agent tools are unreachable fails instead of dispatching", async () => {
     const unreachable = "The container can't reach the agent tools server.";
     const preflights: Array<{ environmentId: string; stage: string }> = [];

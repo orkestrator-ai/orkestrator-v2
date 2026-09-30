@@ -54,7 +54,12 @@ import { toEngineInput, withSkillInput } from "./app-server-runtime-helpers.js";
 export type PromptDispatchOutcome =
   | { ok: true; result: PromptAcceptedResult }
   | { ok: false; status: 400 | 404 | 409 | 503; error: string }
-  | { ok: false; status: 422; error: string; kind: "command-unavailable" };
+  | { ok: false; status: 422; error: string; kind: "command-unavailable" }
+  /**
+   * The thread could not expose the workflow result tool the turn must call.
+   * Nothing was journaled or sent; the backend fails the step with this text.
+   */
+  | { ok: false; status: 424; error: string };
 
 function commandRefusal(message: string): PromptDispatchOutcome {
   return { ok: false, status: 422, error: message, kind: "command-unavailable" };
@@ -347,6 +352,13 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       ...(input.readOnly ? { sandbox: "read-only", approvalPolicy: "never" } : {}),
       ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
     });
+    if (context && !context.materialized && input.workflowResultTool) {
+      // A thread that was never prompted has no rollout, so reloading it for
+      // the result turn's configuration would lose it. Release it and start
+      // the result turn on a fresh thread that carries that configuration.
+      await this.detachThread(context);
+      context = undefined;
+    }
     const hadAttachedContext = context !== undefined;
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
@@ -376,10 +388,26 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     // in flight, and turn/start must use the configuration that won that race.
     const turnConfig = promptConfig();
     if (hadAttachedContext && input.workflowResultTool) {
-      // app-server's turn/start protocol has no `config` field. Re-resume an
+      // app-server's turn/start protocol has no `config` field. Reload an
       // already attached thread so the attempt-scoped MCP server and its narrow
       // approval mode are applied before the result turn starts.
       context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
+    }
+    if (input.workflowResultTool && turnConfig.agentMcp) {
+      // The turn can only finish by calling this tool. Without it the model
+      // runs to the end and pastes its result as text, which the backend waits
+      // on for minutes before failing with no explanation.
+      const availability = await this.options.engine.workflowResultToolAvailability(
+        context.threadId,
+        input.workflowResultTool,
+      );
+      if (availability.state === "missing") {
+        return {
+          ok: false,
+          status: 424,
+          error: `Codex could not offer ${input.workflowResultTool} to this session: the orkestrator MCP server ${availability.reason}`,
+        };
+      }
     }
 
     // Last admission check, with no await between it and the claim below: a
@@ -838,12 +866,26 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     }
   }
 
+  /**
+   * Applies a result turn's thread-scoped configuration to an attached thread.
+   * A plain `thread/resume` would rejoin the loaded thread and keep its old MCP
+   * servers, so this reloads it (see `AppServerEngine.reloadThread`).
+   */
   private async resumeThreadForPrompt(
     sessionId: string,
     context: ThreadContext,
     config: EngineTurnConfig,
   ): Promise<ThreadContext> {
-    const thread = await this.options.engine.resumeThread(context.threadId, { config });
+    let thread;
+    try {
+      thread = await this.options.engine.reloadThread(context.engineHandle, { config });
+    } catch (error) {
+      // Unsubscribe or resume failed. Make the next request re-attach rather
+      // than dispatch through the dropped handle; result turns still reload
+      // that attachment and require a successful unsubscribe before dispatch.
+      context.unsubscribed = true;
+      throw error;
+    }
     if (!thread.id) throw new Error("Codex did not return a thread id");
     return this.registry.attach(sessionId, thread.id, {
       engineHandle: thread.handle,

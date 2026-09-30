@@ -181,6 +181,8 @@ class Provider implements BuildPipelineProvider {
   consolidationReport: StructuredReviewReport = consolidatedReport;
   messagesCalls = 0;
   usageTokens: number | undefined;
+  /** Cumulative tokens for one session, overriding `usageTokens`. */
+  readonly usageTokensBySession = new Map<string, number>();
   usageUsedTokens: number | undefined;
   usagePending = false;
   backgroundWorkLive = false;
@@ -254,12 +256,13 @@ class Provider implements BuildPipelineProvider {
   }
   async observeSession(sessionId: string) {
     const status = await this.status(sessionId);
+    const sessionTokens = this.usageTokensBySession.get(sessionId) ?? this.usageTokens;
     const contextUsage: NativeAgentContextUsage | undefined =
-      this.usageTokens === undefined && this.usageUsedTokens === undefined
+      sessionTokens === undefined && this.usageUsedTokens === undefined
         ? undefined
         : {
-            usedTokens: this.usageUsedTokens ?? this.usageTokens ?? 0,
-            ...(this.usageTokens === undefined ? {} : { sessionTokens: this.usageTokens }),
+            usedTokens: this.usageUsedTokens ?? sessionTokens ?? 0,
+            ...(sessionTokens === undefined ? {} : { sessionTokens }),
           };
     return {
       status,
@@ -3720,6 +3723,45 @@ test.each(["grok", "cursor", "pi", "codex"] as const)(
     );
   },
 );
+
+test("a consolidation that pastes its report instead of submitting it says so", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-tool-results-pasted";
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const selection = { agent: "codex" as const, model: "default" };
+      const started = await start([selection], selection);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
+      });
+      await workflowResults!.submit(
+        { environmentId, projectId: "project-1" },
+        (await snapshot(started.id))!.reviewers[0]!.requestId!,
+        cleanReport,
+      );
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "consolidate";
+      });
+      // The model could not reach its submit tool and answered in text.
+      provider.messagesValue = [
+        { role: "assistant", parts: [{ type: "text", content: JSON.stringify(cleanReport) }] },
+      ];
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      expect((await snapshot(started.id))?.error).toBe(
+        "The consolidation model replied with its consolidated report as text instead of calling submit_consolidated_review",
+      );
+    },
+    { toolMode: true },
+  );
+});
 
 test("MultiReviewService sends OpenCode the stable broker capability and exact turn tool", async () => {
   const provider = new Provider(false);
@@ -7956,7 +7998,7 @@ test("Multi Review prepares and consolidates with its review model before openin
   await withService(
     "env-package",
     provider,
-    async ({ service, snapshot }) => {
+    async ({ service, storage, snapshot }) => {
       const started = await service.start({
         environmentId: "env-package",
         projectId: "project-1",
@@ -8020,17 +8062,30 @@ test("Multi Review prepares and consolidates with its review model before openin
         expect(sent.prompt).toContain("Do not rerun the full test suite");
         expect(sent.prompt).not.toContain("Validation commands may write");
       }
+      const reviewerCreates = provider.creates.filter(
+        (entry) => entry.options?.reviewerSession === true,
+      );
+      expect(reviewerCreates).toHaveLength(2);
       expect(
-        provider.creates
-          .slice(1)
-          .every(
-            (entry) =>
-              entry.options?.mode === "plan" &&
-              entry.options?.readOnly === true &&
-              entry.options?.reviewerSession === true &&
-              entry.options.policy?.id === "pipeline",
-          ),
+        reviewerCreates.every(
+          (entry) =>
+            entry.options?.mode === "plan" &&
+            entry.options?.readOnly === true &&
+            entry.options.policy?.id === "pipeline",
+        ),
       ).toBe(true);
+      // Preparation, two reviewers, then consolidation on a session of its own.
+      expect(provider.creates.map((entry) => entry.label)).toEqual([
+        "Multi Review · Prepare review package",
+        expect.any(String),
+        expect.any(String),
+        "Multi Review · Consolidation",
+      ]);
+      expect(provider.creates.at(-1)?.options).toMatchObject({
+        model: "review-coordinator",
+        mode: "build",
+        readOnly: true,
+      });
       expect(
         commands.filter((entry) => entry.command === "generate_looped_review_package"),
       ).toHaveLength(1);
@@ -8057,7 +8112,15 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(consolidation?.prompt).toContain(reviewing.reviewPackage!.filePath);
       expect(ready.reviewSession).toMatchObject({
         model: "review-coordinator",
+        providerSessionId: "session-4",
+        openedFor: "consolidate",
+        status: "idle",
+      });
+      // The preparation transcript stays reachable after consolidation moves on.
+      expect(ready.preparationSession).toMatchObject({
+        model: "review-coordinator",
         providerSessionId: "session-1",
+        openedFor: "prepare",
         status: "idle",
       });
       expect(ready.fixSession).toBeUndefined();
@@ -8065,7 +8128,12 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(interactive.phase).toBe("interactive");
       expect(interactive.addressPromptPending).toBe(true);
       expect(interactive.fixSession).toBeUndefined();
-      expect(interactive.reviewSession?.providerSessionId).toBe("session-1");
+      expect(interactive.reviewSession?.providerSessionId).toBe("session-4");
+      await service.close(started.id);
+      expect(new Set(provider.closed)).toEqual(
+        new Set(["session-1", "session-2", "session-3", "session-4"]),
+      );
+      expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
     },
     {
       invoke: async (command, args) => {
@@ -8075,6 +8143,153 @@ test("Multi Review prepares and consolidates with its review model before openin
     },
   );
 });
+
+test.each(["failed", "unconfirmed"])(
+  "Multi Review retains preparation ownership after a %s close and retries teardown",
+  async (failure) => {
+    const provider = new Provider();
+    await withService(
+      `env-preparation-close-${failure}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        const ready = (await snapshot(started.id))!;
+        const retained = ready.preparationSession!;
+        expect(retained.providerSessionId).toBe("session-1");
+        await service.address(started.id);
+        const close = provider.closeSession.bind(provider);
+        let failClose = true;
+        provider.closeSession = async (sessionId) => {
+          if (failClose && sessionId === retained.providerSessionId) {
+            throw new Error(
+              failure === "failed" ? "preparation close failed" : "preparation close pending",
+            );
+          }
+          await close(sessionId);
+        };
+        // Even an idle status/working abort cannot confirm that the registered
+        // conversation was closed. Keep the durable owner until close succeeds.
+        await expect(service.close(started.id)).rejects.toThrow(
+          `preparation close ${failure === "failed" ? "failed" : "pending"}`,
+        );
+        expect((await snapshot(started.id))?.preparationSession).toEqual(retained);
+        expect((await storage.getMultiReviewWorkflow(started.id))?.controllerLease).toBeUndefined();
+        failClose = false;
+        await service.close(started.id);
+        expect(provider.closed).toContain(retained.providerSessionId);
+        expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
+      },
+      { packageFlow: true },
+    );
+  },
+);
+
+test("Multi Review closes retained preparation before creating its replacement and preserves it on failure", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-preparation-replacement-close",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const retained = (await snapshot(started.id))!.preparationSession!;
+      const createsBefore = provider.creates.length;
+      provider.closeError = new Error("preparation close pending");
+      await service.restartStep(started.id, "prepare");
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("failed");
+      expect((await snapshot(started.id))?.preparationSession).toEqual(retained);
+      expect(provider.creates).toHaveLength(createsBefore);
+      provider.closeError = null;
+      provider.statusValue = "running";
+      await service.retry(started.id);
+      await service.advanceNow(started.id);
+      const replaced = (await snapshot(started.id))!;
+      expect(provider.closed).toContain(retained.providerSessionId);
+      expect(replaced.preparationSession).toBeUndefined();
+      expect(replaced.fixSession?.providerSessionId).not.toBe(retained.providerSessionId);
+      expect(provider.creates).toHaveLength(createsBefore + 1);
+    },
+    { packageFlow: true },
+  );
+});
+
+test.each([
+  { running: true, modelChanged: false },
+  { running: false, modelChanged: true },
+  { running: true, modelChanged: true },
+])(
+  "Multi Review retains and shuts down abandoned preparation (%j)",
+  async ({ running, modelChanged }) => {
+    const provider = new Provider();
+    const shutdowns: Array<{ agent: MultiReviewModelSelection["agent"]; sessionId: string }> = [];
+    await withService(
+      `env-leaving-preparation-${running}-${modelChanged}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        const retained = (await snapshot(started.id))!.preparationSession!;
+        await mutateStoredWorkflow(storage, started.id, (workflow) => {
+          workflow.phase = "consolidating";
+          workflow.fixSession = { ...retained, status: running ? "running" : "idle" };
+          delete workflow.preparationSession;
+          delete workflow.activeRequest;
+          delete workflow.consolidatedReport;
+          if (modelChanged) {
+            workflow.consolidationModel = { agent: "codex", model: "gpt-5.4" };
+            workflow.reviewSession = workflow.fixSession;
+            delete workflow.fixSession;
+          }
+        });
+        await service.advanceNow(started.id);
+        expect(provider.aborted).toContain(retained.providerSessionId);
+        expect((await snapshot(started.id))?.preparationSession).toMatchObject({
+          providerSessionId: retained.providerSessionId,
+          agent: retained.agent,
+          status: running ? "running" : "idle",
+        });
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        await service.address(started.id);
+        await service.close(started.id);
+        expect(provider.closed).toContain(retained.providerSessionId);
+        expect(shutdowns).toContainEqual({
+          agent: retained.agent,
+          sessionId: retained.providerSessionId,
+        });
+      },
+      {
+        packageFlow: true,
+        createProvider: async (_workflow, selection) => {
+          return new Proxy(provider, {
+            get(target, property) {
+              if (property === "closeSession")
+                return async (sessionId: string) => {
+                  shutdowns.push({ agent: selection.agent, sessionId });
+                  await target.closeSession(sessionId);
+                };
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        },
+      },
+    );
+  },
+);
 
 test("MultiReviewService stops validation and advances with partial evidence", async () => {
   const provider = new Provider();
@@ -8841,7 +9056,13 @@ test("preparation metadata repairs are bounded and preserve already collected ev
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
       });
-      expect(provider.creates).toHaveLength(2);
+      // Preparation, the reviewer, and consolidation's own session: the repair
+      // stayed inside the preparation session.
+      expect(provider.creates.map((entry) => entry.label)).toEqual([
+        "Multi Review · Prepare review package",
+        expect.any(String),
+        "Multi Review · Consolidation",
+      ]);
     },
     { packageFlow: true },
   );
@@ -8895,14 +9116,16 @@ test("preparation and consolidation each keep their own runtime and token count"
       const prepare = prepared.stepRuntimes!.prepare!;
       expect(prepare.completedAt).toBeDefined();
 
-      provider.usageTokens = 65_000;
+      // Consolidation runs on a session of its own with its own counter.
+      provider.usageTokensBySession.set(prepared.fixSession!.providerSessionId, 90_000);
+      provider.usageTokens = 25_000;
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
       });
 
       const ready = (await snapshot(started.id))!;
-      // Preparation finished before consolidation was dispatched, so the shared
+      // Preparation finished before consolidation was dispatched, so its
       // session's later growth may not be added to it.
       expect(ready.stepRuntimes?.prepare).toMatchObject({
         startedAt: prepare.startedAt,
@@ -8911,7 +9134,8 @@ test("preparation and consolidation each keep their own runtime and token count"
       });
       expect(ready.stepRuntimes?.consolidate).toMatchObject({ tokenCount: 25_000 });
       expect(ready.stepRuntimes?.consolidate?.completedAt).toBeDefined();
-      expect(ready.fixSession?.tokenCount).toBe(65_000);
+      expect(ready.fixSession?.tokenCount).toBe(25_000);
+      expect(ready.preparationSession?.tokenCount).toBe(40_000);
     },
     { packageFlow: true },
   );
@@ -8942,7 +9166,8 @@ test("finalizes delayed preparation usage before baselining consolidation", asyn
       expect(prepared.phase).toBe("reviewing");
       expect(prepared.stepRuntimes?.prepare?.tokenCount).toBe(40_000);
 
-      provider.usageTokens = 65_000;
+      provider.usageTokensBySession.set(prepared.fixSession!.providerSessionId, 90_000);
+      provider.usageTokens = 25_000;
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
@@ -8955,7 +9180,7 @@ test("finalizes delayed preparation usage before baselining consolidation", asyn
   );
 });
 
-test("does not attribute usage when a later step's cumulative baseline is unknown", async () => {
+test("consolidation's own session is counted from zero when preparation usage was never read", async () => {
   const provider = new Provider();
   provider.statusValue = "running";
   await withService(
@@ -8979,8 +9204,10 @@ test("does not attribute usage when a later step's cumulative baseline is unknow
 
       const consolidating = (await snapshot(started.id))!;
       expect(consolidating.fixSession?.tokenCount).toBe(65_000);
-      expect(consolidating.stepRuntimes?.consolidate?.tokenBaseline).toBeUndefined();
-      expect(consolidating.stepRuntimes?.consolidate?.tokenCount).toBeUndefined();
+      expect(consolidating.fixSession?.openedFor).toBe("consolidate");
+      expect(consolidating.stepRuntimes?.consolidate?.tokenBaseline).toBe(0);
+      expect(consolidating.stepRuntimes?.consolidate?.tokenCount).toBe(65_000);
+      expect(consolidating.stepRuntimes?.prepare?.tokenCount).toBeUndefined();
     },
     { packageFlow: true },
   );

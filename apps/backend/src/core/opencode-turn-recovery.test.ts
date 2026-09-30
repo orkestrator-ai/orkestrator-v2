@@ -7,6 +7,7 @@ import {
   OPENCODE_PROVIDER_ERROR_CONTINUATION,
   OPENCODE_PROVIDER_ERROR_MAX_AGE_MS,
   OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS,
+  isOpenCodeToolSchemaRejection,
 } from "./opencode-turn-recovery.js";
 
 function user(text: string, id = "user-1", info: Record<string, unknown> = {}) {
@@ -38,7 +39,13 @@ function stalledAssistant(
 }
 
 function failedAssistant(
-  overrides: { id?: string; statusCode?: number; name?: string; completed?: number } = {},
+  overrides: {
+    id?: string;
+    statusCode?: number;
+    name?: string;
+    completed?: number;
+    message?: string;
+  } = {},
 ) {
   return {
     info: {
@@ -52,7 +59,7 @@ function failedAssistant(
       error: {
         name: overrides.name ?? "APIError",
         data: {
-          message: 'Bad Request: {"model":"deepseek-v4.1-flash"}',
+          message: overrides.message ?? 'Bad Request: {"model":"deepseek-v4.1-flash"}',
           statusCode: overrides.statusCode ?? 400,
           isRetryable: false,
         },
@@ -178,6 +185,19 @@ describe("inspectOpenCodeIncompleteTurn provider errors", () => {
         inspectOpenCodeIncompleteTurn([user("Open the PR"), failedAssistant({ name })]),
       ).toBeNull();
     }
+  });
+
+  test("does not retry a provider that rejected a tool's JSON Schema", () => {
+    const message = "Recursive JSON schemas are not currently supported";
+    expect(
+      inspectOpenCodeIncompleteTurn([user("Open the PR"), failedAssistant({ message })]),
+    ).toBeNull();
+    expect(
+      inspectOpenCodeIncompleteTurn([
+        user("Open the PR"),
+        failedAssistant({ message, statusCode: 500 }),
+      ]),
+    ).toMatchObject({ action: "continue", reason: "provider-error" });
   });
 
   test("retries transient statuses and errors without a status", () => {
@@ -376,5 +396,45 @@ describe("inspectOpenCodeIncompleteTurn", () => {
 
   test("derives a stable durable request id from the stalled assistant", () => {
     expect(openCodeIncompleteTurnRequestId("msg_abc")).toBe("opencode-incomplete-msg_abc");
+  });
+});
+
+describe("isOpenCodeToolSchemaRejection", () => {
+  function apiError(message: unknown, statusCode: unknown = 400) {
+    return { name: "APIError", data: { message, statusCode } };
+  }
+
+  test("recognizes provider refusals of a tool input schema", () => {
+    for (const message of [
+      "Recursive JSON schemas are not currently supported",
+      "Invalid schema for function 'validate_workflow_result': recursion is not supported",
+      "tools.3.custom.input_schema: JSON schema is invalid",
+      "Invalid JSON payload received. Unknown name \"$ref\" at 'tools[0].function_declarations[2].parameters'",
+    ]) {
+      expect(isOpenCodeToolSchemaRejection(apiError(message))).toBe(true);
+    }
+    expect(
+      isOpenCodeToolSchemaRejection(
+        apiError("Recursive JSON schemas are not currently supported", 422),
+      ),
+    ).toBe(true);
+  });
+
+  test("ignores unrelated failures and other error shapes", () => {
+    expect(isOpenCodeToolSchemaRejection(apiError('Bad Request: {"model":"x"}'))).toBe(false);
+    expect(isOpenCodeToolSchemaRejection(apiError("response_format schema is invalid"))).toBe(
+      false,
+    );
+    expect(
+      isOpenCodeToolSchemaRejection(apiError("Recursive JSON schemas are not supported", 503)),
+    ).toBe(false);
+    expect(isOpenCodeToolSchemaRejection(apiError(undefined))).toBe(false);
+    expect(
+      isOpenCodeToolSchemaRejection({
+        name: "ProviderAuthError",
+        data: { message: "tool schema", statusCode: 400 },
+      }),
+    ).toBe(false);
+    expect(isOpenCodeToolSchemaRejection(null)).toBe(false);
   });
 });

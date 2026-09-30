@@ -95,6 +95,15 @@ export function createMultiReviewerPrompt(input: {
 }
 
 /**
+ * Consolidation merges finished reports; it is not another review. Without
+ * this bound, consolidation models re-verified single-reviewer findings and
+ * explored the codebase, turning a dedupe of a handful of reports into a
+ * multi-minute investigation.
+ */
+const CONSOLIDATION_SCOPE =
+  "This is a merge, not another review. The reviewers already read the change and ran validation. Your job is to combine their reports into one: match findings that describe the same defect, merge them, and carry every other finding forward. Work from the reports. Look at the code only when the reports cannot settle whether two findings are the same defect, or when reviewers directly contradict each other about the same code. Even then, read only the cited locations. Do not re-verify findings, re-run validation, explore the codebase, or look for new issues.";
+
+/**
  * Builds the consolidation turn from the compact evidence envelope.
  *
  * Throws {@link ConsolidationBudgetError} — before anything is dispatched —
@@ -120,21 +129,23 @@ export function createMultiReviewConsolidationPrompt(input: {
 
 The evidence is compact: facts every reviewer reported identically — scope, reviewed files, validation commands, test totals, change types and risk areas — appear once under "shared" and apply to every reviewer. Each entry in "reviewers" holds that reviewer's own verdict, commentary, strengths, issues, coverage gaps, limitations, and any scope detail beyond the shared facts. Treat both parts together as each reviewer's complete report.
 
+${CONSOLIDATION_SCOPE}
+
 ${MULTI_REVIEW_REPORTS_FRAME_OPEN}
 ${serializeFramedEvidence(evidence)}
 ${MULTI_REVIEW_REPORTS_FRAME_CLOSE}
 
 ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBranch)}.
 
-- Semantically deduplicate equivalent issues and coverage gaps. Keep the clearest evidence, most accurate location, strongest verification, and highest justified severity/confidence.
+- Semantically deduplicate equivalent issues and coverage gaps. From the reports, keep the clearest evidence, most precise location, strongest verification, and highest justified severity/confidence.
 - Every source issue and coverage gap has a backend-issued reviewSourceIds value. For every consolidated finding, copy the IDs of every source finding that substantiates it into reviewSourceIds. Preserve all supporting IDs when deduplicating. Set reviewModels to null; the backend derives authoritative model labels from the cited IDs.
 - Preserve distinct findings even when they touch the same file or symptom.
-- Reconcile disagreements using the supplied evidence; do not decide by majority vote.${scopeReconciliationRule(input.worktree, input.reviewPackage, input.worktreeChangedDuringReview)}
+- Reconcile disagreements using the supplied evidence; do not decide by majority vote. A finding raised by only one reviewer is not a disagreement: carry it forward as reported rather than re-verifying it.${scopeReconciliationRule(input.worktree, input.reviewPackage, input.worktreeChangedDuringReview)}
 - Combine useful strengths, limitations, test results, scope details, change explanation, and reviewer commentary without inventing evidence.
 - The output must stand alone. Do not mention reviewer numbers or assume the reader can see the source reports.
 - If a workflow result tool is assigned, never call its submission tool with a probe, placeholder, partial report, or transport test. Submit only the complete final consolidated report; an accepted submission cannot be replaced.
 - This is a report-consolidation turn, not a planning turn. ${MULTI_REVIEW_PLAN_TOOL_PROHIBITION} A plan, plan-review card, or approval request is not a valid result. Do not ask anyone to approve a plan or switch modes. Return the consolidated structured report directly.
-- Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.
+- Do not edit files, run validation or any command beyond those targeted reads, ask questions, or add prose outside the provider-enforced structured result.
 
 ${buildStructuredReviewOutputGuide()}`;
 }
@@ -151,7 +162,7 @@ function scopeReconciliationRule(
   worktreeChangedDuringReview?: boolean,
 ): string {
   if (reviewPackage) {
-    return `\n- Every reviewer was dispatched against the same backend-verified immutable review package at ${JSON.stringify(reviewPackage.filePath)}. Treat that package as the authoritative change scope and preserve package-integrity limitations from the reports.`;
+    return `\n- Every reviewer was dispatched against the same backend-verified immutable review package at ${JSON.stringify(reviewPackage.filePath)}. Treat that package as the authoritative change scope and preserve package-integrity limitations from the reports. The reviewers already examined it; do not re-read it to review the change again.`;
   }
   const rules: string[] = [];
   if (worktree?.status === "dirty") {

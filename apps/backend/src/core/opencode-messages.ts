@@ -8,6 +8,7 @@ import {
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
 import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
+import { isOpenCodeToolSchemaRejection } from "./opencode-turn-recovery.js";
 
 /**
  * Which OpenCode part kinds this normalizer accounts for.
@@ -469,6 +470,13 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
 export const OPEN_CODE_INLINE_ERROR_ID_PREFIX = "error-opencode-";
 
 /**
+ * Appended when the provider refused a tool definition, which otherwise reads
+ * like a fault in the conversation rather than in the tools sent with it.
+ */
+export const OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT =
+  " — the model provider rejected the JSON Schema of a tool offered to the model, so the model never ran. Retrying with this model will fail the same way; choose another model or fix the tool definition.";
+
+/**
  * A durable transcript row for an assistant message that failed.
  *
  * OpenCode persists the failure on the message itself, which often has no
@@ -487,7 +495,9 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
   const statusCode = asRecord(error?.data)?.statusCode;
   const content =
     nonEmptyString(error?.name) === "APIError"
-      ? `Model request failed${typeof statusCode === "number" ? ` (HTTP ${statusCode})` : ""}: ${terminal.message}`
+      ? `Model request failed${typeof statusCode === "number" ? ` (HTTP ${statusCode})` : ""}: ${terminal.message}${
+          isOpenCodeToolSchemaRejection(error) ? OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT : ""
+        }`
       : terminal.message;
   const time = asRecord(info.time);
   const validDate = [time?.completed, time?.created]

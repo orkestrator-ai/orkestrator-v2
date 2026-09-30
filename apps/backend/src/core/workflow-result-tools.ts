@@ -214,7 +214,9 @@ export function registerWorkflowResultBrokerTools(
         .object({
           resultKey: z.string().uuid(),
           capability: z.string().min(32).max(2_048),
-          result: z.json(),
+          // Every result kind is an object; the service validates the contract.
+          // z.json() would publish a recursive $ref that some providers reject.
+          result: z.record(z.string(), z.unknown()),
         })
         .strict(),
       annotations: {

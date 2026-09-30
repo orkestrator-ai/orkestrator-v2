@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   normalizeOpenCodeInlineError,
   normalizeOpenCodeInteractiveMessage,
+  OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT,
 } from "./opencode-messages.js";
 
 function message(parts: unknown[]): unknown {
@@ -148,6 +149,19 @@ describe("normalizeOpenCodeInlineError", () => {
         },
       ],
       createdAt: new Date(20).toISOString(),
+    });
+  });
+
+  test("explains a provider refusing a tool's JSON Schema", () => {
+    expect(
+      normalizeOpenCodeInlineError(
+        failed({
+          name: "APIError",
+          data: { message: "Recursive JSON schemas are not currently supported", statusCode: 400 },
+        }),
+      ),
+    ).toMatchObject({
+      content: `Model request failed (HTTP 400): Recursive JSON schemas are not currently supported${OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT}`,
     });
   });
 

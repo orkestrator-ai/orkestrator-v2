@@ -157,15 +157,33 @@ export function openCodeMessageFinishReason(entry: unknown): string | undefined 
 }
 
 /**
+ * A provider 400/422 that refused a tool's input JSON Schema, for example
+ * "Recursive JSON schemas are not currently supported" or an unknown `$ref`.
+ * The request is rejected before the model runs, so a retry fails the same way.
+ */
+export function isOpenCodeToolSchemaRejection(error: unknown): boolean {
+  if (!isRecord(error) || error.name !== "APIError" || !isRecord(error.data)) return false;
+  const { statusCode, message } = error.data;
+  if (statusCode !== 400 && statusCode !== 422) return false;
+  if (typeof message !== "string") return false;
+  return (
+    /schema|\$ref|\$defs/i.test(message) &&
+    /tool|function|parameters|recursive|\$ref|\$defs/i.test(message)
+  );
+}
+
+/**
  * A provider API failure worth retrying automatically.
  *
  * Only `APIError` qualifies: aborts, auth failures, output-length and context
  * overflow errors are either deliberate or deterministic. Statuses that cannot
- * succeed on retry are excluded; everything else — including 400s gateways
- * return for transient upstream faults — is retried within a small budget.
+ * succeed on retry are excluded, as are tool-schema rejections; everything
+ * else — including 400s gateways return for transient upstream faults — is
+ * retried within a small budget.
  */
 function isRetryableProviderError(error: unknown): boolean {
   if (!isRecord(error) || error.name !== "APIError") return false;
+  if (isOpenCodeToolSchemaRejection(error)) return false;
   const statusCode = isRecord(error.data) ? error.data.statusCode : undefined;
   return typeof statusCode !== "number" || !NON_RETRYABLE_PROVIDER_STATUSES.has(statusCode);
 }

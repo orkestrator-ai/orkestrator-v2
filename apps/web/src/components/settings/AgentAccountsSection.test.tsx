@@ -109,10 +109,14 @@ afterEach(() => {
   resetReadCoordinatorForTests();
 });
 
-async function mount(onActiveAccountChange?: () => void) {
+async function mount() {
   await act(async () => {
-    render(<AgentAccountsSection platform="codex" onActiveAccountChange={onActiveAccountChange} />);
+    render(<AgentAccountsSection platform="codex" />);
   });
+}
+
+function accountOrder(): string[] {
+  return screen.getAllByRole("listitem").map((item) => item.getAttribute("aria-label") ?? "");
 }
 
 describe("AgentAccountsSection", () => {
@@ -128,19 +132,32 @@ describe("AgentAccountsSection", () => {
     expect(screen.queryAllByRole("listitem")).toHaveLength(2);
   });
 
-  test("switching asks the backend and tells the pane to re-read usage", async () => {
-    const onChange = mock(() => undefined);
-    await mount(onChange);
+  test("lists the active account first, then the rest alphabetically", async () => {
+    snapshot.accounts.push(
+      account({ id: "b", label: "bravo", isDefault: false, isActive: false }),
+      account({ id: "a", label: "Alpha", isDefault: false, isActive: false }),
+    );
+    await mount();
+    await screen.findByRole("listitem", { name: "Host login" });
+    expect(accountOrder()).toEqual(["Host login", "Alpha", "bravo", "second@example.com"]);
+  });
+
+  test("switching asks the backend, moves the account to the top and re-reads usage", async () => {
+    await mount();
     const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    await waitFor(() => expect(screen.getAllByText("5-hour limit")).toHaveLength(2));
+    const usageReads = () => calls.filter((c) => c.command === "get_agent_account_usage").length;
+    const readsBefore = usageReads();
 
     fireEvent.click(within(added).getByRole("button", { name: "Use" }));
 
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(added).getByText("Active")).toBeTruthy());
     expect(calls.find((c) => c.command === "set_active_agent_account")?.args).toEqual({
       platform: "codex",
       accountId: ADDED_ID,
     });
-    expect(within(added).getByText("Active")).toBeTruthy();
+    expect(accountOrder()).toEqual(["second@example.com", "Host login"]);
+    await waitFor(() => expect(usageReads()).toBeGreaterThan(readsBefore));
     // The host login is no longer active, so it can be switched back to.
     const host = screen.getByRole("listitem", { name: "Host login" });
     expect(within(host).getByRole("button", { name: "Use" })).toBeTruthy();

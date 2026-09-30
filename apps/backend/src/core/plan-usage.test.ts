@@ -115,9 +115,65 @@ describe("claudePlanWindows", () => {
   });
 
   test("keeps an unknown window the endpoint starts reporting", () => {
-    const windows = claudePlanWindows({ fiveHourOpus: { utilization: 4 } });
+    const windows = claudePlanWindows({
+      fiveHourOpus: { utilization: 4, resets_at: "2026-09-11T22:00:00.000Z" },
+    });
     expect(windows).toEqual([
-      { window: "five_hour_opus", label: "Five hour opus", usedPercent: 4 },
+      {
+        window: "five_hour_opus",
+        label: "Five hour opus",
+        usedPercent: 4,
+        resetsAt: "2026-09-11T22:00:00.000Z",
+      },
+    ]);
+  });
+
+  test("drops a codename entry that has no reset", () => {
+    const windows = claudePlanWindows({
+      five_hour: { utilization: 11, resets_at: "2026-09-30T12:49:00.000Z" },
+      nimbus_quill: { utilization: 0, resets_at: null },
+    });
+    expect(windows.map((window) => window.label)).toEqual(["5-hour limit"]);
+  });
+
+  test("prefers the limits list, which names a model's weekly window", () => {
+    const windows = claudePlanWindows({
+      five_hour: { utilization: 11, resets_at: "2026-09-30T12:49:00.000Z" },
+      nimbus_quill: { utilization: 0, resets_at: null },
+      limits: [
+        { kind: "session", percent: 11, resets_at: "2026-09-30T12:49:00+00:00", scope: null },
+        { kind: "weekly_all", percent: 6, resets_at: "2026-10-06T10:59:00+00:00", scope: null },
+        {
+          kind: "weekly_scoped",
+          percent: 0,
+          resets_at: "2026-10-06T11:00:00+00:00",
+          scope: { model: { id: null, display_name: "Fable" }, surface: null },
+        },
+        { kind: "something_new", percent: 3, resets_at: null, scope: null },
+      ],
+    });
+    expect(windows).toEqual([
+      {
+        window: "five_hour",
+        label: "5-hour limit",
+        usedPercent: 11,
+        resetsAt: "2026-09-30T12:49:00.000Z",
+        windowMinutes: 300,
+      },
+      {
+        window: "seven_day",
+        label: "Weekly limit",
+        usedPercent: 6,
+        resetsAt: "2026-10-06T10:59:00.000Z",
+        windowMinutes: 10_080,
+      },
+      {
+        window: "seven_day_fable",
+        label: "Weekly Fable limit",
+        usedPercent: 0,
+        resetsAt: "2026-10-06T11:00:00.000Z",
+        windowMinutes: 10_080,
+      },
     ]);
   });
 
@@ -1067,7 +1123,7 @@ describe("shared plan-usage cache integration", () => {
       const snapshot = await readPlanUsage(contextWithGlobal(), "claude");
       expect(snapshot.status).toBe("ok");
       expect(snapshot.windows).toEqual([
-        { window: "five_hour", label: "5-hour limit", usedPercent: 33 },
+        { window: "five_hour", label: "5-hour limit", usedPercent: 33, windowMinutes: 300 },
       ]);
     } finally {
       sharedPlanUsageCache.clear();

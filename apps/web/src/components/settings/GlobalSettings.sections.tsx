@@ -546,15 +546,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
     <div className="max-w-2xl space-y-5">
-      {(PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
-        <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
-      ) : null}
+      {/* Platforms with accounts show usage on each account instead. */}
       {isAgentAccountPlatform(platform) ? (
-        <AgentAccountsSection
-          key={`accounts-${platform}`}
-          platform={platform}
-          onActiveAccountChange={() => setPlanUsageRefreshToken((token) => token + 1)}
-        />
+        <AgentAccountsSection key={`accounts-${platform}`} platform={platform} />
+      ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
+        <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
       ) : null}
       <AgentPlatformPane
         platform={platform}

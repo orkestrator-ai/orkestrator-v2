@@ -49,6 +49,15 @@ function describeIdentity(account: AgentAccountSummary): string {
     .join(" · ");
 }
 
+/** The active account first, then the rest alphabetically by name. */
+function sortAccounts(accounts: AgentAccountSummary[]): AgentAccountSummary[] {
+  return [...accounts].sort(
+    (a, b) =>
+      Number(b.isActive) - Number(a.isActive) ||
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+  );
+}
+
 function AccountUsage({
   platform,
   accountId,
@@ -348,14 +357,7 @@ function LoginPanel({
   );
 }
 
-export function AgentAccountsSection({
-  platform,
-  onActiveAccountChange,
-}: {
-  platform: AgentAccountPlatform;
-  /** Fired after a switch so the platform's usage card re-reads past its cache. */
-  onActiveAccountChange?: () => void;
-}) {
+export function AgentAccountsSection({ platform }: { platform: AgentAccountPlatform }) {
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [login, setLogin] = useState<AgentAccountLoginProgress>({ state: "idle" });
   const [busy, setBusy] = useState(false);
@@ -420,10 +422,7 @@ export function AgentAccountsSection({
       const next = await operation();
       if (!mounted.current) return;
       setSnapshot(next);
-      if (activeChanged) {
-        setUsageReloadToken((token) => token + 1);
-        onActiveAccountChange?.();
-      }
+      if (activeChanged) setUsageReloadToken((token) => token + 1);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));
     } finally {
@@ -448,7 +447,9 @@ export function AgentAccountsSection({
     await refreshLogin();
   };
 
-  const accounts = snapshot?.accounts.filter((account) => account.platform === platform) ?? [];
+  const accounts = sortAccounts(
+    snapshot?.accounts.filter((account) => account.platform === platform) ?? [],
+  );
   const otherLoginPending = login.state === "pending" && !loginHere;
 
   return (

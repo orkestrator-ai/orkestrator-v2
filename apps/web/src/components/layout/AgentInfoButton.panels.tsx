@@ -188,8 +188,8 @@ const SPELLED_HOURS: Record<string, number> = {
  * The period a limit covers, read from its name.
  *
  * A compatibility fallback only. Providers that report a duration are believed;
- * this exists because several name the period without measuring it — Claude's
- * structured usage calls its windows "Weekly" and "Five Hour", Codex's
+ * this exists because several name the period without measuring it —
+ * older Claude bridges called its windows "Weekly" and "Five Hour", Codex's
  * retained account rows arrive as "Weekly limit" and "5-hour limit" — and a
  * window whose length is known by name can still be placed in time.
  */

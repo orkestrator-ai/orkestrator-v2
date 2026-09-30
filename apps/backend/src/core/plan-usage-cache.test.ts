@@ -3,6 +3,7 @@ import {
   CACHE_TTL_MS,
   contextUsageWithPlanUsage,
   createPlanUsageCache,
+  okSnapshot,
   sharedPlanUsageCache,
   setActivePlanUsageAccount,
 } from "./plan-usage-cache.js";
@@ -121,6 +122,47 @@ describe("contextUsageWithPlanUsage", () => {
       rateLimits: [{ label: "Weekly limit", usedPercent: 5 }],
     });
     expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.window).toBe("seven_day");
+  });
+
+  test("folds an older bridge's Claude labels into the canonical rows", () => {
+    const sharedWindow = "2026-10-06T10:00:00.000Z";
+    sharedPlanUsageCache.store(
+      "claude",
+      okSnapshot(
+        "claude",
+        [
+          { window: "five_hour", label: "5-hour limit", usedPercent: 10, windowMinutes: 300 },
+          { window: "seven_day", label: "Weekly limit", usedPercent: 5, windowMinutes: 10_080 },
+          { window: "seven_day_fable", label: "Weekly Fable limit", usedPercent: 0 },
+        ],
+        new Date(0).toISOString(),
+      ),
+      60_000,
+    );
+    contextUsageWithPlanUsage("claude", {
+      usedTokens: 1,
+      rateLimits: [
+        { label: "Five Hour", usedPercent: 11 },
+        { label: "Weekly", usedPercent: 6, resetsAt: sharedWindow },
+        { label: "Weekly (Fable)", usedPercent: 1 },
+      ],
+    });
+    expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual([
+      { window: "five_hour", label: "5-hour limit", usedPercent: 11, windowMinutes: 300 },
+      {
+        window: "seven_day",
+        label: "Weekly limit",
+        usedPercent: 6,
+        resetsAt: sharedWindow,
+        windowMinutes: 10_080,
+      },
+      {
+        window: "seven_day_fable",
+        label: "Weekly Fable limit",
+        usedPercent: 1,
+        windowMinutes: 10_080,
+      },
+    ]);
   });
 
   test("does not apply Claude's ids to another platform's rate limits", () => {

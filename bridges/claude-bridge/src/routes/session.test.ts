@@ -2703,7 +2703,7 @@ describe("persisted session routes", () => {
             endedAt: 1_769_990_400_000,
           },
         },
-        rateLimits: [{ label: "Five Hour", usedPercent: 42 }],
+        rateLimits: [{ label: "5-hour limit", usedPercent: 42 }],
         completionBlockedByBackgroundTasks: true,
         retainedContinuationRequestIds: new Set(["request-1"]),
         rewindInProgress: true,
@@ -2722,7 +2722,7 @@ describe("persisted session routes", () => {
           endedAt: 1_769_990_400_000,
         },
       });
-      expect(data.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
+      expect(data.rateLimits).toEqual([{ label: "5-hour limit", usedPercent: 42 }]);
       expect(data.completionBlockedByBackgroundTasks).toBe(true);
       expect(data.retainedContinuationRequestIds).toEqual(["request-1"]);
       expect(data.rewindInProgress).toBe(true);

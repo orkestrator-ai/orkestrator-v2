@@ -15,7 +15,7 @@ import type {
   NativeAgentRateLimitWindow,
 } from "@orkestrator/protocol/native-agent";
 import {
-  claudePlanWindowIdFromLabel,
+  claudePlanWindowFromLabel,
   isPlanUsagePlatform,
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
@@ -141,23 +141,26 @@ export function initializeActivePlanUsageAccount(
 
 /**
  * Claude reports its plan windows per session as rate limits, not as account
- * rows, so the same quota arrives under a different key. Known labels map onto
- * the canonical ids the direct OAuth read emits, so a window a session reports
- * updates the same cached row rather than sitting beside it under a slug.
+ * rows, so the same quota arrives under a different key. Known labels — and
+ * the "Five Hour" / "Weekly" wording older bridges used — map onto the
+ * canonical id and label the direct OAuth read emits, so a window a session
+ * reports updates the same cached row rather than sitting beside it.
  */
 function accountWindowsFromRateLimits(
   limits: NativeAgentRateLimitWindow[],
   agent: AgentPlatform,
 ): NativeAgentAccountUsageWindow[] {
-  return limits.map((limit) => ({
-    window:
-      (agent === "claude" ? claudePlanWindowIdFromLabel(limit.label) : undefined) ??
-      sessionWindowId(limit.label),
-    label: limit.label,
-    ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
-    ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
-    ...(limit.windowMinutes !== undefined ? { windowMinutes: limit.windowMinutes } : {}),
-  }));
+  return limits.map((limit) => {
+    const known = agent === "claude" ? claudePlanWindowFromLabel(limit.label) : undefined;
+    const windowMinutes = limit.windowMinutes ?? known?.windowMinutes;
+    return {
+      window: known?.id ?? sessionWindowId(limit.label),
+      label: known?.label ?? limit.label,
+      ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
+      ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
+      ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+    };
+  });
 }
 
 function sessionWindowId(label: string): string {

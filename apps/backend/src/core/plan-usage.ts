@@ -23,6 +23,8 @@ import {
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
 import {
   CLAUDE_PLAN_WINDOW_LABELS,
+  claudeModelWeeklyWindow,
+  type ClaudePlanWindowIdentity,
   isPlanUsagePlatform,
   PLAN_USAGE_PLATFORMS,
   type PlanUsagePlatform,
@@ -172,17 +174,58 @@ function humanizeWindowId(id: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+/** The window a `limits` entry describes, by its kind and scope. */
+function claudeLimitIdentity(raw: Record<string, unknown>): ClaudePlanWindowIdentity | undefined {
+  if (raw.kind === "session") return { id: "five_hour", ...CLAUDE_WINDOW_LABELS.five_hour! };
+  if (raw.kind === "weekly_all") return { id: "seven_day", ...CLAUDE_WINDOW_LABELS.seven_day! };
+  if (raw.kind === "weekly_scoped") {
+    const model = nonEmptyString(asRecord(asRecord(raw.scope)?.model)?.display_name);
+    return model ? claudeModelWeeklyWindow(model) : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The payload's `limits` list: the windows claude.ai itself draws, each with a
+ * kind and, for a model's own weekly limit, the model's display name. Kinds
+ * this cannot name are skipped rather than shown under a guessed label.
+ */
+function claudeLimitsWindows(limits: unknown): NativeAgentAccountUsageWindow[] {
+  if (!Array.isArray(limits)) return [];
+  const windows: NativeAgentAccountUsageWindow[] = [];
+  for (const entry of limits) {
+    const raw = asRecord(entry);
+    if (!raw) continue;
+    const identity = claudeLimitIdentity(raw);
+    const usedPercent = finitePercent(raw.percent);
+    if (!identity || usedPercent === undefined) continue;
+    if (windows.some((window) => window.window === identity.id)) continue;
+    const resetsAt = isoReset(raw.resets_at ?? raw.resetsAt);
+    windows.push({
+      window: identity.id,
+      label: identity.label,
+      usedPercent,
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
+      windowMinutes: identity.windowMinutes,
+    });
+  }
+  return windows;
+}
+
 /**
  * Map Claude's OAuth usage payload onto the generic account windows.
  *
- * The endpoint is first-party but undocumented, so this reads by shape rather
- * than by a fixed key list: any entry carrying a utilization percentage is a
- * window, whatever Anthropic names it next. Known ids keep their friendly
- * label and period length.
+ * The endpoint is first-party but undocumented. Its `limits` list is preferred
+ * because it names every window, including a model's weekly limit. Without it,
+ * any top-level entry carrying a utilization percentage is a window. Known ids
+ * keep their label and period; an unknown one needs a reset instant, since the
+ * payload also carries internal codename entries that are not real quotas.
  */
 export function claudePlanWindows(value: unknown): NativeAgentAccountUsageWindow[] {
   const body = asRecord(value);
   if (!body) return [];
+  const listed = claudeLimitsWindows(body.limits);
+  if (listed.length > 0) return listed;
   const source = asRecord(body.usage) ?? body;
   const windows: NativeAgentAccountUsageWindow[] = [];
   for (const [key, entry] of Object.entries(source)) {
@@ -193,6 +236,7 @@ export function claudePlanWindows(value: unknown): NativeAgentAccountUsageWindow
     const id = snakeCase(key);
     const known = CLAUDE_WINDOW_LABELS[id];
     const resetsAt = isoReset(raw.resets_at ?? raw.resetsAt);
+    if (!known && resetsAt === undefined) continue;
     const windowMinutes =
       positiveNumber(raw.window_minutes ?? raw.windowMinutes) ?? known?.windowMinutes;
     windows.push({

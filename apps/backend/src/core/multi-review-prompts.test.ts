@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MULTI_REVIEW_PLAN_TOOL_PROHIBITION } from "@orkestrator/protocol/multi-review";
+import { MULTI_REVIEW_REPORTS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewPreparationPrompt,
@@ -174,9 +175,29 @@ describe("multi review consolidation prompt", () => {
     );
     expect(
       prompt.indexOf(
-        "- Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.",
+        "- Do not edit files, run validation or any command beyond those targeted reads, ask questions, or add prose outside the provider-enforced structured result.",
       ),
     ).toBeLessThan(prompt.indexOf("## Structured report structural preflight"));
+  });
+
+  // Consolidation once spent minutes re-verifying findings and exploring the
+  // codebase to dedupe a handful of reports.
+  test("bounds consolidation to merging the reports", () => {
+    const prompt = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [{ reviewerId: "a", agent: "codex", model: "gpt", report }],
+    });
+
+    expect(prompt).toContain("This is a merge, not another review.");
+    expect(prompt).toContain("read only the cited locations");
+    expect(prompt).toContain(
+      "Do not re-verify findings, re-run validation, explore the codebase, or look for new issues.",
+    );
+    expect(prompt).toContain("carry it forward as reported rather than re-verifying it");
+    // The bound must be read before the evidence frame, not after it.
+    expect(prompt.indexOf("This is a merge, not another review.")).toBeLessThan(
+      prompt.indexOf(MULTI_REVIEW_REPORTS_FRAME_OPEN),
+    );
   });
 
   test("omits the scope rule when nothing was uncommitted", () => {

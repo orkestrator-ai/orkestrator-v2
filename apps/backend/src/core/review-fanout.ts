@@ -48,7 +48,11 @@ import {
   workflowResultToolName,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
-import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
+import {
+  lastAssistantText,
+  missingWorkflowResultMessage,
+  workflowResultReminderPrompt,
+} from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
@@ -1324,16 +1328,21 @@ export class ReviewFanoutRunner {
         );
       }
       await finalUsage();
-      return this.recordStall(reviewer, async () =>
-        reviewer.resultTransport === "tool-v1"
-          ? missingWorkflowResultMessage({
-              subject: "The reviewer",
-              resultLabel: "structured report",
-              toolName: workflowResultToolName("review-report"),
-              submission: reviewer.resultSubmission,
-              finalText: lastAssistantText(await transcript.read(2).catch(() => undefined)),
-            })
-          : "The reviewer became idle without returning its structured report",
+      const finalText = async () =>
+        lastAssistantText(await transcript.read(2).catch(() => undefined));
+      return this.recordStall(
+        reviewer,
+        async () =>
+          reviewer.resultTransport === "tool-v1"
+            ? missingWorkflowResultMessage({
+                subject: "The reviewer",
+                resultLabel: "structured report",
+                toolName: workflowResultToolName("review-report"),
+                submission: reviewer.resultSubmission,
+                finalText: await finalText(),
+              })
+            : "The reviewer became idle without returning its structured report",
+        () => this.prepareReviewerResultReminder(reviewer, finalText),
       );
     }
     await finalUsage();
@@ -1649,12 +1658,63 @@ export class ReviewFanoutRunner {
   }
 
   /**
+   * Queues the single reminder turn for a tool-transport reviewer that went
+   * idle with no accepted report, in place of failing it. Returns false when
+   * the reminder does not apply or was already spent.
+   *
+   * The reviewer's analysis is complete by now; only delivery failed, and a
+   * fresh session would redo all of it. The follow-up runs in the same session
+   * under a new result slot, exactly like a schema repair.
+   */
+  private async prepareReviewerResultReminder(
+    reviewer: ReviewerRecord,
+    finalText: () => Promise<string | undefined>,
+  ): Promise<boolean> {
+    if (
+      reviewer.resultTransport !== "tool-v1" ||
+      reviewer.resultReminderSent === true ||
+      !reviewer.providerSessionId ||
+      // Accepted-but-unread and budget-exhausted slots are not a delivery gap
+      // another turn can close.
+      reviewer.resultSubmission === "received" ||
+      reviewer.resultSubmission === "needs-attention"
+    ) {
+      return false;
+    }
+    const prompt = workflowResultReminderPrompt({
+      resultLabel: "structured report",
+      toolName: workflowResultToolName("review-report"),
+      submission: reviewer.resultSubmission,
+      finalText: await finalText(),
+    });
+    // Retire the old slot before the new request identity reaches memory, for
+    // the same reason a schema repair does.
+    if (reviewer.requestId) await this.host.closeResult?.(reviewer.requestId);
+    reviewer.resultReminderSent = true;
+    reviewer.continuationPrompt = prompt;
+    reviewer.requestId = randomUUID();
+    reviewer.dispatchState = "prepared";
+    reviewer.resultSubmission = "preparing";
+    // The reminder is a new turn; the stall clock measures it, not the wait
+    // that preceded it.
+    reviewer.progressAt = nowIso();
+    delete reviewer.stalledSince;
+    delete reviewer.idleResultPolls;
+    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
+    await this.commit();
+    return true;
+  }
+
+  /**
    * Counts one stalled poll, failing the reviewer once the bound is reached.
    * `error` may be deferred so a costly explanation is built only then.
+   * `retry`, when given, may claim the exhausted bound for one more turn
+   * instead of failing.
    */
   private async recordStall(
     reviewer: ReviewerRecord,
     error: string | (() => Promise<string>),
+    retry?: () => Promise<boolean>,
   ): Promise<"continue" | "stop"> {
     const scope = `${this.host.workflowId}\0${reviewer.id}\0idle`;
     const gate = this.host.pollGate;
@@ -1667,6 +1727,7 @@ export class ReviewFanoutRunner {
       reviewer.idleResultPolls >= MAX_REVIEW_IDLE_RESULT_POLLS ||
       gate?.exhausted(scope, reviewer.idleResultPolls, MAX_REVIEW_IDLE_RESULT_POLLS)
     ) {
+      if (retry && (await retry())) return "stop";
       if (reviewer.providerSessionId) {
         await this.host.abandonSession(reviewer, reviewer.providerSessionId);
         this.host.progress.forget(reviewer.providerSessionId);

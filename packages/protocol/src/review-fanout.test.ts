@@ -88,6 +88,11 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ schemaRepairAttempts: 4 }))).toBe(false);
   });
 
+  test("persists the spent result reminder as a boolean", () => {
+    expect(isReviewerRecord(reviewer({ resultReminderSent: true }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ resultReminderSent: "yes" as never }))).toBe(false);
+  });
+
   test("requires a 64-character digest so a truncated one cannot be compared", () => {
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(64) }))).toBe(true);
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(63) }))).toBe(false);

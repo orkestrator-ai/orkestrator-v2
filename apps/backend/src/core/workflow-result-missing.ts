@@ -27,6 +27,40 @@ export function missingWorkflowResultMessage(input: {
   return `${subject} finished without calling ${toolName} to submit its ${resultLabel}`;
 }
 
+/**
+ * The one follow-up turn sent before a missing result becomes a failure.
+ *
+ * The common cause is not a model that forgot the tool but one that called it
+ * with malformed arguments — typically a long nested object missing its final
+ * closing brace — and then concluded the tool itself was broken. OpenCode
+ * reroutes such a call to its internal `invalid` tool, which a model can then
+ * keep calling directly with errors it invents, so the result tool is never
+ * reached again. The reminder names both so the retry targets the real fault.
+ *
+ * Bounded well below the 4 KiB durable continuation-prompt limit; the
+ * attempt's fresh result-tool instruction is appended at dispatch.
+ */
+export function workflowResultReminderPrompt(input: {
+  /** e.g. "structured report". */
+  resultLabel: string;
+  toolName: string;
+  submission: WorkflowResultSubmissionState | undefined;
+  finalText?: string;
+}): string {
+  const { resultLabel, toolName } = input;
+  const cause =
+    input.submission === "correcting"
+      ? `Your last submission was rejected. Correct only the problems it reported and submit again.`
+      : input.finalText !== undefined && looksLikeJsonObject(input.finalText)
+        ? `You wrote the ${resultLabel} as reply text. Reply text is not read; pass it to \`${toolName}\` instead.`
+        : `No call to \`${toolName}\` was accepted.`;
+  return [
+    `Orkestrator has not received your ${resultLabel}. ${cause} Your analysis is already done: do not repeat it, only submit the result.`,
+    `The result tools are working. If a call was rejected because its arguments could not be parsed as JSON (for example "JSON Parse error: Expected '}'"), the arguments you emitted were malformed, most often a closing brace missing at the end of a long nested object. Emit the arguments as one complete JSON object, check that every brace and bracket is closed, and keep prose fields short so the payload stays small. Only call tools that were offered to you: never call a tool named \`invalid\`, and never write a tool error yourself.`,
+    `The earlier resultKey is closed. Use only the resultKey (and capability, when one is given) from the instructions below.`,
+  ].join("\n\n");
+}
+
 /** Deliberately a shape check, not a parse: the text can be any size. */
 function looksLikeJsonObject(text: string): boolean {
   const trimmed = text

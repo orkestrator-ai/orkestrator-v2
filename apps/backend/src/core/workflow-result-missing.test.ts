@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
+import {
+  lastAssistantText,
+  missingWorkflowResultMessage,
+  workflowResultReminderPrompt,
+} from "./workflow-result-missing.js";
 
 const BASE = {
   subject: "The consolidation model",
@@ -38,6 +42,39 @@ describe("missingWorkflowResultMessage", () => {
     ).toBe(
       "The consolidation model stopped before submit_consolidated_review accepted its consolidated report; its last submission was rejected",
     );
+  });
+});
+
+describe("workflowResultReminderPrompt", () => {
+  const REMINDER = { resultLabel: "structured report", toolName: "submit_review_report" };
+
+  test("tells a model that blamed the tool that its arguments were malformed", () => {
+    const prompt = workflowResultReminderPrompt({ ...REMINDER, submission: "preparing" });
+    expect(prompt).toContain("No call to `submit_review_report` was accepted.");
+    expect(prompt).toContain("do not repeat it");
+    expect(prompt).toContain("The result tools are working.");
+    expect(prompt).toContain("JSON Parse error: Expected '}'");
+    expect(prompt).toContain("never call a tool named `invalid`");
+    expect(prompt).toContain("The earlier resultKey is closed.");
+  });
+
+  test("names a report pasted as reply text", () => {
+    expect(
+      workflowResultReminderPrompt({ ...REMINDER, submission: "preparing", finalText: '{"a":1}' }),
+    ).toContain("You wrote the structured report as reply text.");
+  });
+
+  test("names a rejected submission ahead of pasted text", () => {
+    expect(
+      workflowResultReminderPrompt({ ...REMINDER, submission: "correcting", finalText: "{}" }),
+    ).toContain("Your last submission was rejected.");
+  });
+
+  test("fits the durable continuation-prompt bound", () => {
+    for (const submission of ["preparing", "correcting", undefined] as const) {
+      const prompt = workflowResultReminderPrompt({ ...REMINDER, submission, finalText: "{}" });
+      expect(prompt.length).toBeLessThan(4_096);
+    }
   });
 });
 

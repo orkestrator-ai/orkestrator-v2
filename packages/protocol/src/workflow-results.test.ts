@@ -42,6 +42,10 @@ describe("workflow result contracts", () => {
     expect(instruction).toContain("validate_workflow_result");
     expect(instruction).toContain("Never call the submission tool with a probe");
     expect(instruction).toContain("arguments` as a raw object");
+    // A model that emits malformed arguments must retry the call rather than
+    // conclude the tool is broken.
+    expect(instruction).toContain("every brace and bracket closed");
+    expect(instruction).toContain("not a sign that the tool is broken");
     expect(instruction).toContain("Only retry an accepted submission with the exact same payload");
     expect(instruction).toContain("Do not print the result as JSON in your final response.");
     // Acceptance must not read as workflow completion.

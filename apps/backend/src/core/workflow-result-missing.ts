@@ -70,21 +70,24 @@ function looksLikeJsonObject(text: string): boolean {
   return trimmed.startsWith("{") && trimmed.endsWith("}");
 }
 
-/** Text of the last assistant message in a normalized transcript. */
+/** Text of the last assistant message in a normalized or raw provider transcript. */
 export function lastAssistantText(messages: readonly unknown[] | undefined): string | undefined {
   if (!messages) return undefined;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: unknown; content?: unknown; parts?: unknown };
-    if (!message || message.role !== "assistant") continue;
+    const message = messages[index] as {
+      role?: unknown;
+      info?: { role?: unknown };
+      content?: unknown;
+      parts?: unknown;
+    };
+    if (!message || (message.role ?? message.info?.role) !== "assistant") continue;
     if (Array.isArray(message.parts)) {
       const text = message.parts
-        .filter(
-          (part): part is { type: "text"; content: string } =>
-            !!part &&
-            (part as { type?: unknown }).type === "text" &&
-            typeof (part as { content?: unknown }).content === "string",
-        )
-        .map((part) => part.content)
+        .map((part: { type?: unknown; content?: unknown; text?: unknown } | null) => {
+          if (part?.type !== "text") return undefined;
+          return typeof part.content === "string" ? part.content : part.text;
+        })
+        .filter((text): text is string => typeof text === "string")
         .join("\n");
       if (text) return text;
     }

@@ -6145,6 +6145,70 @@ test("MultiReviewService consolidates from the reviewers left after one is stopp
   });
 });
 
+test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
+  "MultiReviewService clears a spent reviewer reminder on %s",
+  async (kind) => {
+    const provider = new Provider(false);
+    provider.statusValue = "running";
+    const environmentId = `env-reminder-reset-${kind}`;
+    await withService(environmentId, provider, async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await service.advanceNow(started.id);
+      const stored = (await storage.getMultiReviewWorkflow(started.id))!;
+      const workflow = stored.snapshot as MultiReviewWorkflow;
+      const reviewer = workflow.reviewers[0]!;
+      const oldSession = reviewer.providerSessionId!;
+      const oldRequest = reviewer.requestId!;
+      reviewer.resultReminderSent = true;
+      reviewer.schemaRepairAttempts = 1;
+      reviewer.status = "failed";
+      reviewer.error = "The reviewer finished without submitting its report";
+      if (kind === "retry" || kind === "stale-retry") workflow.phase = "failed";
+      if (kind === "stale-retry") {
+        workflow.reviewPackage = testGeneratedReviewPackage({
+          packageId: randomUUID(),
+          round: 1,
+          targetBranch: "main",
+        }) as unknown as NonNullable<MultiReviewWorkflow["reviewPackage"]>;
+        workflow.reviewSnapshotStale = true;
+      }
+      await storage.saveMultiReviewWorkflow(
+        started.id,
+        environmentId,
+        1,
+        workflow,
+        stored.revision,
+      );
+
+      const reset =
+        kind === "reviewer"
+          ? await service.restartReviewer(started.id, reviewer.id)
+          : kind === "prepare"
+            ? await service.restartStep(started.id, "prepare")
+            : await service.retry(started.id);
+      expect(reset.reviewers[0]?.resultReminderSent).toBeUndefined();
+      expect(reset.reviewers[0]?.schemaRepairAttempts).toBeUndefined();
+      expect(reset.reviewers[0]?.status).toBe("pending");
+      expect(reset.reviewers[0]?.providerSessionId).toBeUndefined();
+      expect(provider.aborted).toContain(oldSession);
+      expect((await snapshot(started.id))?.reviewers[0]?.resultReminderSent).toBeUndefined();
+      if (kind === "reviewer" || kind === "retry") {
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.reviewers[0]?.dispatchState === "sent";
+        });
+        const fresh = (await snapshot(started.id))!.reviewers[0]!;
+        expect(fresh.providerSessionId).not.toBe(oldSession);
+        expect(fresh.requestId).not.toBe(oldRequest);
+        expect(fresh.resultReminderSent).toBeUndefined();
+        expect(provider.sends.get(fresh.requestId!)?.prompt).toContain(
+          "You are independent reviewer",
+        );
+      }
+    });
+  },
+);
+
 test("MultiReviewService restarts only the selected reviewer in a fresh session", async () => {
   const provider = new Provider();
   provider.idempotentSessionKeys = true;

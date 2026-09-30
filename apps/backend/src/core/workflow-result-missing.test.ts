@@ -79,6 +79,36 @@ describe("workflowResultReminderPrompt", () => {
 });
 
 describe("lastAssistantText", () => {
+  test("detects pasted JSON in the raw OpenCode provider envelope", () => {
+    const messages = [
+      { info: { role: "assistant" }, parts: [{ type: "text", text: "earlier" }] },
+      {
+        info: { role: "assistant" },
+        parts: [
+          { type: "text", text: '```json\n{"issues":[' },
+          { type: "tool", tool: "invalid", state: { error: "JSON Parse error" } },
+          null,
+          { type: "text", text: 42 },
+          { type: "text", text: "]}\n```" },
+        ],
+      },
+      { info: { role: "user" }, parts: [{ type: "text", text: "continue" }] },
+    ];
+    const finalText = lastAssistantText(messages);
+    expect(finalText).toBe('```json\n{"issues":[\n]}\n```');
+    expect(missingWorkflowResultMessage({ ...BASE, submission: "preparing", finalText })).toContain(
+      "as text instead of calling submit_consolidated_review",
+    );
+    expect(
+      workflowResultReminderPrompt({
+        resultLabel: "structured report",
+        toolName: "submit_review_report",
+        submission: "preparing",
+        finalText,
+      }),
+    ).toContain("You wrote the structured report as reply text.");
+  });
+
   test("joins the text parts of the last assistant message", () => {
     expect(
       lastAssistantText([

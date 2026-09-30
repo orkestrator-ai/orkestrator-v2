@@ -1692,6 +1692,7 @@ export class ReviewFanoutRunner {
     if (reviewer.requestId) await this.host.closeResult?.(reviewer.requestId);
     reviewer.resultReminderSent = true;
     reviewer.continuationPrompt = prompt;
+    delete reviewer.schemaRepairPrompt;
     reviewer.requestId = randomUUID();
     reviewer.dispatchState = "prepared";
     reviewer.resultSubmission = "preparing";

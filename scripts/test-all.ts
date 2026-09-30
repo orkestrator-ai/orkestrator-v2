@@ -104,6 +104,16 @@ export const MAX_GROUP_OUTPUT_TAIL_BYTES = 256 * 1024;
  */
 export const DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS = 5 * 60 * 1_000;
 export const DEFAULT_TEST_GROUP_TIMEOUT_MS = 30 * 60 * 1_000;
+/**
+ * The aggregate prints only one line per finished group, so the gap after the
+ * fast groups finish is as long as the slowest group runs. Wrapped in
+ * `test:logged`, the aggregate is itself one watched group, and that silence
+ * tripped the wrapper's no-progress watchdog on a healthy workspace group.
+ * Each group keeps its own watchdogs; this line only proves the aggregate is
+ * alive. It is capped at half the no-progress budget so a shortened budget is
+ * still honoured.
+ */
+export const TEST_PROGRESS_HEARTBEAT_MS = 60 * 1_000;
 /** iOS builds and boots a simulator, which is far slower than any Bun group. */
 export const IOS_GROUP_TIMEOUT_MS = 60 * 60 * 1_000;
 /** Longest a group may hold an unreadable lease before we call it contended. */
@@ -781,6 +791,31 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     }
   }
 
+  const running = new Map<string, number>();
+  const heartbeatMs = Math.min(
+    TEST_PROGRESS_HEARTBEAT_MS,
+    Math.max(
+      1,
+      Math.floor(
+        configuredPositiveInteger(
+          dependencies.env,
+          TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
+          DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS,
+        ) / 2,
+      ),
+    ),
+  );
+  const heartbeat = setInterval(() => {
+    if (running.size === 0) return;
+    const now = Date.now();
+    const names = Array.from(
+      running,
+      ([name, since]) => `${name} (${formatDuration(now - since)})`,
+    );
+    dependencies.log(`STILL RUNNING ${names.join(", ")}`);
+  }, heartbeatMs);
+  heartbeat.unref();
+
   try {
     await pruneExpiredTestLogDirectories().catch(() => undefined);
     const affected = dependencies.env[TEST_AFFECTED_ENV] === "1";
@@ -828,10 +863,11 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const results: CompletedGroup[] = await Promise.all(
       groups.map(async (group) => {
         const groupStartedAt = Date.now();
+        running.set(group.name, groupStartedAt);
         const result = await runGroup(
           group,
           group.env ? { ...runEnvironment, ...group.env } : runEnvironment,
-        );
+        ).finally(() => running.delete(group.name));
         const completed = { group, result, elapsedMs: Date.now() - groupStartedAt };
         completedCount += 1;
         dependencies.log(
@@ -890,7 +926,10 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
       };
       dependencies.log(`\nRunning ${iosGroup.name}…`);
       const startedAt = Date.now();
-      const result = await runGroup(iosGroup, runEnvironment);
+      running.set(iosGroup.name, startedAt);
+      const result = await runGroup(iosGroup, runEnvironment).finally(() =>
+        running.delete(iosGroup.name),
+      );
       const ios = { group: iosGroup, result, elapsedMs: Date.now() - startedAt };
       results.push(ios);
       const status = result.status ?? 1;
@@ -903,6 +942,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     await finalizeTestLogs(logDirectory, results, true);
     return 0;
   } finally {
+    clearInterval(heartbeat);
     for (const [signal, listener] of interruptListeners) process.off(signal, listener);
     admission?.close();
   }

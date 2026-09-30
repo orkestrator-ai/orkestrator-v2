@@ -1,7 +1,7 @@
 # DesignCanvasTab history > only the focused pane handles a shared shortcut
 
 - **ID:** 0156
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-22
 - **File:** `apps/web/src/components/design/DesignCanvasTab.test.tsx:218`
 - **Original command:** `mise run test`
@@ -57,3 +57,30 @@
   keybinding file. The owning file passed alone with `mise run test:logged --
    --name design-canvas-alone -- bun --cwd=apps/web test
    ./src/components/design/DesignCanvasTab.test.tsx`.
+
+## Resolution (2026-09-30)
+
+Already fixed in product code; this entry was never closed. The hypothesis
+above was right, and it was a real product bug. Before #844 the canvas kept
+`history` and `busy` in React state, and the async sync loop set them
+(`setHistory(nextHistory)`, a default-priority update). The Undo button's
+`disabled={!canvas || busy || !history.canUndo}` reached the DOM at commit.
+The window keydown listener, however, was a `useEffect` whose closure captured
+`history` and `busy`. React flushes that effect in a later scheduler task, so
+between the commit and that task the listener still saw `canUndo === false`
+and never called `preventDefault()`. A user pressing Ctrl/Cmd+Z in that window
+got a no-op.
+
+#844 (`8f5d8041`, 2026-09-25) rebuilt the canvas. The handler now reads
+`projectionRef.current?.workspace?.history` when the key is pressed. The ref is
+assigned during render from the same `projection` that enables the toolbar
+button, so the listener cannot lag the DOM. The test is now
+`DesignCanvasTab > shortcuts route to design undo only for the owning pane and
+never from text fields`, and its assertion is unchanged.
+
+Every commit that recorded a failure here lacks `8f5d8041`: `23ef8fbf`,
+`8fa8c26b`, `173b94a8`, `366b3f74`, `9767f061`, `17e021e8`, `964d71f4` and
+`9fc48656`. So does branch commit `4cda1722`, from the 2026-09-26 run. This was
+checked with `git merge-base --is-ancestor`. A recurrence on code containing
+#844 would be a new mechanism; check the aggregate log first for an uncaught
+React error that unmounted the root.

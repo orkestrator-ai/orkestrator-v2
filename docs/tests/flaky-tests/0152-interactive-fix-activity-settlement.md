@@ -1,7 +1,7 @@
 # Interactive Fix environment activity settlement
 
 - **ID:** 0152
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-20
 - **Test:** `MultiReviewService settles the interactive Fix card in the background with final usage`
 - **File:** `apps/backend/src/core/multi-review-service.test.ts:741`
@@ -27,3 +27,20 @@ The same test recurred on 2026-09-23 in a second full `mise run test` on
 and one failure. Five isolated runs of `multi-review-service.test.ts` passed
 with 176 tests each. The environment activity write still lagged the idle Fix
 snapshot; the case remains open.
+
+## Resolution (2026-09-30)
+
+Already fixed; this entry was never closed. `MultiReviewService.saveNow`
+commits the workflow snapshot and then awaits `syncWorkflowActivity`, which
+waits on the environment mutation lock and, for a working→idle transition,
+rotates backups. The test's `snapshot()` reads the workflow store, so it can
+see the idle Fix session before the derived environment projection is
+written. That ordering is by design: the workflow store is authoritative and
+boot-time reconciliation repairs a lost projection.
+
+2dfcbb78 (#812, 2026-09-21) made the test wait for
+`agentActivitySources["multi-review"].state === "idle"` before asserting it.
+The 2026-09-23 recurrence ran on `slash-commands-support-3b13a4bc3b08-r1` at
+954e96b0, which does not contain 2dfcbb78
+(`git merge-base --is-ancestor 2dfcbb78 954e96b0` fails). No failure has been
+observed on code that has the wait.

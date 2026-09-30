@@ -1,7 +1,7 @@
 # Re-cached provider retirement assertion varies in the aggregate
 
 - **ID:** 0172
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Test:** `NativeAgentService shared observations > a re-cached provider is never retired`
 - **File:** `apps/backend/src/core/native-agent-service-reconciliation.test.ts:4932`
@@ -13,3 +13,22 @@
 ## Current assessment
 
 The aggregate and isolated results differ. The backend code did not change in this task; the retirement timing needs targeted investigation.
+
+## Resolution (2026-09-30)
+
+The test configured `providerRetirementGraceMs: 0`. The failed observation
+evicts the provider and arms a `setTimeout(…, 0)` retirement. The re-cache the
+test then performs (`provider(TAB)`) awaits storage twice
+(`assertEnvironmentLive`) before `installProvider()` cancels the retirement.
+Under load that storage I/O took longer than the zero-length timer, so the
+timer fired first and disposed a provider that was about to be re-cached. The
+test was racing its own configuration; the product ordering is intended.
+
+The test now uses a 60-second grace, so the retirement stays armed until the
+re-cache has to cancel it. It asserts `retiringProviders` holds the provider
+after the failed sweep and no longer holds it after the re-cache. It still
+asserts that `dispose` was never called. Removing
+`cancelProviderRetirement()` from `installProvider()` fails the new assertion
+deterministically instead of intermittently.
+
+Verification: the owning test passed 30/30 with `--rerun-each 30` under full-suite load.

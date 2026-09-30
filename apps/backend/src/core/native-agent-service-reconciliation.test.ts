@@ -216,6 +216,7 @@ function internals(service: NativeAgentService) {
       effort?: string,
     ): Promise<BridgeConnection>;
     providers: Map<string, AgentSessionProvider>;
+    retiringProviders: Map<AgentSessionProvider, unknown>;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
     absentBridgeUntil: Map<string, number>;
@@ -4940,14 +4941,18 @@ describe("NativeAgentService shared observations", () => {
       {
         prefix: "orkestrator-native-observation-recache-",
         provider: async () => stub.provider,
-        providerRetirementGraceMs: 0,
+        // A zero grace let the retirement timer beat the re-cache, which awaits
+        // storage, under load. A long grace keeps the retirement armed until
+        // the re-cache must cancel it, which is the behaviour under test.
+        providerRetirementGraceMs: 60_000,
       },
       async ({ storage, service }) => {
         await adopt(storage, "tab-1", "provider-1");
         await captureWarnings(() => service.reconcileAgentActivity());
+        expect(internals(service).retiringProviders.has(stub.provider)).toBe(true);
         fail = false;
         await internals(service).provider(TAB);
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(internals(service).retiringProviders.has(stub.provider)).toBe(false);
         expect(stub.dispose).not.toHaveBeenCalled();
       },
     );

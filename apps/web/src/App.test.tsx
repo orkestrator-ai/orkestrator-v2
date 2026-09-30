@@ -1,4 +1,5 @@
 import { createSessionKey } from "@/lib/utils";
+import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
@@ -451,6 +452,19 @@ function makeEnvironment(id: string, projectId: string): Environment {
     order: 0,
     environmentType: "containerized",
   } as Environment;
+}
+
+function expectStartupBlockerTheme(heading: HTMLElement) {
+  const panel = heading.parentElement?.parentElement;
+  expect(panel).toBeTruthy();
+  const classes = panel!.className.split(/\s+/);
+  expect(classes).toEqual(
+    expect.arrayContaining([
+      ...MODAL_CONTENT_CLASS_NAME.split(/\s+/).filter((className) => className !== "bg-background"),
+      "bg-card",
+    ]),
+  );
+  expect(classes).not.toContain("bg-background");
 }
 
 function resetStores({
@@ -1552,7 +1566,7 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expectStartupBlockerTheme(await screen.findByRole("heading", { name: "macOS File Access" }));
       expect(screen.queryByText("Checking macOS file access...") === null).toBe(true);
       expect(screen.getByText("Full Disk Access")).toBeTruthy();
       expect(screen.getByText("Documents folder")).toBeTruthy();
@@ -1694,7 +1708,9 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("Could not check macOS file access")).toBeTruthy();
+      expectStartupBlockerTheme(
+        await screen.findByRole("heading", { name: "Could not check macOS file access" }),
+      );
       expect(screen.getByText("ipc unavailable")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
       expect(consoleError).toHaveBeenCalledWith(

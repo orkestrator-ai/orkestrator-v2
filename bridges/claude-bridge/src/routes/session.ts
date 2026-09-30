@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
+import { NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   commandUnavailableResponse,
@@ -504,6 +505,7 @@ session.post("/:id/steer", async (c) => {
     return c.json({ error: "input, requestId, and expectedRunId are required" }, 400);
   }
   const outcome = await steerClaudeSession(c.req.param("id"), text, requestId, expectedRunId);
+  if (typeof outcome === "object") return c.json(outcome, NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS);
   return c.json({ outcome }, outcome === "unknown" ? 503 : 200);
 });
 

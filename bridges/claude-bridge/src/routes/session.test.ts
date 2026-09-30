@@ -1831,6 +1831,22 @@ describe("session routes", () => {
       );
     });
 
+    test("returns the definitive capacity refusal contract", async () => {
+      const refusal = {
+        outcome: "rejected" as const,
+        reason: "steer-capacity-exceeded" as const,
+        requestId: "steer-full",
+      };
+      mockSteerClaudeSession.mockResolvedValueOnce(refusal);
+      const res = await jsonRequest("POST", "/session/s-1/steer", {
+        input: "Follow up",
+        requestId: "steer-full",
+        expectedRunId: "run-1",
+      });
+      expect(res.status).toBe(429);
+      expect(await jsonBody(res)).toEqual(refusal);
+    });
+
     test("reports an idle session without starting a turn", async () => {
       mockSteerClaudeSession.mockResolvedValueOnce("idle");
       const res = await jsonRequest("POST", "/session/s-1/steer", {

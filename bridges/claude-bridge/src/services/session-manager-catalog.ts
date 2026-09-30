@@ -11,6 +11,7 @@ import type {
   NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
+  NativeAgentSteerRejectedOutcome,
 } from "@orkestrator/protocol/native-agent";
 import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
@@ -129,7 +130,7 @@ export function readClaudeSteerDispatch(
   if (requestId === "orkestrator-steer-qualification") return "unknown";
   const entry = sessions.get(sessionId)?.steerJournal?.get(requestId);
   if (entry?.state === "dispatched") return "dispatched";
-  if (entry?.state === "absent") return "absent";
+  if (entry?.state === "absent" || entry?.state === "capacity-exceeded") return "absent";
   return "unknown";
 }
 
@@ -428,7 +429,12 @@ export async function steerClaudeSession(
   text: string,
   requestId: string,
   expectedRunId: string,
-): Promise<"applied" | "idle" | "mismatch" | "unknown"> {
+): Promise<"applied" | "idle" | "mismatch" | "unknown" | NativeAgentSteerRejectedOutcome> {
+  const capacityRefusal: NativeAgentSteerRejectedOutcome = {
+    outcome: "rejected",
+    reason: "steer-capacity-exceeded",
+    requestId,
+  };
   const session = sessions.get(sessionId);
   const inputDigest = createHash("sha256").update(text).digest("hex");
   const previous = session?.steerJournal?.get(requestId);
@@ -438,6 +444,7 @@ export async function steerClaudeSession(
     }
     if (previous.state === "dispatched") return "applied";
     if (previous.state === "absent") return "idle";
+    if (previous.state === "capacity-exceeded") return capacityRefusal;
     return "unknown";
   }
   if (!session || session.status !== "running" || !session.queryControl?.pushInput) {
@@ -481,16 +488,16 @@ export async function steerClaudeSession(
   await steerTestHooks?.beforePushInput?.();
   const pushed = session.queryControl.pushInput(message);
   await steerTestHooks?.afterPushInput?.();
-  if (!pushed) {
+  if (pushed !== true) {
     rememberSteer(session, {
       requestId,
       inputDigest,
       expectedRunId,
-      state: "unknown",
+      state: pushed === "capacity-exceeded" ? "capacity-exceeded" : "unknown",
       createdAt: Date.now(),
     });
     await persistSteerJournal(session);
-    return "unknown";
+    return pushed === "capacity-exceeded" ? capacityRefusal : "unknown";
   }
 
   rememberSteer(session, {

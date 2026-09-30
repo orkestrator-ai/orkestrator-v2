@@ -39,7 +39,7 @@ export interface PromptStreamState {
   pendingApiRetryMessageId?: string;
   flushStreamedAssistantMessage: () => void;
   applyPartialAssistantMessage: (partialMessage: any) => boolean;
-  resolveStreamMessageKey: (raw: string) => string;
+  startPostSteerRowFor: (apiMessageId: string) => void;
   beginPostSteerScope: () => void;
   clearFlushTimer: () => void;
 }
@@ -96,12 +96,13 @@ export function createPromptStreamState(
   let currentStreamApiMessageId: string | null = null;
   // Fallback keys for messages that carry neither an API message id nor a uuid.
   let syntheticMessageKeyCounter = 0;
-  // After a mid-turn steer, later blocks of the same API message must land on a
-  // fresh assistant row rather than replaying the pre-steer parts under a new
-  // user instruction.
-  const remappedApiMessageIds = new Map<string, string>();
-
-  const resolveStreamMessageKey = (raw: string): string => remappedApiMessageIds.get(raw) ?? raw;
+  // After a mid-turn steer, the API messages already under way until the first
+  // one that could have seen it. Everything for these was produced without
+  // the steer — including the final records the CLI writes for a message the
+  // steer interrupted, which arrive after the steer — so it stays on the row it
+  // streamed into. Null when no steer is waiting for its response.
+  let preSteerApiMessageIds: Set<string> | null = null;
+  const rootApiMessageIds = new Set<string>();
 
   // Flattened view of `blocksByApiMessage`, in message order then block order.
   let accumulatedOrderedParts: OrderedPartEntry[] = [];
@@ -297,6 +298,35 @@ export function createPromptStreamState(
     emitCurrentAssistantMessage();
   };
 
+  /**
+   * Start a fresh assistant row if `apiMessageId` is the first root API
+   * message after a steer, so the response to the steer does not extend the
+   * one it interrupted.
+   */
+  const startPostSteerRowFor = (apiMessageId: string) => {
+    rootApiMessageIds.add(apiMessageId);
+    if (!preSteerApiMessageIds || preSteerApiMessageIds.has(apiMessageId)) return;
+    if (preSteerApiMessageIds.size === 0) {
+      // A steer before the first reply can precede the interrupted request's
+      // delayed final record. Keep that first root ID on the original row.
+      preSteerApiMessageIds.add(apiMessageId);
+      return;
+    }
+    preSteerApiMessageIds = null;
+    flushStreamedAssistantMessage();
+    rootApiMessageIds.clear();
+    rootApiMessageIds.add(apiMessageId);
+    blocksByApiMessage.clear();
+    parentTaskByApiMessage.clear();
+    finalizedBlockCountByApiMessage.clear();
+    accumulatedOrderedParts = [];
+    currentAssistantMessage = null;
+    publishedMessageId = null;
+    publishedParts = [];
+    lastStreamMessageKey = null;
+    lastStreamModelId = undefined;
+  };
+
   const scheduleStreamedAssistantMessageFlush = () => {
     streamEventsDirty = true;
     streamEventFlushTimer ??= setTimeout(() => {
@@ -325,6 +355,7 @@ export function createPromptStreamState(
         partialMessage.parent_tool_use_id,
         partialMessage.isSidechain,
       );
+      if (isRootAssistant && apiMessageId) startPostSteerRowFor(apiMessageId);
       const modelId = isRootAssistant
         ? normalizeBackendModelId(streamEvent.message?.model)
         : undefined;
@@ -355,13 +386,12 @@ export function createPromptStreamState(
 
     // Only fall back to the event uuid when no `message_start` was seen, which
     // real SDK streams always send before any block event.
-    const rawMessageKey =
+    const messageKey =
       currentStreamApiMessageId ??
       (typeof partialMessage.uuid === "string" ? partialMessage.uuid : undefined);
-    if (!rawMessageKey) {
+    if (!messageKey) {
       return false;
     }
-    const messageKey = resolveStreamMessageKey(rawMessageKey);
     const parentTaskUseId = explicitParentTaskUseId ?? parentTaskByApiMessage.get(messageKey);
     if (explicitParentTaskUseId) {
       parentTaskByApiMessage.set(messageKey, explicitParentTaskUseId);
@@ -479,22 +509,12 @@ export function createPromptStreamState(
     },
     flushStreamedAssistantMessage,
     applyPartialAssistantMessage,
-    resolveStreamMessageKey,
+    startPostSteerRowFor,
     beginPostSteerScope: () => {
+      // Publish what streamed so far, so the row holding it precedes the
+      // steer's user row.
       flushStreamedAssistantMessage();
-      const previousKey = lastStreamMessageKey ?? currentStreamApiMessageId;
-      const newKey = `steer-split-${(syntheticMessageKeyCounter += 1)}`;
-      if (previousKey) remappedApiMessageIds.set(previousKey, newKey);
-      if (currentStreamApiMessageId) remappedApiMessageIds.set(currentStreamApiMessageId, newKey);
-      blocksByApiMessage.clear();
-      parentTaskByApiMessage.clear();
-      finalizedBlockCountByApiMessage.clear();
-      accumulatedOrderedParts = [];
-      currentAssistantMessage = null;
-      publishedMessageId = null;
-      publishedParts = [];
-      lastStreamMessageKey = newKey;
-      lastStreamModelId = undefined;
+      preSteerApiMessageIds = new Set(rootApiMessageIds);
     },
     clearFlushTimer: () => {
       if (streamEventFlushTimer) {

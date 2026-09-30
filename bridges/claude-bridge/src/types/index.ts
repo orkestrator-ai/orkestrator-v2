@@ -228,6 +228,8 @@ export interface SdkResultMessage extends SdkMessageBase {
   user_message_uuids?: string[];
   /** How many results this process wrote before this one; absent from older producers. */
   result_index?: number;
+  /** User sends waiting in the provider queue; absent on older producers. */
+  queued_turn_count?: number;
 }
 
 /** Type guard for compact boundary message */
@@ -376,7 +378,9 @@ export interface NormalizedMessage {
 
 export interface ClaudeQueryControl {
   interrupt?: () => Promise<{ still_queued: string[]; cancelled?: string[] } | undefined>;
-  pushInput?: (message: import("@anthropic-ai/claude-agent-sdk").SDKUserMessage) => boolean;
+  pushInput?: (
+    message: import("@anthropic-ai/claude-agent-sdk").SDKUserMessage,
+  ) => boolean | "capacity-exceeded";
   setPermissionMode?: (mode: PermissionMode) => Promise<void>;
   setModel?: (model?: string) => Promise<void>;
   setMaxThinkingTokens?: (
@@ -757,7 +761,7 @@ export interface ClaudeSteerJournalEntry {
   requestId: string;
   inputDigest: string;
   expectedRunId: string;
-  state: "prepared" | "dispatched" | "absent" | "unknown";
+  state: "prepared" | "dispatched" | "absent" | "unknown" | "capacity-exceeded";
   createdAt: number;
 }
 

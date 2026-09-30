@@ -529,6 +529,24 @@ export function ReviewValidationStatus({
                     className="px-2 py-2 text-right align-top tabular-nums text-muted-foreground"
                   >
                     {resultElapsedMs !== null ? formatSeconds(resultElapsedMs) : ""}
+                    {(result.reservedWorkers !== undefined ||
+                      (result.cpuMs !== undefined && result.durationMs >= 1000)) && (
+                      <div
+                        data-slot="validation-usage"
+                        className="mt-1 whitespace-nowrap"
+                        title="Average cores used (CPU time over wall time) and host scheduler slots reserved"
+                      >
+                        {result.cpuMs !== undefined && result.durationMs >= 1000 && (
+                          <div>{(result.cpuMs / result.durationMs).toFixed(1)} cores</div>
+                        )}
+                        {result.reservedWorkers !== undefined && (
+                          <div>
+                            {result.reservedWorkers}{" "}
+                            {result.reservedWorkers === 1 ? "slot" : "slots"}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td
                     data-slot="validation-queued"

@@ -422,7 +422,10 @@ test("HEAD change after discovery still fails validation", async () => {
 test("cancellation terminates children and a cancelled launch cannot start commands", async () => {
   const { root, run } = await fixture([
     command("slow", "sleep 10; touch .orkestrator/unexpected", { weight: 2 }),
-    command("never-after-slow", "touch .orkestrator/unexpected-after-slow"),
+    // Several commands may run at once, so only a dependency keeps this one waiting.
+    command("never-after-slow", "touch .orkestrator/unexpected-after-slow", {
+      dependsOn: ["slow"],
+    }),
   ]);
   await control(root, run);
   const runningDeadline = Date.now() + 3_000;
@@ -1388,3 +1391,17 @@ admission.close(); process.exitCode = result.status ?? 1;
   });
   expect(done.results[0]!.status).toBe("passed");
 }, 20000);
+
+test("a measured command reserves its observed CPU use on the next run", async () => {
+  // The same command twice: the first run is sized by weight, the second by
+  // the first run's measured parallelism. Sleeping uses almost no CPU.
+  const { root, run } = await fixture([
+    command("first", "sleep 1.2"),
+    command("second", "sleep 1.2", { dependsOn: ["first"] }),
+  ]);
+  const done = await waitFor(root, run, 15000, { ORKESTRATOR_TEST_HOST_WORKERS: "4" });
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+  expect(done.results[0]).toMatchObject({ reservedWorkers: 4 });
+  expect(done.results[0]!.cpuMs).toBeLessThan(done.results[0]!.durationMs);
+  expect(done.results[1]).toMatchObject({ reservedWorkers: 1 });
+}, 30000);

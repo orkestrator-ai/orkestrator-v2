@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
 import {
+  abortSession,
+  captureEvents,
   createSession,
   evictIdleHydratedTranscripts,
   getPromptDispatchState,
@@ -9,6 +11,7 @@ import {
   hydratePersistedSessionMessages,
   IDLE_TRANSCRIPT_EVICTION_MS,
   nextQueryCall,
+  queryControlOverrides,
   persistSessionMetadata,
   readSessionPreferences,
   sendPrompt,
@@ -17,6 +20,7 @@ import {
 } from "./session-manager-test-harness.js";
 import {
   answerIdleSteerPrompt,
+  gracefulInterruptClaudeSession,
   readClaudeSteerDispatch,
   sessions,
   setClaudeSteerTestHooks,
@@ -248,6 +252,288 @@ describe("Claude steer journal and transcript", () => {
     parent_tool_use_id: null,
   });
 
+  async function startSteerTurn(title: string) {
+    const session = createSession(title);
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Write the plan");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const first = await input.next();
+    if (first.done) throw new Error("Held input closed before prompt");
+    const promptUuid = first.value.uuid!;
+    const steer = async (id: string) => {
+      const outcome = await steerClaudeSession(
+        session.id,
+        id,
+        id,
+        String(session.latestTurnGeneration),
+      );
+      expect(outcome).toBe("applied");
+      const delivered = await input.next();
+      expect(delivered.done ? undefined : delivered.value.uuid).toBe(id);
+    };
+    const result = (uuids: string[], index: number, fields: Record<string, unknown> = {}) => {
+      call.push({
+        type: "result",
+        subtype: "success",
+        result_index: index,
+        user_message_uuids: uuids,
+        ...fields,
+      });
+    };
+    const finish = async (uuids: string[], index = 1, fields: Record<string, unknown> = {}) => {
+      let inputClosed = false;
+      const completion = input.next().then((next) => {
+        inputClosed = next.done === true;
+      });
+      result(uuids, index, fields);
+      // Do not finish the mock output until the result closes held stdin:
+      // finishing it first would mask a skipped terminal result.
+      await waitFor(() => inputClosed);
+      await completion;
+      call.finish();
+      await prompt;
+      expect(session.status).toBe("idle");
+      expect(session.queryControl).toBeUndefined();
+      return getSessionMessages(session.id);
+    };
+    return { session, prompt, call, input, promptUuid, steer, result, finish };
+  }
+
+  test("bounds coalesced input at 64 UUIDs and definitively refuses excess steers", async () => {
+    const { events, stop } = captureEvents();
+    try {
+      const turn = await startSteerTurn("Correlation boundary");
+      const ids = Array.from({ length: 63 }, (_, i) => `boundary-${i}`);
+      for (const id of ids) await turn.steer(id);
+      for (const id of ["boundary-63", "boundary-64"]) {
+        const refused = { outcome: "rejected", reason: "steer-capacity-exceeded", requestId: id };
+        const send = () =>
+          steerClaudeSession(turn.session.id, id, id, String(turn.session.latestTurnGeneration));
+        expect(await send()).toEqual(refused);
+        expect(readClaudeSteerDispatch(turn.session.id, id)).toBe("absent");
+        // Persisted refusals and accepted requests remain idempotent.
+        const saved = await readSessionPreferences(sdkSessionIdFromBridgeId(turn.session.id)!);
+        turn.session.steerJournal = steerJournalMapFromPreferences(saved?.steerJournal);
+        expect(await send()).toEqual(refused);
+      }
+      expect(
+        await steerClaudeSession(
+          turn.session.id,
+          ids[0]!,
+          ids[0]!,
+          String(turn.session.latestTurnGeneration),
+        ),
+      ).toBe("applied");
+      const transcript = await turn.finish([turn.promptUuid, ...ids]);
+      expect(transcript.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+        "Write the plan",
+        ...ids,
+      ]);
+      expect(transcript[0]?.sdkUuid).toBe(turn.promptUuid);
+      expect(events.some((e) => e.type === "session.idle" && e.sessionId === turn.session.id)).toBe(
+        true,
+      );
+      for (const id of ids) expect(readClaudeSteerDispatch(turn.session.id, id)).toBe("dispatched");
+    } finally {
+      stop();
+    }
+  });
+
+  test("settles successive steers only after the last result and preserves transcript order", async () => {
+    const turn = await startSteerTurn("Successive steers");
+    callText(turn.call, "original", "original reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "original reply"));
+    await turn.steer("first-steer");
+    turn.result([turn.promptUuid], 0);
+    callText(turn.call, "first-reply", "first reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "first reply"));
+    await turn.steer("second-steer");
+    turn.result(["first-steer"], 1, { queued_turn_count: 0 });
+    callText(turn.call, "second-reply", "second reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "second reply"));
+    expect(turn.session.status).toBe("running");
+    expect(turn.session.messages[0]?.sdkUuid).toBe(turn.promptUuid);
+    const transcript = await turn.finish(["second-steer"], 2);
+    expect(transcript.map((m) => m.content)).toEqual([
+      "Write the plan",
+      "original reply",
+      "first-steer",
+      "first reply",
+      "second-steer",
+      "second reply",
+    ]);
+    expect(transcript[0]?.sdkUuid).toBe(turn.promptUuid);
+  });
+
+  const callText = (call: Awaited<ReturnType<typeof nextQueryCall>>, id: string, text: string) => {
+    call.push(finalText(id, text));
+  };
+
+  test("reconciles omitted steer UUIDs only when the latest steer reports a drained queue", async () => {
+    const turn = await startSteerTurn("Drained coalesced steers");
+    await turn.steer("coalesced-a");
+    await turn.steer("coalesced-b");
+    turn.result([turn.promptUuid], 0, { queued_turn_count: 0 });
+    callText(turn.call, "old-final", "interrupted reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "interrupted reply"));
+    expect(turn.session.status).toBe("running");
+    const transcript = await turn.finish(["coalesced-b"], 1, { queued_turn_count: 0 });
+    expect(transcript[0]?.sdkUuid).toBe(turn.promptUuid);
+    expect(readClaudeSteerDispatch(turn.session.id, "coalesced-a")).toBe("dispatched");
+  });
+
+  test("ignores a result naming neither this prompt nor a pending steer", async () => {
+    const turn = await startSteerTurn("Unrelated result");
+    await turn.steer("owned-steer");
+    turn.result(["other-input"], 0, { queued_turn_count: 0 });
+    callText(turn.call, "original", "original reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "original reply"));
+    expect(turn.session.status).toBe("running");
+    expect(turn.session.messages[0]?.sdkUuid).toBeUndefined();
+    turn.result([turn.promptUuid], 1);
+    turn.result(["other-input"], 2);
+    callText(turn.call, "steered", "steered reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "steered reply"));
+    expect(turn.session.status).toBe("running");
+    const transcript = await turn.finish(["owned-steer"], 3);
+    expect(transcript[0]?.sdkUuid).toBe(turn.promptUuid);
+  });
+
+  test("a graceful interrupt retains an unanswered queued steer until its own result", async () => {
+    queryControlOverrides.interrupt = async () => ({ still_queued: ["surviving-steer"] });
+    const turn = await startSteerTurn("Graceful interrupt");
+    await turn.steer("surviving-steer");
+    expect(await gracefulInterruptClaudeSession(turn.session.id)).toEqual({
+      interrupted: true,
+      stillQueued: ["surviving-steer"],
+    });
+    turn.result([turn.promptUuid], 0, { subtype: "error_during_execution", is_error: true });
+    callText(turn.call, "interrupted", "partial reply");
+    await waitFor(() => turn.session.messages.some((m) => m.content === "partial reply"));
+    expect(turn.session.status).toBe("running");
+    await turn.finish(["surviving-steer"]);
+  });
+
+  test("aborting with an unanswered steer closes input and publishes terminal state", async () => {
+    const { events, stop } = captureEvents();
+    try {
+      const turn = await startSteerTurn("Abort pending steer");
+      await turn.steer("unanswered-steer");
+      const completion = turn.input.next();
+      expect(abortSession(turn.session.id)).toBe(true);
+      await turn.prompt;
+      expect((await completion).done).toBe(true);
+      expect(turn.session.status).toBe("idle");
+      expect(turn.session.queryControl).toBeUndefined();
+      expect(readClaudeSteerDispatch(turn.session.id, "unanswered-steer")).toBe("dispatched");
+      expect(
+        events.some(
+          (e) =>
+            e.type === "session.idle" &&
+            e.sessionId === turn.session.id &&
+            (e.data as { aborted?: boolean }).aborted,
+        ),
+      ).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  for (const phase of ["before-first-event", "after-message-stop"] as const) {
+    test(`splits delayed root records when steering ${phase}`, async () => {
+      const turn = await startSteerTurn(phase);
+      if (phase === "after-message-stop") {
+        for (const frame of textStream("old-root", 0, "before steer")) turn.call.push(frame);
+        turn.call.push({
+          type: "stream_event",
+          event: { type: "message_stop" },
+          parent_tool_use_id: null,
+        });
+        turn.call.push({
+          ...finalText("old-root", "before steer"),
+          message: {
+            id: "old-root",
+            content: [
+              { type: "text", text: "before steer" },
+              { type: "tool_use", id: "tool-running", name: "Bash", input: { command: "sleep 1" } },
+            ],
+          },
+        });
+        await waitFor(() =>
+          turn.session.messages.some((m) => m.parts.some((p) => p.type === "tool-invocation")),
+        );
+      }
+      await turn.steer("deferred-steer");
+      turn.call.push(
+        finalText("old-root", phase === "before-first-event" ? "delayed original" : "old final"),
+      );
+      turn.result([turn.promptUuid], 0);
+      if (phase === "after-message-stop") {
+        turn.call.push({
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tool-running", content: "done" }],
+          },
+          parent_tool_use_id: null,
+        });
+      }
+      turn.call.push(finalText("new-root", "steer reply"));
+      const transcript = await turn.finish(["deferred-steer"]);
+      const assistants = transcript.filter((m) => m.role === "assistant");
+      expect(assistants).toHaveLength(2);
+      expect(assistants[0]?.content).toContain(
+        phase === "before-first-event" ? "delayed original" : "old final",
+      );
+      expect(assistants[1]?.content).toBe("steer reply");
+      expect(assistants[0]?.id).not.toBe(assistants[1]?.id);
+    });
+  }
+
+  for (const emptySnapshot of [false, true]) {
+    test(`sidechain frames and repeated steers preserve the deferred root split (empty=${emptySnapshot})`, async () => {
+      const turn = await startSteerTurn("Sidechain ordering");
+      if (!emptySnapshot) {
+        turn.call.push(finalText("old-root", "before steer"));
+        await waitFor(() => turn.session.messages.some((m) => m.content === "before steer"));
+      }
+      await turn.steer("side-steer-a");
+      for (const frame of textStream("side-api", 0, "side work")) {
+        turn.call.push({ ...frame, parent_tool_use_id: "agent-tool", isSidechain: true });
+      }
+      turn.call.push({
+        ...finalText("side-api", "side work"),
+        uuid: "side-record",
+        parent_tool_use_id: "agent-tool",
+        isSidechain: true,
+      });
+      // The final record's UUID is a synchronization marker, including when
+      // sidechain text is excluded from root content.
+      await waitFor(() =>
+        turn.session.messages.some(
+          (m) =>
+            m.sdkUuid === "side-record" ||
+            m.parts.some((p) => p.type === "text" && p.content === "side work"),
+        ),
+      );
+      await turn.steer("side-steer-b");
+      turn.call.push(finalText("old-root", "delayed original"));
+      turn.result([turn.promptUuid], 0);
+      turn.call.push(finalText("steer-root", "steer reply"));
+      const transcript = await turn.finish(["side-steer-a", "side-steer-b"]);
+      const assistants = transcript.filter((m) => m.role === "assistant");
+      expect(assistants).toHaveLength(2);
+      expect(assistants[0]?.content).toContain("delayed original");
+      expect(assistants[1]?.content).toBe("steer reply");
+      expect(transcript.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+        "Write the plan",
+        "side-steer-a",
+        "side-steer-b",
+      ]);
+    });
+  }
+
   /** Start a turn, stream its first text, and steer it. */
   async function steerAfterFirstText(title: string) {
     const session = createSession(title);
@@ -391,7 +677,6 @@ describe("Claude steer journal and transcript", () => {
 
       call.push({
         ...interrupted,
-        user_message_uuid: promptUuid,
         user_message_uuids: [promptUuid],
       });
       call.push({

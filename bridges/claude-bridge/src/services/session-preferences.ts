@@ -58,7 +58,7 @@ export interface ClaudeSteerPreferenceEntry {
   requestId: string;
   inputDigest: string;
   expectedRunId: string;
-  state: "prepared" | "dispatched" | "absent" | "unknown";
+  state: "prepared" | "dispatched" | "absent" | "unknown" | "capacity-exceeded";
   createdAt: number;
 }
 
@@ -390,7 +390,11 @@ function parseSteerJournalEntry(value: unknown): ClaudeSteerPreferenceEntry | un
     !/^[a-f0-9]{64}$/.test(inputDigest) ||
     !expectedRunId ||
     expectedRunId.length > 512 ||
-    (state !== "prepared" && state !== "dispatched" && state !== "absent" && state !== "unknown") ||
+    (state !== "prepared" &&
+      state !== "dispatched" &&
+      state !== "absent" &&
+      state !== "unknown" &&
+      state !== "capacity-exceeded") ||
     typeof record.createdAt !== "number" ||
     !Number.isFinite(record.createdAt)
   ) {

@@ -220,6 +220,7 @@ import {
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
   resultAnswersOtherInput,
+  MAX_RESULT_INPUT_UUIDS,
   resultInputUuids,
   resultSupersededBySteer,
   taskNotificationNoticePart,
@@ -875,9 +876,14 @@ export async function sendPrompt(
     // result has named yet. See `resultSupersededBySteer`.
     const steerUuids = new Set<string>();
     const unansweredSteerUuids = new Set<string>();
-    const pushSteerInput = (message: SDKUserMessage): boolean => {
+    let latestSteerUuid: string | undefined;
+    const pushSteerInput = (message: SDKUserMessage): boolean | "capacity-exceeded" => {
+      // Bound all steers for this query, not just the unacknowledged ones:
+      // merged prompt batches and tool-round fold-ins share the result cap.
+      if (steerUuids.size >= MAX_RESULT_INPUT_UUIDS - 1) return "capacity-exceeded";
       const pushed = heldSdkPrompt.push(message);
       if (pushed && typeof message.uuid === "string" && message.uuid) {
+        latestSteerUuid = message.uuid;
         steerUuids.add(message.uuid);
         unansweredSteerUuids.add(message.uuid);
       }
@@ -2718,13 +2724,14 @@ export async function sendPrompt(
         // and republished rather than inferred from message ordering. A steer's
         // result names the steer, whose record is not this prompt's.
         const recordPromptSdkUuid = () => {
-          if (
-            typeof resultMsg.user_message_uuid === "string" &&
-            resultMsg.user_message_uuid.length > 0 &&
-            !steerUuids.has(resultMsg.user_message_uuid) &&
-            userMessage.sdkUuid !== resultMsg.user_message_uuid
-          ) {
-            userMessage.sdkUuid = resultMsg.user_message_uuid;
+          const uuids = resultInputUuids(resultMsg);
+          const sdkUuid = uuids.includes(promptUuid)
+            ? promptUuid
+            : userMessage.sdkUuid
+              ? undefined
+              : uuids.find((uuid) => !steerUuids.has(uuid));
+          if (sdkUuid && userMessage.sdkUuid !== sdkUuid) {
+            userMessage.sdkUuid = sdkUuid;
             markTranscriptChanged(session);
             eventEmitter.emit({
               type: "message.updated",
@@ -2733,7 +2740,7 @@ export async function sendPrompt(
             });
           }
         };
-        if (resultSupersededBySteer(resultMsg, unansweredSteerUuids)) {
+        if (resultSupersededBySteer(resultMsg, unansweredSteerUuids, latestSteerUuid)) {
           // The prompt was answered, if only by the interruption, so what
           // follows is no longer filtered as another input's result.
           if (resultInputUuids(resultMsg).includes(promptUuid)) receivedPromptResult = true;

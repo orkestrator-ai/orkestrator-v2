@@ -1,78 +1,31 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  ImageBlockParam,
-  TextBlockParam,
-  ContentBlockParam,
-} from "@anthropic-ai/sdk/resources/messages/messages";
-import type {
-  ModelInfo,
   SessionState,
   NormalizedMessage,
   NormalizedPart,
   ToolDiffMetadata,
-  QuestionInfo,
-  QuestionRequest,
-  PlanApprovalRequest,
-  PromptOptions,
-  SessionInitData,
-  McpServerRuntimeStatus,
-  PluginRuntimeStatus,
-  SdkMessageBase,
-  SdkCompactBoundaryMessage,
-  SdkResultMessage,
-  SdkSystemMessage,
   TaskListSnapshot,
-  MessagePatchEventData,
-  SessionUsageSnapshot,
   BackgroundTaskSnapshot,
-  SessionRateLimitWindow,
-  StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import {
-  structuredOutputFailure,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
 import {
   toolDiffFromToolInput,
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
-import {
-  deleteSessionPreferences,
-  MAX_DISPATCHED_REQUEST_IDS,
-  readSessionPreferences,
-  sessionPreferencesUnavailable,
-  updateSessionPreferences,
-  type SessionPreferences,
-} from "./session-preferences.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { getMcpRuntimeConfig } from "./mcp-config.js";
-import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, existsSync, type Stats } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-
-import * as core from "./session-manager-core.js";
 import { generateMessageId } from "./session-manager-core.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   boundBackgroundTaskHistory,
 } from "./session-manager-background-tasks.js";
+
 export class ToolTracker {
   private tools = new Map<string, NormalizedPart>();
 
@@ -493,6 +446,9 @@ export function resultAnswersOtherInput(
   return Number.isSafeInteger(result.result_index);
 }
 
+// The SDK caps consumed UUIDs at 64, including the original prompt.
+export const MAX_RESULT_INPUT_UUIDS = 64;
+
 /**
  * Whether a `result` closes input that a steer has since overtaken, and so
  * is not the end of the turn. Forgets every steer the result names.
@@ -503,17 +459,25 @@ export function resultAnswersOtherInput(
  * `success` if text had begun streaming but `error_during_execution` while the
  * model was still thinking; taking the error as this turn's failure tore the
  * CLI down with the steer unanswered. The turn is over only once every steer
- * pushed into it has been named. A result that names no input at all cannot be
+ * pushed into it has been named, or the provider explicitly reports a drained
+ * queue on the result naming the latest steer. A result naming no input cannot be
  * attributed, and is handled as before.
  */
 export function resultSupersededBySteer(
   result: ResultInputFields,
   unansweredSteerUuids: Set<string>,
+  latestSteerUuid?: string,
 ): boolean {
   if (unansweredSteerUuids.size === 0) return false;
   const uuids = resultInputUuids(result);
   if (uuids.length === 0) return false;
   for (const uuid of uuids) unansweredSteerUuids.delete(uuid);
+  // A queue snapshot alone may precede delivery of a steer held in our input
+  // iterator. Naming the latest accepted steer proves that delivery reached
+  // the provider; FIFO delivery plus an explicit drain retires omitted UUIDs.
+  if (result.queued_turn_count === 0 && latestSteerUuid && uuids.includes(latestSteerUuid)) {
+    unansweredSteerUuids.clear();
+  }
   return unansweredSteerUuids.size > 0;
 }
 
@@ -521,6 +485,7 @@ type ResultInputFields = {
   user_message_uuid?: unknown;
   user_message_uuids?: unknown;
   result_index?: unknown;
+  queued_turn_count?: unknown;
   subtype?: unknown;
   is_error?: unknown;
 };

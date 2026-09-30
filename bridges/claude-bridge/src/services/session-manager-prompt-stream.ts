@@ -102,6 +102,7 @@ export function createPromptStreamState(
   // steer interrupted, which arrive after the steer — so it stays on the row it
   // streamed into. Null when no steer is waiting for its response.
   let preSteerApiMessageIds: Set<string> | null = null;
+  const rootApiMessageIds = new Set<string>();
 
   // Flattened view of `blocksByApiMessage`, in message order then block order.
   let accumulatedOrderedParts: OrderedPartEntry[] = [];
@@ -303,9 +304,18 @@ export function createPromptStreamState(
    * one it interrupted.
    */
   const startPostSteerRowFor = (apiMessageId: string) => {
+    rootApiMessageIds.add(apiMessageId);
     if (!preSteerApiMessageIds || preSteerApiMessageIds.has(apiMessageId)) return;
+    if (preSteerApiMessageIds.size === 0) {
+      // A steer before the first reply can precede the interrupted request's
+      // delayed final record. Keep that first root ID on the original row.
+      preSteerApiMessageIds.add(apiMessageId);
+      return;
+    }
     preSteerApiMessageIds = null;
     flushStreamedAssistantMessage();
+    rootApiMessageIds.clear();
+    rootApiMessageIds.add(apiMessageId);
     blocksByApiMessage.clear();
     parentTaskByApiMessage.clear();
     finalizedBlockCountByApiMessage.clear();
@@ -504,8 +514,7 @@ export function createPromptStreamState(
       // Publish what streamed so far, so the row holding it precedes the
       // steer's user row.
       flushStreamedAssistantMessage();
-      preSteerApiMessageIds = new Set(blocksByApiMessage.keys());
-      if (currentStreamApiMessageId) preSteerApiMessageIds.add(currentStreamApiMessageId);
+      preSteerApiMessageIds = new Set(rootApiMessageIds);
     },
     clearFlushTimer: () => {
       if (streamEventFlushTimer) {

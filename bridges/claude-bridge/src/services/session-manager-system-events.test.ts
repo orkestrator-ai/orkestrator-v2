@@ -929,6 +929,34 @@ describe("result input matching", () => {
     expect(unanswered.size).toBe(0);
   });
 
+  test("reconciles a truncated 65-steer batch on an explicit provider drain", () => {
+    const ids = Array.from({ length: 65 }, (_, i) => `steer-${i}`);
+    const pending = new Set(ids);
+    const latest = ids.at(-1)!;
+    const result = { subtype: "success", user_message_uuids: ids.slice(1) };
+    expect(resultSupersededBySteer(result, pending, latest)).toBe(true);
+    expect(pending).toEqual(new Set([ids[0]!]));
+    expect(resultSupersededBySteer({ ...result, queued_turn_count: 1 }, pending, latest)).toBe(
+      true,
+    );
+    expect(resultSupersededBySteer({ ...result, queued_turn_count: 0 }, pending, latest)).toBe(
+      false,
+    );
+    expect(pending.size).toBe(0);
+  });
+
+  test("a stale queue drain cannot retire a newer accepted steer", () => {
+    const pending = new Set(["earlier-steer", "latest-steer"]);
+    expect(
+      resultSupersededBySteer(
+        { subtype: "success", queued_turn_count: 0, user_message_uuids: ["earlier-steer"] },
+        pending,
+        "latest-steer",
+      ),
+    ).toBe(true);
+    expect(pending).toEqual(new Set(["latest-steer"]));
+  });
+
   test("treats a result naming no input as before, even with a steer pending", () => {
     const unanswered = new Set(["steer-a"]);
     expect(resultSupersededBySteer({ subtype: "error_during_execution" }, unanswered)).toBe(false);

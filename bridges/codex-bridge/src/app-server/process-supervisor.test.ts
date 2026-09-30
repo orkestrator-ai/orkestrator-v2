@@ -1816,6 +1816,42 @@ describe("request and health plumbing", () => {
     expect(h.supervisor.getState()).toBe("restarting");
   });
 
+  test("an environment restart joins a stored-login drain and preserves its predicate", async () => {
+    const h = harness({ behaviours: [{ pid: UNMAPPED_PID }, { pid: UNMAPPED_PID }] });
+    await h.supervisor.ensureReady();
+    let releaseIdle!: () => void;
+    const idle = new Promise<void>((resolve) => {
+      releaseIdle = resolve;
+    });
+    let firstPredicateCalls = 0;
+    const first = h.supervisor.restartWhenIdle("stored account login changed", {
+      // A stored-login drain excludes no thread. The joining environment check
+      // must not replace this with its own caller-excluding predicate.
+      hasActiveTurns: () => {
+        firstPredicateCalls += 1;
+        return true;
+      },
+      waitForIdle: () => idle,
+    });
+    await flushMicrotasks();
+    h.setFingerprint("sha256:changed");
+    const second = h.supervisor.ensureEnvironmentIsCurrent({
+      hasActiveTurns: () => {
+        throw new Error("joining predicate must not run");
+      },
+      waitForIdle: async () => {
+        throw new Error("joining wait must not run");
+      },
+    });
+    await flushMicrotasks();
+    expect(h.children).toHaveLength(1);
+    expect(firstPredicateCalls).toBe(1);
+    releaseIdle();
+    await Promise.all([first, second]);
+    expect(h.children).toHaveLength(2);
+    h.children[1]!.exit(0);
+  });
+
   test("a second environment check joins the drain already in flight", async () => {
     const h = harness({
       behaviours: [{ pid: UNMAPPED_PID }, { pid: UNMAPPED_PID }],

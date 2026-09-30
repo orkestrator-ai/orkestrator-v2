@@ -1,21 +1,11 @@
 import { isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
 import {
-  RuntimeSseEvent,
-  AppServerRuntimeOptions,
-  OrderedRuntimeEvent,
-  SteerOrdering,
   HistoricalAssistantSegmentState,
-  MAX_HISTORICAL_ASSISTANT_SEGMENTS,
   ThreadRuntimeState,
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
   MAX_ORDERED_EVENTS_PER_THREAD,
   MAX_ORDERED_EVENT_BYTES_PER_THREAD,
-  LARGE_MESSAGE_CHARS,
-  VERY_LARGE_MESSAGE_CHARS,
-  ORDERED_EVENT_ESTIMATE_MAX_DEPTH,
-  ORDERED_EVENT_ESTIMATE_NODE_BYTES,
-  DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
   estimateOrderedEventBytes,
   messageSnapshotIntervalMs,
   isSamePublishedPart,
@@ -23,92 +13,48 @@ import {
   DEFAULT_THREAD_IDLE_MS,
   DEFAULT_SESSION_RETENTION_MS,
   DEFAULT_SWEEP_INTERVAL_MS,
-  DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS,
-  DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS,
-  DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS,
-  MAX_RECOVERED_CONTEXT_CHARS,
-  IDLE_WAIT_POLL_MS,
-  AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
-  AmbiguousDispatchResolution,
   mergeRateLimitWindows,
   mergeTurnUsage,
   mergeAccountUsage,
   accountUsageFromLimits,
-  isJsonObject,
-  DEFAULT_COMPACTION_TIMEOUT_MS,
-  MAX_STEER_REQUESTS,
-  codexStructuredOutputFailure,
   parseCodexStructuredOutput,
-  buildRecoveredContextPrompt,
-  PromptAcceptedResult,
   AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
-import { createHash } from "node:crypto";
-import type { AppServerEngine } from "./engine/app-server-engine.js";
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  ApprovalResolution,
-} from "./app-server/approvals.js";
-import {
-  isInteractionAnswerMap,
-  type InteractionAnswer,
-  type InteractionRequest,
-  type InteractionResolution,
-} from "./app-server/interactions.js";
+
 import type {
   EngineEvent,
   EngineGeneration,
   EngineItem,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-  EngineThread,
   EngineTurnConfig,
   EngineTurnStatus,
-  EngineUsageSnapshot,
-  EngineUserInput,
 } from "./engine/types.js";
 import {
-  OverlappingTurnError,
   ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
   CODEX_RESTARTED_MID_TURN_MESSAGE,
-  type PromptAttachmentInput,
-  type SessionPhase,
-  type SessionTitleSource,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-  type AssistantSegment,
-} from "./sessions/turn-accumulator.js";
-import {
-  compareDispatchRecordsNewestFirst,
-  DispatchJournal,
-  DispatchJournalAdmissionError,
-} from "./sessions/dispatch-journal.js";
-import { BridgeSessionStore } from "./sessions/persistence.js";
+import { TurnAccumulator, type AssistantSegment } from "./sessions/turn-accumulator.js";
+import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
+
 import {
   beginTurnRenderState,
   createTurnRenderState,
   releaseTurnRenderState,
   renderTurn,
   SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-  type TurnRenderState,
 } from "./messages/render-turn.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
 import { describeDiffBudget } from "./messages/diff-budget.js";
 import { getTranscriptCacheStats, type TranscriptCacheStats } from "./transcript-cache.js";
 import {
   createMessageId,
-  createSessionId,
   type MessagePatchEventData,
   type NormalizedMessage,
   type NormalizedPart,
 } from "./messages/types.js";
-import { appendAttachmentTags } from "./messages/attachment-tags.js";
+
 import {
   commandChangeCwd,
   commandChangeRole,
@@ -118,29 +64,11 @@ import {
 import { hasMeasuredChanges } from "@orkestrator/protocol/command-change-journal";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { ConversationMode } from "./prompts/slash-commands.js";
+import { hydrateMessagesFromPersistedSession } from "./history/rollout.js";
+
+import { isMissingRolloutError } from "./app-server/errors.js";
+
 import {
-  getWorkingDirectory,
-  hydrateMessagesFromPersistedSession,
-  invalidateTranscriptCatalogCache,
-  listPersistedSessionsWithTitlesForCwd,
-  type PersistedSessionMeta,
-} from "./history/rollout.js";
-import {
-  buildFallbackSessionTitle,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
-  type PersistedSessionTitleSource,
-} from "./session-titles.js";
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
-import type { BridgeModel } from "./models-cache.js";
-import {
-  structuredOutputFailure,
-  tryParseStructuredOutputText,
-  type JsonSchema,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-import {
-  fallbackReasoningId,
   isNativeAgentExecutionPolicy,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -248,6 +176,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.resolveDispatchAdmissionStop();
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
     for (const timer of this.recoveryBackstops.values()) clearTimeout(timer);
@@ -277,7 +206,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // Generation/dispatch recovery is also launched from transport callbacks.
     // Settle it before flushing render coalescers because recovery may create or
     // finalize turns and schedule a final snapshot.
-    await Promise.allSettled([this.generationRecovery, this.dispatchRecovery]);
+    await Promise.allSettled([this.generationRecovery, this.dispatchRecovery, this.accountReload]);
     while (true) {
       // A finalization can schedule a coalesced render after an earlier flush,
       // so flush at the start of every pass rather than only once before
@@ -808,6 +737,15 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       return;
     }
     if (event.kind === "unknown.protocol") return;
+    if (event.kind === "account.reload.requested") {
+      void this.reloadStoredAccountLogin().catch((error: unknown) => {
+        console.warn(
+          "[codex-bridge] Reloading the stored account login failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+      return;
+    }
     if (event.kind === "account.rateLimits.updated") {
       /**
        * `account/rateLimits/updated` is a **sparse rolling update**, not a

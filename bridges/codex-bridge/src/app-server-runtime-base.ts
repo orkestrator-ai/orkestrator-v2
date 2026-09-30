@@ -11,7 +11,7 @@
  *   - coalesced UI snapshots
  *   - history and models, with the rollout parser and model cache as fallbacks
  */
-import { createHash } from "node:crypto";
+
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import { CodexCommandCatalogue } from "./commands/codex-command-catalogue.js";
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
@@ -31,80 +31,36 @@ import {
 import type {
   EngineEvent,
   EngineAccountUsageWindow,
-  EngineGeneration,
   EngineRateLimitWindow,
   EngineRateLimitWindowUpdate,
-  EngineThread,
-  EngineTurnConfig,
   EngineUsageSnapshot,
   EngineTurnUsage,
-  EngineUserInput,
 } from "./engine/types.js";
 import {
-  OverlappingTurnError,
   ThreadRegistry,
-  phaseToExternalStatus,
   type BridgeSession,
   type PromptAttachmentInput,
   type SessionPhase,
-  type SessionTitleSource,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-  type AssistantSegment,
-} from "./sessions/turn-accumulator.js";
-import {
-  compareDispatchRecordsNewestFirst,
-  DispatchJournal,
-  DispatchJournalAdmissionError,
-} from "./sessions/dispatch-journal.js";
+import { TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
-import {
-  beginTurnRenderState,
-  createTurnRenderState,
-  releaseTurnRenderState,
-  renderTurn,
-  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-  type TurnRenderState,
-} from "./messages/render-turn.js";
+import { type TurnRenderState } from "./messages/render-turn.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
-import { describeDiffBudget } from "./messages/diff-budget.js";
+
 import { isAuthoritativeAgentMessage } from "./messages/agent-message.js";
-import { getTranscriptCacheStats } from "./transcript-cache.js";
-import {
-  createMessageId,
-  createSessionId,
-  type MessagePatchEventData,
-  type NormalizedMessage,
-  type NormalizedPart,
-} from "./messages/types.js";
-import { appendAttachmentTags } from "./messages/attachment-tags.js";
-import {
-  getWorkingDirectory,
-  hydrateMessagesFromPersistedSession,
-  invalidateTranscriptCatalogCache,
-  listPersistedSessionsWithTitlesForCwd,
-  type PersistedSessionMeta,
-} from "./history/rollout.js";
-import {
-  buildFallbackSessionTitle,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
-  type PersistedSessionTitleSource,
-} from "./session-titles.js";
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+
+import { type NormalizedMessage, type NormalizedPart } from "./messages/types.js";
+
 import type { BridgeModel } from "./models-cache.js";
 import {
   MAX_STRUCTURED_OUTPUT_TURNS,
   structuredOutputFailure,
   tryParseStructuredOutputText,
-  type JsonSchema,
   type StructuredOutputResult,
   type StructuredOutputTurnRecord,
 } from "@orkestrator/protocol/structured-output";
-import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
 export interface RuntimeSseEvent {
   type:
@@ -624,6 +580,36 @@ export abstract class AppServerRuntimeBase {
    * measurement reach its journal and tests can wait for one to land.
    */
   protected readonly pendingCommandChanges = new Set<Promise<void>>();
+  /** Dispatch preparation must cross the RPC boundary before a reload gates RPCs. */
+  protected readonly admittedDispatches = new Set<Promise<void>>();
+  protected accountReload: Promise<void> | null = null;
+  private pendingDispatchAdmissions = 0;
+  protected resolveDispatchAdmissionStop!: () => void;
+  protected readonly dispatchAdmissionStopped = new Promise<void>((resolve) => {
+    this.resolveDispatchAdmissionStop = resolve;
+  });
+
+  protected async withDispatchAdmission<T>(dispatch: () => Promise<T>): Promise<T> {
+    // Bound both preparation claims and requests waiting for the reload fence.
+    if (this.pendingDispatchAdmissions >= 256) throw new Error("Codex dispatch admission is full");
+    this.pendingDispatchAdmissions += 1;
+    let done: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    try {
+      while (this.accountReload && !this.stopping) await this.accountReload;
+      if (this.stopping) throw new Error("Codex bridge is stopping");
+      done = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      this.admittedDispatches.add(done);
+      return await dispatch();
+    } finally {
+      this.pendingDispatchAdmissions -= 1;
+      if (done) this.admittedDispatches.delete(done);
+      release?.();
+    }
+  }
+
   /** Serializes and exposes generation recovery to request paths. */
   protected generationRecovery: Promise<void> = Promise.resolve();
   /**
@@ -704,6 +690,8 @@ export abstract class AppServerRuntimeBase {
   protected accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
   protected abstract onEngineEvent(event: EngineEvent): void;
+  /** Replace the app-server between turns so it loads the login stored on disk. */
+  protected abstract reloadStoredAccountLogin(): Promise<void>;
   protected abstract enqueueAfterMessageFlush(
     threadId: string,
     publish: () => void,

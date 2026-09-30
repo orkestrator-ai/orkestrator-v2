@@ -1,108 +1,30 @@
 import {
-  RuntimeSseEvent,
-  AppServerRuntimeOptions,
-  OrderedRuntimeEvent,
-  SteerOrdering,
-  HistoricalAssistantSegmentState,
-  MAX_HISTORICAL_ASSISTANT_SEGMENTS,
-  ThreadRuntimeState,
-  MAX_PENDING_EVENTS_PER_TURN,
-  MAX_PENDING_TURNS,
-  MAX_ORDERED_EVENTS_PER_THREAD,
-  MAX_ORDERED_EVENT_BYTES_PER_THREAD,
-  LARGE_MESSAGE_CHARS,
-  VERY_LARGE_MESSAGE_CHARS,
-  ORDERED_EVENT_ESTIMATE_MAX_DEPTH,
-  ORDERED_EVENT_ESTIMATE_NODE_BYTES,
   DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
-  estimateOrderedEventBytes,
-  messageSnapshotIntervalMs,
-  isSamePublishedPart,
-  normalizedMessageSnapshotChars,
-  DEFAULT_THREAD_IDLE_MS,
-  DEFAULT_SESSION_RETENTION_MS,
-  DEFAULT_SWEEP_INTERVAL_MS,
-  DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS,
   DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS,
   DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS,
-  MAX_RECOVERED_CONTEXT_CHARS,
   IDLE_WAIT_POLL_MS,
   AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
   AmbiguousDispatchResolution,
-  mergeRateLimitWindows,
-  isJsonObject,
-  DEFAULT_COMPACTION_TIMEOUT_MS,
-  MAX_STEER_REQUESTS,
-  codexStructuredOutputFailure,
-  parseCodexStructuredOutput,
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
-  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
 import { AppServerRuntimeSessions, SESSION_CLOSING_ERROR } from "./app-server-runtime-sessions.js";
-import { createHash } from "node:crypto";
+
 import type { AppServerEngine } from "./engine/app-server-engine.js";
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  ApprovalResolution,
-} from "./app-server/approvals.js";
-import {
-  isInteractionAnswerMap,
-  type InteractionAnswer,
-  type InteractionRequest,
-  type InteractionResolution,
-} from "./app-server/interactions.js";
-import type {
-  EngineEvent,
-  EngineGeneration,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-  EngineThread,
-  EngineTurnConfig,
-  EngineUsageSnapshot,
-  EngineUserInput,
-} from "./engine/types.js";
+
+import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
 import {
   OverlappingTurnError,
-  ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
   type PromptAttachmentInput,
-  type SessionPhase,
-  type SessionTitleSource,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-  type AssistantSegment,
-} from "./sessions/turn-accumulator.js";
-import {
-  compareDispatchRecordsNewestFirst,
-  DispatchJournal,
-  DispatchJournalAdmissionError,
-} from "./sessions/dispatch-journal.js";
-import { BridgeSessionStore } from "./sessions/persistence.js";
-import {
-  beginTurnRenderState,
-  createTurnRenderState,
-  releaseTurnRenderState,
-  renderTurn,
-  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-  type TurnRenderState,
-} from "./messages/render-turn.js";
-import { UpdateCoalescer } from "./messages/coalescer.js";
-import { describeDiffBudget } from "./messages/diff-budget.js";
-import { getTranscriptCacheStats } from "./transcript-cache.js";
-import {
-  createMessageId,
-  createSessionId,
-  type MessagePatchEventData,
-  type NormalizedMessage,
-  type NormalizedPart,
-} from "./messages/types.js";
-import { appendAttachmentTags } from "./messages/attachment-tags.js";
+import { TurnAccumulator, unconfirmedTurnId } from "./sessions/turn-accumulator.js";
+import { DispatchJournalAdmissionError } from "./sessions/dispatch-journal.js";
+
+import { createMessageId, type NormalizedMessage, type NormalizedPart } from "./messages/types.js";
+
 import { parseCodexSteerCommand, wrapPromptForConversationMode } from "./prompts/slash-commands.js";
 import type { CommandPlan } from "./commands/codex-command-catalogue.js";
 import {
@@ -114,30 +36,14 @@ import type {
   NativeAgentCommandRefreshOutcome,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
-import {
-  getWorkingDirectory,
-  hydrateMessagesFromPersistedSession,
-  invalidateTranscriptCatalogCache,
-  listPersistedSessionsWithTitlesForCwd,
-  type PersistedSessionMeta,
-} from "./history/rollout.js";
-import {
-  buildFallbackSessionTitle,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
-  type PersistedSessionTitleSource,
-} from "./session-titles.js";
+import { invalidateTranscriptCatalogCache } from "./history/rollout.js";
+import { buildFallbackSessionTitle, persistSessionTitle } from "./session-titles.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+
 import type { BridgeModel } from "./models-cache.js";
-import {
-  structuredOutputFailure,
-  tryParseStructuredOutputText,
-  type JsonSchema,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
+import { structuredOutputFailure, type JsonSchema } from "@orkestrator/protocol/structured-output";
+
 import { toEngineInput, withSkillInput } from "./app-server-runtime-helpers.js";
 
 /**
@@ -200,7 +106,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
 
     try {
       return await this.registry.withDispatchLock(session, () =>
-        this.dispatchPrompt(session, input),
+        this.withDispatchAdmission(() => this.dispatchPrompt(session, input)),
       );
     } catch (error) {
       if (error instanceof OverlappingTurnError) {
@@ -1406,6 +1312,36 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       context.compacting ||
       phaseToExternalStatus(context.phase) === "running"
     );
+  }
+
+  protected reloadStoredAccountLogin(): Promise<void> {
+    if (this.accountReload) return this.accountReload;
+    if (this.stopping) {
+      this.options.engine.cancelStoredAccountReload();
+      return Promise.resolve();
+    }
+    // Publish the fence synchronously, before any new prompt/review can enter.
+    // Existing admissions may still need RPCs for preparation or dispatch: do
+    // not install the supervisor's drain gate until those calls have settled.
+    const reload = (async () => {
+      await Promise.race([Promise.all(this.admittedDispatches), this.dispatchAdmissionStopped]);
+      if (this.stopping) {
+        this.options.engine.cancelStoredAccountReload();
+        return;
+      }
+      const generation = this.options.engine.info().generation;
+      await this.options.engine.reloadAccountFromStoredLogin({
+        hasActiveTurns: () => this.hasActiveWorkOtherThan(null),
+        waitForIdle: () => this.waitForAllThreadsIdle(generation),
+      });
+      // Rebind every loaded thread before reopening dispatch admission.
+      await this.generationRecovery;
+    })();
+    const settled = reload.finally(() => {
+      if (this.accountReload === settled) this.accountReload = null;
+    });
+    this.accountReload = settled;
+    return settled;
   }
 
   /** Active work anywhere except the thread asking, which never waits on itself. */

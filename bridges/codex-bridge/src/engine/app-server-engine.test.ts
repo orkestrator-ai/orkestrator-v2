@@ -1,5 +1,8 @@
-import { describe, test, expect } from "bun:test";
+import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AppServerEngine,
   CODEX_SIGN_IN_EXPIRED_NOTICE,
@@ -2936,5 +2939,175 @@ describe("account sign-in", () => {
 
     expect(requestCount(h, "account/read")).toBe(1);
     expect(h.engine.isAccountSignInRequired()).toBe(false);
+  });
+
+  describe("a sign-out that contradicts the stored login", () => {
+    const UNAUTHORIZED_TURN = {
+      threadId: "t1",
+      turnId: "turn-1",
+      error: {
+        message: "Your access token could not be refreshed.",
+        codexErrorInfo: "unauthorized",
+      },
+      willRetry: false,
+    };
+    const gate = { hasActiveTurns: () => false, waitForIdle: async () => undefined };
+    const homes: string[] = [];
+
+    async function homeWith(auth: unknown | undefined): Promise<string> {
+      const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+      homes.push(home);
+      if (auth !== undefined) await writeFile(join(home, "auth.json"), JSON.stringify(auth));
+      return home;
+    }
+
+    const reloadRequests = (h: Harness) =>
+      h.events.filter((event) => event.kind === "account.reload.requested").length;
+
+    /** The stored login is read from disk, which outlasts a few event-loop turns. */
+    async function untilReloadRequests(h: Harness, count: number): Promise<void> {
+      for (let attempt = 0; attempt < 200 && reloadRequests(h) < count; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    afterEach(async () => {
+      await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+    });
+
+    test("asks for a reload, and the replacement child clears the sign-out", async () => {
+      let account: unknown = SIGNED_OUT;
+      const home = await homeWith({
+        auth_mode: "chatgpt",
+        tokens: { refresh_token: "rotated-by-another-process" },
+      });
+      const h = harness({ "account/read": () => account }, { codexHome: home });
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await untilReloadRequests(h, 1);
+      await flush(h);
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+      expect(reloadRequests(h)).toBe(1);
+
+      // The stored login is good; only the replacement child sees it.
+      account = SIGNED_IN;
+      await h.engine.reloadAccountFromStoredLogin(gate);
+      await flush(h);
+
+      expect(h.children).toHaveLength(2);
+      expect(h.engine.isAccountSignInRequired()).toBe(false);
+    });
+
+    test("does not restart when no login is stored", async () => {
+      const h = harness(
+        { "account/read": () => SIGNED_OUT },
+        { codexHome: await homeWith(undefined) },
+      );
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await flush(h);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+      expect(reloadRequests(h)).toBe(0);
+    });
+
+    test("does not restart for a stored login that holds no credential", async () => {
+      const home = await homeWith({ auth_mode: "chatgpt", tokens: {} });
+      const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await flush(h);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(reloadRequests(h)).toBe(0);
+    });
+
+    test("a login that is still refused after the reload is not reloaded again", async () => {
+      const home = await homeWith({ auth_mode: "chatgpt", tokens: { refresh_token: "dead" } });
+      const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await untilReloadRequests(h, 1);
+      await h.engine.reloadAccountFromStoredLogin(gate);
+      await flush(h);
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await flush(h);
+      // Give a wrongly issued second request time to land before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+      expect(reloadRequests(h)).toBe(1);
+    });
+
+    test.each([{ tokens: { refresh_token: "dead" } }, { OPENAI_API_KEY: "test-api-key" }])(
+      "identical credential rewrites cannot loop replacement children: %j",
+      async (auth) => {
+        const home = await homeWith(auth);
+        const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+        await h.engine.start();
+        h.child().notify("error", UNAUTHORIZED_TURN);
+        await untilReloadRequests(h, 1);
+        await h.engine.reloadAccountFromStoredLogin(gate);
+        await flush(h);
+        await writeFile(join(home, "auth.json"), JSON.stringify(auth));
+        await h.engine.readAccount();
+        await flush(h);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(reloadRequests(h)).toBe(1);
+        expect(h.children).toHaveLength(2);
+
+        // Metadata and formatting changes are also the same credential identity.
+        await writeFile(
+          join(home, "auth.json"),
+          JSON.stringify({ ...auth, last_refresh: "new" }, null, 2),
+        );
+        await h.engine.readAccount();
+        await flush(h);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(reloadRequests(h)).toBe(1);
+      },
+    );
+
+    test("a failed restart releases the unchanged credential for another request", async () => {
+      const home = await homeWith({ tokens: { refresh_token: "retry" } });
+      const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+      await h.engine.start();
+      await h.engine.readAccount();
+      await untilReloadRequests(h, 1);
+      const restart = spyOn(h.engine.getSupervisor(), "restartWhenIdle").mockRejectedValueOnce(
+        new Error("spawn failed"),
+      );
+      try {
+        await expect(h.engine.reloadAccountFromStoredLogin(gate)).rejects.toThrow("spawn failed");
+      } finally {
+        restart.mockRestore();
+      }
+      await h.engine.readAccount();
+      await untilReloadRequests(h, 2);
+      expect(reloadRequests(h)).toBe(2);
+      await h.engine.reloadAccountFromStoredLogin(gate);
+      expect(h.children).toHaveLength(2);
+    });
+
+    test("a login replaced on disk since the last reload is tried again", async () => {
+      const home = await homeWith({ auth_mode: "chatgpt", tokens: { refresh_token: "first" } });
+      const h = harness({ "account/read": () => SIGNED_OUT }, { codexHome: home });
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await untilReloadRequests(h, 1);
+      await h.engine.reloadAccountFromStoredLogin(gate);
+      await flush(h);
+      await writeFile(
+        join(home, "auth.json"),
+        JSON.stringify({ auth_mode: "chatgpt", tokens: { refresh_token: "second-and-longer" } }),
+      );
+      h.child().notify("error", UNAUTHORIZED_TURN);
+      await untilReloadRequests(h, 2);
+
+      expect(reloadRequests(h)).toBe(2);
+    });
   });
 });

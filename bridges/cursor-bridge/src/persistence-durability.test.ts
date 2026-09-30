@@ -482,6 +482,10 @@ describe("dispatch around the write queue", () => {
     try {
       expect((await prompt(state, "settling-1")).status).toBe(202);
       expect(state.status).toBe("running");
+      // The dispatch schedules best-effort writes of its own after the 202. One
+      // still in flight when the hold is installed is counted, and the write
+      // this test schedules then queues behind it: three writes, not two.
+      await persistBarrier();
 
       hold = holdPublication();
       schedulePersist();

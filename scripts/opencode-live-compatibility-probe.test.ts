@@ -378,4 +378,55 @@ describe("runOpenCodeLiveCompatibility", () => {
     expect(server.exitCode).toBe(0);
     expect(await tempRoots()).toEqual(before);
   });
+
+  test("a deadline during setup stops the abandoned probe from spawning a server", async () => {
+    const before = await tempRoots();
+    let spawned = 0;
+    await expect(
+      runOpenCodeLiveCompatibility(
+        options({
+          // Setup is still allocating a port when the deadline expires, which
+          // is what slow temp-directory I/O under load looks like.
+          allocatePort: () => new Promise<number>((resolve) => setTimeout(() => resolve(4321), 50)),
+          spawnServer: () => {
+            spawned += 1;
+            return createFakeServer();
+          },
+          deadlineMs: 10,
+        }),
+      ),
+    ).rejects.toThrow("OpenCode compatibility probe exceeded 10ms");
+    // Past the port allocation, where the old probe went on to spawn.
+    await Bun.sleep(80);
+    expect(spawned).toBe(0);
+    expect(await tempRoots()).toEqual(before);
+  });
+
+  test("a deadline while the CLI version is read leaves nothing to create later", async () => {
+    const before = await tempRoots();
+    let releaseCli: () => void = () => {};
+    let spawned = 0;
+    await expect(
+      runOpenCodeLiveCompatibility(
+        options({
+          runCli: async () => {
+            await new Promise<void>((resolve) => {
+              releaseCli = resolve;
+            });
+            return { stdout: `${VERSION}\n`, stderr: "", exitCode: 0 };
+          },
+          spawnServer: () => {
+            spawned += 1;
+            return createFakeServer();
+          },
+          deadlineMs: 10,
+        }),
+      ),
+    ).rejects.toThrow("OpenCode compatibility probe exceeded 10ms");
+    releaseCli();
+    // Let the abandoned probe run to wherever it would have stopped.
+    await Bun.sleep(50);
+    expect(spawned).toBe(0);
+    expect(await tempRoots()).toEqual(before);
+  });
 });

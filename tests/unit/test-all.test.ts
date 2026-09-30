@@ -169,6 +169,40 @@ describe("scripts/test-all.ts", () => {
     expect(startedBeforeRelease).toContain(PROTOCOL);
   }, 30_000);
 
+  test("reports a still-running group so a wrapping watchdog sees progress", async () => {
+    let release = () => {};
+    const gate = {
+      name: WORKSPACE,
+      release: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    // The heartbeat is half the no-progress budget, so a 40 ms budget beats
+    // every 20 ms while the gated group is the only one left.
+    const { dependencies, logs } = createDependencies({
+      gate,
+      environment: { [TEST_NO_PROGRESS_TIMEOUT_MS_ENV]: "40" },
+    });
+
+    const run = runAllTests(dependencies);
+    const deadline = Date.now() + 15_000;
+    while (!logs.some((line) => line.startsWith("STILL RUNNING")) && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+    const heartbeats = logs.filter((line) => line.startsWith("STILL RUNNING"));
+    release();
+    expect(await run).toBe(0);
+
+    expect(heartbeats.length).toBeGreaterThan(0);
+    expect(heartbeats.at(-1)).toContain(WORKSPACE);
+    // Finished groups are not reported as running, and nothing beats after the run.
+    const lastHeartbeat = heartbeats.at(-1)!;
+    expect(lastHeartbeat).not.toContain(ROOT);
+    const settledLogCount = logs.length;
+    await Bun.sleep(60);
+    expect(logs).toHaveLength(settledLogCount);
+  }, 30_000);
+
   test("passes a bounded worker count so concurrent groups cannot oversubscribe", () => {
     const groups = buildConcurrentGroups(10);
     const workspaceGroup = groups.find((group) => group.name === WORKSPACE)!;

@@ -292,6 +292,7 @@ export async function stopServer(
 
 async function probeOpenCode(
   options: OpenCodeLiveCompatibilityOptions,
+  abandoned: AbortSignal,
 ): Promise<OpenCodeLiveCompatibilityResult> {
   const {
     runCli = defaultRunCli,
@@ -313,39 +314,59 @@ async function probeOpenCode(
         `@opencode-ai/sdk pins ${expectedVersion}`,
     );
   }
+  // The deadline found nothing to tear down while the versions were read, so
+  // this probe must not create anything now.
+  abandoned.throwIfAborted();
 
-  const isolatedRoot = await mkdtemp(join(tmpdir(), "ork-opencode-compat-"));
+  let isolatedRoot: string | undefined;
   let server: ServerHandle | undefined;
+  // Creating the temp root and the server is bounded local work. Teardown waits
+  // for it to settle: a deadline that expires mid-setup would otherwise remove
+  // the root and return before the server existed, and the abandoned probe
+  // would then spawn a server nothing ever stops.
+  let setup: Promise<unknown> = Promise.resolve();
   const teardown = once(async () => {
+    await setup.catch(() => undefined);
     if (server) await stopServer(server);
-    await rm(isolatedRoot, { recursive: true, force: true });
+    if (isolatedRoot) await rm(isolatedRoot, { recursive: true, force: true });
   });
   activeProbeTeardown = teardown;
 
   try {
-    const configRoot = join(isolatedRoot, "config");
-    const dataRoot = join(isolatedRoot, "data");
-    const stateRoot = join(isolatedRoot, "state");
-    const cacheRoot = join(isolatedRoot, "cache");
-    await Promise.all(
-      [configRoot, dataRoot, stateRoot, cacheRoot].map((directory) =>
-        mkdir(directory, { recursive: true }),
-      ),
-    );
-    const port = await allocatePort();
-    const baseUrl = `http://127.0.0.1:${port}`;
-    server = spawnServer([cliPath, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
-      cwd: isolatedRoot,
-      env: {
-        ...process.env,
-        XDG_CONFIG_HOME: configRoot,
-        XDG_DATA_HOME: dataRoot,
-        XDG_STATE_HOME: stateRoot,
-        XDG_CACHE_HOME: cacheRoot,
-      },
-    });
+    const started = (async () => {
+      const root = await mkdtemp(join(tmpdir(), "ork-opencode-compat-"));
+      isolatedRoot = root;
+      const configRoot = join(root, "config");
+      const dataRoot = join(root, "data");
+      const stateRoot = join(root, "state");
+      const cacheRoot = join(root, "cache");
+      await Promise.all(
+        [configRoot, dataRoot, stateRoot, cacheRoot].map((directory) =>
+          mkdir(directory, { recursive: true }),
+        ),
+      );
+      const port = await allocatePort();
+      abandoned.throwIfAborted();
+      const spawned = spawnServer(
+        [cliPath, "serve", "--hostname", "127.0.0.1", "--port", String(port)],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: configRoot,
+            XDG_DATA_HOME: dataRoot,
+            XDG_STATE_HOME: stateRoot,
+            XDG_CACHE_HOME: cacheRoot,
+          },
+        },
+      );
+      server = spawned;
+      return { root, spawned, baseUrl: `http://127.0.0.1:${port}` };
+    })();
+    setup = started;
+    const { root, spawned, baseUrl } = await started;
 
-    const health = await waitForHealth(baseUrl, server, {
+    const health = await waitForHealth(baseUrl, spawned, {
       fetchImpl,
       sleep,
       attempts: healthAttempts,
@@ -354,7 +375,7 @@ async function probeOpenCode(
 
     const sessions = await listSessions(
       baseUrl,
-      isolatedRoot,
+      root,
       AbortSignal.timeout(SESSION_LIST_TIMEOUT_MS),
     );
 
@@ -375,14 +396,20 @@ export async function runOpenCodeLiveCompatibility(
 ): Promise<OpenCodeLiveCompatibilityResult> {
   const deadlineMs = options.deadlineMs ?? PROBE_DEADLINE_MS;
   const deadline = createTimer(deadlineMs);
+  const abandoned = new AbortController();
   try {
     return await Promise.race([
-      probeOpenCode(options),
+      probeOpenCode(options, abandoned.signal),
       // The abandoned probe cannot run its own `finally` before this rejects, so
-      // the deadline branch tears the server down itself.
+      // the deadline branch tears the server down itself, and the abort stops a
+      // probe that has not reached its setup yet from starting one afterwards.
+      // Either branch may settle first once setup sees the abort, so both
+      // reject with the same error.
       deadline.expired.then<never>(async () => {
+        const exceeded = new Error(`OpenCode compatibility probe exceeded ${deadlineMs}ms`);
+        abandoned.abort(exceeded);
         await activeProbeTeardown?.();
-        throw new Error(`OpenCode compatibility probe exceeded ${deadlineMs}ms`);
+        throw exceeded;
       }),
     ]);
   } finally {

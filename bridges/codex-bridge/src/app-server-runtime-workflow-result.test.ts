@@ -26,6 +26,11 @@ function orkestratorTools(...names: string[]) {
   };
 }
 
+function configuredBearer(params: Record<string, unknown>): string {
+  const config = params.config as Record<string, { http_headers: { Authorization: string } }>;
+  return config["mcp_servers.orkestrator"].http_headers.Authorization;
+}
+
 describe("workflow result turns", () => {
   test("refuses a result turn whose thread does not offer the submit tool", async () => {
     let listed = ["submit_validation_plan"];
@@ -93,6 +98,73 @@ describe("workflow result turns", () => {
         .requests.filter((request) => request.method === "turn/start")
         .at(-1)?.params.threadId,
     ).toBe("thread-1");
+  });
+
+  test("refuses rotated result credentials until unsubscribe confirms the old connection unloaded", async () => {
+    let loaded = false;
+    let failUnsubscribe = false;
+    let liveToken: unknown;
+    const h = await harness({
+      "thread/start": (params) => {
+        loaded = true;
+        liveToken = configuredBearer(params);
+        return { thread: threadPayload("thread-1") };
+      },
+      "thread/unsubscribe": () => {
+        if (failUnsubscribe) throw new Error("unsubscribe unavailable");
+        loaded = false;
+        return {};
+      },
+      "thread/resume": (params) => {
+        // A loaded app-server thread ignores every configuration override.
+        if (!loaded) {
+          liveToken = configuredBearer(params);
+        }
+        loaded = true;
+        return { thread: threadPayload(String(params.threadId)) };
+      },
+      "mcpServerStatus/list": () => orkestratorTools("submit_consolidated_review"),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(await h.runtime.prompt(sessionId, { ...RESULT_TURN, requestId: "first" })).toMatchObject(
+      { ok: true },
+    );
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const rotated = {
+      ...RESULT_TURN,
+      agentMcp: { ...RESULT_TURN.agentMcp, token: "rotated-secret" },
+      requestId: "rotated",
+    };
+    const turns = () => h.child().requests.filter((request) => request.method === "turn/start");
+    failUnsubscribe = true;
+    const resumesBefore = h
+      .child()
+      .requests.filter((request) => request.method === "thread/resume").length;
+    expect(await h.runtime.prompt(sessionId, rotated)).toMatchObject({ ok: false, status: 503 });
+    expect(h.child().requests.filter((request) => request.method === "thread/resume")).toHaveLength(
+      resumesBefore,
+    );
+    expect(liveToken).toBe("Bearer attempt-secret");
+    expect(turns()).toHaveLength(1);
+    // Re-attachment may rejoin the old thread, but the result reload must still
+    // confirm unsubscribe before tool inventory or dispatch admission.
+    expect(await h.runtime.prompt(sessionId, rotated)).toMatchObject({ ok: false, status: 503 });
+    expect(liveToken).toBe("Bearer attempt-secret");
+    expect(turns()).toHaveLength(1);
+    expect(
+      h.child().requests.filter((request) => request.method === "mcpServerStatus/list"),
+    ).toHaveLength(1);
+
+    failUnsubscribe = false;
+    // Reusing the request id succeeds: neither refusal admitted a dispatch.
+    expect(await h.runtime.prompt(sessionId, rotated)).toMatchObject({ ok: true });
+    expect(liveToken).toBe("Bearer rotated-secret");
+    expect(turns()).toHaveLength(2);
   });
 
   test("an unanswerable tool listing does not block the result turn", async () => {

@@ -62,7 +62,7 @@ export function classifyMcpToolAvailability(
  * still connecting at the deadline is `unverified`, never `missing`.
  */
 export async function waitForMcpToolAvailability(
-  list: () => Promise<unknown>,
+  list: (timeoutMs: number) => Promise<unknown>,
   serverName: string,
   toolName: string,
   options: { timeoutMs?: number; pollMs?: number; now?: () => number } = {},
@@ -70,16 +70,27 @@ export async function waitForMcpToolAvailability(
   const now = options.now ?? Date.now;
   const deadline = now() + (options.timeoutMs ?? MCP_TOOL_AVAILABILITY_TIMEOUT_MS);
   const pollMs = options.pollMs ?? MCP_TOOL_AVAILABILITY_POLL_MS;
+  const expired = Symbol("availability-deadline");
   for (;;) {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) return { state: "unverified" };
     let response: unknown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      response = await list();
+      response = await Promise.race([
+        list(remainingMs),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(expired), remainingMs);
+        }),
+      ]);
     } catch {
       return { state: "unverified" };
+    } finally {
+      clearTimeout(timer);
     }
+    if (response === expired || now() >= deadline) return { state: "unverified" };
     const availability = classifyMcpToolAvailability(response, serverName, toolName);
     if (availability) return availability;
-    if (now() >= deadline) return { state: "unverified" };
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, deadline - now())));
   }
 }

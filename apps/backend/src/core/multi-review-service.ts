@@ -1847,6 +1847,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                 },
               ]
             : []),
+          ...(workflow.preparationSession?.providerSessionId
+            ? [
+                {
+                  selection: workflow.preparationSession,
+                  sessionId: workflow.preparationSession.providerSessionId,
+                },
+              ]
+            : []),
         ];
         const uniqueTargets = [
           ...new Map(
@@ -1879,6 +1887,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             try {
               await provider.closeSession(sessionId);
             } catch (closeError) {
+              // Retained preparation conversations remain reachable outside the
+              // active step. An abort alone would leave them registered and
+              // able to resume after the workflow loses its ownership record.
+              if (
+                workflow.preparationSession?.providerSessionId === sessionId &&
+                workflow.preparationSession.agent === selection.agent
+              ) {
+                throw closeError;
+              }
               try {
                 await provider.abort(sessionId);
                 await confirmStopped();
@@ -3415,6 +3432,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.save(workflow, token);
     }
     if (!session) {
+      if (preparing && workflow.preparationSession) {
+        const retained = workflow.preparationSession;
+        const retainedProvider = await this.provider(workflow, retained);
+        if (retainedProvider.closeSession) {
+          await retainedProvider.closeSession(retained.providerSessionId);
+        } else {
+          await retainedProvider.abort(retained.providerSessionId);
+          const observed = await readProviderStatus(retainedProvider, retained.providerSessionId);
+          if (observed.status === "running" || observed.status === "blocked") {
+            throw new Error(`Preparation session remained ${observed.status} after abort`);
+          }
+        }
+        await this.assertFence(workflow.id, token);
+        this.progress.forget(retained.providerSessionId);
+        delete workflow.preparationSession;
+        await this.save(workflow, token);
+      }
       const sessionKey = separateReviewSession
         ? (workflow.reviewSessionKey ?? reviewSessionKey(workflow.id))
         : (workflow.fixSessionKey ?? fixSessionKey(workflow.id));
@@ -3452,8 +3486,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         status: "running",
         startedAt: nowIso(),
       };
-      // A new preparation supersedes the one an earlier attempt kept.
-      if (preparing) delete workflow.preparationSession;
       if (separateReviewSession) {
         workflow.reviewSession = session;
         workflow.reviewSessionKey = sessionKey;

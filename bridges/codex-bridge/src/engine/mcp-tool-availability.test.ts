@@ -92,6 +92,57 @@ describe("waitForMcpToolAvailability", () => {
     expect(availability).toEqual({ state: "unverified" });
   });
 
+  test("a stalled listing settles within the availability budget", async () => {
+    let budget: number | undefined;
+    const started = Date.now();
+    const result = await waitForMcpToolAvailability(
+      (timeoutMs) => {
+        budget = timeoutMs;
+        return new Promise(() => {});
+      },
+      "orkestrator",
+      TOOL,
+      { timeoutMs: 25 },
+    );
+    expect(result).toEqual({ state: "unverified" });
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBeLessThanOrEqual(25);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test.each([true, false])(
+    "ignores a definite answer after the deadline (available=%s)",
+    async (available) => {
+      let clock = 0;
+      expect(
+        await waitForMcpToolAvailability(
+          async () => {
+            clock = 26;
+            return server({
+              runtimeStatus: "connected",
+              tools: available ? { [TOOL]: { name: TOOL } } : {},
+            });
+          },
+          "orkestrator",
+          TOOL,
+          { timeoutMs: 25, now: () => clock },
+        ),
+      ).toEqual({ state: "unverified" });
+    },
+  );
+
+  test("a late listing rejection is handled after the deadline", async () => {
+    let reject!: (error: Error) => void;
+    const listing = new Promise((_, rejectListing) => {
+      reject = rejectListing;
+    });
+    expect(
+      await waitForMcpToolAvailability(() => listing, "orkestrator", TOOL, { timeoutMs: 10 }),
+    ).toEqual({ state: "unverified" });
+    reject(new Error("late transport failure"));
+    await Promise.resolve();
+  });
+
   test("a failed status request is unverified", async () => {
     expect(
       await waitForMcpToolAvailability(

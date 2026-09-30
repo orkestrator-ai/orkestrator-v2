@@ -1403,16 +1403,10 @@ export class AppServerEngine implements CodexEngine {
   async reloadThread(handle: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const threadId = this.bindings.get(handle)?.threadId ?? handle;
     this.bindings.delete(handle);
-    try {
-      await this.supervisor.request("thread/unsubscribe", { threadId });
-    } catch (error) {
-      // The resume below still rejoins the thread; the tool check that follows
-      // a reload is what reports a configuration that did not apply.
-      console.warn(
-        "[codex-bridge] thread/unsubscribe before reload failed:",
-        error instanceof Error ? error.message : error,
-      );
-    }
+    // A failed unsubscribe cannot prove that the previous attempt's MCP
+    // connection was unloaded. Tool names are shared across attempts, so a
+    // subsequent inventory check cannot prove that its credential changed.
+    await this.supervisor.request("thread/unsubscribe", { threadId });
     return this.resumeThread(threadId, options);
   }
 
@@ -1423,12 +1417,12 @@ export class AppServerEngine implements CodexEngine {
     options?: { timeoutMs?: number; pollMs?: number },
   ): Promise<McpToolAvailability> {
     return waitForMcpToolAvailability(
-      () =>
-        this.supervisor.request("mcpServerStatus/list", {
-          threadId,
-          serverName: "orkestrator",
-          detail: "toolsAndAuthOnly",
-        }),
+      (timeoutMs) =>
+        this.supervisor.request(
+          "mcpServerStatus/list",
+          { threadId, serverName: "orkestrator", detail: "toolsAndAuthOnly" },
+          { timeoutMs },
+        ),
       "orkestrator",
       toolName,
       options,

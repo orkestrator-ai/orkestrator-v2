@@ -412,6 +412,21 @@ describe("HTTP bridge provider", () => {
     );
   });
 
+  test("surfaces a Codex result-tool refusal as a prompt rejection with the bridge reason", async () => {
+    const message =
+      "Codex could not offer submit_consolidated_review to this session: the orkestrator MCP server does not list submit_consolidated_review";
+    const { provider } = httpProvider(
+      () => Response.json({ error: message }, { status: 424 }),
+      codexConnection,
+    );
+    const sent = provider.send("session-1", "Submit the report", {
+      requestId: "consolidate",
+      workflowResultTool: "submit_consolidated_review",
+    });
+    await expect(sent).rejects.toBeInstanceOf(PromptRejectedError);
+    await expect(sent).rejects.toThrow(message);
+  });
+
   test("surfaces Cursor credential rejection without an HTTP transport envelope", async () => {
     const message =
       "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.";

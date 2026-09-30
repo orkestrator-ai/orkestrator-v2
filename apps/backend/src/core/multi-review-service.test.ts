@@ -7998,7 +7998,7 @@ test("Multi Review prepares and consolidates with its review model before openin
   await withService(
     "env-package",
     provider,
-    async ({ service, snapshot }) => {
+    async ({ service, storage, snapshot }) => {
       const started = await service.start({
         environmentId: "env-package",
         projectId: "project-1",
@@ -8129,6 +8129,11 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(interactive.addressPromptPending).toBe(true);
       expect(interactive.fixSession).toBeUndefined();
       expect(interactive.reviewSession?.providerSessionId).toBe("session-4");
+      await service.close(started.id);
+      expect(new Set(provider.closed)).toEqual(
+        new Set(["session-1", "session-2", "session-3", "session-4"]),
+      );
+      expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
     },
     {
       invoke: async (command, args) => {
@@ -8138,6 +8143,153 @@ test("Multi Review prepares and consolidates with its review model before openin
     },
   );
 });
+
+test.each(["failed", "unconfirmed"])(
+  "Multi Review retains preparation ownership after a %s close and retries teardown",
+  async (failure) => {
+    const provider = new Provider();
+    await withService(
+      `env-preparation-close-${failure}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        const ready = (await snapshot(started.id))!;
+        const retained = ready.preparationSession!;
+        expect(retained.providerSessionId).toBe("session-1");
+        await service.address(started.id);
+        const close = provider.closeSession.bind(provider);
+        let failClose = true;
+        provider.closeSession = async (sessionId) => {
+          if (failClose && sessionId === retained.providerSessionId) {
+            throw new Error(
+              failure === "failed" ? "preparation close failed" : "preparation close pending",
+            );
+          }
+          await close(sessionId);
+        };
+        // Even an idle status/working abort cannot confirm that the registered
+        // conversation was closed. Keep the durable owner until close succeeds.
+        await expect(service.close(started.id)).rejects.toThrow(
+          `preparation close ${failure === "failed" ? "failed" : "pending"}`,
+        );
+        expect((await snapshot(started.id))?.preparationSession).toEqual(retained);
+        expect((await storage.getMultiReviewWorkflow(started.id))?.controllerLease).toBeUndefined();
+        failClose = false;
+        await service.close(started.id);
+        expect(provider.closed).toContain(retained.providerSessionId);
+        expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
+      },
+      { packageFlow: true },
+    );
+  },
+);
+
+test("Multi Review closes retained preparation before creating its replacement and preserves it on failure", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-preparation-replacement-close",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const retained = (await snapshot(started.id))!.preparationSession!;
+      const createsBefore = provider.creates.length;
+      provider.closeError = new Error("preparation close pending");
+      await service.restartStep(started.id, "prepare");
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("failed");
+      expect((await snapshot(started.id))?.preparationSession).toEqual(retained);
+      expect(provider.creates).toHaveLength(createsBefore);
+      provider.closeError = null;
+      provider.statusValue = "running";
+      await service.retry(started.id);
+      await service.advanceNow(started.id);
+      const replaced = (await snapshot(started.id))!;
+      expect(provider.closed).toContain(retained.providerSessionId);
+      expect(replaced.preparationSession).toBeUndefined();
+      expect(replaced.fixSession?.providerSessionId).not.toBe(retained.providerSessionId);
+      expect(provider.creates).toHaveLength(createsBefore + 1);
+    },
+    { packageFlow: true },
+  );
+});
+
+test.each([
+  { running: true, modelChanged: false },
+  { running: false, modelChanged: true },
+  { running: true, modelChanged: true },
+])(
+  "Multi Review retains and shuts down abandoned preparation (%j)",
+  async ({ running, modelChanged }) => {
+    const provider = new Provider();
+    const shutdowns: Array<{ agent: MultiReviewModelSelection["agent"]; sessionId: string }> = [];
+    await withService(
+      `env-leaving-preparation-${running}-${modelChanged}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        const retained = (await snapshot(started.id))!.preparationSession!;
+        await mutateStoredWorkflow(storage, started.id, (workflow) => {
+          workflow.phase = "consolidating";
+          workflow.fixSession = { ...retained, status: running ? "running" : "idle" };
+          delete workflow.preparationSession;
+          delete workflow.activeRequest;
+          delete workflow.consolidatedReport;
+          if (modelChanged) {
+            workflow.consolidationModel = { agent: "codex", model: "gpt-5.4" };
+            workflow.reviewSession = workflow.fixSession;
+            delete workflow.fixSession;
+          }
+        });
+        await service.advanceNow(started.id);
+        expect(provider.aborted).toContain(retained.providerSessionId);
+        expect((await snapshot(started.id))?.preparationSession).toMatchObject({
+          providerSessionId: retained.providerSessionId,
+          agent: retained.agent,
+          status: running ? "running" : "idle",
+        });
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        await service.address(started.id);
+        await service.close(started.id);
+        expect(provider.closed).toContain(retained.providerSessionId);
+        expect(shutdowns).toContainEqual({
+          agent: retained.agent,
+          sessionId: retained.providerSessionId,
+        });
+      },
+      {
+        packageFlow: true,
+        createProvider: async (_workflow, selection) => {
+          return new Proxy(provider, {
+            get(target, property) {
+              if (property === "closeSession")
+                return async (sessionId: string) => {
+                  shutdowns.push({ agent: selection.agent, sessionId });
+                  await target.closeSession(sessionId);
+                };
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        },
+      },
+    );
+  },
+);
 
 test("MultiReviewService stops validation and advances with partial evidence", async () => {
   const provider = new Provider();

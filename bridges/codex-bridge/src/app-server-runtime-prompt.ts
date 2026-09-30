@@ -880,8 +880,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     try {
       thread = await this.options.engine.reloadThread(context.engineHandle, { config });
     } catch (error) {
-      // The thread was released before the resume failed. Make the next
-      // request re-attach it rather than dispatch through the dropped handle.
+      // Unsubscribe or resume failed. Make the next request re-attach rather
+      // than dispatch through the dropped handle; result turns still reload
+      // that attachment and require a successful unsubscribe before dispatch.
       context.unsubscribed = true;
       throw error;
     }

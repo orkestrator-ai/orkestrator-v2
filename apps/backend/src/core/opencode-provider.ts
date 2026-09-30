@@ -529,6 +529,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.lifecycle.observeStreamEvent(effect.sessionId, effect.status);
         this.observation.changed(effect.sessionId);
       }
+      if (effect.abortTurn && effect.sessionId) {
+        // Not awaited: the abort's own events arrive on this stream.
+        void this.abort(effect.sessionId).catch(() => undefined);
+      }
       if (effect.refreshMcp) {
         this.invalidateInteractiveMetadata();
       }
@@ -1144,7 +1148,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       ...(terminal?.kind === "error" || streamedError
         ? {
             phase: "error" as const,
-            error: terminal?.message ?? streamedError?.message ?? "OpenCode session failed",
+            // A failure the backend aborted leaves a stop on the message; the
+            // streamed failure says why.
+            error:
+              (terminal?.kind === "error" ? terminal.message : undefined) ??
+              streamedError?.message ??
+              terminal?.message ??
+              "OpenCode session failed",
           }
         : {}),
     };

@@ -30,6 +30,18 @@ type OpenCodeStreamSession = {
   /** Monotonic count of inbound session events, including events seen while dirty. */
   eventVersion: number;
   notices: NativeAgentNotice[];
+  /**
+   * Notices derived from `session.status` rather than from the transcript.
+   *
+   * Kept apart from `notices` because an authoritative messages read clears
+   * those: a `session.error` is persisted on the failed message, so the read
+   * supersedes it, but a retry lives only in the status and would vanish on
+   * the next transcript refresh. `retryNotice` lasts while OpenCode retries;
+   * `turnFailure` is a retry OpenCode says needs the user (a usage limit) and
+   * lasts until the next turn starts.
+   */
+  retryNotice?: NativeAgentNotice;
+  turnFailure?: NativeAgentNotice;
   revision: number;
   /** Exact after snapshots/structural changes; a safe upper bound after deltas. */
   transcriptBytes?: number;
@@ -54,9 +66,31 @@ export type OpenCodeStreamEffect = {
   reconnect?: boolean;
   refreshInteractions?: string;
   refreshMcp?: boolean;
+  /** The turn cannot progress without the user; abort it so the session is free. */
+  abortTurn?: boolean;
   sessionId?: string;
   status?: "running" | "idle" | "missing";
 };
+
+/**
+ * The failure message for a retry status OpenCode marked as needing the user.
+ *
+ * OpenCode attaches `action` to a retry only for account conditions its TUI
+ * turns into a dialog (for example "Go limit reached" with a settings link);
+ * an ordinary transient retry has none.
+ */
+export function openCodeRetryActionFailure(
+  status: Record<string, unknown> | null | undefined,
+): string | undefined {
+  const action = asRecord(status?.action);
+  if (!action) return undefined;
+  const title = nonEmptyString(action.title);
+  const detail = nonEmptyString(action.message) ?? nonEmptyString(status?.message);
+  const link = nonEmptyString(action.link);
+  const text = [title, detail].filter(Boolean).join(": ");
+  if (!text) return undefined;
+  return `${text}${link && !text.includes(link) ? ` ${link}` : ""}`.slice(0, 2_000);
+}
 
 /**
  * Bounded incremental state derived from OpenCode's v1 SSE stream.
@@ -188,7 +222,14 @@ export class OpenCodeStreamState {
   }
 
   notices(sessionId: string): NativeAgentNotice[] {
-    return [...(this.sessions.get(sessionId)?.notices ?? [])];
+    const state = this.sessions.get(sessionId);
+    if (!state) return [];
+    // The turn failure leads: readers take the first error as the turn error.
+    return [
+      ...(state.turnFailure ? [state.turnFailure] : []),
+      ...state.notices,
+      ...(state.retryNotice ? [state.retryNotice] : []),
+    ];
   }
 
   /** Record dispatch before a renderer has to observe the turn. */
@@ -196,6 +237,8 @@ export class OpenCodeStreamState {
     const state = this.session(sessionId);
     state.turnStartedAt = startedAt;
     state.turnConfirmed = false;
+    delete state.retryNotice;
+    delete state.turnFailure;
   }
 
   /** The authoritative turn clock, if one has been established. */
@@ -287,10 +330,25 @@ export class OpenCodeStreamState {
       const status = statusRecord?.type;
       if (status === "busy") {
         state.notices = [];
+        delete state.retryNotice;
+        delete state.turnFailure;
         this.ensureTurnStarted(sessionId, observedAt);
         return { sessionId, status: "running" };
       }
       if (status === "retry") {
+        const failure = openCodeRetryActionFailure(statusRecord);
+        if (failure) {
+          // OpenCode attaches an action when the retry cannot succeed without
+          // the user — an exhausted usage allowance whose reset can be days
+          // away. Its TUI opens a dialog; here the turn fails and is aborted,
+          // rather than showing "thinking" until the allowance resets.
+          const firstObservation = state.turnFailure === undefined;
+          delete state.retryNotice;
+          state.turnFailure = { kind: "error", message: failure };
+          this.endTurn(sessionId);
+          this.bump(state);
+          return { sessionId, status: "running", ...(firstObservation ? { abortTurn: true } : {}) };
+        }
         const attempt =
           typeof statusRecord?.attempt === "number" ? statusRecord.attempt : undefined;
         const detail =
@@ -299,23 +357,23 @@ export class OpenCodeStreamState {
           attempt !== undefined
             ? `OpenCode is retrying the model request (attempt ${attempt}). ${detail}`
             : `OpenCode is retrying the model request. ${detail}`;
-        state.notices = [
-          {
-            kind: "advisory",
-            severity: "warning",
-            message: headline.slice(0, 2_000),
-          },
-        ];
+        state.retryNotice = {
+          kind: "advisory",
+          severity: "warning",
+          message: headline.slice(0, 2_000),
+        };
         this.ensureTurnStarted(sessionId, observedAt);
         return { sessionId, status: "running" };
       }
       if (status === "idle") {
+        delete state.retryNotice;
         this.endTurn(sessionId);
         return { sessionId, status: "idle" };
       }
       return { sessionId };
     }
     if (event.type === "session.idle") {
+      delete state.retryNotice;
       this.endTurn(sessionId);
       return { sessionId, status: "idle" };
     }
@@ -363,7 +421,13 @@ export class OpenCodeStreamState {
     }
     if (event.type === "session.error") {
       this.endTurn(sessionId);
+      delete state.retryNotice;
       const error = asRecord(properties?.error);
+      // The abort that follows a turn failure reports itself as an error too;
+      // the failure that caused it is the one worth showing.
+      if (state.turnFailure && nonEmptyString(error?.name) === "MessageAbortedError") {
+        return { sessionId };
+      }
       const data = asRecord(error?.data);
       const message =
         nonEmptyString(data?.message) ??

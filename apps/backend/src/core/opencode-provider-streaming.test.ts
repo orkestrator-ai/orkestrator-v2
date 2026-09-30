@@ -263,6 +263,92 @@ describe("OpenCode provider v1 SSE projection", () => {
     }
   });
 
+  test("fails and aborts a turn stuck retrying on a usage limit", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake, {
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    const limitRetry = {
+      type: "session.status",
+      properties: {
+        sessionID: "owned-session",
+        status: {
+          type: "retry",
+          attempt: 1,
+          message: "monthly usage limit reached. It will reset in 3 days. - https://opencode.ai/go",
+          action: {
+            reason: "account_rate_limit",
+            provider: "opencode-go",
+            title: "Go limit reached",
+            message: "monthly usage limit reached. It will reset in 3 days.",
+            label: "open settings",
+            link: "https://opencode.ai/go",
+          },
+          next: Date.now() + 3 * 24 * 60 * 60 * 1_000,
+        },
+      },
+    };
+    const expected =
+      "Go limit reached: monthly usage limit reached. It will reset in 3 days. https://opencode.ai/go";
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      await provider.send("owned-session", "Keep working", { requestId: "request-1" });
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+
+      stream.push(limitRetry);
+      const failed = await waitForSessionState(provider, (snapshot) => snapshot.status === "error");
+      expect(failed.error).toBe(expected);
+      await waitUntil(() => fake.abortCalls.length === 1);
+
+      // The abort's own stop, a repeated retry and the persisted stop marker
+      // must not replace the reason or abort twice.
+      stream.push(limitRetry);
+      stream.push({
+        type: "session.error",
+        properties: {
+          sessionID: "owned-session",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      });
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              id: "assistant-1",
+              sessionID: "owned-session",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+              error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+            },
+            parts: [],
+          },
+        ],
+      });
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "idle" } },
+      });
+      const settled = await waitForSnapshot(provider, (snapshot) => snapshot.status === "error");
+      expect(settled.error).toBe(expected);
+      expect((await provider.sessionStateSnapshot?.("owned-session"))?.error).toBe(expected);
+      expect(fake.abortCalls).toHaveLength(1);
+
+      await provider.send("owned-session", "Try another model", { requestId: "request-2" });
+      const retried = await provider.sessionStateSnapshot?.("owned-session");
+      expect(retried?.status).not.toBe("error");
+      expect(retried?.notices).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("does not manufacture a turn clock for a turn only the provider observed", async () => {
     const fake = openCodeFake();
     fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });

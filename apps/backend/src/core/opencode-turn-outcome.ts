@@ -7,6 +7,7 @@ import {
 import { assertSdkResponse, asRecord } from "./agent-provider-runtime.js";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import { normalizeOpenCodeTerminalState } from "./opencode-messages.js";
+import { openCodeActionFailureForMessage } from "./opencode-action-failures.js";
 
 /**
  * How one request's OpenCode turn ended: its terminal error, or null when the
@@ -40,6 +41,14 @@ export async function readOpenCodeTurnTerminalError(
       info.parentID.endsWith(marker)
     ) {
       const terminal = normalizeOpenCodeTerminalState(history[index]);
+      if (terminal?.kind === "stopped") {
+        const sessionResponse = await client.session.get({ sessionID: sessionId }, requestOptions);
+        assertSdkResponse(sessionResponse, "OpenCode action failure outcome read");
+        return (
+          openCodeActionFailureForMessage(asRecord(sessionResponse.data) ?? {}, history[index]) ??
+          terminal.message
+        );
+      }
       if (terminal) return terminal.message;
       if (typeof asRecord(info.time)?.completed === "number") return null;
       break;

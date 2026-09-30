@@ -129,6 +129,8 @@ import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-perm
 import { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-broker.js";
 import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
 import { readOpenCodeTurnTerminalError } from "./opencode-turn-outcome.js";
+import { OpenCodeActionRetryCoordinator } from "./opencode-action-retry.js";
+import { reconcileOpenCodeStreamState } from "./opencode-stream-reconciliation.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
@@ -200,6 +202,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
    */
   private readonly health = new RuntimeHealthRecorder();
   private readonly streamState = new OpenCodeStreamState();
+  private readonly actionRetry: OpenCodeActionRetryCoordinator;
   /** Shell-call badges; absent when the worktree is not readable from here. */
   private readonly commandChanges?: OpenCodeCommandChanges;
   private activeStreamController: AbortController | null = null;
@@ -278,6 +281,17 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
     this.observation = new OpenCodeObservationStream(dependencies.onObservationHint);
+    this.actionRetry = new OpenCodeActionRetryCoordinator(
+      connection,
+      this.client,
+      this.messageIds,
+      this.streamState,
+      this.lifecycle,
+      this.workflowResults,
+      this.reviewPermissions,
+      () => this.requestOptions(),
+      (sessionId) => this.observation.changed(sessionId),
+    );
     this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
     // Only a connection with a host directory runs where git can read it:
     // local-worktree environments. A container's OpenCode works on a clone
@@ -528,6 +542,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       if (effect.status && effect.sessionId) {
         this.lifecycle.observeStreamEvent(effect.sessionId, effect.status);
         this.observation.changed(effect.sessionId);
+        this.actionRetry.observeStatus(effect.sessionId, effect.status);
+      }
+      if (effect.abortTurn && effect.sessionId) {
+        this.actionRetry.requestAbort(effect.sessionId);
       }
       if (effect.refreshMcp) {
         this.invalidateInteractiveMetadata();
@@ -657,44 +675,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   private async reconcileStreamStateNow(): Promise<void> {
-    if (this.disposed) return;
-    const sessionIds = Array.from(this.lifecycle.ownedSessions);
-    if (sessionIds.length === 0) return;
-    this.streamState.markGap();
-    this.invalidateInteractiveMetadata();
-    const reconcileStartedAt = this.now();
-    const lifecycle = await this.lifecycle.readSessionLifecycle(sessionIds, true, true);
-    // A reconnect is an authoritative observation, but it was taken before this
-    // loop ran. Only a clock that already existed when the read started may be
-    // ended; a dispatch that arrived while the read was in flight is live.
-    for (const sessionId of sessionIds) {
-      if (lifecycle.get(sessionId) === "running") continue;
-      const turnStartedAt = this.streamState.turnStartedAt(sessionId);
-      if (turnStartedAt !== undefined && turnStartedAt <= reconcileStartedAt) {
-        this.streamState.endTurn(sessionId);
-      }
-    }
-    let cursor = 0;
-    const worker = async (): Promise<void> => {
-      while (!this.disposed) {
-        const sessionId = sessionIds[cursor++];
-        if (!sessionId) return;
-        try {
-          const eventVersion = this.streamState.eventVersion(sessionId);
-          const messages = [
-            ...boundedOpenCodeMessageHistory(
-              await this.readMessagesSnapshot(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
-              { count: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
-            ),
-          ];
-          this.streamState.replaceMessages(sessionId, messages, eventVersion);
-        } catch {
-          // The dirty flag remains set. The next projection read retries the
-          // authoritative snapshot instead of exposing a partial event tail.
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(4, sessionIds.length) }, () => worker()));
+    await reconcileOpenCodeStreamState({
+      disposed: () => this.disposed,
+      lifecycle: this.lifecycle,
+      streamState: this.streamState,
+      now: this.now,
+      invalidateMetadata: () => this.invalidateInteractiveMetadata(),
+      readMessages: (sessionId, limit) => this.readMessagesSnapshot(sessionId, limit),
+      reconciled: (sessionId) => this.actionRetry.reconciled(sessionId),
+    });
   }
 
   private async reconcilePendingRequestsNow(): Promise<void> {
@@ -773,6 +762,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     );
     const scope = openCodeMessageIdScope(this.connection, sessionId);
     await this.messageIds.runExclusive(scope, async () => {
+      await this.actionRetry.guardSend(sessionId);
       // The bounded newest transcript recovers an accepted ambiguous dispatch
       // after a restart. In-memory reservations cover the gap before OpenCode
       // materializes a just-accepted user message.
@@ -796,6 +786,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
+      this.actionRetry.beginTurn(sessionId);
       await this.commandChanges?.beginTurn(sessionId);
       let response;
       try {
@@ -900,6 +891,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async status(sessionId: string): Promise<ProviderStatus> {
+    if (this.actionRetry.isPending(sessionId)) return "running";
     if (this.blockedSessions.has(sessionId)) return "blocked";
     if (this.failedQuestionSessions.has(sessionId)) return "error";
     try {
@@ -910,6 +902,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         throw new Error(`OpenCode lifecycle snapshot omitted ${sessionId}`);
       }
       if (lifecycle === "running") return "running";
+      this.actionRetry.reconciled(sessionId);
       if (lifecycle === "missing") return "missing";
       if (lifecycle === "idle") return "idle";
       return "error";
@@ -1007,7 +1000,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const eventVersionBefore = this.streamState.eventVersion(sessionId);
     const status = await this.projectedStatus(sessionId);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
-    const notices = this.streamState.notices(sessionId);
+    const notices = this.actionRetry.notices(sessionId);
     const streamedError = notices.some((notice) => notice.kind === "error");
     // The clock is authoritative only when a dispatch or an observed busy/retry
     // event set it. A read must never manufacture one, and an observation that
@@ -1052,12 +1045,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   private async projectedStatus(sessionId: string): Promise<ProviderStatus> {
+    if (this.actionRetry.isPending(sessionId)) return "running";
     if (this.blockedSessions.has(sessionId)) return "blocked";
     if (this.failedQuestionSessions.has(sessionId)) return "error";
     const lifecycle = (await this.lifecycle.readSessionLifecycle([sessionId], false)).get(
       sessionId,
     );
     if (lifecycle === "running") return "running";
+    this.actionRetry.reconciled(sessionId);
     if (lifecycle === "idle" || lifecycle === "missing") return lifecycle;
     if (!lifecycle) {
       throw new ProviderUnavailableError(`OpenCode lifecycle snapshot omitted ${sessionId}`);
@@ -1083,25 +1078,32 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.commandChanges?.changes(sessionId),
     ]);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
+    const outcomeMessages = await this.actionRetry.messagesWithFailures(sessionId, rawMessages);
     const normalizedMessages = normalizeOpenCodeTranscriptMessages(
-      rawMessages,
+      outcomeMessages,
       (type) => this.health.recordUnknown(`part:${type}`),
       commandChanges,
     );
     const messages = await this.hydrateSubagentTranscripts(
       normalizedMessages,
-      collectRawOpenCodeSubagentIds(rawMessages),
+      collectRawOpenCodeSubagentIds(outcomeMessages),
     );
     // OpenCode persists terminal errors on the final assistant message rather
     // than in its lifecycle snapshot. Normalize that provider detail here so
     // the shared projection can render the same durable terminal row for every
     // provider, including aborts initiated outside this renderer.
-    const terminal = normalizeOpenCodeTerminalState(
-      [...rawMessages].reverse().find((candidate) => Boolean(asRecord(asRecord(candidate)?.info))),
+    const persistedTerminal = normalizeOpenCodeTerminalState(
+      [...outcomeMessages]
+        .reverse()
+        .find((candidate) => Boolean(asRecord(asRecord(candidate)?.info))),
     );
-    const streamNotices = this.streamState.notices(sessionId);
+    // A previous assistant stop can still be the transcript tail while this
+    // retry is live. It cannot settle the turn whose abort is pending or failed.
+    const terminal =
+      status === "running" && this.actionRetry.isUnsettled(sessionId) ? null : persistedTerminal;
+    const streamNotices = this.actionRetry.notices(sessionId);
     const streamedError = streamNotices.find((notice) => notice.kind === "error");
-    const latestUsage = this.streamState.contextUsage(sessionId, rawMessages);
+    const latestUsage = this.streamState.contextUsage(sessionId, outcomeMessages);
     const running = status === "running" && !terminal && !streamedError;
     const settled =
       Boolean(terminal) ||
@@ -1138,13 +1140,19 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         : {}),
       runtime: metadata.runtime,
       providerRevision: this.streamState.revision(sessionId),
-      ...([...(terminal ? [terminal] : []), ...streamNotices].length > 0
-        ? { notices: [...(terminal ? [terminal] : []), ...streamNotices] }
+      ...([...(terminal && !streamedError ? [terminal] : []), ...streamNotices].length > 0
+        ? { notices: [...(terminal && !streamedError ? [terminal] : []), ...streamNotices] }
         : {}),
       ...(terminal?.kind === "error" || streamedError
         ? {
             phase: "error" as const,
-            error: terminal?.message ?? streamedError?.message ?? "OpenCode session failed",
+            // A failure the backend aborted leaves a stop on the message; the
+            // streamed failure says why.
+            error:
+              (terminal?.kind === "error" ? terminal.message : undefined) ??
+              streamedError?.message ??
+              terminal?.message ??
+              "OpenCode session failed",
           }
         : {}),
     };
@@ -1458,6 +1466,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.sessionPolicies.delete(sessionId);
     this.blockedSessions.delete(sessionId);
     this.failedQuestionSessions.delete(sessionId);
+    this.actionRetry.forget(sessionId);
   }
 
   /** See `AgentSessionProvider.observationStreamLive`. */

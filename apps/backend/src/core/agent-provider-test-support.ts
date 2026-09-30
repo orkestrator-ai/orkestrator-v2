@@ -282,6 +282,9 @@ export type OpenCodeFake = {
     handler: ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null,
   ): void;
   setAbortResponse(response: Record<string, unknown>): void;
+  setAbortHandler(
+    handler: ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null,
+  ): void;
   setDeleteResponse(response: Record<string, unknown>): void;
   setCreateResponse(response: Record<string, unknown>): void;
   setUpdateResponse(response: Record<string, unknown>): void;
@@ -339,6 +342,9 @@ export function openCodeFake(): OpenCodeFake {
     | ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
     | null = null;
   let abortResponse: Record<string, unknown> = { data: true };
+  let abortHandler:
+    | ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
+    | null = null;
   let deleteResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let updateResponse: Record<string, unknown> = { data: { id: "owned-session" } };
@@ -541,6 +547,7 @@ export function openCodeFake(): OpenCodeFake {
       },
       async abort(parameters?: Record<string, unknown>) {
         abortCalls.push(parameters);
+        if (abortHandler) return abortHandler(parameters);
         return abortResponse;
       },
       async delete(parameters?: Record<string, unknown>) {
@@ -652,6 +659,9 @@ export function openCodeFake(): OpenCodeFake {
     },
     setAbortResponse(response) {
       abortResponse = response;
+    },
+    setAbortHandler(handler) {
+      abortHandler = handler;
     },
     setDeleteResponse(response) {
       deleteResponse = response;

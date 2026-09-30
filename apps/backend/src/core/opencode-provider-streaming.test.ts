@@ -2,13 +2,19 @@ import { describe, expect, test } from "bun:test";
 import {
   openCodeActivityProvider,
   openCodeFake,
+  deferred,
+  expectedOpenCodeMessageId,
   waitUntil,
 } from "./agent-provider-test-support.js";
 import type {
   ProviderInteractiveSnapshot,
   ProviderSessionStateSnapshot,
 } from "./agent-provider-contract.js";
-import { AmbiguousPromptDispatchError, PromptRejectedError } from "./native-agent-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderUnavailableError,
+} from "./native-agent-provider.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 
 type SnapshotProvider = {
@@ -234,6 +240,36 @@ describe("OpenCode provider v1 SSE projection", () => {
     }
   });
 
+  test("clears a retry advisory when reconnect reconciliation finds the session idle", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake, {
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: {
+          sessionID: "owned-session",
+          status: { type: "retry", attempt: 1, message: "temporary outage" },
+        },
+      });
+      await waitForSessionState(provider, (snapshot) => Boolean(snapshot.notices?.length));
+      fake.setStatusResponse({ data: { "owned-session": { type: "idle" } } });
+      stream.push({ type: "server.instance.disposed", properties: {} });
+      const idle = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "idle" && !snapshot.notices?.length,
+      );
+      expect(idle.notices).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("clears the turn clock when the turn is aborted", async () => {
     const fake = openCodeFake();
     let now = 0;
@@ -258,6 +294,268 @@ describe("OpenCode provider v1 SSE projection", () => {
       // abort settled it rather than waiting for a missed idle event.
       const after = await provider.sessionStateSnapshot?.("owned-session");
       expect(after?.turnStartedAt).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("fails and aborts a turn stuck retrying on a usage limit", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake, {
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    const limitRetry = {
+      type: "session.status",
+      properties: {
+        sessionID: "owned-session",
+        status: {
+          type: "retry",
+          attempt: 1,
+          message: "monthly usage limit reached. It will reset in 3 days. - https://opencode.ai/go",
+          action: {
+            reason: "account_rate_limit",
+            provider: "opencode-go",
+            title: "Go limit reached",
+            message: "monthly usage limit reached. It will reset in 3 days.",
+            label: "open settings",
+            link: "https://opencode.ai/go",
+          },
+          next: Date.now() + 3 * 24 * 60 * 60 * 1_000,
+        },
+      },
+    };
+    const expected =
+      "Go limit reached: monthly usage limit reached. It will reset in 3 days. https://opencode.ai/go";
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      await provider.send("owned-session", "Keep working", { requestId: "request-1" });
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+
+      stream.push(limitRetry);
+      const failed = await waitForSessionState(provider, (snapshot) => snapshot.status === "error");
+      expect(failed.error).toBe(expected);
+      await waitUntil(() => fake.abortCalls.length === 1);
+
+      // The abort's own stop, a repeated retry and the persisted stop marker
+      // must not replace the reason or abort twice.
+      stream.push(limitRetry);
+      stream.push({
+        type: "session.error",
+        properties: {
+          sessionID: "owned-session",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      });
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              id: "assistant-1",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              sessionID: "owned-session",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+              error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+            },
+            parts: [],
+          },
+        ],
+      });
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "idle" } },
+      });
+      fake.setStatusResponse({ data: { "owned-session": { type: "idle" } } });
+      const settled = await waitForSnapshot(provider, (snapshot) => snapshot.status === "error");
+      expect(settled.error).toBe(expected);
+      expect(settled.notices).toEqual([{ kind: "error", message: expected }]);
+      expect((await provider.sessionStateSnapshot?.("owned-session"))?.error).toBe(expected);
+      expect(await provider.status("owned-session")).toBe("idle");
+      expect(await provider.turnTerminalError?.("owned-session", "request-1")).toBe(expected);
+      expect(fake.abortCalls).toHaveLength(1);
+
+      const reconstructed = openCodeActivityProvider(fake);
+      reconstructed.registerSession?.("owned-session");
+      try {
+        const restored = await reconstructed.interactiveSnapshot?.("owned-session");
+        expect(restored?.error).toBe(expected);
+        expect(restored?.notices).toEqual([{ kind: "error", message: expected }]);
+        expect(await reconstructed.turnTerminalError?.("owned-session", "request-1")).toBe(
+          expected,
+        );
+      } finally {
+        await reconstructed.dispose?.();
+      }
+
+      await provider.send("owned-session", "Try another model", { requestId: "request-2" });
+      const retried = await provider.sessionStateSnapshot?.("owned-session");
+      expect(retried?.status).not.toBe("error");
+      expect(retried?.notices).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("retries a failed automatic abort and keeps the live turn running until stopped", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: { "owned-session": { type: "retry" } } });
+    fake.setMessagesResponse({
+      data: [
+        {
+          info: {
+            id: "previous-stop",
+            parentID: expectedOpenCodeMessageId("previous-request"),
+            role: "assistant",
+            time: { created: 1, completed: 2 },
+            error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+          },
+          parts: [],
+        },
+      ],
+    });
+    let abortAttempt = 0;
+    fake.setAbortHandler(async () => {
+      abortAttempt += 1;
+      if (abortAttempt === 1) throw new Error("abort unavailable");
+      return { data: true };
+    });
+    const provider = openCodeActivityProvider(fake, { monitorRetryMs: 1 });
+    provider.registerSession?.("owned-session");
+    const retry = {
+      type: "session.status",
+      properties: {
+        sessionID: "owned-session",
+        status: { type: "retry", action: { title: "Usage limit reached" } },
+      },
+    };
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      await provider.send("owned-session", "first", { requestId: "request-1" });
+      const stream = fake.subscriptions[0]!;
+      stream.push(retry);
+      await waitUntil(() => fake.abortCalls.length === 1);
+      const retrying = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "running" && Boolean(snapshot.notices?.length),
+      );
+      expect(retrying.error).toBeUndefined();
+      expect(retrying.notices?.[0]?.kind).toBe("advisory");
+      const interactive = await waitForSnapshot(
+        provider,
+        (snapshot) => snapshot.status === "running" && snapshot.notices?.[0]?.kind === "advisory",
+      );
+      expect(interactive.error).toBeUndefined();
+      await expect(
+        provider.send("owned-session", "second", { requestId: "request-2" }),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fake.promptCalls).toHaveLength(1);
+
+      stream.push(retry);
+      await waitUntil(() => fake.abortCalls.length === 2);
+      const stopped = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "error",
+      );
+      expect(stopped.error).toBe("Usage limit reached");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("finishes an automatic abort before dispatching the next prompt", async () => {
+    const fake = openCodeFake();
+    const abortGate = deferred();
+    fake.setAbortHandler(async () => {
+      await abortGate.promise;
+      return { data: true };
+    });
+    const provider = openCodeActivityProvider(fake, { monitorRetryMs: 1 });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      await provider.send("owned-session", "first", { requestId: "request-1" });
+      fake.subscriptions[0]!.push({
+        type: "session.status",
+        properties: {
+          sessionID: "owned-session",
+          status: { type: "retry", action: { title: "Usage limit reached" } },
+        },
+      });
+      await waitUntil(() => fake.abortCalls.length === 1);
+      const nextSend = provider.send("owned-session", "second", { requestId: "request-2" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(fake.promptCalls).toHaveLength(1);
+      expect(await provider.status("owned-session")).toBe("running");
+      abortGate.resolve();
+      await nextSend;
+      expect(fake.promptCalls).toHaveLength(2);
+      expect(fake.abortCalls).toHaveLength(1);
+    } finally {
+      abortGate.resolve();
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps an ordinary user stop as a stopped notice", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake, { monitorRetryMs: 1 });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      await provider.send("owned-session", "first", { requestId: "request-1" });
+      await provider.abort("owned-session");
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              id: "assistant-1",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              sessionID: "owned-session",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+              error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+            },
+            parts: [],
+          },
+        ],
+      });
+      fake.subscriptions[0]!.push({
+        type: "session.error",
+        properties: {
+          sessionID: "owned-session",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      });
+      fake.subscriptions[0]!.push({
+        type: "message.updated",
+        properties: {
+          sessionID: "owned-session",
+          info: {
+            id: "assistant-1",
+            parentID: expectedOpenCodeMessageId("request-1"),
+            sessionID: "owned-session",
+            role: "assistant",
+            time: { created: 1, completed: 2 },
+            error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+          },
+        },
+      });
+      const snapshot = await waitForSnapshot(
+        provider,
+        (value) => value.notices?.[0]?.kind === "stopped",
+      );
+      expect(snapshot.error).toBeUndefined();
+      expect(snapshot.notices).toEqual([{ kind: "stopped", message: "Query stopped by user." }]);
+      expect(await provider.turnTerminalError?.("owned-session", "request-1")).toBe(
+        "Query stopped by user.",
+      );
     } finally {
       await provider.dispose?.();
     }

@@ -171,6 +171,128 @@ describe("OpenCodeStreamState turn clock", () => {
     expect(state.turnStartedAt("session")).toBe(9_000);
   });
 
+  test("keeps the retry advisory across an authoritative transcript read", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: {
+        sessionID: "session",
+        status: { type: "retry", attempt: 1, message: "Provider timed out" },
+      },
+    } as never);
+    expect(state.replaceMessages("session", [])).toBe(true);
+    expect(state.notices("session")).toHaveLength(1);
+
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "idle" } },
+    } as never);
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("a retry that needs the user fails the turn until the next one starts", () => {
+    const state = new OpenCodeStreamState();
+    const retry = {
+      type: "session.status",
+      properties: {
+        sessionID: "session",
+        status: {
+          type: "retry",
+          attempt: 1,
+          message: "Upgrade to continue - https://opencode.ai/pricing",
+          action: {
+            reason: "free_tier_limit",
+            provider: "opencode",
+            title: "Free limit reached",
+            message: "Subscribe to OpenCode Go.",
+            label: "subscribe",
+            link: "https://opencode.ai/pricing",
+          },
+          next: 1,
+        },
+      },
+    } as never;
+    const failure = {
+      kind: "error" as const,
+      message: "Free limit reached: Subscribe to OpenCode Go. https://opencode.ai/pricing",
+    };
+    state.beginTurn("session", 1_000);
+    expect(state.apply(retry)).toEqual({
+      sessionId: "session",
+      status: "running",
+      abortTurn: true,
+    });
+    expect(state.turnStartedAt("session")).toBeUndefined();
+    expect(state.notices("session")).toEqual([failure]);
+    // The provider coalesces in-flight aborts; a later event can retry a failed one.
+    expect(state.apply(retry)).toEqual({
+      sessionId: "session",
+      status: "running",
+      abortTurn: true,
+    });
+
+    state.apply({
+      type: "session.error",
+      properties: {
+        sessionID: "session",
+        error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+      },
+    } as never);
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "idle" } },
+    } as never);
+    expect(state.replaceMessages("session", [])).toBe(true);
+    expect(state.notices("session")).toEqual([failure]);
+
+    state.beginTurn("session", 2_000);
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("reconciliation clears a retry advisory after an SSE gap", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "retry", message: "temporary" } },
+    } as never);
+    state.markGap();
+    state.endTurn("session");
+    state.replaceMessages("session", []);
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("a renewed busy status clears an action failure", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: {
+        sessionID: "session",
+        status: { type: "retry", action: { title: "Limit reached" } },
+      },
+    } as never);
+    expect(state.turnFailure("session")?.message).toBe("Limit reached");
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "busy" } },
+    } as never);
+    expect(state.turnFailure("session")).toBeUndefined();
+    expect(state.notices("session")).toEqual([]);
+  });
+
+  test("session deletion discards the action failure and all cached notices", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.status",
+      properties: {
+        sessionID: "session",
+        status: { type: "retry", action: { title: "Limit reached" } },
+      },
+    } as never);
+    state.apply({ type: "session.deleted", properties: { sessionID: "session" } } as never);
+    expect(state.turnFailure("session")).toBeUndefined();
+    expect(state.notices("session")).toEqual([]);
+  });
+
   test("session.updated records the provider session model", () => {
     const state = new OpenCodeStreamState();
     state.apply({

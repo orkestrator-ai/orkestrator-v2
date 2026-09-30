@@ -1581,7 +1581,7 @@ export class AppServerEngine implements CodexEngine {
     // one. A failed routine read leaves a pending failure check free to land.
     const sequence = ++this.accountCheckSequence;
     const generation = this.supervisor.getGeneration();
-    // The backend polls auth status every 15 s: never force a refresh here (see
+    // On-demand UI auth-status reads must not force a token refresh here (see
     // `checkAccountSignIn`). App-server refreshes a stale token on its own.
     const response = await this.supervisor.request("account/read", { refreshToken: false });
     // Auth-status reads answer from account/read itself. A connector reload is

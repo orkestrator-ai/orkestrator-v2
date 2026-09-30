@@ -1134,6 +1134,10 @@ describe("AgentNativeTab", () => {
           "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
       },
     }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "signed-out",
+      signIn: { kind: "terminal" },
+    }));
     let requestedSection: unknown;
     const onSettings = (event: Event) => {
       requestedSection = (event as CustomEvent<unknown>).detail;
@@ -1157,11 +1161,92 @@ describe("AgentNativeTab", () => {
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
       expect(dock.className).toContain("top-1/2");
 
-      fireEvent.click(screen.getByRole("button", { name: "Open Cursor Agent settings" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Open Cursor Agent settings" }));
       expect(requestedSection).toBe("cursor");
     } finally {
       window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
     }
+  });
+
+  test("pending auth options never show the settings fallback", async () => {
+    let resolveAuth!: (value: NativeAgentAuthStatus) => void;
+    getNativeAgentAuthStatusMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAuth = resolve;
+        }),
+    );
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
+    }));
+    render(<AgentNativeTab tabId="tab-auth-pending" data={identity("codex")} isActive />);
+    await screen.findByText("Account needs sign-in");
+    expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Checking sign-in options…" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    await act(async () => resolveAuth({ state: "signed-out", signIn: { kind: "browser-url" } }));
+    expect(await screen.findByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
+  });
+
+  test.each(["reject", "null"])(
+    "recovers from a %s auth read without remounting",
+    async (failure) => {
+      let reads = 0;
+      getNativeAgentAuthStatusMock.mockImplementation(async () => {
+        if (++reads === 1) {
+          if (failure === "reject") throw new Error("Bridge unavailable");
+          return null;
+        }
+        return { state: "signed-out", signIn: { kind: "browser-url" } };
+      });
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
+      }));
+      render(<AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />);
+      await screen.findByRole("button", { name: "Retry sign-in options" });
+      expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
+      expect(
+        await screen.findByRole("button", { name: "Sign in to Codex" }, { timeout: 2_000 }),
+      ).toBeTruthy();
+      expect(reads).toBe(2);
+    },
+  );
+
+  test.each(["terminal", "none"] as const)(
+    "confirmed %s auth options use settings",
+    async (kind) => {
+      getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+        state: "signed-out",
+        signIn: { kind },
+      }));
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
+      }));
+      render(<AgentNativeTab tabId="tab-auth-settings" data={identity("codex")} isActive />);
+      expect(await screen.findByRole("button", { name: "Open Codex settings" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Sign in to Codex" }) === null).toBe(true);
+    },
+  );
+
+  test("a failed auth read has a manual retry while still authentication-required", async () => {
+    let available = false;
+    getNativeAgentAuthStatusMock.mockImplementation(async () =>
+      available ? { state: "signed-out", signIn: { kind: "device-code" } } : null,
+    );
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
+    }));
+    render(<AgentNativeTab tabId="tab-auth-manual-retry" data={identity("codex")} isActive />);
+    const retry = await screen.findByRole("button", { name: "Retry sign-in options" });
+    available = true;
+    fireEvent.click(retry);
+    expect(await screen.findByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
   });
 
   test("an expired Codex sign-in offers to sign in from the tab", async () => {
@@ -1299,6 +1384,10 @@ describe("AgentNativeTab", () => {
   });
 
   test("routes provider-neutral authentication recovery to the active platform", async () => {
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "signed-out",
+      signIn: { kind: "terminal" },
+    }));
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
@@ -1318,7 +1407,7 @@ describe("AgentNativeTab", () => {
       expect(
         (screen.getByTitle("Sign in to Grok Build before sending") as HTMLButtonElement).disabled,
       ).toBe(true);
-      fireEvent.click(screen.getByRole("button", { name: "Open Grok Build settings" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Open Grok Build settings" }));
       expect(requestedSection).toBe("grok");
     } finally {
       window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
@@ -5376,6 +5465,10 @@ describe("AgentNativeTab", () => {
   });
 
   test("keeps the authentication banner reachable when an empty created tab re-enters connecting", async () => {
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "signed-out",
+      signIn: { kind: "terminal" },
+    }));
     // The establishment overlay replaces the whole pane, including the pinned
     // accessory row, so a background refresh over an empty transcript must not
     // swallow the one control that recovers the tab. The banner has no message

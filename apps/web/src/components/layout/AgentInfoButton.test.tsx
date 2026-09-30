@@ -5748,6 +5748,134 @@ describe("AgentInfoButton ACP agents", () => {
     expect(accountReads()).toBe(2);
   });
 
+  test("a late pre-logout read cannot restore the signed-in account", async () => {
+    let reads = 0;
+    let resolveOld!: (value: unknown) => void;
+    const oldRead = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status") {
+        reads++;
+        if (reads === 2) return oldRead;
+        return reads === 1
+          ? { state: "signed-in", account: { label: "old@example.test" }, signOut: true }
+          : { state: "signed-out", signIn: { kind: "browser-url" } };
+      }
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    await screen.findByText("old@example.test");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    open();
+    await waitFor(() => expect(reads).toBe(2));
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await screen.findByRole("button", { name: "Sign in" });
+    await act(async () =>
+      resolveOld({ state: "signed-in", account: { label: "old@example.test" }, signOut: true }),
+    );
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(screen.queryByText("old@example.test") === null).toBe(true);
+  });
+
+  test.each(["browser-url", "device-code"])(
+    "refreshes an open account after %s sign-in",
+    async (kind) => {
+      let reads = 0;
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_native_agent_auth_status") {
+          return ++reads === 1
+            ? { state: "signed-out", signIn: { kind } }
+            : {
+                state: "signed-in",
+                account: { label: "new@example.test", plan: "Pro" },
+                signOut: true,
+              };
+        }
+        if (command === "begin_native_agent_sign_in")
+          return kind === "device-code" ? { code: "TEST-CODE" } : {};
+        return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+      });
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      expect(await screen.findByText("new@example.test")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+      expect(screen.getByText("signed in · Pro")).toBeTruthy();
+    },
+  );
+
+  test("polls until browser sign-in finishes while the panel stays open", async () => {
+    let reads = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status") {
+        return ++reads < 3
+          ? { state: "signed-out", signIn: { kind: "browser-url" } }
+          : { state: "signed-in", account: { label: "completed@example.test" }, signOut: true };
+      }
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(reads).toBe(2));
+    expect(await screen.findByText("completed@example.test", {}, { timeout: 3_000 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+  });
+
+  test.each(["reject", "null"])(
+    "retries a %s account read without closing the panel",
+    async (failure) => {
+      let reads = 0;
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_native_agent_auth_status") {
+          if (++reads === 1) {
+            if (failure === "reject") throw new Error("Bridge unavailable");
+            return null;
+          }
+          return { state: "signed-out", signIn: { kind: "browser-url" } };
+        }
+        return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+      });
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Retry account status" }));
+      expect(await screen.findByRole("button", { name: "Sign in" })).toBeTruthy();
+      expect(screen.queryByText("Could not read account status.") === null).toBe(true);
+    },
+  );
+
+  test("closing the panel cancels imperative post-sign-out reads", async () => {
+    let reads = 0;
+    let resolveLogout!: (value: unknown) => void;
+    const logoutRead = new Promise((resolve) => {
+      resolveLogout = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status") {
+        reads++;
+        if (reads === 2) return logoutRead;
+        if (reads > 2) return new Promise(() => undefined);
+        return { state: "signed-in", account: { label: "retained@example.test" }, signOut: true };
+      }
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(reads).toBe(2));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await act(async () => resolveLogout({ state: "signed-out", signIn: { kind: "browser-url" } }));
+    open();
+    expect(await screen.findByText("retained@example.test")).toBeTruthy();
+  });
+
   test("collapses the MCP inventory into a tool total that expands and reconnects on click", async () => {
     // A session with a dozen servers used to render a dozen cards; the popover
     // now leads with the tool total and only expands the dense list on demand,

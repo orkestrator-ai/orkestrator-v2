@@ -478,26 +478,61 @@ export function appendSubagentInterruptedNotice(
  * a successful result that does not name the prompt answers other input:
  * another send, or a turn the CLI started itself, which names none. Errors
  * without a uuid can be session-scoped startup failures and must be surfaced.
- * An older producer is trusted as before, whatever uuid it reports.
+ * An older producer is trusted as before, whatever uuid it reports. A steer
+ * pushed into this turn is this turn's input too, so naming one is not other
+ * input.
  */
 export function resultAnswersOtherInput(
-  result: {
-    user_message_uuid?: unknown;
-    user_message_uuids?: unknown;
-    result_index?: unknown;
-    subtype?: unknown;
-    is_error?: unknown;
-  },
+  result: ResultInputFields,
   promptUuid: string,
+  steerUuids: ReadonlySet<string> = new Set(),
 ): boolean {
   if (result.subtype !== "success" || result.is_error === true) return false;
+  const uuids = resultInputUuids(result);
+  if (uuids.includes(promptUuid) || uuids.some((uuid) => steerUuids.has(uuid))) return false;
+  return Number.isSafeInteger(result.result_index);
+}
+
+/**
+ * Whether a `result` closes input that a steer has since overtaken, and so
+ * is not the end of the turn. Forgets every steer the result names.
+ *
+ * A steer is sent with `priority: "now"`, so the CLI aborts the request in
+ * flight and first reports a result for the input it was answering, before it
+ * starts on the steer and reports that one's own. The interrupted result is
+ * `success` if text had begun streaming but `error_during_execution` while the
+ * model was still thinking; taking the error as this turn's failure tore the
+ * CLI down with the steer unanswered. The turn is over only once every steer
+ * pushed into it has been named. A result that names no input at all cannot be
+ * attributed, and is handled as before.
+ */
+export function resultSupersededBySteer(
+  result: ResultInputFields,
+  unansweredSteerUuids: Set<string>,
+): boolean {
+  if (unansweredSteerUuids.size === 0) return false;
+  const uuids = resultInputUuids(result);
+  if (uuids.length === 0) return false;
+  for (const uuid of uuids) unansweredSteerUuids.delete(uuid);
+  return unansweredSteerUuids.size > 0;
+}
+
+type ResultInputFields = {
+  user_message_uuid?: unknown;
+  user_message_uuids?: unknown;
+  result_index?: unknown;
+  subtype?: unknown;
+  is_error?: unknown;
+};
+
+/** The client uuids of the user messages a `result` answers. */
+export function resultInputUuids(result: ResultInputFields): string[] {
   const uuids = Array.isArray(result.user_message_uuids)
     ? result.user_message_uuids
     : typeof result.user_message_uuid === "string"
       ? [result.user_message_uuid]
       : [];
-  if (uuids.includes(promptUuid)) return false;
-  return Number.isSafeInteger(result.result_index);
+  return uuids.filter((uuid): uuid is string => typeof uuid === "string" && uuid.length > 0);
 }
 
 /**

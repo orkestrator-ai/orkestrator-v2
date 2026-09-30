@@ -220,6 +220,8 @@ import {
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
   resultAnswersOtherInput,
+  resultInputUuids,
+  resultSupersededBySteer,
   taskNotificationNoticePart,
   toolResultIds,
 } from "./session-manager-messages.js";
@@ -869,6 +871,18 @@ export async function sendPrompt(
     // `resultAnswersOtherInput`.
     const promptUuid = crypto.randomUUID();
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
+    // Client uuids of the steers pushed into this turn: every one, and those no
+    // result has named yet. See `resultSupersededBySteer`.
+    const steerUuids = new Set<string>();
+    const unansweredSteerUuids = new Set<string>();
+    const pushSteerInput = (message: SDKUserMessage): boolean => {
+      const pushed = heldSdkPrompt.push(message);
+      if (pushed && typeof message.uuid === "string" && message.uuid) {
+        steerUuids.add(message.uuid);
+        unansweredSteerUuids.add(message.uuid);
+      }
+      return pushed;
+    };
     /**
      * Closing stdin starts the CLI's exit. `session.queryControl` stays set
      * until this turn's `finally`, so without this marker a read-only control
@@ -1681,7 +1695,7 @@ export async function sendPrompt(
         onUserDialog: async () => ({ behavior: "cancelled" as const }),
       },
     });
-    const liveQuery = Object.assign(queryIterator, { pushInput: heldSdkPrompt.push });
+    const liveQuery = Object.assign(queryIterator, { pushInput: pushSteerInput });
     session.queryControl = liveQuery;
     queryIteratorControl = liveQuery;
     queryStarted = true;
@@ -2455,11 +2469,16 @@ export async function sendPrompt(
         // assistant message per content block, all sharing `message.id`, so the
         // running finalized-block count gives each block its stream index.
         const apiMessageId = (message as SDKAssistantMessage).message?.id;
-        const rawMessageKey =
+        const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+        const isRootAssistant = isRootAssistantRecord(
+          parentToolUseId,
+          (message as { isSidechain?: unknown }).isSidechain,
+        );
+        if (isRootAssistant && apiMessageId) stream.startPostSteerRowFor(apiMessageId);
+        const messageKey =
           apiMessageId ??
           (message.uuid as string | undefined) ??
           `assistant-${(stream.syntheticMessageKeyCounter += 1)}`;
-        const messageKey = stream.resolveStreamMessageKey(rawMessageKey);
 
         const blocks = stream.getBlocksForMessage(messageKey);
         const blockIndexBase = stream.finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
@@ -2489,11 +2508,6 @@ export async function sendPrompt(
         // which is what a fork boundary must point at.
         const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
         const observedModel = (message as { message?: { model?: unknown } }).message?.model;
-        const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
-        const isRootAssistant = isRootAssistantRecord(
-          parentToolUseId,
-          (message as { isSidechain?: unknown }).isSidechain,
-        );
         const modelId = isRootAssistant ? normalizeBackendModelId(observedModel) : undefined;
         if (!stream.currentAssistantMessage) {
           stream.currentAssistantMessage = {
@@ -2690,8 +2704,41 @@ export async function sendPrompt(
         // later stopped its background agents. Only this turn's first result
         // is filtered: once it has arrived, a continuation's result is the
         // legitimate end of the retained turn.
-        if (!receivedPromptResult && resultAnswersOtherInput(resultMsg, promptUuid)) {
+        if (!receivedPromptResult && resultAnswersOtherInput(resultMsg, promptUuid, steerUuids)) {
           debugLog("[session-manager] Result for other input skipped", {
+            sessionId,
+            subtype: resultMsg.subtype,
+            durationMs: resultMsg.duration_ms,
+          });
+          continue;
+        }
+        // The only authoritative link between the id this bridge minted for the
+        // prompt and the transcript record it became. Everything destructive
+        // (fork boundary, file rewind) resolves through it, so it is recorded
+        // and republished rather than inferred from message ordering. A steer's
+        // result names the steer, whose record is not this prompt's.
+        const recordPromptSdkUuid = () => {
+          if (
+            typeof resultMsg.user_message_uuid === "string" &&
+            resultMsg.user_message_uuid.length > 0 &&
+            !steerUuids.has(resultMsg.user_message_uuid) &&
+            userMessage.sdkUuid !== resultMsg.user_message_uuid
+          ) {
+            userMessage.sdkUuid = resultMsg.user_message_uuid;
+            markTranscriptChanged(session);
+            eventEmitter.emit({
+              type: "message.updated",
+              sessionId,
+              data: { message: userMessage },
+            });
+          }
+        };
+        if (resultSupersededBySteer(resultMsg, unansweredSteerUuids)) {
+          // The prompt was answered, if only by the interruption, so what
+          // follows is no longer filtered as another input's result.
+          if (resultInputUuids(resultMsg).includes(promptUuid)) receivedPromptResult = true;
+          recordPromptSdkUuid();
+          debugLog("[session-manager] Result superseded by steer skipped", {
             sessionId,
             subtype: resultMsg.subtype,
             durationMs: resultMsg.duration_ms,
@@ -2707,24 +2754,7 @@ export async function sendPrompt(
           costUSD: resultMsg.total_cost_usd,
           durationMs: resultMsg.duration_ms,
         });
-
-        // The only authoritative link between the id this bridge minted for the
-        // prompt and the transcript record it became. Everything destructive
-        // (fork boundary, file rewind) resolves through it, so it is recorded
-        // and republished rather than inferred from message ordering.
-        if (
-          typeof resultMsg.user_message_uuid === "string" &&
-          resultMsg.user_message_uuid.length > 0 &&
-          userMessage.sdkUuid !== resultMsg.user_message_uuid
-        ) {
-          userMessage.sdkUuid = resultMsg.user_message_uuid;
-          markTranscriptChanged(session);
-          eventEmitter.emit({
-            type: "message.updated",
-            sessionId,
-            data: { message: userMessage },
-          });
-        }
+        recordPromptSdkUuid();
 
         // Account allocation can advance during the last model request. Queue
         // one final coalesced refresh before publishing the completed token

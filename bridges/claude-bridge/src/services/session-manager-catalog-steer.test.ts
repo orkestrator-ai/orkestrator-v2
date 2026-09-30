@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
 import {
   createSession,
@@ -224,75 +225,82 @@ describe("Claude steer journal and transcript", () => {
     expect(getPromptDispatchState(session.id, "idle-steer")).toBe("already-processed");
   });
 
-  test("splits the live stream so post-steer assistant text is a new row", async () => {
-    const session = createSession("Live split");
+  const textStream = (messageId: string, index: number, text: string) => [
+    {
+      type: "stream_event",
+      event: { type: "message_start", message: { id: messageId, model: "claude-opus-test" } },
+      parent_tool_use_id: null,
+    },
+    {
+      type: "stream_event",
+      event: { type: "content_block_start", index, content_block: { type: "text", text: "" } },
+      parent_tool_use_id: null,
+    },
+    {
+      type: "stream_event",
+      event: { type: "content_block_delta", index, delta: { type: "text_delta", text } },
+      parent_tool_use_id: null,
+    },
+  ];
+  const finalText = (messageId: string, text: string) => ({
+    type: "assistant",
+    message: { id: messageId, model: "claude-opus-test", content: [{ type: "text", text }] },
+    parent_tool_use_id: null,
+  });
+
+  /** Start a turn, stream its first text, and steer it. */
+  async function steerAfterFirstText(title: string) {
+    const session = createSession(title);
     track(session.id);
     const prompt = sendPrompt(session.id, "Write the plan");
     const call = await nextQueryCall();
-    session.queryControl = {
-      ...session.queryControl,
-      pushInput: () => true,
-    };
-    const expectedRunId = String(session.latestTurnGeneration ?? "");
-
-    call.push({
-      type: "stream_event",
-      uuid: "split-start",
-      event: {
-        type: "message_start",
-        message: { id: "msg-split", model: "claude-opus-test" },
-      },
-    });
-    call.push({
-      type: "stream_event",
-      uuid: "split-block",
-      event: {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "text", text: "" },
-      },
-    });
-    call.push({
-      type: "stream_event",
-      uuid: "split-before",
-      event: {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "text_delta", text: "before steer" },
-      },
-    });
-
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const first = await input.next();
+    if (first.done) throw new Error("Held prompt closed before sending its user message");
+    for (const frame of textStream("msg-plan", 0, "before steer")) call.push(frame);
     await waitFor(() =>
       getSessionMessages(session.id).some((message) => message.content === "before steer"),
     );
-
+    const steerId = "steer-live";
     expect(
-      await steerClaudeSession(session.id, "narrow the scope", "steer-live", expectedRunId),
+      await steerClaudeSession(
+        session.id,
+        "narrow the scope",
+        steerId,
+        String(session.latestTurnGeneration ?? ""),
+      ),
     ).toBe("applied");
+    const finish = async () => {
+      call.push({
+        type: "result",
+        subtype: "success",
+        result_index: 1,
+        user_message_uuids: [steerId],
+      });
+      call.finish();
+      await prompt;
+      return getSessionMessages(session.id);
+    };
+    return { session, call, promptUuid: first.value.uuid!, finish };
+  }
 
-    call.push({
-      type: "stream_event",
-      uuid: "split-after",
-      event: {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "text_delta", text: "after steer" },
-      },
-    });
-    call.push({
-      type: "assistant",
-      uuid: "split-final",
-      message: {
-        id: "msg-split",
-        model: "claude-opus-test",
-        content: [{ type: "text", text: "after steer" }],
-      },
-    });
-    call.push({ type: "result", subtype: "success" });
-    call.finish();
-    await prompt;
+  test("keeps the interrupted message on its row and starts the steer's reply on a new one", async () => {
+    const { call, promptUuid, finish } = await steerAfterFirstText("Live split");
 
-    const transcript = getSessionMessages(session.id);
+    // CLI 2.1.284 aborts the interrupted message and writes its final record
+    // only now, after the steer, then answers the steer in a new API message.
+    call.push(finalText("msg-plan", "before steer"));
+    call.push({
+      type: "result",
+      subtype: "success",
+      result_index: 0,
+      terminal_reason: "aborted_streaming",
+      user_message_uuids: [promptUuid],
+    });
+    for (const frame of textStream("msg-steer", 0, "after steer")) call.push(frame);
+    call.push(finalText("msg-steer", "after steer"));
+    const transcript = await finish();
+
     expect(transcript.map((message) => ({ role: message.role, content: message.content }))).toEqual(
       [
         { role: "user", content: "Write the plan" },
@@ -302,6 +310,129 @@ describe("Claude steer journal and transcript", () => {
       ],
     );
     expect(transcript[1]?.id).not.toBe(transcript[3]?.id);
-    expect(transcript[3]?.content).not.toContain("before steer");
   });
+
+  test("keeps blocks the in-flight message streams after a steer on the pre-steer row", async () => {
+    const { call, finish } = await steerAfterFirstText("Continued split");
+
+    // Anything more from the message under way was produced without the steer;
+    // only the next API message can have seen it.
+    call.push({
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "!" } },
+      parent_tool_use_id: null,
+    });
+    call.push(finalText("msg-plan", "before steer!"));
+    for (const frame of textStream("msg-steer", 0, "after steer")) call.push(frame);
+    call.push(finalText("msg-steer", "after steer"));
+    const transcript = await finish();
+
+    expect(transcript.map((message) => message.content)).toEqual([
+      "Write the plan",
+      "before steer!",
+      "narrow the scope",
+      "after steer",
+    ]);
+  });
+
+  // The frames CLI 2.1.284 sends for a `priority: "now"` steer: a result for
+  // the interrupted prompt, then the steer's own turn and result.
+  const interruptedPromptResults = {
+    "mid-thinking": {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+      result_index: 0,
+      terminal_reason: "aborted_streaming",
+    },
+    "mid-text": {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "The plan so far",
+      result_index: 0,
+      terminal_reason: "aborted_streaming",
+    },
+  } as const;
+
+  for (const [phase, interrupted] of Object.entries(interruptedPromptResults)) {
+    test(`keeps the turn running through a steer that interrupts ${phase}`, async () => {
+      const session = createSession(`Steer ${phase}`);
+      track(session.id);
+      const prompt = sendPrompt(session.id, "Write the plan");
+      const call = await nextQueryCall();
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      const first = await input.next();
+      if (first.done) throw new Error("Held prompt closed before sending its user message");
+      const promptUuid = first.value.uuid!;
+      let inputClosed = false;
+      const steerInput = input.next();
+
+      call.push({
+        type: "stream_event",
+        uuid: "thinking-start",
+        event: { type: "message_start", message: { id: "msg-plan", model: "claude-opus-test" } },
+      });
+      const steerId = "7d5c79f1-a6bd-4b8e-8e94-7b291d9eaf48";
+      expect(
+        await steerClaudeSession(
+          session.id,
+          "the game is called Open Battle Master",
+          steerId,
+          String(session.latestTurnGeneration ?? ""),
+        ),
+      ).toBe("applied");
+      const steered = await steerInput;
+      expect(steered.done ? undefined : steered.value.uuid).toBe(steerId);
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+      });
+
+      call.push({
+        ...interrupted,
+        user_message_uuid: promptUuid,
+        user_message_uuids: [promptUuid],
+      });
+      call.push({
+        type: "assistant",
+        uuid: "steer-reply",
+        message: {
+          id: "msg-steer",
+          model: "claude-opus-test",
+          content: [{ type: "text", text: "Noted: Open Battle Master." }],
+        },
+        parent_tool_use_id: null,
+      });
+      await waitFor(() =>
+        getSessionMessages(session.id).some(
+          (message) => message.content === "Noted: Open Battle Master.",
+        ),
+      );
+      expect(sessions.get(session.id)?.status).toBe("running");
+      expect(inputClosed).toBe(false);
+
+      call.push({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result_index: 1,
+        user_message_uuid: steerId,
+        user_message_uuids: [steerId],
+      });
+      await waitFor(() => inputClosed);
+      await inputCompletion;
+      call.finish();
+      await prompt;
+
+      expect(sessions.get(session.id)?.status).toBe("idle");
+      const transcript = getSessionMessages(session.id);
+      expect(transcript.filter((message) => message.role === "user").map((m) => m.content)).toEqual(
+        ["Write the plan", "the game is called Open Battle Master"],
+      );
+      expect(transcript.at(-1)?.content).toBe("Noted: Open Battle Master.");
+      // The prompt keeps its own transcript uuid; the steer's is not it.
+      expect(transcript[0]?.sdkUuid).toBe(promptUuid);
+    });
+  }
 });

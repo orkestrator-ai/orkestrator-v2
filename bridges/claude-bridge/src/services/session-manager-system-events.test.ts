@@ -23,6 +23,7 @@ import {
   parseTaskNotification,
   refreshSettledToolRows,
   resultAnswersOtherInput,
+  resultSupersededBySteer,
   subagentInterruptedNoticeText,
 } from "./session-manager-messages.js";
 import { THINKING_TOKENS_EMIT_INTERVAL_MS, memoryRecallPart } from "./session-manager-prompt.js";
@@ -882,6 +883,58 @@ describe("result input matching", () => {
     ).toBe(false);
     expect(
       resultAnswersOtherInput({ subtype: "success", is_error: true, result_index: 0 }, promptUuid),
+    ).toBe(false);
+  });
+
+  test("does not filter the result of a steer pushed into the turn", () => {
+    const steer = { subtype: "success", result_index: 1, user_message_uuids: ["steer-id"] };
+    expect(resultAnswersOtherInput(steer, "prompt-id")).toBe(true);
+    expect(resultAnswersOtherInput(steer, "prompt-id", new Set(["steer-id"]))).toBe(false);
+  });
+
+  test("skips results for input a steer overtook until every steer is answered", () => {
+    const unanswered = new Set(["steer-a", "steer-b"]);
+    // The interrupted prompt, whether it ended mid-text or mid-thinking.
+    expect(
+      resultSupersededBySteer(
+        { subtype: "success", result_index: 0, user_message_uuids: ["prompt-id"] },
+        unanswered,
+      ),
+    ).toBe(true);
+    expect(
+      resultSupersededBySteer(
+        {
+          subtype: "error_during_execution",
+          is_error: true,
+          result_index: 0,
+          user_message_uuids: ["prompt-id"],
+        },
+        unanswered,
+      ),
+    ).toBe(true);
+    // The first steer was itself overtaken by the second.
+    expect(
+      resultSupersededBySteer(
+        { subtype: "success", result_index: 1, user_message_uuid: "steer-a" },
+        unanswered,
+      ),
+    ).toBe(true);
+    expect(unanswered).toEqual(new Set(["steer-b"]));
+    expect(
+      resultSupersededBySteer(
+        { subtype: "success", result_index: 2, user_message_uuids: ["steer-b"] },
+        unanswered,
+      ),
+    ).toBe(false);
+    expect(unanswered.size).toBe(0);
+  });
+
+  test("treats a result naming no input as before, even with a steer pending", () => {
+    const unanswered = new Set(["steer-a"]);
+    expect(resultSupersededBySteer({ subtype: "error_during_execution" }, unanswered)).toBe(false);
+    expect(unanswered).toEqual(new Set(["steer-a"]));
+    expect(
+      resultSupersededBySteer({ subtype: "success", user_message_uuids: ["prompt-id"] }, new Set()),
     ).toBe(false);
   });
 });

@@ -61,6 +61,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
+import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -204,6 +206,15 @@ export function isEnvironmentContainerAvailable(
     (environment.status === "error" && environment.setupPhase === "failed")
   );
 }
+
+// The startup blocker is full-screen rather than a Radix dialog, but should
+// read as one: same outline, radius and shadow, lifted onto `card` because
+// there is no overlay darkening the page behind it.
+const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
+  "w-full max-w-2xl border p-8",
+  MODAL_CONTENT_CLASS_NAME,
+  "bg-card",
+);
 
 function App() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -1176,7 +1187,7 @@ function App() {
                 )}
               </div>
             ) : macOsProbeFailed ? (
-              <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-2xl">
+              <div className={STARTUP_BLOCKER_PANEL_CLASS_NAME}>
                 <div className="mb-6">
                   <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
                     Setup needed
@@ -1217,7 +1228,7 @@ function App() {
                 </div>
               </div>
             ) : (
-              <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-2xl">
+              <div className={STARTUP_BLOCKER_PANEL_CLASS_NAME}>
                 <div className="mb-6">
                   <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
                     {macOsHasBlockingMissing ? "Setup required" : "Recommended setup"}
@@ -1234,7 +1245,7 @@ function App() {
                   {macOsPermissions.missing.map((permission) => (
                     <li
                       key={permission.id}
-                      className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-4 py-3"
+                      className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3"
                     >
                       <span className="font-medium">{permission.label}</span>
                       <span className="text-xs font-medium text-amber-600 dark:text-amber-400">

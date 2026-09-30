@@ -1321,14 +1321,21 @@ describe("at-most-once dispatch", () => {
       }),
     ).toMatchObject({ ok: true });
 
-    const resume = h
-      .child()
-      .requests.filter((request) => request.method === "thread/resume")
-      .at(-1)!;
+    const requests = h.child().requests;
+    const resumeIndex = requests.findLastIndex((request) => request.method === "thread/resume");
+    const resume = requests[resumeIndex]!;
     expect(
       (resume.params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
         ?.default_tools_approval_mode,
     ).toBe("approve");
+    // app-server ignores config on a resume that rejoins a loaded thread, so
+    // the thread has to be released first for the new MCP server to apply.
+    const unsubscribeIndex = requests.findLastIndex(
+      (request) => request.method === "thread/unsubscribe",
+    );
+    expect(unsubscribeIndex).toBeGreaterThan(-1);
+    expect(unsubscribeIndex).toBeLessThan(resumeIndex);
+    expect(requests[unsubscribeIndex]!.params).toEqual({ threadId: "thread-1" });
     const resultTurn = h
       .child()
       .requests.filter((request) => request.method === "turn/start")

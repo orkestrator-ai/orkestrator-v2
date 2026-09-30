@@ -2990,6 +2990,46 @@ describe("MultiReviewTab pipeline step cards", () => {
     });
   });
 
+  test("opens preparation on the session it kept once consolidation has its own", () => {
+    const legacy = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...legacy,
+      preparationSession: {
+        ...legacy.fixSession!,
+        providerSessionId: "provider-prepare",
+        openedFor: "prepare",
+      },
+      fixSession: { ...legacy.fixSession!, openedFor: "consolidate" },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    activateReviewTile(
+      screen.getByRole("button", { name: "Open review package generation session" }),
+    );
+    activateReviewTile(screen.getByRole("button", { name: "Open consolidation session" }));
+
+    expect(createTab.mock.calls.map((call) => call[1]?.resumeSessionId)).toEqual([
+      "provider-prepare",
+      "provider-fix",
+    ]);
+    // A record written before consolidation moved still opens the shared session.
+    expect(multiReviewReviewSessionTabOptions(legacy, "prepare")).toMatchObject({
+      resumeSessionId: "provider-fix",
+    });
+  });
+
   test("stays disabled until the review model has opened a provider session", () => {
     const workflow = preparingWorkflow();
     delete workflow.fixSession;

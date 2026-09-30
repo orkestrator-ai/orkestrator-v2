@@ -48,6 +48,7 @@ import {
   workflowResultToolName,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
+import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
@@ -1323,9 +1324,16 @@ export class ReviewFanoutRunner {
         );
       }
       await finalUsage();
-      return this.recordStall(
-        reviewer,
-        "The reviewer became idle without returning its structured report",
+      return this.recordStall(reviewer, async () =>
+        reviewer.resultTransport === "tool-v1"
+          ? missingWorkflowResultMessage({
+              subject: "The reviewer",
+              resultLabel: "structured report",
+              toolName: workflowResultToolName("review-report"),
+              submission: reviewer.resultSubmission,
+              finalText: lastAssistantText(await transcript.read(2).catch(() => undefined)),
+            })
+          : "The reviewer became idle without returning its structured report",
       );
     }
     await finalUsage();
@@ -1640,8 +1648,14 @@ export class ReviewFanoutRunner {
     return "stop";
   }
 
-  /** Counts one stalled poll, failing the reviewer once the bound is reached. */
-  private async recordStall(reviewer: ReviewerRecord, error: string): Promise<"continue" | "stop"> {
+  /**
+   * Counts one stalled poll, failing the reviewer once the bound is reached.
+   * `error` may be deferred so a costly explanation is built only then.
+   */
+  private async recordStall(
+    reviewer: ReviewerRecord,
+    error: string | (() => Promise<string>),
+  ): Promise<"continue" | "stop"> {
     const scope = `${this.host.workflowId}\0${reviewer.id}\0idle`;
     const gate = this.host.pollGate;
     if (gate && !gate.count(scope)) return "continue";
@@ -1658,7 +1672,7 @@ export class ReviewFanoutRunner {
         this.host.progress.forget(reviewer.providerSessionId);
       }
       reviewer.status = "failed";
-      reviewer.error = error;
+      reviewer.error = typeof error === "string" ? error : await error();
       reviewer.completedAt = nowIso();
       delete reviewer.stalledSince;
     }

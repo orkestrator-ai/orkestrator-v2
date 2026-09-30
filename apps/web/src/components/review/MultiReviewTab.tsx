@@ -150,21 +150,28 @@ export function multiReviewFixSessionTabOptions(
   };
 }
 
-/** The shared preparation/consolidation session, which records its own provider. */
+/**
+ * The preparation/consolidation session, which records its own provider.
+ * Consolidation moves to a session of its own, so the preparation step reads
+ * the session the backend kept for it once that has happened.
+ */
 export function multiReviewReviewSession(
   workflow: MultiReviewWorkflow,
+  step: "prepare" | "consolidate" = "consolidate",
 ): MultiReviewWorkflow["reviewSession"] {
   return (
+    (step === "prepare" ? workflow.preparationSession : undefined) ??
     workflow.reviewSession ??
     (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
   );
 }
 
-/** Opens the shared preparation/consolidation conversation, never the Fix tab. */
+/** Opens a preparation or consolidation conversation, never the Fix tab. */
 export function multiReviewReviewSessionTabOptions(
   workflow: MultiReviewWorkflow,
+  step: "prepare" | "consolidate" = "consolidate",
 ): CreateTabOptions | null {
-  const session = multiReviewReviewSession(workflow);
+  const session = multiReviewReviewSession(workflow, step);
   if (!session?.providerSessionId) return null;
   return {
     // A restarted step (possibly on another provider) gets a new provider
@@ -902,14 +909,14 @@ function MultiReviewOverviewTab({
   );
 
   const presentReviewSession = useCallback(
-    (target: MultiReviewWorkflow | undefined) => {
+    (target: MultiReviewWorkflow | undefined, step: "prepare" | "consolidate") => {
       setPresentationNotice(null);
       if (!target) {
         setError("The review preparation session is no longer available");
         return;
       }
-      const session = multiReviewReviewSession(target);
-      const options = multiReviewReviewSessionTabOptions(target);
+      const session = multiReviewReviewSession(target, step);
+      const options = multiReviewReviewSessionTabOptions(target, step);
       if (!session || !options) {
         setError("The review preparation session is no longer available");
         return;
@@ -1156,15 +1163,15 @@ function MultiReviewOverviewTab({
     multiReviewStepRuntimeSummary(workflow, step, status.state === "running", reviewPanelNow);
   const reviewSelection = workflow.reviewModel ?? workflow.fixModel;
   const consolidationSelection = workflow.consolidationModel ?? reviewSelection;
-  const hasReviewSession = Boolean(
-    (
-      workflow.reviewSession ??
-      (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
-    )?.providerSessionId,
+  const hasReviewSession = Boolean(multiReviewReviewSession(workflow)?.providerSessionId);
+  const hasPreparationSession = Boolean(
+    multiReviewReviewSession(workflow, "prepare")?.providerSessionId,
   );
   const hasFixSession = Boolean(workflow.fixSession?.providerSessionId);
   const canOpenReviewStep = (status: MultiReviewStepStatus): boolean =>
     status.state !== "not-started" && hasReviewSession && Boolean(createTab);
+  const canOpenPreparationStep = (status: MultiReviewStepStatus): boolean =>
+    status.state !== "not-started" && hasPreparationSession && Boolean(createTab);
   const canOpenFixStep = (status: MultiReviewStepStatus): boolean =>
     status.state !== "not-started" && hasFixSession && Boolean(createTab);
   const canCancel =
@@ -1244,12 +1251,12 @@ function MultiReviewOverviewTab({
             openLabel="Open review package generation session"
             openTitle={stepOpenTitle(
               packageStatus,
-              hasReviewSession,
+              hasPreparationSession,
               "review package generation",
               "Review package generation has not started yet",
             )}
-            canOpen={canOpenReviewStep(packageStatus)}
-            onOpen={() => presentReviewSession(workflow)}
+            canOpen={canOpenPreparationStep(packageStatus)}
+            onOpen={() => presentReviewSession(workflow, "prepare")}
             canRestart={packageStatus.state !== "not-started" && Boolean(commands.restartStep)}
             restarting={restartingStep === "prepare"}
             onRestart={() => void restartStep("prepare")}
@@ -1492,7 +1499,7 @@ function MultiReviewOverviewTab({
               "Consolidation starts after the independent reviews finish",
             )}
             canOpen={canOpenReviewStep(consolidationStatus)}
-            onOpen={() => presentReviewSession(workflow)}
+            onOpen={() => presentReviewSession(workflow, "consolidate")}
             canRestart={
               consolidationStatus.state !== "not-started" && Boolean(commands.restartStep)
             }

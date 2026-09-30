@@ -56,6 +56,7 @@ import {
   reconcileFromThreadTurns,
   type ReconciliationOutcome,
 } from "../sessions/dispatch-journal.js";
+import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
   APP_SERVER_CAPABILITIES,
   type CodexEngine,
@@ -1388,6 +1389,50 @@ export class AppServerEngine implements CodexEngine {
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
     return thread;
+  }
+
+  /**
+   * Resumes a thread so thread-scoped configuration applies again.
+   *
+   * app-server rejoins a thread that is still loaded and ignores every config
+   * override on `thread/resume`, `mcp_servers.*` included, so a second resume
+   * keeps the previous attempt's MCP credential. Releasing the idle thread
+   * first makes the resume rebuild it from its rollout with the new
+   * configuration. Verified against codex 0.158.0.
+   */
+  async reloadThread(handle: string, options: ResumeThreadOptions): Promise<EngineThread> {
+    const threadId = this.bindings.get(handle)?.threadId ?? handle;
+    this.bindings.delete(handle);
+    try {
+      await this.supervisor.request("thread/unsubscribe", { threadId });
+    } catch (error) {
+      // The resume below still rejoins the thread; the tool check that follows
+      // a reload is what reports a configuration that did not apply.
+      console.warn(
+        "[codex-bridge] thread/unsubscribe before reload failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+    return this.resumeThread(threadId, options);
+  }
+
+  /** Whether the thread's live `orkestrator` MCP connection lists a workflow result tool. */
+  workflowResultToolAvailability(
+    threadId: string,
+    toolName: string,
+    options?: { timeoutMs?: number; pollMs?: number },
+  ): Promise<McpToolAvailability> {
+    return waitForMcpToolAvailability(
+      () =>
+        this.supervisor.request("mcpServerStatus/list", {
+          threadId,
+          serverName: "orkestrator",
+          detail: "toolsAndAuthOnly",
+        }),
+      "orkestrator",
+      toolName,
+      options,
+    );
   }
 
   async forkThread(

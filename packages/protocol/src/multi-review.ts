@@ -319,6 +319,8 @@ export type MultiReviewStepRuntimes = Partial<Record<MultiReviewStepKind, MultiR
 export interface MultiReviewSession extends MultiReviewModelSelection {
   sessionKey: string;
   providerSessionId: string;
+  /** Step whose dispatch opened this provider session; absent on older records. */
+  openedFor?: MultiReviewStepKind;
   requestIds: string[];
   status: "running" | "idle" | "failed" | "cancelled";
   startedAt: string;
@@ -390,6 +392,11 @@ export interface MultiReviewWorkflow {
   /** Durable key for the preparation/consolidation provider session. */
   reviewSessionKey?: string;
   reviewSession?: MultiReviewSession;
+  /**
+   * The finished preparation session, kept so its transcript stays reachable
+   * after consolidation moves to a session of its own.
+   */
+  preparationSession?: MultiReviewSession;
   fixModel: MultiReviewModelSelection;
   /** Durable key reserved for the next or current fix session. */
   fixSessionKey?: string;
@@ -706,6 +713,7 @@ function isFixSession(value: unknown): boolean {
       "fastMode",
       "sessionKey",
       "providerSessionId",
+      "openedFor",
       "requestIds",
       "status",
       "startedAt",
@@ -722,6 +730,8 @@ function isFixSession(value: unknown): boolean {
     isMultiReviewModelSelectionFields(value) &&
     nonBlank(value.sessionKey) &&
     nonBlank(value.providerSessionId) &&
+    (value.openedFor === undefined ||
+      MULTI_REVIEW_STEP_KINDS.includes(value.openedFor as MultiReviewStepKind)) &&
     Array.isArray(value.requestIds) &&
     value.requestIds.length <= 256 &&
     value.requestIds.every((requestId) => nonBlank(requestId)) &&
@@ -880,6 +890,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "consolidationModel",
       "reviewSessionKey",
       "reviewSession",
+      "preparationSession",
       "fixModel",
       "fixSessionKey",
       "fixSession",
@@ -932,6 +943,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       !isMultiReviewModelSelection(value.consolidationModel)) ||
     (value.reviewSessionKey !== undefined && !nonBlank(value.reviewSessionKey)) ||
     (value.reviewSession !== undefined && !isFixSession(value.reviewSession)) ||
+    (value.preparationSession !== undefined && !isFixSession(value.preparationSession)) ||
     !record(value.fixModel) ||
     !isMultiReviewModelSelection(value.fixModel) ||
     (value.fixSessionKey !== undefined && !nonBlank(value.fixSessionKey)) ||

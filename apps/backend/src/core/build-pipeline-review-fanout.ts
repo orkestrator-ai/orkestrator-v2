@@ -57,6 +57,7 @@ import {
   workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
+import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
@@ -831,7 +832,15 @@ export class BuildPipelineReviewFanout {
       return this.countIdlePoll(
         pipeline,
         state,
-        "The consolidation session became idle without returning its consolidated report",
+        consolidation.resultTransport === "tool-v1"
+          ? missingWorkflowResultMessage({
+              subject: "The consolidation session",
+              resultLabel: "consolidated report",
+              toolName: workflowResultToolName("consolidated-review"),
+              submission: consolidation.resultSubmission,
+              finalText: lastAssistantText(session.messages),
+            })
+          : "The consolidation session became idle without returning its consolidated report",
       );
     }
     let parsed: ReturnType<typeof parseStructuredReportResult>;

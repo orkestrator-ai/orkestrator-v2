@@ -43,12 +43,15 @@ export function createHostTestScheduler(
   // The owner pid never changes for this factory, so its birth token is read
   // once instead of spawning `ps` on every enqueue.
   const selfBorn = birth(process.pid);
-  const hardwareWorkers = Math.max(1, Math.min(64, os.availableParallelism() - 2));
+  // Slots are admission estimates of average CPU use, not OS limits, so the
+  // default ceiling is every logical core. Hosts may oversubscribe further
+  // (up to four slots per core) when their workloads are mostly waiting.
+  const cores = Math.max(1, os.availableParallelism());
   const hardwareMemory = Math.max(512, Math.floor((os.totalmem() / 1048576) * 0.65));
   const workers = positive(
     options.workers ?? process.env.ORKESTRATOR_TEST_HOST_WORKERS,
-    Math.min(8, hardwareWorkers),
-    hardwareWorkers,
+    Math.min(256, cores),
+    Math.min(256, cores * 4),
   );
   const memoryMiB = positive(
     options.memoryMiB ?? process.env.ORKESTRATOR_TEST_HOST_MEMORY_MIB,
@@ -82,7 +85,9 @@ export function createHostTestScheduler(
     workers INTEGER NOT NULL, memory INTEGER NOT NULL, resources TEXT NOT NULL,
     state TEXT NOT NULL, queued INTEGER NOT NULL, admitted INTEGER
   ); CREATE TABLE IF NOT EXISTS owners (id TEXT PRIMARY KEY, served INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS budget (id INTEGER PRIMARY KEY CHECK(id=1), workers INTEGER, memory INTEGER);`);
+  CREATE TABLE IF NOT EXISTS budget (id INTEGER PRIMARY KEY CHECK(id=1), workers INTEGER, memory INTEGER);
+  CREATE TABLE IF NOT EXISTS usage (key TEXT NOT NULL, recorded INTEGER NOT NULL, parallelism REAL NOT NULL);
+  CREATE INDEX IF NOT EXISTS usage_key ON usage (key, recorded);`);
   type Job = {
     sequence: number;
     id: string;
@@ -93,7 +98,10 @@ export function createHostTestScheduler(
     childBorn: string | null;
     cohort: string | null;
     bypasses: number;
+    /** Current reservation: the preferred size while queued, the grant once admitted. */
     workers: number;
+    /** Elastic floor; null (older rows) means the full preferred size. */
+    minWorkers: number | null;
     memory: number;
     resources: string;
     state: string;
@@ -121,6 +129,7 @@ export function createHostTestScheduler(
     if (!columns.includes("bypasses"))
       db.exec("ALTER TABLE jobs ADD COLUMN bypasses INTEGER NOT NULL DEFAULT 0");
     if (!columns.includes("pidBorn")) db.exec("ALTER TABLE jobs ADD COLUMN pidBorn TEXT");
+    if (!columns.includes("minWorkers")) db.exec("ALTER TABLE jobs ADD COLUMN minWorkers INTEGER");
   });
   const reap = () => {
     // Reading a pid's birth token costs a process spawn, so read each distinct
@@ -191,6 +200,13 @@ export function createHostTestScheduler(
       )
     );
   };
+  // Smallest reservation a job may start with. CPU slots are elastic: a job
+  // starts with whatever is free above this floor. Memory and exclusive
+  // resources are not elastic and must fit whole.
+  const floor = (job: Job) => Math.max(1, Math.min(job.workers, job.minWorkers ?? job.workers));
+  // A blocked job may be overtaken by a competing later job this many times.
+  // After that it reserves the host until it fits, so backfill cannot starve it.
+  const MAX_BYPASSES = 32;
   const admit = () => {
     reap();
     while (true) {
@@ -204,44 +220,48 @@ export function createHostTestScheduler(
           .all()
           .map((row) => [row.id, row.served]),
       );
-      // Round robin across worktrees, FIFO within each worktree. Reserve the
-      // next owner's head if it cannot fit; backfilling would starve big jobs.
+      // Round robin across worktrees, FIFO within each worktree.
       pending.sort(
         (a, b) => served.get(a.owner)! - served.get(b.owner)! || a.sequence - b.sequence,
       );
-      let next = pending[0]!;
       const budget = limits();
+      const freeWorkers = budget.workers - running.reduce((sum, job) => sum + job.workers, 0);
+      const freeMemory = budget.memory - running.reduce((sum, job) => sum + job.memory, 0);
       const conflicts = (candidate: Job, job: Job) =>
         (!candidate.cohort || job.cohort !== candidate.cohort || job.owner !== candidate.owner) &&
         conflict(job.resources, candidate.resources, job.owner, candidate.owner);
-      const fits = (candidate: Job) =>
-        running.reduce((sum, job) => sum + job.workers, 0) + candidate.workers <= budget.workers &&
-        running.reduce((sum, job) => sum + job.memory, 0) + candidate.memory <= budget.memory &&
-        !running.some((job) => conflicts(candidate, job));
-      if (!fits(next)) {
-        // Only let the already-running lock holder finish its finite cohort.
-        // Unrelated small jobs still cannot jump a large waiting request. A
-        // persisted bound prevents an open-ended cohort from starving outsiders.
-        const blockers = running.filter((job) => conflicts(next, job));
-        const sibling =
-          next.bypasses < 32 && blockers.length > 0
-            ? pending.find(
-                (candidate) =>
-                  candidate.cohort &&
-                  blockers.some(
-                    (job) => job.cohort === candidate.cohort && job.owner === candidate.owner,
-                  ) &&
-                  !pending.some(
-                    (job) => job.owner === candidate.owner && job.sequence < candidate.sequence,
-                  ) &&
-                  fits(candidate),
-              )
-            : undefined;
-        if (!sibling) return;
-        db.query("UPDATE jobs SET bypasses=bypasses+1 WHERE id=?").run(next.id);
-        next = sibling;
+      const starved = (job: Job) => freeWorkers < floor(job) || freeMemory < job.memory;
+      const grant = (candidate: Job) =>
+        starved(candidate) || running.some((job) => conflicts(candidate, job))
+          ? 0
+          : Math.min(candidate.workers, freeWorkers);
+      // Later jobs backfill around blocked ones. Overtaking only counts against
+      // a blocked job when it competes: for capacity the blocked job is short
+      // of, or for one of its exclusive resources. A job waiting on a lock that
+      // the backfill does not touch loses nothing.
+      const skipped: Job[] = [];
+      let next: Job | undefined,
+        granted = 0,
+        charged: Job[] = [];
+      for (const candidate of pending) {
+        const size = grant(candidate);
+        const competing = skipped.filter((job) => starved(job) || conflicts(candidate, job));
+        if (size && competing.every((job) => job.bypasses < MAX_BYPASSES)) {
+          next = candidate;
+          granted = size;
+          charged = competing;
+          break;
+        }
+        skipped.push(candidate);
       }
-      db.query("UPDATE jobs SET state='running', admitted=? WHERE id=?").run(Date.now(), next.id);
+      if (!next) return;
+      for (const job of charged)
+        db.query("UPDATE jobs SET bypasses=bypasses+1 WHERE id=?").run(job.id);
+      db.query("UPDATE jobs SET state='running', admitted=?, workers=? WHERE id=?").run(
+        Date.now(),
+        granted,
+        next.id,
+      );
       const turn = Math.max(0, ...served.values()) + 1;
       db.query("UPDATE owners SET served=? WHERE id=?").run(turn, next.owner);
     }
@@ -271,7 +291,10 @@ export function createHostTestScheduler(
     },
     enqueue(request: {
       owner: string;
+      /** Preferred slots; the job may start with fewer, down to minWorkers. */
       workers: number;
+      /** Elastic floor. Omitted means the job needs all of `workers`. */
+      minWorkers?: number;
       memoryMiB: number;
       resources?: string[];
       cohort?: string;
@@ -287,6 +310,10 @@ export function createHostTestScheduler(
           !Number.isSafeInteger(request.workers) ||
           request.workers < 1 ||
           request.workers > budget.workers ||
+          (request.minWorkers !== undefined &&
+            (!Number.isSafeInteger(request.minWorkers) ||
+              request.minWorkers < 1 ||
+              request.minWorkers > request.workers)) ||
           !Number.isSafeInteger(request.memoryMiB) ||
           request.memoryMiB < 1 ||
           request.memoryMiB > budget.memory ||
@@ -301,13 +328,14 @@ export function createHostTestScheduler(
           request.owner,
         );
         db.query(
-          "INSERT INTO jobs (id,owner,pid,pidBorn,workers,memory,resources,state,queued,cohort) VALUES (?,?,?,?,?,?,?,'queued',?,?)",
+          "INSERT INTO jobs (id,owner,pid,pidBorn,workers,minWorkers,memory,resources,state,queued,cohort) VALUES (?,?,?,?,?,?,?,?,'queued',?,?)",
         ).run(
           id,
           request.owner,
           process.pid,
           selfBorn,
           request.workers,
+          request.minWorkers ?? null,
           request.memoryMiB,
           JSON.stringify(request.resources ?? []),
           Date.now(),
@@ -334,20 +362,54 @@ export function createHostTestScheduler(
         );
         const reason = blocker
           ? `exclusive resource held by worktree ${blocker.owner.slice(0, 12)} (PID ${blocker.pid})`
-          : usedWorkers + job.workers > budget.workers
+          : usedWorkers + floor(job) > budget.workers
             ? "worker slots"
             : usedMemory + job.memory > budget.memory
               ? "estimated memory budget"
               : "an earlier request's fair turn";
+        const needs =
+          floor(job) < job.workers ? `${floor(job)}-${job.workers}` : String(job.workers);
         return {
           state: job.state as "queued" | "running",
+          /** Slots held once running; the preferred size while queued. */
+          workers: job.workers,
           queuedMs: (job.admitted ?? Date.now()) - job.queued,
           queueReason:
             job.state === "queued"
-              ? `Waiting for ${reason}; ${usedWorkers}/${budget.workers} slots and ${usedMemory}/${budget.memory} MiB reserved; needs ${job.workers} slots and ${job.memory} MiB.`
+              ? `Waiting for ${reason}; ${usedWorkers}/${budget.workers} slots and ${usedMemory}/${budget.memory} MiB reserved; needs ${needs} slots and ${job.memory} MiB.`
               : undefined,
         };
       });
+    },
+    /**
+     * Records one command's observed average CPU parallelism (CPU time over
+     * wall time) under an opaque digest. History is bounded per key and host.
+     */
+    recordUsage(key: string, parallelism: number) {
+      if (!/^[a-f0-9]{64}$/.test(key) || !Number.isFinite(parallelism) || parallelism < 0) return;
+      transaction(() => {
+        db.query("INSERT INTO usage VALUES (?,?,?)").run(
+          key,
+          Date.now(),
+          Math.min(1024, parallelism),
+        );
+        db.query(
+          "DELETE FROM usage WHERE key=? AND rowid NOT IN (SELECT rowid FROM usage WHERE key=? ORDER BY recorded DESC, rowid DESC LIMIT 10)",
+        ).run(key, key);
+        db.exec(
+          "DELETE FROM usage WHERE rowid NOT IN (SELECT rowid FROM usage ORDER BY recorded DESC, rowid DESC LIMIT 4096)",
+        );
+      });
+    },
+    /** Slots a measured command needs: its busiest recent run, rounded up. */
+    estimateWorkers(key: string): number | undefined {
+      if (!/^[a-f0-9]{64}$/.test(key)) return undefined;
+      const row = db
+        .query<{ peak: number | null }, [string]>(
+          "SELECT MAX(parallelism) AS peak FROM (SELECT parallelism FROM usage WHERE key=? ORDER BY recorded DESC, rowid DESC LIMIT 5)",
+        )
+        .get(key);
+      return row?.peak == null ? undefined : Math.max(1, Math.ceil(row.peak));
     },
     registerChild(id: string, child: number) {
       if (!Number.isSafeInteger(child) || child <= 1) throw new Error("Invalid child process");
@@ -377,6 +439,8 @@ export function testSchedulingPolicy(config: unknown) {
   type Profile = {
     resources?: string[];
     workers?: number;
+    /** Elastic floor for `workers`; the command may start with this many. */
+    minWorkers?: number;
     memoryMiB?: number;
     covers?: string[];
     noProgressTimeoutMs?: number;
@@ -416,6 +480,10 @@ export function testSchedulingPolicy(config: unknown) {
           (!Number.isSafeInteger(profile.workers) ||
             profile.workers < 1 ||
             profile.workers > 64)) ||
+        (profile.minWorkers !== undefined &&
+          (!Number.isSafeInteger(profile.minWorkers) ||
+            profile.minWorkers < 1 ||
+            profile.minWorkers > (profile.workers ?? 64))) ||
         (profile.memoryMiB !== undefined &&
           (!Number.isSafeInteger(profile.memoryMiB) ||
             profile.memoryMiB < 1 ||

@@ -46,6 +46,7 @@ const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORK
 // gets a generous window; only its last successful read is treated as stale.
 const COOPERATIVE_STARTUP_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STARTUP_MS) || 60000));
 const COOPERATIVE_STALE_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STALE_MS) || 10000));
+const LOCAL_WEIGHT_BUDGET = 4;
 const MAX_STREAM_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 let totalBytes = 0;
@@ -127,6 +128,34 @@ function recordEnvironmentChanges(files) {
   if (omitted > 0) run.environmentChangesOmitted = omitted;
   else delete run.environmentChangesOmitted;
 }
+// Usage history is shared by every worktree of one repository, so a command
+// measured in one review sizes the same command in the next.
+let usageScope;
+function usageKey(cmd) {
+  if (usageScope === undefined) {
+    const common = spawnSync("git", ["rev-parse", "--git-common-dir"], gitOptions());
+    usageScope = common.status === 0 && common.stdout.trim() ? path.resolve(root, common.stdout.trim()) : root;
+    try { usageScope = fs.realpathSync(usageScope); } catch {}
+  }
+  return createHash("sha256").update(usageScope + "\0" + cmd.cwd + "\0" + cmd.command).digest("hex");
+}
+// The command shell writes bash's "times" on exit: its second line is the CPU
+// time of every descendant it reaped. Absent or unparseable means unmeasured.
+function childCpuMs(file) {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return undefined;
+    const line = fs.readFileSync(file, "utf8").trim().split("\n")[1] ?? "";
+    const match = /^(\d+)m([\d.,]+)s\s+(\d+)m([\d.,]+)s$/.exec(line.trim());
+    if (!match) return undefined;
+    const seconds = Number(match[1]) * 60 + Number(match[2].replace(",", ".")) + Number(match[3]) * 60 + Number(match[4].replace(",", "."));
+    return Number.isFinite(seconds) ? Math.round(seconds * 1000) : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    try { fs.unlinkSync(file); } catch {}
+  }
+}
 function noteWorktreeDrift() {
   const files = worktreePaths();
   if (files === null) throw new Error("Git status could not be read; rediscover validation against the current snapshot");
@@ -150,18 +179,24 @@ async function execute(cmd, index) {
   // the whole host wait.
   active.set(cmd.id, { cmd, stop: () => {}, weight: cooperative ? 0 : cmd.weight });
   const channel = path.join(directory, "scheduler-" + index + ".json");
+  const cpuPath = path.join(directory, "cpu-" + index + ".txt");
   try {
     scheduler ??= createScheduler();
     const capacity = scheduler.capacity(), owner = scheduler.owner(root);
     const resources = scheduler.resources(owner, cmd.resources);
     if (!cooperative) {
-      const suiteBudget = Math.min(8, capacity.workers);
-      // A profile declares what the command wants, not what this host has. Clamp
-      // both estimates into the frozen budget: enqueue rejects an over-budget
-      // request outright, which would make the command permanently incomplete on
-      // a small host instead of simply reserving everything available.
-      const workers = Math.max(1, Math.min(suiteBudget, profile.workers ?? (cmd.weight === 2 ? suiteBudget : Math.max(1, Math.floor(suiteBudget / 2)))));
-      ticket = scheduler.enqueue({ owner, workers, memoryMiB: Math.max(1, Math.min(capacity.memoryMiB, profile.memoryMiB ?? workers * 1024)), resources });
+      // Prefer the repository's declaration, then this command's measured CPU
+      // use, then discovery's coarse weight. A profile declares what the command
+      // wants, not what this host has. Clamp every estimate into the frozen
+      // budget: enqueue rejects an over-budget request outright, which would
+      // make the command permanently incomplete on a small host.
+      const measured = scheduler.estimateWorkers(usageKey(cmd));
+      const preferred = profile.workers ?? measured ?? (cmd.weight === 2 ? 8 : 4);
+      const workers = Math.max(1, Math.min(capacity.workers, preferred));
+      // Slots are estimates, so a busy host starts the command with a partial
+      // grant instead of idling until the whole estimate is free.
+      const minWorkers = Math.max(1, Math.min(workers, profile.minWorkers ?? Math.ceil(workers / 4)));
+      ticket = scheduler.enqueue({ owner, workers, minWorkers, memoryMiB: Math.max(1, Math.min(capacity.memoryMiB, profile.memoryMiB ?? workers * 1024)), resources });
       tickets.add(ticket);
       let published = false;
       while (true) {
@@ -172,7 +207,10 @@ async function execute(cmd, index) {
           published = true;
           persist();
         }
-        if (status.state === "running") break;
+        if (status.state === "running") {
+          result.reservedWorkers = status.workers;
+          break;
+        }
         result.queuedMs = Date.now() - queuedAt;
         if (stopping) throw new Error("Validation was cancelled while queued");
         if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
@@ -212,7 +250,7 @@ async function execute(cmd, index) {
   const started = performance.now();
   persist();
   await new Promise(resolve => {
-    const shell = "( while kill -0 \"$2\" 2>/dev/null; do sleep 1; done; kill -KILL -- -$$ ) </dev/null >/dev/null 2>&1 & __orkestrator_validation_watchdog=$!; trap 'kill \"$__orkestrator_validation_watchdog\" 2>/dev/null || true' EXIT; eval \"$1\"";
+    const shell = "( while kill -0 \"$2\" 2>/dev/null; do sleep 1; done; kill -KILL -- -$$ ) </dev/null >/dev/null 2>&1 & __orkestrator_validation_watchdog=$!; trap 'kill \"$__orkestrator_validation_watchdog\" 2>/dev/null || true; times >\"$3\" 2>/dev/null || true' EXIT; eval \"$1\"";
     // Do not leak an outer command's cooperative channel into unrelated nested
     // runners. A declared cooperative command owns this private channel only.
     const env = { ...process.env };
@@ -223,7 +261,7 @@ async function execute(cmd, index) {
     if (!cooperative) env.ORKESTRATOR_TEST_PARENT_RESERVATION = run.id;
     if (cooperative) env.ORKESTRATOR_VALIDATION_RESOURCES = JSON.stringify(resources);
     if (cooperative) { env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE = channel; env.ORKESTRATOR_VALIDATION_HEAD_REF = run.plan.headRef; }
-    const child = spawn("bash", ["-lc", shell, "review-validation", cmd.command, String(process.pid)], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("bash", ["-lc", shell, "review-validation", cmd.command, String(process.pid), cpuPath], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let failure;
     let forceKill;
     const stopJob = reason => {
@@ -320,6 +358,15 @@ async function execute(cmd, index) {
       delete result.queueReason;
       result.limitation = unavailable;
       result.durationMs = cooperative && projection ? projection.executionMs : Math.round(performance.now() - started);
+      const cpuMs = childCpuMs(cpuPath);
+      if (cpuMs !== undefined) result.cpuMs = cpuMs;
+      // Only an undisturbed ordinary command teaches the scheduler: a stopped
+      // or cut-short run understates its CPU use, and a cooperative runner
+      // reserves its own groups. Sub-second runs are too noisy to learn from.
+      const wallMs = performance.now() - started;
+      if (cpuMs !== undefined && !unavailable && !cooperative && wallMs >= 1000) {
+        try { scheduler.recordUsage(usageKey(cmd), cpuMs / wallMs); } catch {}
+      }
       try {
         for (const stream of streams) {
           fs.closeSync(stream.fd);
@@ -466,7 +513,9 @@ async function main() {
           continue;
         }
         const jobs = Array.from(active.values());
-        if (jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > 2) continue;
+        // Host admission governs load; this bound only keeps one review from
+        // flooding the host queue. Two heavy or four light commands at once.
+        if (jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > LOCAL_WEIGHT_BUDGET) continue;
         if (jobs.some(job => cmd.resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource)) || job.cmd.resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource)) || cmd.resources.some(resource => job.cmd.resources.includes(resource)))) continue;
         pending.delete(index);
         const task = execute(cmd, index).catch(() => {

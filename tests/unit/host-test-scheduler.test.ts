@@ -31,9 +31,15 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
 
-test("host tuning can exceed the suite cap but leaves hardware headroom", () => {
-  const { scheduler } = fixture({ workers: 64, memoryMiB: 128 });
-  expect(scheduler.capacity().workers).toBe(Math.max(1, Math.min(64, availableParallelism() - 2)));
+test("the host budget defaults to every core and may oversubscribe up to four slots per core", () => {
+  const cores = Math.max(1, availableParallelism());
+  // Zero is not a positive request, so it selects the default instead of the environment.
+  expect(fixture({ workers: 0, memoryMiB: 128 }).scheduler.capacity().workers).toBe(
+    Math.min(256, cores),
+  );
+  expect(fixture({ workers: 10_000, memoryMiB: 128 }).scheduler.capacity().workers).toBe(
+    Math.min(256, cores * 4),
+  );
 });
 
 test("workspace wildcards isolate worktrees and host resources still exclude them", () => {
@@ -214,6 +220,12 @@ test("repository scheduling profiles are bounded and use exact command declarati
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 0 } } },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 65 } } },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 1.5 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { minWorkers: 0 } } },
+    {
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { invalid: { workers: 2, minWorkers: 3 } },
+    },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 0 } } },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 1048577 } } },
     {
@@ -280,18 +292,88 @@ test("a queue created before the bypass column migrates and keeps admitting", ()
   scheduler.release(id);
 });
 
-test("memory pressure and a heavy fair-turn waiter cannot be bypassed by unrelated small jobs", () => {
+test("small jobs backfill around a capacity-blocked waiter a bounded number of times", () => {
   const { scheduler } = fixture();
   const first = scheduler.enqueue({ owner: "a".repeat(64), workers: 1, memoryMiB: 100 });
   const heavy = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 100 });
-  const small = scheduler.enqueue({ owner: "c".repeat(64), workers: 1, memoryMiB: 1 });
   expect(scheduler.poll(heavy).queueReason).toContain("estimated memory budget");
-  expect(scheduler.poll(small).queueReason).toContain("fair turn");
+  for (let i = 0; i < 32; i++) {
+    const small = scheduler.enqueue({ owner: "c".repeat(64), workers: 1, memoryMiB: 1 });
+    expect(scheduler.poll(small).state).toBe("running");
+    scheduler.release(small);
+  }
+  // The waiter has been overtaken as often as allowed and now holds its turn.
+  const late = scheduler.enqueue({ owner: "c".repeat(64), workers: 1, memoryMiB: 1 });
+  expect(scheduler.poll(late).queueReason).toContain("fair turn");
   scheduler.release(first);
   expect(scheduler.poll(heavy).state).toBe("running");
-  expect(scheduler.poll(small).state).toBe("running");
+  expect(scheduler.poll(late).state).toBe("running");
   scheduler.release(heavy);
-  scheduler.release(small);
+  scheduler.release(late);
+});
+
+test("a busy host admits an elastic request with the free slots above its floor", () => {
+  const { scheduler } = fixture({ workers: 4, memoryMiB: 128 });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 3, memoryMiB: 1 });
+  const rigid = scheduler.enqueue({ owner: "a".repeat(64), workers: 2, memoryMiB: 1 });
+  expect(scheduler.poll(rigid).queueReason).toContain("needs 2 slots");
+  const floored = scheduler.enqueue({
+    owner: "c".repeat(64),
+    workers: 4,
+    minWorkers: 2,
+    memoryMiB: 1,
+  });
+  expect(scheduler.poll(floored).queueReason).toContain("needs 2-4 slots");
+  const elastic = scheduler.enqueue({
+    owner: "d".repeat(64),
+    workers: 4,
+    minWorkers: 1,
+    memoryMiB: 1,
+  });
+  // Only the grant is reserved, so the host stays exactly full.
+  expect(scheduler.poll(elastic)).toMatchObject({ state: "running", workers: 1 });
+  scheduler.release(blocker);
+  expect(scheduler.poll(rigid)).toMatchObject({ state: "running", workers: 2 });
+  expect(scheduler.poll(floored).state).toBe("queued");
+  scheduler.release(elastic);
+  expect(scheduler.poll(floored)).toMatchObject({ state: "running", workers: 2 });
+  expect(() =>
+    scheduler.enqueue({ owner: "a".repeat(64), workers: 2, minWorkers: 3, memoryMiB: 1 }),
+  ).toThrow("exceeds");
+  scheduler.release(rigid);
+  scheduler.release(floored);
+});
+
+test("backfill that leaves a waiter's lock alone is never charged against it", () => {
+  const { scheduler } = fixture({ workers: 4, memoryMiB: 128 });
+  const request = { workers: 1, memoryMiB: 1 };
+  const holder = scheduler.enqueue({ ...request, owner: "a".repeat(64), resources: ["simulator"] });
+  const waiter = scheduler.enqueue({ ...request, owner: "b".repeat(64), resources: ["simulator"] });
+  for (let i = 0; i < 40; i++) {
+    const small = scheduler.enqueue({ ...request, owner: "c".repeat(64) });
+    expect(scheduler.poll(small).state).toBe("running");
+    scheduler.release(small);
+  }
+  expect(scheduler.poll(waiter).queueReason).toContain("exclusive resource");
+  scheduler.release(holder);
+  expect(scheduler.poll(waiter).state).toBe("running");
+  scheduler.release(waiter);
+});
+
+test("measured command usage sizes later requests from recent history", () => {
+  const { scheduler } = fixture();
+  const key = "e".repeat(64);
+  expect(scheduler.estimateWorkers(key)).toBeUndefined();
+  scheduler.recordUsage(key, 1.2);
+  scheduler.recordUsage(key, 3.4);
+  expect(scheduler.estimateWorkers(key)).toBe(4);
+  // Only the latest five runs count, so an old spike ages out.
+  for (let i = 0; i < 5; i++) scheduler.recordUsage(key, 0.3);
+  expect(scheduler.estimateWorkers(key)).toBe(1);
+  scheduler.recordUsage("not-a-digest", 2);
+  scheduler.recordUsage(key, Number.NaN);
+  expect(scheduler.estimateWorkers("not-a-digest")).toBeUndefined();
+  expect(scheduler.estimateWorkers(key)).toBe(1);
 });
 
 test("workspace exclusion also covers commands without named resources; legacy locks stay global", () => {

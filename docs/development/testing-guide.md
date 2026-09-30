@@ -54,9 +54,11 @@ specifications, package tests, and intentionally malformed fixtures. Use
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
 
-All cooperating runs share a host budget: eight worker slots by default, leaving
-two logical cores free where possible, plus a memory admission budget of 65% of
-physical memory. The protocol check reserves one slot too. Groups run together
+All cooperating runs share a host budget: one worker slot per logical core by
+default (`ORKESTRATOR_TEST_HOST_WORKERS` may raise it to four per core), plus a
+memory admission budget of 65% of physical memory. This suite still plans at
+most eight Bun workers of its own; the larger host budget lets other worktrees
+and review validations run beside it. The protocol check reserves one slot too. Groups run together
 when they fit; smaller machines queue groups instead of spawning extra workers.
 The per-suite plan includes the protocol slot in its eight-slot ceiling.
 Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
@@ -396,9 +398,27 @@ areas the change cannot affect and naming the omission in one limitation. When
 the instructions require a suite for every change, or the change's reach is
 uncertain, the full relevant coverage runs.
 
-Ordinary discovered commands reserve half the per-suite budget (`weight: 1`) or
-its whole budget (`weight: 2`), capped at eight slots even when the host ceiling
-is higher. Exact repository `commandProfiles` can declare smaller `workers` and
+Ordinary discovered commands are sized in this order: an exact repository
+`commandProfiles` entry, then the command's measured CPU use, then discovery's
+weight (four slots for `weight: 1`, eight for `weight: 2`). After each
+undisturbed run of at least a second, the worker records the command's average
+parallelism (CPU time of its reaped descendants over wall time, from bash's
+`times`) in the host scheduler database, keyed by repository, directory and
+command. Later requests reserve the busiest of its last five runs, rounded up,
+so every worktree of the repository benefits. The validation table shows each
+command's average cores and the slots it held, which is how to spot commands
+that reserve more than they use.
+
+Slots are elastic. A request carries a floor (`minWorkers` in a profile, or a
+quarter of its size by default) and starts with whatever is free above that
+floor instead of waiting for its whole estimate. Memory and exclusive resources
+are not elastic and must fit whole. Later jobs may backfill around a blocked
+job; a blocked job counts only overtaking that competes with it (for capacity it
+is short of, or for one of its resources), and after 32 such bypasses it holds
+its turn until it fits. One validation run executes at most two heavy or four
+light commands at once; host admission governs everything beyond that.
+
+Exact repository `commandProfiles` can declare `workers`, `minWorkers` and
 `memoryMiB` requirements for known commands. These are estimates, not OS limits.
 A profile describes what a command wants, not what the host has: a requirement
 larger than the frozen host budget is clamped down to it rather than refused, so

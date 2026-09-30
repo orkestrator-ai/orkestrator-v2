@@ -8,7 +8,7 @@ export interface ReviewValidationPlan {
     dependsOn: string[];
     /** workspace: scopes local resources; host: scopes cross-worktree resources. Legacy unprefixed resources remain host-scoped. */
     resources: string[];
-    /** Internally parallel or memory-heavy commands reserve the whole runner. */
+    /** Internally parallel or memory-heavy commands (2) get a larger default reservation until measured. */
     weight: 1 | 2;
     timeoutMs: number;
   }>;
@@ -35,6 +35,10 @@ export interface ReviewValidationResult {
   stderrSha256?: string;
   startedAt?: string;
   durationMs: number;
+  /** CPU time of the command's reaped descendants; durationMs gives average cores. */
+  cpuMs?: number;
+  /** Host scheduler slots granted, which may be below the request when admitted partially. */
+  reservedWorkers?: number;
   limitation: string | null;
 }
 
@@ -212,6 +216,9 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
       uint(r.stderrBytes) &&
       uint(r.durationMs) &&
       (r.queuedMs === undefined || uint(r.queuedMs)) &&
+      (r.cpuMs === undefined || uint(r.cpuMs)) &&
+      (r.reservedWorkers === undefined ||
+        (Number.isSafeInteger(r.reservedWorkers) && (r.reservedWorkers as number) >= 1)) &&
       (r.queueReason === undefined || text(r.queueReason, 1024)) &&
       (r.executionUpdatedAt === undefined || date(r.executionUpdatedAt)) &&
       (r.lastOutputAt === undefined || date(r.lastOutputAt)) &&

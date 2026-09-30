@@ -1,5 +1,5 @@
 # Agent Instructions
-
+.
 This file provides specific guidance for AI agents working on this codebase.
 The living documentation catalog is [`docs/README.md`](docs/README.md).
 

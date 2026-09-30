@@ -1042,7 +1042,7 @@ export class AppServerEngine implements CodexEngine {
         (event.kind === "turn.completed" || (event.kind === "error" && !event.willRetry)) &&
         event.error?.code === "unauthorized"
       ) {
-        this.checkAccountSignIn(false);
+        this.checkAccountSignIn(false, true);
       }
       this.emit(event);
     }
@@ -1054,18 +1054,24 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /**
-   * Ask app-server whether the account is still signed in, refreshing its token.
+   * Ask app-server whether the account is still signed in.
    *
    * A signed-in answer means any `codex_apps` failure was a stale token, so the
    * connector is reloaded to pick up the fresh one. A successful reload happens
    * at most once per generation for an unprompted failure; a rejected reload
    * remains eligible on the next failure. An account change always retries.
+   *
+   * `refreshToken` forces an OAuth refresh first. Reserve it for a turn the
+   * model already refused: once a forced refresh is rejected, app-server reports
+   * no account for the rest of its life even while the access token still
+   * serves turns, and every forced refresh rotates the refresh token shared
+   * through `$CODEX_HOME/auth.json` with other Codex clients.
    */
-  private checkAccountSignIn(accountChanged: boolean): void {
+  private checkAccountSignIn(accountChanged: boolean, refreshToken = false): void {
     const sequence = ++this.accountCheckSequence;
     const generation = this.supervisor.getGeneration();
     void this.supervisor
-      .request("account/read", { refreshToken: true })
+      .request("account/read", { refreshToken })
       .then((response) => this.applyAccountRead(response, sequence, generation, accountChanged))
       .catch((error: unknown) => {
         // Unconfirmed either way: leave admission alone. The notice still says
@@ -1674,7 +1680,9 @@ export class AppServerEngine implements CodexEngine {
     // one. A failed routine read leaves a pending failure check free to land.
     const sequence = ++this.accountCheckSequence;
     const generation = this.supervisor.getGeneration();
-    const response = await this.supervisor.request("account/read", { refreshToken: true });
+    // On-demand UI auth-status reads must not force a token refresh here (see
+    // `checkAccountSignIn`). App-server refreshes a stale token on its own.
+    const response = await this.supervisor.request("account/read", { refreshToken: false });
     // Auth-status reads answer from account/read itself. A connector reload is
     // independent work and must not turn a valid account answer into an error.
     void this.applyAccountRead(response, sequence, generation, false).catch((error: unknown) => {

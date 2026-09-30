@@ -186,6 +186,105 @@ test("real browser gateway exercises an authoritative local environment", async 
   }
 });
 
+test("signed-out Codex recovery and account reads survive reload and environment switches", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const projects = await invoke<Project[]>("get_projects");
+  const fixture = projects.find((project) => project.localPath === status.testProject);
+  expect(fixture).toBeTruthy();
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: fixture!.id,
+    name: `auth-recovery-${Date.now()}`,
+    networkAccessMode: "restricted",
+    environmentType: "local",
+  });
+  const other = await invoke<Environment>("create_environment", {
+    projectId: fixture!.id,
+    name: `auth-other-${Date.now()}`,
+    networkAccessMode: "restricted",
+    environmentType: "local",
+  });
+  try {
+    await invoke("start_environment", { environmentId: environment.id });
+    const identity = {
+      environmentId: environment.id,
+      agent: "codex",
+      logicalSessionKey: `env-${environment.id}:tab-auth`,
+    };
+    await invoke("ensure_native_agent_session", identity);
+    // A fresh tab creates its provider session lazily. Establish an account
+    // snapshot without sending a model turn before testing the recovery banner.
+    const auth = await invoke<{ state: string }>("get_native_agent_auth_status", identity);
+    expect(["signed-out", "needs-auth"]).toContain(auth.state);
+    const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: environment.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: environment.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane-auth",
+        root: {
+          kind: "leaf",
+          id: "pane-auth",
+          activeTabId: "tab-auth",
+          tabs: [
+            {
+              id: "tab-auth",
+              type: "agent-native",
+              nativeAgentData: { environmentId: environment.id, platform: "codex", isLocal: true },
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(status.browserUrl!);
+    const openEnvironment = async (name: string) => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+      const entry = page.getByText(name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await page.mouse.move(0, 0);
+      await page.keyboard.press("Escape");
+      await entry.click();
+    };
+    await openEnvironment(environment.name);
+    await expect(page.getByRole("button", { name: "Sign in to Codex", exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "Open Codex settings", exact: true }),
+    ).toHaveCount(0);
+    const openAccount = async () => {
+      await page.getByRole("button", { name: "Open agent information" }).click();
+      await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible({
+        timeout: 15_000,
+      });
+      await page.keyboard.press("Escape");
+    };
+    await openAccount();
+    await openEnvironment(other.name);
+    await openEnvironment(environment.name);
+    await expect(page.getByRole("button", { name: "Sign in to Codex", exact: true })).toBeVisible();
+    await openAccount();
+    await page.reload();
+    await openEnvironment(environment.name);
+    await expect(page.getByRole("button", { name: "Sign in to Codex", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    await openAccount();
+  } finally {
+    await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
+  }
+});
+
 test("deletion during local setup clears worktree, bridge state, branch and ledger", async ({
   page,
 }) => {

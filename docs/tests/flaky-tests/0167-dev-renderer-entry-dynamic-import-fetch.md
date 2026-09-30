@@ -40,3 +40,27 @@ fetches are shown to fail for another reason.
 - **Change:** both container specs now load through
   `e2e/agent-testing/dev-startup-retry.ts`, the same single, annotated retry
   the draft spec uses, limited to the dev server's module-fetch failure.
+
+## Recurrence — 2026-09-30
+
+- **Test:** `real browser gateway exercises an authoritative local environment`
+  in `e2e/agent-testing/browser-gateway.spec.ts`, after the account-switching case.
+- **Original command:** `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  on branch `logged-out-message-fc70c7944c03-r1`, one browser worker, while the
+  repository suite was running.
+- **Failure:** the renderer showed "Orkestrator couldn’t connect" instead of
+  the fixture project. Its trace recorded a 502 and `[DesktopStartup]`
+  `Failed to fetch dynamically imported module: .../src/renderer-entry.tsx`.
+  The suite finished with 11 passed, 2 failed and 10 skipped; the second failure
+  was in the unrelated draft spec's narrow-viewport assertion.
+- **Isolated rerun:** `ORKESTRATOR_AGENT_TEST_PROFILE=qa-auth-review-fc70c794 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-auth-review-fc70c794-complete mise run test:logged -- --name auth-browser-complete -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts --workers=1`
+  passed the complete owning file: 5 passed, 3 opt-in skips, exit 0 (30.6 s).
+  This includes the new signed-out Codex account/recovery scenario. The
+  repository suite had finished before this rerun.
+- **Evidence:** original logged failure at
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FEyvYt`;
+  sanitized browser artifacts at
+  `output/agent-testing/qa-browser-dc912226-dd9/browser/` and the passing rerun's
+  result at `output/agent-testing/qa-auth-review-fc70c794-complete/browser/results.json`.
+- **Assessment:** the trace matches this existing dev-module-fetch failure;
+  status remains environmental. Both disposable profiles were stopped and reset.

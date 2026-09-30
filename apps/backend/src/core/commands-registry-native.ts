@@ -249,11 +249,11 @@ export function registerNativeAgentCommands(
     if (
       !Array.isArray(args.sections) ||
       args.sections.length === 0 ||
-      args.sections.length > NATIVE_AGENT_DISCOVERY_SECTIONS.length ||
+      args.sections.length > NATIVE_AGENT_DISCOVERY_SECTIONS.length + 1 ||
       args.sections.some(
         (section) =>
           typeof section !== "string" ||
-          !NATIVE_AGENT_DISCOVERY_SECTIONS.includes(section as never),
+          (section !== "auth" && !NATIVE_AGENT_DISCOVERY_SECTIONS.includes(section as never)),
       )
     ) {
       throw new Error("Native agent discovery sections are invalid");
@@ -264,7 +264,9 @@ export function registerNativeAgentCommands(
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       viewVersion: 1,
       sections: [
-        ...new Set(args.sections),
+        // Older open renderers still ask for auth. Accept it without restoring
+        // account reads to progressive discovery.
+        ...new Set(args.sections.filter((section) => section !== "auth")),
       ] as import("@orkestrator/protocol/native-agent").NativeAgentDiscoverySection[],
       knownToken:
         args.knownToken === undefined
@@ -456,6 +458,20 @@ export function registerNativeAgentCommands(
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       serverId: asNonBlankString(args.serverId, "serverId"),
       action: action as import("@orkestrator/protocol/native-agent").NativeAgentMcpServerAction,
+    });
+  });
+
+  register("get_native_agent_auth_status", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    const agent = asNonBlankString(
+      args.agent,
+      "agent",
+    ) as import("./models.js").NativeAgentProvider;
+    if (!BUILD_PIPELINE_AGENTS.includes(agent)) throw new Error("Native agent provider is invalid");
+    return context.nativeAgents.readProjectionAuthStatus({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
 

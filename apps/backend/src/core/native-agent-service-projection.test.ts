@@ -681,7 +681,7 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("projects sign-in metadata without blocking a new unauthenticated session", async () => {
+  test("reads the account on demand instead of on every projection", async () => {
     const stub = createProviderStub("cursor", {
       authStatus: async () => ({
         state: "signed-out",
@@ -691,44 +691,117 @@ describe("NativeAgentService", () => {
     });
     await withService(
       {
-        prefix: "orkestrator-native-auth-bootstrap-",
+        prefix: "orkestrator-native-auth-on-demand-",
         provider: async () => stub.provider,
       },
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",
           agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-auth-bootstrap",
+          logicalSessionKey: "env-env-1:tab-auth-on-demand",
         };
+        // An unauthenticated provider still gets a session to sign in from.
         await expect(service.ensureSession(identity)).resolves.toMatchObject({
           providerSessionId: "provider-session",
         });
-        await expect(service.getProjection(identity)).resolves.toMatchObject({
-          auth: { state: "signed-out", signIn: { kind: "browser-url" } },
+        const projection = await service.getProjection(identity);
+        await service.getProjection(identity);
+        expect(projection).not.toHaveProperty("auth");
+        expect(stub.authStatus).not.toHaveBeenCalled();
+
+        await expect(service.readProjectionAuthStatus(identity)).resolves.toEqual({
+          state: "signed-out",
+          signIn: { kind: "browser-url" },
+          signOut: false,
         });
+        await service.readProjectionAuthStatus(identity);
+        expect(stub.authStatus).toHaveBeenCalledTimes(2);
       },
     );
   });
 
-  test("caches authentication discovery across projection refreshes", async () => {
-    const stub = createProviderStub("cursor", {
-      authStatus: async () => ({ state: "signed-in", signOut: true }),
-    });
+  test("an account read without auth support returns null and needs no session", async () => {
+    const stub = createProviderStub("cursor");
     await withService(
-      {
-        prefix: "orkestrator-native-auth-cache-",
-        provider: async () => stub.provider,
-      },
-      async ({ service }) => {
+      { prefix: "orkestrator-auth-unsupported-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
         const identity = {
           environmentId: "env-1",
           agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-auth-cache",
+          logicalSessionKey: "missing-session",
         };
-        await service.ensureSession(identity);
-        await service.getProjection(identity);
-        await service.getProjection(identity);
-        expect(stub.authStatus).toHaveBeenCalledTimes(1);
+        await expect(service.readProjectionAuthStatus(identity)).resolves.toBeNull();
+        expect(stub.createSession).not.toHaveBeenCalled();
+        expect(
+          await storage.getNativeAgentSession(
+            nativeAgentSessionStorageKey(
+              identity.environmentId,
+              identity.agent,
+              identity.logicalSessionKey,
+            ),
+          ),
+        ).toBeNull();
+      },
+    );
+  });
+
+  test("account reads propagate provider resolution failures", async () => {
+    await withService(
+      {
+        prefix: "orkestrator-auth-no-provider-",
+        provider: async () => {
+          throw new Error("Provider unavailable");
+        },
+      },
+      async ({ service }) => {
+        await expect(
+          service.readProjectionAuthStatus({
+            environmentId: "env-1",
+            agent: "cursor",
+            logicalSessionKey: "missing-session",
+          }),
+        ).rejects.toThrow("Provider unavailable");
+      },
+    );
+  });
+
+  test("account reads reject missing environments before resolving a provider", async () => {
+    const stub = createProviderStub("cursor", {
+      authStatus: async () => ({ state: "signed-out" }),
+    });
+    const provider = mock(async () => stub.provider);
+    await withService(
+      { prefix: "orkestrator-auth-no-environment-", provider },
+      async ({ service }) => {
+        await expect(
+          service.readProjectionAuthStatus({
+            environmentId: "missing-env",
+            agent: "cursor",
+            logicalSessionKey: "missing-session",
+          }),
+        ).rejects.toThrow();
+        expect(provider).not.toHaveBeenCalled();
+        expect(stub.authStatus).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("account reads preserve auth failures rather than reporting unsupported", async () => {
+    const stub = createProviderStub("cursor", {
+      authStatus: async () => {
+        throw new Error("Auth endpoint unavailable");
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-auth-read-error-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await expect(
+          service.readProjectionAuthStatus({
+            environmentId: "env-1",
+            agent: "cursor",
+            logicalSessionKey: "missing-session",
+          }),
+        ).rejects.toThrow("Auth endpoint unavailable");
       },
     );
   });

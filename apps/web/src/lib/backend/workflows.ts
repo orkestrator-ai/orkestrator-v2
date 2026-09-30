@@ -46,6 +46,7 @@ import {
   type AwaitBridgeReadyResult,
 } from "@orkestrator/protocol/bridge-readiness";
 import type {
+  NativeAgentAuthStatus,
   NativeAgentControlUpdate,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
@@ -733,6 +734,18 @@ export async function performNativeAgentMcpAction(input: {
   action: NativeAgentMcpServerAction;
 }): Promise<{ url?: string }> {
   return invoke("perform_native_agent_mcp_action", input);
+}
+
+/**
+ * Read the provider's account now. Not part of the projection: an account read
+ * can reach the provider's auth service, so ask only when the answer is shown.
+ */
+export async function getNativeAgentAuthStatus(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<NativeAgentAuthStatus | null> {
+  return invoke("get_native_agent_auth_status", input);
 }
 
 export async function beginNativeAgentSignIn(input: {

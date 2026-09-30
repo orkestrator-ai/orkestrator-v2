@@ -65,7 +65,9 @@ import {
   beginNativeAgentSignIn,
   forkNativeAgentSession,
   getBuildPipelineSessionProjection,
+  getNativeAgentAuthStatus,
   getNativeAgentProjection,
+  openInBrowser,
   performNativeAgentSessionAction,
   performNativeAgentMcpAction,
   signOutNativeAgent,
@@ -83,6 +85,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
   nativeAgentSteerRejectionMessage,
+  type NativeAgentAuthStatus,
   type NativeAgentControlUpdate,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -603,6 +606,89 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       cancelled = true;
     };
   }, [activeSession, currentSessionId, open]);
+
+  // Read when the panel opens rather than carried by the projection: an
+  // account read is not free, and only this panel shows the account.
+  const accountEnvironmentId = activeSession?.environmentId;
+  const accountAgent = activeSession?.provider;
+  const accountSessionKey = activeSession?.sessionKey;
+  const accountKey =
+    accountEnvironmentId && accountAgent && accountSessionKey
+      ? `${accountEnvironmentId}\0${accountAgent}\0${accountSessionKey}`
+      : null;
+  const [accountStatus, setAccountStatus] = useState<{
+    key: string;
+    status: NativeAgentAuthStatus | null;
+  } | null>(null);
+  const [accountReadFailed, setAccountReadFailed] = useState(false);
+  const accountReaderRef = useRef<{
+    refresh: () => Promise<void>;
+    invalidate: () => void;
+    watchSignIn: () => void;
+  } | null>(null);
+  useEffect(() => {
+    if (!open || !accountKey || !accountEnvironmentId || !accountAgent || !accountSessionKey)
+      return;
+    let cancelled = false;
+    let sequence = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let signInReadsRemaining = 0;
+    let signInDeadline = 0;
+    const invalidate = () => {
+      sequence++;
+      clearTimeout(timer);
+      signInReadsRemaining = 0;
+      signInDeadline = 0;
+    };
+    const refresh = async () => {
+      if (cancelled) return;
+      clearTimeout(timer);
+      const request = ++sequence;
+      try {
+        const status = await getNativeAgentAuthStatus({
+          environmentId: accountEnvironmentId,
+          agent: accountAgent,
+          logicalSessionKey: accountSessionKey,
+        });
+        if (cancelled || request !== sequence) return;
+        if (typeof status?.state !== "string") throw new Error("Account status is unavailable");
+        setAccountStatus({ key: accountKey, status });
+        setAccountReadFailed(false);
+        if (status.state === "signed-in") signInReadsRemaining = 0;
+      } catch {
+        if (cancelled || request !== sequence) return;
+        setAccountReadFailed(true);
+      }
+      // Login completion happens outside this panel. Bound the follow-up reads
+      // to two minutes, and stop them on close, identity change or sign-out.
+      if (signInReadsRemaining > 0 && Date.now() < signInDeadline) {
+        signInReadsRemaining--;
+        timer = setTimeout(() => void refresh(), 2_000);
+      }
+    };
+    const reader = {
+      refresh,
+      invalidate,
+      watchSignIn: () => {
+        if (cancelled) return;
+        signInReadsRemaining = 60;
+        signInDeadline = Date.now() + 120_000;
+        void refresh();
+      },
+    };
+    accountReaderRef.current = reader;
+    setAccountReadFailed(false);
+    void refresh();
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      invalidate();
+      window.removeEventListener("focus", onFocus);
+      if (accountReaderRef.current === reader) accountReaderRef.current = null;
+    };
+  }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
+  const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
 
   const openForkTab = (
     sessionId: string,
@@ -1784,22 +1870,31 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     ) : null}
                   </div>
                 ) : null}
-                {neutralProjection?.auth ? (
+                {accountReadFailed ? (
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span>Could not read account status.</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void accountReaderRef.current?.refresh()}
+                    >
+                      Retry account status
+                    </Button>
+                  </div>
+                ) : null}
+                {auth ? (
                   <div className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="font-medium text-foreground">
-                          {neutralProjection.auth.account?.label ?? activeSession.providerLabel}
+                          {auth.account?.label ?? activeSession.providerLabel}
                         </div>
                         <div className="mt-0.5 text-muted-foreground">
-                          {neutralProjection.auth.state.replaceAll("-", " ")}
-                          {neutralProjection.auth.account?.plan
-                            ? ` · ${neutralProjection.auth.account.plan}`
-                            : ""}
+                          {auth.state.replaceAll("-", " ")}
+                          {auth.account?.plan ? ` · ${auth.account.plan}` : ""}
                         </div>
                       </div>
-                      {neutralProjection.auth.state === "signed-in" &&
-                      neutralProjection.auth.signOut ? (
+                      {auth.state === "signed-in" && auth.signOut ? (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1807,33 +1902,37 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           disabled={busyAction !== null}
                           onClick={() =>
                             void runAction("auth-sign-out", async () => {
+                              const reader = accountReaderRef.current;
+                              reader?.invalidate();
                               await signOutNativeAgent({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
                               });
                               toast.success(`Signed out of ${activeSession.providerLabel}`);
+                              await reader?.refresh();
                             })
                           }
                         >
                           Sign out
                         </Button>
-                      ) : neutralProjection.auth.signIn?.kind !== "none" &&
-                        neutralProjection.auth.signIn?.kind !== "terminal" ? (
+                      ) : auth.signIn?.kind !== "none" && auth.signIn?.kind !== "terminal" ? (
                         <Button
                           size="sm"
                           className="h-7"
                           disabled={busyAction !== null}
                           onClick={() =>
                             void runAction("auth-sign-in", async () => {
+                              const reader = accountReaderRef.current;
+                              reader?.invalidate();
                               const result = await beginNativeAgentSignIn({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
                               });
-                              if (result.url) {
-                                window.open(result.url, "_blank", "noopener,noreferrer");
-                              }
+                              reader?.watchSignIn();
+                              // The desktop shell denies window.open.
+                              if (result.url) await openInBrowser(result.url);
                               if (result.code) toast.info(`Device code: ${result.code}`);
                             })
                           }
@@ -1842,10 +1941,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                         </Button>
                       ) : null}
                     </div>
-                    {neutralProjection.auth.signIn?.hint &&
-                    neutralProjection.auth.state !== "signed-in" ? (
+                    {auth.signIn?.hint && auth.state !== "signed-in" ? (
                       <p className="mt-2 leading-relaxed text-muted-foreground">
-                        {neutralProjection.auth.signIn.hint}
+                        {auth.signIn.hint}
                       </p>
                     ) : null}
                   </div>

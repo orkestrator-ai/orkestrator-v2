@@ -2460,11 +2460,11 @@ describe("native agent progressive failure and lifecycle", () => {
 
   test("an invalidation during a discovery read leaves the epoch prunable", async () => {
     let releaseDiscovery!: () => void;
-    const heldDiscovery = new Promise<null>((resolve) => {
-      releaseDiscovery = () => resolve(null);
+    const heldDiscovery = new Promise<[]>((resolve) => {
+      releaseDiscovery = () => resolve([]);
     });
     const stub = createProviderStub("cursor", {
-      authStatus: async () => heldDiscovery as never,
+      slashCommands: async () => heldDiscovery as never,
       transcriptSnapshot: async () => ({
         messages: [],
         complete: true,
@@ -2489,7 +2489,7 @@ describe("native agent progressive failure and lifecycle", () => {
         await service.getDiscoveryUpdate({
           ...identity,
           viewVersion: 1,
-          sections: ["auth"],
+          sections: ["commands"],
         });
         const view = internals(service);
         await waitForCondition(() =>

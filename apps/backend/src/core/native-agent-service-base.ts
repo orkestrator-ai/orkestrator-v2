@@ -54,7 +54,6 @@ type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
 type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
 type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
-type NativeAgentAuthStatus = shared.NativeAgentAuthStatus;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
@@ -222,10 +221,6 @@ export abstract class NativeAgentServiceBase {
       if (!this.stopped) this.storage.announceNativeAgentSessionProjection(environmentId);
     },
   });
-  protected readonly authStatusCache = new Map<
-    string,
-    { status: NativeAgentAuthStatus | undefined; expiresAt: number }
-  >();
   /** Coalesced stale-while-revalidate tasks for projection-only metadata. */
   protected readonly modelCatalogRefreshes = new Map<
     string,
@@ -980,7 +975,6 @@ export abstract class NativeAgentServiceBase {
     }
     this.modelCatalogCache.delete(input.environmentId);
     this.commandCatalogues.invalidate(slashCommandKey);
-    this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
     // Best-effort, and dropped *after* the caches above rather than before.
     // Some providers answer this by reaching their bridge process — Pi has to,
     // because its `ModelRuntime` owns a credential snapshot this side cannot

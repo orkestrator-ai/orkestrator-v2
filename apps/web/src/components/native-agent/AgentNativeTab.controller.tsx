@@ -55,6 +55,7 @@ import {
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
+  getNativeAgentAuthStatus,
   openInBrowser,
   recoverMultiReviewFixSession,
   writeCoordinatorAttachment,
@@ -789,10 +790,55 @@ export function SharedNativeAgentController({
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
-  // Only flows the app can drive itself; a terminal login is explained in settings.
+  // Asked only while sign-in is required: the account read is not free, so it
+  // is not part of the projection.
+  const authReadKey = `${data.environmentId}\0${platform}\0${sessionKey}`;
+  const [signInStatus, setSignInStatus] = useState<{
+    key: string;
+    kind: string | null;
+    state: "loading" | "ready" | "failed";
+  } | null>(null);
+  const [authReadAttempt, setAuthReadAttempt] = useState(0);
+  useEffect(() => {
+    if (!authenticationRequired) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    setSignInStatus({ key: authReadKey, kind: null, state: "loading" });
+    const read = async () => {
+      try {
+        const status = await getNativeAgentAuthStatus({
+          environmentId: data.environmentId,
+          agent: platform,
+          logicalSessionKey: sessionKey,
+        });
+        if (cancelled) return;
+        if (!status?.signIn?.kind) throw new Error("Sign-in options are unavailable");
+        setSignInStatus({ key: authReadKey, kind: status.signIn.kind, state: "ready" });
+      } catch {
+        if (cancelled) return;
+        setSignInStatus({ key: authReadKey, kind: null, state: "failed" });
+        if (++failures < 3) timer = setTimeout(() => void read(), 1_000);
+      }
+    };
+    void read();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    authenticationRequired,
+    authReadKey,
+    authReadAttempt,
+    data.environmentId,
+    platform,
+    sessionKey,
+  ]);
+  const currentSignInStatus = signInStatus?.key === authReadKey ? signInStatus : null;
+  // Only confirmed terminal/none flows belong in settings. Pending and failed
+  // reads cannot establish that inline sign-in is unsupported.
   const inlineSignInAvailable =
-    projection?.auth?.signIn?.kind === "browser-url" ||
-    projection?.auth?.signIn?.kind === "device-code";
+    currentSignInStatus?.kind === "browser-url" || currentSignInStatus?.kind === "device-code";
   const [signInPending, setSignInPending] = useState(false);
   const [signInUrl, setSignInUrl] = useState<string | null>(null);
   // The desktop shell denies window.open and target=_blank, so links must go
@@ -2093,7 +2139,19 @@ export function SharedNativeAgentController({
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
         <span>{authenticationReadiness.message}</span>
-        {inlineSignInAvailable ? (
+        {currentSignInStatus?.state !== "ready" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={currentSignInStatus?.state !== "failed"}
+            onClick={() => setAuthReadAttempt((attempt) => attempt + 1)}
+          >
+            {currentSignInStatus?.state === "failed"
+              ? "Retry sign-in options"
+              : "Checking sign-in options…"}
+          </Button>
+        ) : inlineSignInAvailable ? (
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"

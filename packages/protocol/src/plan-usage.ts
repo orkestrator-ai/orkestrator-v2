@@ -87,7 +87,22 @@ export function claudeModelWeeklyWindow(modelName: string): ClaudePlanWindowIden
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
   if (!slug) return undefined;
-  return { id: `seven_day_${slug}`, label: `Weekly ${name} limit`, windowMinutes: WEEK_MINUTES };
+  const id = `seven_day_${slug}`;
+  const known = CLAUDE_PLAN_WINDOW_LABELS[id];
+  return { id, label: known?.label ?? `Weekly ${name} limit`, windowMinutes: WEEK_MINUTES };
+}
+
+/** Identity from Claude's named OAuth limits and in-session `/usage` reports. */
+export function claudePlanWindowFromKind(
+  kind: unknown,
+  modelName?: unknown,
+): ClaudePlanWindowIdentity | undefined {
+  if (kind === "session") return { id: "five_hour", ...CLAUDE_PLAN_WINDOW_LABELS.five_hour! };
+  if (kind === "weekly_all") return { id: "seven_day", ...CLAUDE_PLAN_WINDOW_LABELS.seven_day! };
+  if (kind === "weekly_scoped" && typeof modelName === "string") {
+    return claudeModelWeeklyWindow(modelName);
+  }
+  return undefined;
 }
 
 /**
@@ -97,7 +112,9 @@ export function claudeModelWeeklyWindow(modelName: string): ClaudePlanWindowIden
  */
 const LEGACY_CLAUDE_WINDOW_LABELS: Record<string, string> = {
   "five hour": "five_hour",
+  session: "five_hour",
   weekly: "seven_day",
+  "weekly all": "seven_day",
   "weekly (oauth apps)": "seven_day_oauth_apps",
 };
 

@@ -65,11 +65,13 @@ function AccountUsage({
 }: {
   platform: AgentAccountPlatform;
   accountId: string;
-  reloadToken: number;
+  reloadToken: string;
 }) {
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const seenReloadTokenRef = useRef(reloadToken);
+  // A credential can change while the general settings pane is visible. A
+  // newly mounted account row must also bypass the pre-change cache then.
+  const seenReloadTokenRef = useRef("0:0");
 
   useEffect(() => {
     let current = true;
@@ -120,7 +122,7 @@ function AccountRow({
 }: {
   account: AgentAccountSummary;
   busy: boolean;
-  usageReloadToken: number;
+  usageReloadToken: string;
   onUse: () => void;
   onRename: (label: string) => Promise<void>;
   onRemove: () => void;
@@ -357,7 +359,13 @@ function LoginPanel({
   );
 }
 
-export function AgentAccountsSection({ platform }: { platform: AgentAccountPlatform }) {
+export function AgentAccountsSection({
+  platform,
+  reloadToken = 0,
+}: {
+  platform: AgentAccountPlatform;
+  reloadToken?: number;
+}) {
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [login, setLogin] = useState<AgentAccountLoginProgress>({ state: "idle" });
   const [busy, setBusy] = useState(false);
@@ -518,7 +526,7 @@ export function AgentAccountsSection({ platform }: { platform: AgentAccountPlatf
               key={account.id}
               account={account}
               busy={busy}
-              usageReloadToken={usageReloadToken}
+              usageReloadToken={`${reloadToken}:${usageReloadToken}`}
               onUse={() => void run(() => setActiveAgentAccount(platform, account.id), true)}
               onRename={(label) => run(() => renameAgentAccount(platform, account.id, label))}
               onRemove={() => void run(() => removeAgentAccount(platform, account.id))}

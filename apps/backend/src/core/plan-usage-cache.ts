@@ -73,8 +73,12 @@ function mergeSessionWindows(
   const merged = existing.map((row) => ({ ...row }));
   for (const window of incoming) {
     const index = merged.findIndex((row) => row.window === window.window);
-    if (index >= 0) merged[index] = { ...window };
-    else merged.push({ ...window });
+    if (index >= 0) {
+      const definedFields = Object.fromEntries(
+        Object.entries(window).filter(([, value]) => value !== undefined),
+      );
+      merged[index] = { ...merged[index]!, ...definedFields };
+    } else merged.push({ ...window });
   }
   return merged;
 }
@@ -112,7 +116,7 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
       const at = now();
       entries.set(platform, {
         expiresAt: at + CACHE_TTL_MS,
-        snapshot: okSnapshot(platform, merged, new Date(at).toISOString()),
+        snapshot: okSnapshot(platform, merged, new Date(at).toISOString(), cached?.snapshot.plan),
       });
     },
     invalidate(platform) {

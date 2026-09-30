@@ -20,6 +20,7 @@ const usage: PlanUsageSnapshot = {
   windows: [{ window: "primary", label: "5-hour limit", usedPercent: 40 }],
   fetchedAt: new Date(0).toISOString(),
 };
+let usageResult: PlanUsageSnapshot = usage;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
@@ -28,7 +29,7 @@ mock.module("@/lib/native/backend", () => ({
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
       case "get_agent_account_usage":
-        return Promise.resolve(usage);
+        return Promise.resolve(usageResult);
       case "get_agent_account_login":
         return Promise.resolve(login);
       case "start_agent_account_login":
@@ -87,6 +88,7 @@ const ADDED_ID = "11111111-2222-4333-8444-555555555555";
 
 beforeEach(() => {
   calls.length = 0;
+  usageResult = usage;
   login = { state: "idle" };
   snapshot = {
     active: { claude: "default", codex: "default" },
@@ -120,6 +122,32 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("forces a Claude usage reread when the credential refresh token changes", async () => {
+    const view = render(<AgentAccountsSection platform="claude" reloadToken={0} />);
+    await screen.findByText("5-hour limit");
+    expect(calls.filter((call) => call.command === "get_agent_account_usage")).toEqual([
+      { command: "get_agent_account_usage", args: { platform: "claude", accountId: "default" } },
+    ]);
+    usageResult = {
+      ...usage,
+      platform: "claude",
+      status: "unavailable",
+      windows: [],
+      message: "Host Claude credentials are disabled.",
+    };
+    view.rerender(<AgentAccountsSection platform="claude" reloadToken={1} />);
+    await screen.findByText("Host Claude credentials are disabled.");
+    expect(calls.filter((call) => call.command === "get_agent_account_usage").at(-1)?.args).toEqual(
+      {
+        platform: "claude",
+        accountId: "default",
+        force: true,
+      },
+    );
+    expect(screen.queryByText("5-hour limit") === null).toBe(true);
+    view.rerender(<AgentAccountsSection platform="claude" reloadToken={1} />);
+    expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(2);
+  });
   test("lists only this platform's accounts with their identity and usage", async () => {
     await mount();
     const host = await screen.findByRole("listitem", { name: "Host login" });

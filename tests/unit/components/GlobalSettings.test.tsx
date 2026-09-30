@@ -14,6 +14,8 @@ import { MAX_OPENCODE_MODEL_PROVIDERS } from "../../../packages/protocol/src/nat
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
 import { installControlledTimeout } from "../../helpers/controlled-timeout";
+import type { AgentAccountsSnapshot } from "../../../packages/protocol/src/agent-accounts";
+import type { PlanUsageSnapshot } from "../../../packages/protocol/src/plan-usage";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -52,13 +54,38 @@ const mockSetOpenCodeZenApiKey = mock(async (apiKey: string | null) => ({
   },
   repositories: {},
 }));
-const mockGetPlanUsage = mock(async (platform: string) => ({
+const mockGetPlanUsage = mock(async (platform: string, _options?: { force?: boolean }) => ({
   platform,
   status: "unavailable" as const,
   windows: [],
   message: "Add an OpenCode Zen API key below to see your plan usage.",
   fetchedAt: "2026-09-11T18:32:00.000Z",
 }));
+const mockListAgentAccounts = mock(async (): Promise<AgentAccountsSnapshot> => ({
+  active: { claude: "default", codex: "default" },
+  accounts: (["claude", "codex"] as const).map((platform) => ({
+    id: "default",
+    platform,
+    label: "Host login",
+    isDefault: true,
+    isActive: true,
+    signedIn: true,
+    identity: {},
+  })),
+}));
+const mockGetAgentAccountUsage = mock(
+  async (
+    platform: "claude" | "codex",
+    _accountId: string,
+    _options?: { force?: boolean },
+  ): Promise<PlanUsageSnapshot> => ({
+    platform,
+    status: "ok",
+    windows: [{ window: "five_hour", label: "5-hour limit", usedPercent: 40 }],
+    fetchedAt: "2026-09-30T10:00:00.000Z",
+  }),
+);
+const mockGetAgentAccountLogin = mock(async () => ({ state: "idle" as const }));
 const mockGetLogDirectory = mock(async () => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
 const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
@@ -119,6 +146,9 @@ mock.module("@/lib/backend", () => ({
   setAnthropicApiKey: mockSetAnthropicApiKey,
   setOpenCodeZenApiKey: mockSetOpenCodeZenApiKey,
   getPlanUsage: mockGetPlanUsage,
+  listAgentAccounts: mockListAgentAccounts,
+  getAgentAccountUsage: mockGetAgentAccountUsage,
+  getAgentAccountLogin: mockGetAgentAccountLogin,
   getLogDirectory: mockGetLogDirectory,
   getLogStorageStats: mockGetLogStorageStats,
   cleanupLogs: mockCleanupLogs,
@@ -182,6 +212,14 @@ describe("GlobalSettings", () => {
     mockSetAnthropicApiKey.mockClear();
     mockSetOpenCodeZenApiKey.mockClear();
     mockGetPlanUsage.mockClear();
+    mockListAgentAccounts.mockClear();
+    mockGetAgentAccountUsage.mockClear();
+    mockGetAgentAccountUsage.mockImplementation(async (platform) => ({
+      platform,
+      status: "ok",
+      windows: [{ window: "five_hour", label: "5-hour limit", usedPercent: 40 }],
+      fetchedAt: "2026-09-30T10:00:00.000Z",
+    }));
     mockGetAppVersion.mockClear();
     mockGetAppVersion.mockImplementation(async () => "2.15.1");
     mockGetLogDirectory.mockClear();
@@ -326,6 +364,82 @@ describe("GlobalSettings", () => {
     // The card must remount and re-read rather than keep the pre-save snapshot
     // for the rest of the backend's cache TTL.
     await waitFor(() => expect(mockGetPlanUsage).toHaveBeenCalledTimes(2));
+    expect(mockGetPlanUsage).toHaveBeenLastCalledWith("opencode", { force: true });
+  });
+
+  test.each(["claude", "codex"] as const)(
+    "shows account usage without a separate plan card for %s",
+    async (platform) => {
+      render(<GlobalSettings activeSection={platform} />);
+      await screen.findByText("5-hour limit");
+      expect(
+        screen.getByRole("region", {
+          name: platform === "claude" ? "Claude Code accounts" : "Codex accounts",
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Plan usage" }) === null).toBe(true);
+      expect(mockGetPlanUsage).not.toHaveBeenCalled();
+      expect(mockGetAgentAccountUsage).toHaveBeenCalledWith(platform, "default", { force: false });
+    },
+  );
+
+  test.each(["cursor", "opencode"] as const)(
+    "retains the platform plan card and forced refresh for %s",
+    async (platform) => {
+      render(<GlobalSettings activeSection={platform} />);
+      const card = screen.getByRole("region", { name: "Plan usage" });
+      await waitFor(() =>
+        expect(mockGetPlanUsage).toHaveBeenCalledWith(platform, { force: false }),
+      );
+      await waitFor(() =>
+        expect(
+          within(card).getByRole("button", { name: "Refresh plan usage" }).hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      fireEvent.click(within(card).getByRole("button", { name: "Refresh plan usage" }));
+      await waitFor(() =>
+        expect(mockGetPlanUsage).toHaveBeenLastCalledWith(platform, { force: true }),
+      );
+      expect(mockGetAgentAccountUsage).not.toHaveBeenCalled();
+    },
+  );
+
+  test("forces Claude account usage past the cache on return after disabling host credentials", async () => {
+    const view = render(<GlobalSettings activeSection="claude" />);
+    await screen.findByText("5-hour limit");
+    view.rerender(<GlobalSettings activeSection="general" />);
+    mockGetAgentAccountUsage.mockImplementation(async (platform) => ({
+      platform,
+      status: "unavailable",
+      windows: [],
+      message: "Host Claude credentials are disabled.",
+      fetchedAt: "2026-09-30T10:01:00.000Z",
+    }));
+    fireEvent.click(screen.getByRole("switch", { name: "Use host Claude Code credentials" }));
+    await flushAutoSave();
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ useHostClaudeCredentials: false }),
+      ),
+    );
+    view.rerender(<GlobalSettings activeSection="claude" />);
+    await screen.findByText("Host Claude credentials are disabled.");
+    expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith("claude", "default", { force: true });
+    expect(screen.queryByText("5-hour limit") === null).toBe(true);
+  });
+
+  test("forces mounted Claude account usage after saving an Anthropic API key", async () => {
+    render(<GlobalSettings activeSection="claude" />);
+    await screen.findByText("5-hour limit");
+    const key = screen.getByPlaceholderText("sk-ant-...");
+    fireEvent.change(key, { target: { value: "test-anthropic-key" } });
+    fireEvent.blur(key);
+    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key"));
+    await waitFor(() =>
+      expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith("claude", "default", {
+        force: true,
+      }),
+    );
   });
 
   test("shows the default Codex subagent limit and saves changes", async () => {

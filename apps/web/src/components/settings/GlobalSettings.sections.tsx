@@ -548,7 +548,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     <div className="max-w-2xl space-y-5">
       {/* Platforms with accounts show usage on each account instead. */}
       {isAgentAccountPlatform(platform) ? (
-        <AgentAccountsSection key={`accounts-${platform}`} platform={platform} />
+        <AgentAccountsSection
+          key={`accounts-${platform}`}
+          platform={platform}
+          reloadToken={planUsageRefreshToken}
+        />
       ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
         <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
       ) : null}

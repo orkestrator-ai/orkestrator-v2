@@ -128,6 +128,56 @@ describe("claudePlanWindows", () => {
     ]);
   });
 
+  test("keeps an unknown utilization window without a reset timestamp", () => {
+    expect(claudePlanWindows({ fiveHourOpus: { utilization: 4 } })).toEqual([
+      { window: "five_hour_opus", label: "Five hour opus", usedPercent: 4 },
+    ]);
+  });
+
+  test("supplements rejected named limits with legacy quotas without overriding named values", () => {
+    expect(
+      claudePlanWindows({
+        five_hour: { utilization: 99 },
+        seven_day: { utilization: 60, resets_at: "2026-10-06T10:00:00Z" },
+        nimbus_quill: { utilization: 0 },
+        limits: [
+          { kind: "session", percent: 11 },
+          { kind: "weekly_all", percent: "invalid" },
+          { kind: "unknown", percent: 42 },
+        ],
+      }),
+    ).toEqual([
+      { window: "five_hour", label: "5-hour limit", usedPercent: 11, windowMinutes: 300 },
+      {
+        window: "seven_day",
+        label: "Weekly limit",
+        usedPercent: 60,
+        resetsAt: "2026-10-06T10:00:00.000Z",
+        windowMinutes: 10_080,
+      },
+    ]);
+  });
+
+  test.each([undefined, [], null, {}, "invalid"].map((limits) => ({ limits })))(
+    "reads legacy windows with limits=%j",
+    ({ limits }) => {
+      expect(claudePlanWindows({ limits, seven_day: { utilization: 60 } })).toEqual([
+        { window: "seven_day", label: "Weekly limit", usedPercent: 60, windowMinutes: 10_080 },
+      ]);
+    },
+  );
+
+  test.each([undefined, "", "   ", "--"])(
+    "rejects a scoped limit with model name %j",
+    (display_name) => {
+      expect(
+        claudePlanWindows({
+          limits: [{ kind: "weekly_scoped", percent: 10, scope: { model: { display_name } } }],
+        }),
+      ).toEqual([]);
+    },
+  );
+
   test("drops a codename entry that has no reset", () => {
     const windows = claudePlanWindows({
       five_hour: { utilization: 11, resets_at: "2026-09-30T12:49:00.000Z" },

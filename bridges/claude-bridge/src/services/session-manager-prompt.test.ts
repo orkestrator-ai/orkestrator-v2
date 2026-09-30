@@ -608,6 +608,8 @@ describe("sendPrompt", () => {
         },
         rate_limits: {
           limits: [
+            { kind: "session", group: "session", percent: 10, resets_at: null },
+            { kind: "weekly_all", group: "weekly", percent: 20, resets_at: null },
             {
               kind: "weekly_scoped",
               group: "weekly",
@@ -637,7 +639,16 @@ describe("sendPrompt", () => {
       linesAdded: 42,
       linesRemoved: 7,
       credits: { hasCredits: true, balance: "75.00 USD" },
-      rateLimits: [{ label: "Opus", usedPercent: 25, resetsAt: "2026-09-20T00:00:00.000Z" }],
+      rateLimits: [
+        { label: "5-hour limit", usedPercent: 10, windowMinutes: 300 },
+        { label: "Weekly limit", usedPercent: 20, windowMinutes: 10_080 },
+        {
+          label: "Weekly Opus limit",
+          usedPercent: 25,
+          resetsAt: "2026-09-20T00:00:00.000Z",
+          windowMinutes: 10_080,
+        },
+      ],
     });
   });
 

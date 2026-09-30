@@ -3107,6 +3107,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     const account = screen.getByRole("region", { name: "Account usage" });
     expect(within(account).getByText("Codex · Weekly limit")).toBeTruthy();
     expect(within(account).getByText("Review · Daily limit")).toBeTruthy();
+    expect(within(account).queryByText("Primary") === null).toBe(true);
     expect(within(account).getByText("10% used")).toBeTruthy();
     expect(within(account).getByText("0.00")).toBeTruthy();
     expect(screen.getAllByText("Credits")).toHaveLength(1);

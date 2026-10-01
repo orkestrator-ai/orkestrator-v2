@@ -4,6 +4,7 @@ import {
   CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND,
   isClaudeAuthenticationError,
   isClaudeAuthenticationFailureMessage,
+  isClaudeNotLoggedInNotice,
 } from "./claude-auth";
 
 describe("claude-auth", () => {
@@ -23,6 +24,22 @@ describe("claude-auth", () => {
     expect(isClaudeAuthenticationError(null)).toBe(false);
     expect(isClaudeAuthenticationError(undefined)).toBe(false);
     expect(isClaudeAuthenticationError("request timed out")).toBe(false);
+  });
+
+  test("recognises Claude's own not-logged-in reply, and only that", () => {
+    const notice = (content: string) => ({ role: "assistant" as const, content });
+    expect(isClaudeNotLoggedInNotice(notice("Not logged in · Please run /login"))).toBe(true);
+    expect(isClaudeNotLoggedInNotice(notice("  Not logged in - Please run /login.\n"))).toBe(true);
+    expect(
+      isClaudeNotLoggedInNotice(notice("If you are not logged in, please run /login first.")),
+    ).toBe(false);
+    expect(
+      isClaudeNotLoggedInNotice(notice("Not logged in · Please run /login\n\nThen retry.")),
+    ).toBe(false);
+    expect(
+      isClaudeNotLoggedInNotice({ role: "user", content: "Not logged in · Please run /login" }),
+    ).toBe(false);
+    expect(isClaudeNotLoggedInNotice(null)).toBe(false);
   });
 
   test("requires the backend's authoritative terminal-error row", () => {

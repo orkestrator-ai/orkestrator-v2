@@ -66,6 +66,32 @@ Both logins are driven by the backend, one at a time:
 A login that resolves to an identity already present (the host account
 included) is discarded.
 
+### Signing the active account in again
+
+`start_agent_account_login` also takes `reauthenticate: true` (Claude only). It
+runs the same `claude auth login` against the **active** account instead of a
+new directory: the host login with `CLAUDE_CONFIG_DIR` untouched, or the
+added account's own directory. Nothing is created, so a failed or cancelled
+attempt never deletes the account directory, and a profile running under an
+agent-test harness refuses to write the host login. On success the stored
+identity (and a label that was only the old email) is refreshed, the account's
+usage cache is dropped, and every bridge that may hold the previous login is
+flagged:
+
+- Local bridges go into `staleLoginLocalBridges`; `localBridgeIsOnActiveAccount`
+  treats a flagged bridge as being on another account, so it is replaced the
+  next time it is used while idle and a busy one finishes first.
+- Containers that share the host login (`useHostClaudeCredentials` on) go into
+  `staleLoginEnvironmentIds`; `reconcileContainerAgentAccount` then pushes the
+  new login in and replaces the idle in-container bridge even when the marker
+  already matches. A container with its own isolated login is not touched and
+  is still signed in from a terminal inside it.
+
+The UI is the recovery card (`ClaudeAuthRecoveryCard`), shown under a terminal
+authentication error and under Claude's own `Not logged in · Please run /login`
+reply while that reply is still the latest exchange. It reuses the settings
+pane's link-and-code panel and resumes a sign-in already running.
+
 ### Plan usage
 
 `get_plan_usage` reads the active account. `get_agent_account_usage` reads any

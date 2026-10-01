@@ -29,6 +29,7 @@ import {
   type InputSourceRoots,
 } from "./portable-inputs.js";
 import { containerLabel, providerCredentialsAllowed } from "./portable-input-status.js";
+import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import { prepareAgentAccountHome } from "./agent-accounts-homes.js";
 import { readAddedClaudeCredentials, resolveActiveAgentAccount } from "./agent-accounts-active.js";
 
@@ -377,8 +378,12 @@ export async function reconcileContainerAgentAccount(
   );
   if (!environment) return;
   const { global } = await context.storage.loadConfig();
+  // The account was signed in again: the container still holds the login it
+  // was given before, whichever account that was.
+  const loginRenewed = platform === "claude" && staleLoginEnvironmentIds.has(environment.id);
   // An opt-out must revoke a credential already placed in an older container.
   if (
+    !loginRenewed &&
     !(await accountHasBeenUsed(context, platform)) &&
     !(platform === "claude" && global.useHostClaudeCredentials === false)
   )
@@ -388,7 +393,11 @@ export async function reconcileContainerAgentAccount(
   }
   const active = await resolveActiveAgentAccount(context, platform);
   const markerMatches = (await readMarker(runners, containerId, platform)) === active.accountId;
-  if (markerMatches && !(platform === "claude" && global.useHostClaudeCredentials === false))
+  if (
+    markerMatches &&
+    !loginRenewed &&
+    !(platform === "claude" && global.useHostClaudeCredentials === false)
+  )
     return;
   if (await context.nativeAgents?.hasObservedLiveWork(environment.id, platform)) {
     return;
@@ -402,5 +411,19 @@ export async function reconcileContainerAgentAccount(
     );
   }
   await writeMarker(runners, containerId, platform, active.accountId);
+  if (platform === "claude") staleLoginEnvironmentIds.delete(environment.id);
   if (running) await bridge.stop();
+}
+
+/**
+ * After the active Claude login was renewed on the host: have each container
+ * that uses it take the new login the next time its idle bridge starts or is
+ * reused. Containers with their own isolated login keep it.
+ */
+export async function markContainersForClaudeLoginRefresh(context: CommandContext): Promise<void> {
+  const { global } = await context.storage.loadConfig();
+  if (global.useHostClaudeCredentials === false) return;
+  for (const environment of await context.storage.loadEnvironments()) {
+    if (environment.containerId) staleLoginEnvironmentIds.add(environment.id);
+  }
 }

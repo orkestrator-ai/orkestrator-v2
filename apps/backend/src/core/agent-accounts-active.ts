@@ -17,6 +17,7 @@ import { localServerProcesses } from "./commands-runtime-state.js";
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
 import {
   agentAccountHome,
@@ -101,7 +102,9 @@ export async function localBridgeIsOnActiveAccount(
   const tokenExpiresAt = kind === "claude" ? localAgentAccountTokenExpiry.get(key) : undefined;
   const tokenLapsed =
     tokenExpiresAt !== undefined && Date.now() >= tokenExpiresAt - TOKEN_REPLACEMENT_LEAD_MS;
-  if (launchedWith === active.accountId) {
+  // Signed in again since launch: the bridge's login is out of date even
+  // though it is on the right account.
+  if (launchedWith === active.accountId && !staleLoginLocalBridges.has(key)) {
     if (tokenExpiresAt === undefined || !tokenLapsed) return true;
     const credentials = active.home
       ? await readAddedClaudeCredentials(active.home)
@@ -124,6 +127,16 @@ export async function localBridgeIsOnActiveAccount(
 
 /** How long before a handed-over token expires its idle bridge is replaced. */
 const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
+
+/**
+ * The platform's login was renewed. Every live local bridge may hold the old
+ * one, so each is replaced the next time it is used while idle.
+ */
+export function markLocalBridgesForLoginRefresh(platform: AgentAccountPlatform): void {
+  for (const key of localServerProcesses.keys()) {
+    if (key.startsWith(`${platform}:`)) staleLoginLocalBridges.add(key);
+  }
+}
 
 /** Whether any live local bridge was launched on this account. */
 export function isAgentAccountInUseByLocalBridge(

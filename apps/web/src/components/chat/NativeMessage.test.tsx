@@ -744,7 +744,7 @@ describe("NativeMessage Claude authentication recovery", () => {
     expect(screen.getByText(error)).toBeTruthy();
   });
 
-  test("keeps a manual fallback when terminal controls are unavailable", () => {
+  test("signs in from the app when terminal controls are unavailable", () => {
     const error = "authentication_error: Invalid authentication credentials";
 
     render(
@@ -758,8 +758,8 @@ describe("NativeMessage Claude authentication recovery", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Sign in to Claude" }) === null).toBe(true);
-    expect(screen.getByText("claude auth login")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Use a terminal instead" }) === null).toBe(true);
   });
 });
 

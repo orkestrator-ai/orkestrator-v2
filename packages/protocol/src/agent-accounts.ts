@@ -61,7 +61,12 @@ export type AgentAccountLoginState = "idle" | "pending" | "succeeded" | "failed"
 export interface AgentAccountLoginProgress {
   state: AgentAccountLoginState;
   platform?: AgentAccountPlatform;
-  /** The account created by a login that succeeded. */
+  /**
+   * `add` creates a new account; `reauthenticate` signs the active account in
+   * again, replacing its credential in place. Absent while idle.
+   */
+  mode?: "add" | "reauthenticate";
+  /** The account created (or, when re-signing in, renewed) by a login that succeeded. */
   accountId?: string;
   url?: string;
   userCode?: string;

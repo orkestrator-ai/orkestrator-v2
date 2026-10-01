@@ -3,8 +3,10 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import {
   activeAgentAccountInputRoots,
+  markContainersForClaudeLoginRefresh,
   reconcileContainerAgentAccount,
   refreshStagedAgentAccountLogins,
   syncContainerAgentAccountsOnStart,
@@ -457,6 +459,47 @@ describe("reconcileContainerAgentAccount", () => {
     await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
     expect(fake.calls.map((call) => call.kind)).toEqual(["exec"]);
     expect(state.stopped).toBe(0);
+  });
+
+  test("a renewed host login reaches a container that never saw an account switch", async () => {
+    staleLoginEnvironmentIds.clear();
+    await markContainersForClaudeLoginRefresh(context);
+    const fake = fakeRunners(null);
+    const { state, control } = bridge(true);
+
+    await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
+
+    expect(fake.calls.find((call) => call.kind === "pipe")?.stdin).toBe(
+      '{"claudeAiOauth":{"accessToken":"claude-host"}}',
+    );
+    expect(state.stopped).toBe(1);
+    expect(staleLoginEnvironmentIds.has(environment.id)).toBe(false);
+    // Once delivered, the container is left alone again.
+    await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
+    expect(fake.calls.filter((call) => call.kind === "pipe")).toHaveLength(1);
+  });
+
+  test("a busy bridge keeps the old login until it is idle", async () => {
+    staleLoginEnvironmentIds.clear();
+    await markContainersForClaudeLoginRefresh(context);
+    liveWork = true;
+    const fake = fakeRunners(null);
+    const { state, control } = bridge(true);
+
+    await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
+
+    expect(fake.calls.some((call) => call.kind === "pipe")).toBe(false);
+    expect(state.stopped).toBe(0);
+    expect(staleLoginEnvironmentIds.has(environment.id)).toBe(true);
+    staleLoginEnvironmentIds.clear();
+  });
+
+  test("an isolated container login is never replaced by the host's", async () => {
+    staleLoginEnvironmentIds.clear();
+    context.storage.loadConfig = async () =>
+      ({ global: { enabledAgentPlatforms: ["claude"], useHostClaudeCredentials: false } }) as never;
+    await markContainersForClaudeLoginRefresh(context);
+    expect(staleLoginEnvironmentIds.size).toBe(0);
   });
 
   test("a revoked provider is never handed a login", async () => {

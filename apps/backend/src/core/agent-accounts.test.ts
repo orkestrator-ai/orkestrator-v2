@@ -21,7 +21,9 @@ import {
   startAgentAccountLogin,
 } from "./agent-accounts.js";
 import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
+import { staleLoginLocalBridges } from "./agent-account-bridge-state.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
+import { localServerProcesses } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
 import { StorageService } from "./storage.js";
@@ -317,6 +319,124 @@ describe("agent accounts", () => {
     ).rejects.toThrow("No more accounts");
     expect(spawns).toBe(0);
   });
+  describe("signing the active account in again", () => {
+    function failingClaudeLogin(): SpawnLike {
+      return () => {
+        const child = new EventEmitter() as ChildProcess;
+        const stdout = new PassThrough();
+        Object.assign(child, {
+          stdout,
+          stderr: new PassThrough(),
+          stdin: new PassThrough(),
+          exitCode: null,
+          signalCode: null,
+          kill: () => true,
+        });
+        setTimeout(() => {
+          stdout.write("visit: https://claude.com/cai/oauth/authorize?state=test\n");
+          setTimeout(() => {
+            Object.assign(child, { exitCode: 1 });
+            child.emit("exit", 1, null);
+          }, 5);
+        }, 1);
+        return child;
+      };
+    }
+
+    async function addActiveClaudeAccount(identity: string): Promise<string> {
+      await startAgentAccountLogin(context, "claude", {
+        spawnImpl: fakeClaudeLogin(identity),
+        executable: "claude",
+      });
+      const progress = await settledLogin();
+      expect(progress.state).toBe("succeeded");
+      await setActiveAgentAccount(context, "claude", progress.accountId!);
+      cancelAgentAccountLogin();
+      return progress.accountId!;
+    }
+
+    afterEach(() => {
+      staleLoginLocalBridges.clear();
+      localServerProcesses.delete("claude:env-1");
+    });
+
+    test("renews the active account in place and flags running bridges", async () => {
+      const accountId = await addActiveClaudeAccount("claude-one");
+      localServerProcesses.set("claude:env-1", {} as never);
+      let command: string[] = [];
+      await startAgentAccountLogin(context, "claude", {
+        reauthenticate: true,
+        executable: "claude",
+        spawnImpl: (cmd, args, options) => {
+          command = [cmd, ...args];
+          expect(options.env.CLAUDE_CONFIG_DIR).toContain(accountId);
+          return fakeClaudeLogin("claude-one")(cmd, args, options);
+        },
+      });
+      expect(agentAccountLoginProgress().mode).toBe("reauthenticate");
+      const progress = await settledLogin();
+
+      expect(command).toEqual(["claude", "auth", "login"]);
+      expect(progress).toMatchObject({ state: "succeeded", accountId, mode: "reauthenticate" });
+      const claude = (await listAgentAccounts(context)).accounts.filter(
+        (a) => a.platform === "claude",
+      );
+      expect(claude).toHaveLength(2);
+      expect(claude.some((a) => a.id === accountId && a.isActive)).toBe(true);
+      expect(staleLoginLocalBridges.has("claude:env-1")).toBe(true);
+    });
+
+    test("a failed sign-in keeps the account it was renewing", async () => {
+      const accountId = await addActiveClaudeAccount("claude-one");
+      const home = path.join(root, "data", "agent-accounts", "claude", accountId);
+      await startAgentAccountLogin(context, "claude", {
+        reauthenticate: true,
+        executable: "claude",
+        spawnImpl: failingClaudeLogin(),
+      });
+      const progress = await settledLogin();
+
+      expect(progress.state).toBe("failed");
+      await expect(fs.stat(home)).resolves.toBeDefined();
+      expect((await listAgentAccounts(context)).accounts.some((a) => a.id === accountId)).toBe(
+        true,
+      );
+    });
+
+    test("refuses to write the host login from an agent-test profile", async () => {
+      let spawns = 0;
+      await expect(
+        startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          executable: "claude",
+          spawnImpl: (...args) => {
+            spawns += 1;
+            return fakeClaudeLogin("host")(...args);
+          },
+        }),
+      ).rejects.toThrow("host login");
+      expect(spawns).toBe(0);
+    });
+
+    test("is not offered for Codex", async () => {
+      await expect(
+        startAgentAccountLogin(context, "codex", { reauthenticate: true }),
+      ).rejects.toThrow("only available for Claude");
+    });
+
+    test("cannot start while an add-account sign-in is pending", async () => {
+      await startAgentAccountLogin(context, "claude", {
+        spawnImpl: fakeClaudeLogin("claude-one"),
+        executable: "claude",
+      });
+      await expect(
+        startAgentAccountLogin(context, "claude", { reauthenticate: true, executable: "claude" }),
+      ).rejects.toThrow("Finish or cancel");
+      // Let the fake CLI finish writing before the directory is removed.
+      await settledLogin();
+    });
+  });
+
   test("lists the host login for each platform before anything is added", async () => {
     const snapshot = await listAgentAccounts(context);
     expect(snapshot.active).toEqual({ claude: "default", codex: "default" });

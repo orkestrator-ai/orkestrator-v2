@@ -31,8 +31,10 @@ import {
   readCodexAuthFile,
   type AgentAccountLoginState,
 } from "./agent-accounts-homes.js";
+import { markContainersForClaudeLoginRefresh } from "./agent-accounts-containers.js";
 import {
   isAgentAccountInUseByLocalBridge,
+  markLocalBridgesForLoginRefresh,
   readAddedClaudeCredentials,
   runtimeHostCodexHome,
 } from "./agent-accounts-active.js";
@@ -286,7 +288,9 @@ export async function removeAgentAccount(
 
 interface ActiveLogin {
   platform: AgentAccountPlatform;
+  /** The new account's id, or for `reauthenticate` the active account's. */
   accountId: string;
+  mode: "add" | "reauthenticate";
   state: "pending" | "succeeded" | "failed";
   handle?: AgentAccountLoginHandle;
   codeSubmitted?: boolean;
@@ -307,6 +311,7 @@ function loginProgress(): AgentAccountLoginProgress {
   return {
     state: entry.state,
     platform: entry.platform,
+    mode: entry.mode,
     ...(entry.state === "succeeded" ? { accountId: entry.accountId } : {}),
     ...(entry.state === "pending" && entry.handle
       ? {
@@ -328,10 +333,71 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Remove what a failed or cancelled sign-in created. A sign-in that renews an
+ * existing account created nothing, and its directory is the account itself.
+ */
+async function discardNewAccount(context: CommandContext, entry: ActiveLogin): Promise<void> {
+  if (entry.mode === "reauthenticate") return;
+  await deleteAccountDirectory(context, entry.platform, entry.accountId);
+}
+
+/** The account directory a login writes into; absent for the host login. */
+function loginHome(context: CommandContext, entry: ActiveLogin): string | undefined {
+  return entry.accountId === DEFAULT_AGENT_ACCOUNT_ID
+    ? undefined
+    : homeFor(context, entry.platform, entry.accountId);
+}
+
+/**
+ * A renewed login: keep the account, refresh what is derived from it, and make
+ * every running agent that may hold the previous login pick up the new one.
+ */
+async function finishReauthentication(context: CommandContext, entry: ActiveLogin): Promise<void> {
+  const { platform, accountId } = entry;
+  const home = loginHome(context, entry);
+  const state = await readLoginState(context, platform, home);
+  if (!state.signedIn) throw new Error("The sign-in finished but no login was saved.");
+  if (home) {
+    await context.storage.mutateAgentAccounts((store) => {
+      const index = store.accounts.findIndex((a) => a.id === accountId && a.platform === platform);
+      if (index < 0) throw new Error("Unknown agent account");
+      const previous = store.accounts[index]!;
+      if (state.identityKey && state.identityKey !== previous.identityKey) {
+        const duplicate = store.accounts.find(
+          (a) =>
+            a.platform === platform && a.id !== accountId && a.identityKey === state.identityKey,
+        );
+        if (duplicate) throw new Error(`That login is already added as “${duplicate.label}”.`);
+      }
+      const accounts = [...store.accounts];
+      accounts[index] = {
+        ...previous,
+        // A name that was only the old email follows the account to its new one.
+        ...(state.identity.email && previous.label === previous.identity?.email
+          ? { label: state.identity.email.slice(0, MAX_AGENT_ACCOUNT_LABEL_LENGTH) }
+          : {}),
+        ...(state.identityKey ? { identityKey: state.identityKey } : {}),
+        ...(Object.keys(state.identity).length > 0 ? { identity: state.identity } : {}),
+      };
+      return { store: { ...store, accounts }, result: undefined };
+    });
+  }
+  usageCache.delete(`${platform}:${accountId}`);
+  readPlanUsage.invalidate(platform);
+  markLocalBridgesForLoginRefresh(platform);
+  if (platform === "claude") await markContainersForClaudeLoginRefresh(context);
+}
+
 async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise<void> {
   const { platform, accountId } = entry;
   try {
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
+    if (entry.mode === "reauthenticate") {
+      await finishReauthentication(context, entry);
+      entry.state = "succeeded";
+      return;
+    }
     const state = await readLoginState(context, platform, homeFor(context, platform, accountId));
     if (!state.signedIn) throw new Error("The sign-in finished but no login was saved.");
     if (!state.identityKey)
@@ -366,27 +432,50 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
     entry.state = "failed";
     entry.error = errorMessage(error);
     try {
-      await deleteAccountDirectory(context, platform, accountId);
+      await discardNewAccount(context, entry);
     } catch {
       entry.error = `${entry.error} Account cleanup failed; retry removing the account directory.`;
     }
   }
 }
 
+/**
+ * Start a sign-in.
+ *
+ * By default it adds an account. With `reauthenticate` it signs the platform's
+ * active account in again — the host login or an added account — so an agent
+ * whose login has lapsed can be repaired without leaving the app.
+ */
 export async function startAgentAccountLogin(
   context: CommandContext,
   platform: AgentAccountPlatform,
-  options: { spawnImpl?: SpawnLike; executable?: string } = {},
+  options: { spawnImpl?: SpawnLike; executable?: string; reauthenticate?: boolean } = {},
 ): Promise<AgentAccountLoginProgress> {
+  const mode = options.reauthenticate ? "reauthenticate" : "add";
   if (activeLogin?.state === "pending") {
-    if (activeLogin.platform === platform) return loginProgress();
+    if (activeLogin.platform === platform && activeLogin.mode === mode) return loginProgress();
     throw new Error("Finish or cancel the other sign-in first.");
   }
-  const entry: ActiveLogin = { platform, accountId: randomUUID(), state: "pending" };
+  if (mode === "reauthenticate" && platform !== "claude") {
+    throw new Error("Signing in again is only available for Claude.");
+  }
+  const entry: ActiveLogin = {
+    platform,
+    mode,
+    accountId: mode === "add" ? randomUUID() : DEFAULT_AGENT_ACCOUNT_ID,
+    state: "pending",
+  };
   activeLogin = entry;
   try {
     const store = await context.storage.loadAgentAccounts();
-    if (
+    if (mode === "reauthenticate") {
+      entry.accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+      // An agent-test profile only reads the host login its harness granted;
+      // it must not write one.
+      if (entry.accountId === DEFAULT_AGENT_ACCOUNT_ID && context.runtimeFlavor === "agent-test") {
+        throw new Error("The host login cannot be signed in again from this profile.");
+      }
+    } else if (
       store.accounts.filter((a) => a.platform === platform).length >=
       MAX_AGENT_ACCOUNTS_PER_PLATFORM
     ) {
@@ -397,17 +486,17 @@ export async function startAgentAccountLogin(
     entry.error = errorMessage(error);
     throw error;
   }
-  const home = homeFor(context, platform, entry.accountId);
+  const home = loginHome(context, entry);
   let handle: AgentAccountLoginHandle;
   try {
-    await prepareAgentAccountHome(platform, home);
+    if (home) await prepareAgentAccountHome(platform, home);
     const shim = await ensureBrowserShim(path.join(accountsRoot(context), ".login-shim"));
     const command = agentAccountLoginCommand({
       platform,
       executable:
         options.executable ??
         (platform === "claude" ? resolveClaudeBinary(context) : resolveCodexBinary(context)),
-      accountHome: home,
+      ...(home ? { accountHome: home } : {}),
       browserShimDirectory: shim,
     });
     handle = await beginAgentAccountLogin(platform, command, { spawnImpl: options.spawnImpl });
@@ -415,7 +504,7 @@ export async function startAgentAccountLogin(
     entry.state = "failed";
     entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
     try {
-      await deleteAccountDirectory(context, platform, entry.accountId);
+      await discardNewAccount(context, entry);
     } catch {
       entry.error = `${entry.error} Account cleanup failed.`;
     }
@@ -424,7 +513,7 @@ export async function startAgentAccountLogin(
   if (entry.cancelled) {
     handle.cancel();
     try {
-      await deleteAccountDirectory(context, platform, entry.accountId);
+      await discardNewAccount(context, entry);
     } catch {
       entry.state = "failed";
       entry.error = "The sign-in was cancelled; account cleanup failed.";
@@ -439,7 +528,7 @@ export async function startAgentAccountLogin(
         entry.state = "failed";
         entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
         try {
-          await deleteAccountDirectory(context, platform, entry.accountId);
+          await discardNewAccount(context, entry);
         } catch {
           entry.error = `${entry.error} Account cleanup failed.`;
         }

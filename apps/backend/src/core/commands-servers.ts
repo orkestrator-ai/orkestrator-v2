@@ -88,6 +88,7 @@ import {
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
 import {
   prMonitorService,
@@ -1374,6 +1375,7 @@ export async function startLocalServerUnlocked(
   localServerWorkingDirectories.set(key, environment.worktreePath);
   if (launchedAccountId) localAgentAccountIds.set(key, launchedAccountId);
   else localAgentAccountIds.delete(key);
+  staleLoginLocalBridges.delete(key);
   if (launchedTokenExpiresAt) localAgentAccountTokenExpiry.set(key, launchedTokenExpiresAt);
   else localAgentAccountTokenExpiry.delete(key);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));

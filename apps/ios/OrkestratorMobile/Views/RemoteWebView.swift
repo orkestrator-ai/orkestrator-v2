@@ -95,6 +95,7 @@ struct RemoteWebView: UIViewRepresentable {
             list: () => call("list"),
             probe: (connectionId) => call("probe", { connectionId }),
             connect: (input) => call("connect", input || {}),
+            rename: (connectionId, nickname) => call("rename", { connectionId, nickname }),
             use: (connectionId) => call("use", { connectionId }),
             forget: (connectionId) => call("forget", { connectionId }),
           };
@@ -571,8 +572,16 @@ struct RemoteWebView: UIViewRepresentable {
                           let token = body["token"] as? String else {
                         throw ConnectionBridgeError.invalidInput
                     }
+                    let nickname = body["nickname"]
+                    guard nickname == nil || nickname is String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
                     isSwitchingThroughBridge = true
-                    let result = try await model.connect(address: address, token: token)
+                    let result = try await model.connect(
+                        address: address,
+                        token: token,
+                        nickname: nickname as? String
+                    )
                     defer { finishBridgeSwitch() }
                     try await reply(id: requestID, result: result)
                 case "use":
@@ -582,6 +591,18 @@ struct RemoteWebView: UIViewRepresentable {
                     isSwitchingThroughBridge = true
                     let result = try await model.use(connectionID: connectionID)
                     defer { finishBridgeSwitch() }
+                    try await reply(id: requestID, result: result)
+                case "rename":
+                    // JSON null arrives as NSNull; both it and a missing key clear the nickname.
+                    let nickname = body["nickname"]
+                    guard let connectionID = body["connectionId"] as? String,
+                          nickname == nil || nickname is NSNull || nickname is String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    let result = try model.rename(
+                        connectionID: connectionID,
+                        nickname: nickname as? String
+                    )
                     try await reply(id: requestID, result: result)
                 case "forget":
                     guard let connectionID = body["connectionId"] as? String else {

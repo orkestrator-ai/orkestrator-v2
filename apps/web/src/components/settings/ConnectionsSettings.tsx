@@ -1,5 +1,9 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
+import {
+  MAX_CONNECTION_NICKNAME_LENGTH,
+  type ConnectionList,
+  type ConnectionSummary,
+} from "@orkestrator/protocol/connections";
 import {
   Check,
   Eye,
@@ -8,6 +12,7 @@ import {
   KeyRound,
   Loader2,
   PanelsTopLeft,
+  Pencil,
   Plus,
   RadioTower,
   RefreshCw,
@@ -52,6 +57,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function connectionHostname(connection: ConnectionSummary): string {
+  if (!connection.address) return connection.name;
+  try {
+    return new URL(connection.address).hostname;
+  } catch {
+    return connection.address;
+  }
+}
+
 function formatLastConnected(value: string | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -69,12 +83,14 @@ export function ConnectionsSettings() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [address, setAddress] = useState("");
+  const [nickname, setNickname] = useState("");
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [tokenTarget, setTokenTarget] = useState<ConnectionSummary | null>(null);
   const [tokenIntent, setTokenIntent] = useState<TokenIntent>("replace");
   const [removeTarget, setRemoveTarget] = useState<ConnectionSummary | null>(null);
+  const [renameTarget, setRenameTarget] = useState<ConnectionSummary | null>(null);
 
   const load = useCallback(async () => {
     if (!api) return;
@@ -105,6 +121,7 @@ export function ConnectionsSettings() {
 
   const resetForm = () => {
     setAddress("");
+    setNickname("");
     setToken("");
     setShowToken(false);
     setFormError(null);
@@ -127,7 +144,7 @@ export function ConnectionsSettings() {
     setBusyId("add");
     setFormError(null);
     try {
-      await api.connect({ address, token });
+      await api.connect({ address, token, ...(nickname.trim() ? { nickname } : {}) });
       reloadAfterConnectionChange();
     } catch (error) {
       setFormError(errorMessage(error));
@@ -152,6 +169,34 @@ export function ConnectionsSettings() {
       resetForm();
       setBusyId(null);
       toast.success("Saved gateway token", { description: tokenTarget.name });
+    } catch (error) {
+      setFormError(errorMessage(error));
+      setBusyId(null);
+    }
+  };
+
+  const openRename = (connection: ConnectionSummary) => {
+    resetForm();
+    setNickname(connection.nickname ?? "");
+    setRenameTarget(connection);
+  };
+
+  const handleRename = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!api?.rename || !renameTarget) return;
+    const target = renameTarget;
+    setBusyId(target.id);
+    setFormError(null);
+    try {
+      const list = await api.rename(target.id, nickname.trim() ? nickname : null);
+      publish(list);
+      setRenameTarget(null);
+      resetForm();
+      setBusyId(null);
+      const renamed = list.connections.find((connection) => connection.id === target.id);
+      toast.success(renamed?.nickname ? "Saved nickname" : "Using hostname", {
+        description: renamed?.name ?? connectionHostname(target),
+      });
     } catch (error) {
       setFormError(errorMessage(error));
       setBusyId(null);
@@ -354,6 +399,20 @@ export function ConnectionsSettings() {
                     )}
                     {connection.kind === "remote" && (
                       <>
+                        {typeof api.rename === "function" && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-zinc-500 hover:text-zinc-100"
+                            onClick={() => openRename(connection)}
+                            disabled={busyId !== null}
+                            aria-label={`Rename ${connection.name}`}
+                            title="Rename"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"
@@ -401,6 +460,8 @@ export function ConnectionsSettings() {
             <ConnectionFields
               address={address}
               onAddressChange={setAddress}
+              nickname={nickname}
+              onNicknameChange={typeof api.rename === "function" ? setNickname : undefined}
               token={token}
               onTokenChange={setToken}
               showToken={showToken}
@@ -483,6 +544,61 @@ export function ConnectionsSettings() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => busyId === null && !open && setRenameTarget(null)}
+      >
+        <DialogContent
+          className={cn("max-w-md", Z_FULLSCREEN_DIALOG)}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
+          <form onSubmit={handleRename}>
+            <DialogHeader>
+              <DialogTitle>Rename connection</DialogTitle>
+              <DialogDescription>
+                The nickname is shown instead of the hostname in the server switcher, settings, and
+                window title. It is saved on this client only.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-5 py-5">
+              <div className="space-y-2">
+                <Label htmlFor="rename-connection-nickname">Nickname</Label>
+                <NicknameInput
+                  id="rename-connection-nickname"
+                  nickname={nickname}
+                  onNicknameChange={setNickname}
+                  placeholder={renameTarget ? connectionHostname(renameTarget) : undefined}
+                  disabled={busyId !== null}
+                  autoFocus
+                />
+                <p className="text-xs leading-relaxed text-zinc-500">
+                  Leave blank to show{" "}
+                  <span className="font-mono text-zinc-400">
+                    {renameTarget ? connectionHostname(renameTarget) : "the hostname"}
+                  </span>
+                  .
+                </p>
+              </div>
+              {formError && <FormError message={formError} />}
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setRenameTarget(null)}
+                disabled={busyId !== null}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busyId !== null}>
+                {busyId !== null && <Loader2 className="h-4 w-4 animate-spin" />}
+                {busyId !== null ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog
         open={removeTarget !== null}
         onOpenChange={(open) => !open && setRemoveTarget(null)}
@@ -518,6 +634,8 @@ export function ConnectionsSettings() {
 function ConnectionFields({
   address,
   onAddressChange,
+  nickname,
+  onNicknameChange,
   token,
   onTokenChange,
   showToken,
@@ -527,6 +645,9 @@ function ConnectionFields({
 }: {
   address: string;
   onAddressChange: (value: string) => void;
+  nickname: string;
+  /** Omitted when this client cannot save nicknames. */
+  onNicknameChange?: (value: string) => void;
   token: string;
   onTokenChange: (value: string) => void;
   showToken: boolean;
@@ -554,6 +675,20 @@ function ConnectionFields({
           origin the first time.
         </p>
       </div>
+      {onNicknameChange && (
+        <div className="space-y-2">
+          <Label htmlFor="settings-connection-nickname">
+            Nickname <span className="font-normal text-zinc-500">(optional)</span>
+          </Label>
+          <NicknameInput
+            id="settings-connection-nickname"
+            nickname={nickname}
+            onNicknameChange={onNicknameChange}
+            placeholder="Defaults to the hostname"
+            disabled={disabled}
+          />
+        </div>
+      )}
       <div className="space-y-2">
         <Label htmlFor="settings-connection-token">Gateway token</Label>
         <TokenInput
@@ -567,6 +702,37 @@ function ConnectionFields({
       </div>
       {error && <FormError message={error} />}
     </div>
+  );
+}
+
+function NicknameInput({
+  id,
+  nickname,
+  onNicknameChange,
+  placeholder,
+  disabled,
+  autoFocus,
+}: {
+  id: string;
+  nickname: string;
+  onNicknameChange: (value: string) => void;
+  placeholder?: string;
+  disabled: boolean;
+  autoFocus?: boolean;
+}) {
+  return (
+    <Input
+      id={id}
+      type="text"
+      value={nickname}
+      onChange={(event) => onNicknameChange(event.target.value)}
+      placeholder={placeholder}
+      maxLength={MAX_CONNECTION_NICKNAME_LENGTH}
+      autoComplete="off"
+      spellCheck={false}
+      disabled={disabled}
+      autoFocus={autoFocus}
+    />
   );
 }
 

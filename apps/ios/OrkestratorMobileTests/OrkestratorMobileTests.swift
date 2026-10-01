@@ -341,6 +341,48 @@ final class ConnectionModelTests: XCTestCase {
         XCTAssertThrowsError(try model.forget(connectionID: "invalid"))
     }
 
+    func testRenameSetsClearsAndPreservesNicknames() async throws {
+        let saved = connection(address: "https://desk.example")
+        let store = MemoryCredentialStore(
+            vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved])
+        )
+        let validator = MockValidator()
+        let model = ConnectionModel(credentialStore: store, validator: validator)
+
+        let renamed = try model.rename(connectionID: saved.id.uuidString, nickname: "  Studio\n Mac ")
+        XCTAssertEqual(renamed.connections.first?.name, "Studio Mac")
+        XCTAssertEqual(renamed.connections.first?.nickname, "Studio Mac")
+        XCTAssertEqual(store.vault.connections.first?.nickname, "Studio Mac")
+        XCTAssertEqual(store.vault.connections.first?.token, saved.token)
+        XCTAssertTrue(validator.checks.isEmpty)
+
+        _ = try await model.connect(address: "https://desk.example", token: "gateway-token-654321")
+        XCTAssertEqual(model.activeConnection?.name, "Studio Mac")
+        _ = try await model.connect(
+            address: "https://desk.example",
+            token: "gateway-token-654321",
+            nickname: "Desk"
+        )
+        XCTAssertEqual(model.activeConnection?.name, "Desk")
+
+        let cleared = try model.rename(connectionID: saved.id.uuidString, nickname: "   ")
+        XCTAssertEqual(cleared.connections.first?.name, "desk.example")
+        XCTAssertNil(cleared.connections.first?.nickname)
+        XCTAssertThrowsError(try model.rename(connectionID: "invalid", nickname: "Desk"))
+        XCTAssertThrowsError(
+            try model.rename(
+                connectionID: saved.id.uuidString,
+                nickname: String(repeating: "x", count: RemoteConnection.maxNicknameLength + 1)
+            )
+        ) { error in
+            XCTAssertEqual(error as? RemoteConnectionError, .nicknameTooLong)
+        }
+
+        store.saveError = TestFailure.expected
+        XCTAssertThrowsError(try model.rename(connectionID: saved.id.uuidString, nickname: "Lab"))
+        XCTAssertEqual(model.activeConnection?.name, "desk.example")
+    }
+
     func testStorageFailuresDoNotPublishUnpersistedState() async {
         let store = MemoryCredentialStore()
         store.saveError = TestFailure.expected
@@ -395,6 +437,21 @@ final class RemoteConnectionTests: XCTestCase {
         let summary = (object?["connections"] as? [[String: Any]])?.first
         XCTAssertEqual(summary?["kind"] as? String, "remote")
         XCTAssertEqual(summary?["requiresToken"] as? Bool, false)
+        XCTAssertNil(summary?["nickname"])
+
+        var nicknamed = saved
+        nicknamed.nickname = "Desk"
+        XCTAssertEqual(nicknamed.name, "Desk")
+        XCTAssertEqual(nicknamed.hostname.lowercased(), "desk.example")
+        let decoded = try JSONDecoder().decode(
+            RemoteConnection.self,
+            from: JSONEncoder().encode(saved)
+        )
+        XCTAssertNil(decoded.nickname)
+        XCTAssertEqual(
+            try JSONDecoder().decode(RemoteConnection.self, from: JSONEncoder().encode(nicknamed)),
+            nicknamed
+        )
     }
 }
 
@@ -1027,6 +1084,31 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertFalse(coordinator.isSwitchingThroughBridge)
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""use-id", true"#))
         assertRedactsTokens(try XCTUnwrap(scripts.last), [first.token, second.token])
+
+        await coordinator.handleBridgeRequest(
+            id: "rename-id",
+            action: "rename",
+            body: ["connectionId": second.id.uuidString, "nickname": "Studio"]
+        )
+        XCTAssertEqual(model.vault.connections.first { $0.id == second.id }?.name, "Studio")
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""rename-id", true"#))
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""nickname":"Studio""#))
+        assertRedactsTokens(try XCTUnwrap(scripts.last), [first.token, second.token])
+
+        await coordinator.handleBridgeRequest(
+            id: "clear-id",
+            action: "rename",
+            body: ["connectionId": second.id.uuidString, "nickname": NSNull()]
+        )
+        XCTAssertNil(model.vault.connections.first { $0.id == second.id }?.nickname)
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""clear-id", true"#))
+
+        await coordinator.handleBridgeRequest(
+            id: "bad-rename-id",
+            action: "rename",
+            body: ["connectionId": second.id.uuidString, "nickname": 7]
+        )
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""bad-rename-id", false"#))
 
         await coordinator.handleBridgeRequest(
             id: "forget-id",

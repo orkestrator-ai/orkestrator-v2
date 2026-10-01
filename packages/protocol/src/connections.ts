@@ -4,7 +4,10 @@ export type ConnectionKind = "local" | "remote";
 
 export interface ConnectionSummary {
   id: string;
+  /** Display name: the user's nickname when set, otherwise the server hostname. */
   name: string;
+  /** User-assigned nickname. Absent when the connection uses its hostname. */
+  nickname?: string;
   address: string | null;
   kind: ConnectionKind;
   active: boolean;
@@ -23,6 +26,35 @@ export interface ConnectionList {
 export interface ConnectToRemoteInput {
   address: string;
   token: string;
+  /** Optional nickname. Omitted or blank keeps an existing nickname for a known address. */
+  nickname?: string;
+}
+
+export const MAX_CONNECTION_NICKNAME_LENGTH = 64;
+
+/**
+ * Normalize a user-entered connection nickname. Whitespace is collapsed and
+ * control characters are removed; a blank value means "use the hostname" and
+ * returns `undefined`.
+ */
+export function normalizeConnectionNickname(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("Expected the nickname to be a string.");
+  // oxlint-disable-next-line no-control-regex -- strips control characters from user input
+  const nickname = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!nickname) return undefined;
+  if (Array.from(nickname).length > MAX_CONNECTION_NICKNAME_LENGTH) {
+    throw new Error(`Use a nickname of ${MAX_CONNECTION_NICKNAME_LENGTH} characters or fewer.`);
+  }
+  return nickname;
+}
+
+/** The name shown for a saved connection: its nickname, falling back to the stored hostname. */
+export function connectionDisplayName(connection: { name: string; nickname?: string }): string {
+  return connection.nickname || connection.name;
 }
 
 /**
@@ -59,7 +91,10 @@ export function expandTailscaleMachineName(
 
 export interface StoredDesktopConnection {
   id: string;
+  /** Server hostname derived from the address. */
   name: string;
+  /** User-assigned display nickname. */
+  nickname?: string;
   address: string;
   encryptedToken: string;
   lastConnectedAt: string;
@@ -82,6 +117,12 @@ function asString(value: unknown, label: string): string {
   return value;
 }
 
+function optionalNickname(value: unknown, label: string): { nickname?: string } {
+  if (value === undefined) return {};
+  const nickname = asString(value, label);
+  return nickname ? { nickname } : {};
+}
+
 export function parseStoredDesktopConnections(value: unknown): StoredDesktopConnections {
   const root = asRecord(value, "desktop connections");
   const activeConnectionId = asString(root.activeConnectionId, "activeConnectionId");
@@ -91,6 +132,7 @@ export function parseStoredDesktopConnections(value: unknown): StoredDesktopConn
     return {
       id: asString(connection.id, `connections[${index}].id`),
       name: asString(connection.name, `connections[${index}].name`),
+      ...optionalNickname(connection.nickname, `connections[${index}].nickname`),
       address: asString(connection.address, `connections[${index}].address`),
       encryptedToken: asString(connection.encryptedToken, `connections[${index}].encryptedToken`),
       lastConnectedAt: asString(
@@ -138,6 +180,7 @@ export function parseConnectionList(value: unknown): ConnectionList {
     return {
       id: asString(connection.id, `connections[${index}].id`),
       name: asString(connection.name, `connections[${index}].name`),
+      ...optionalNickname(connection.nickname, `connections[${index}].nickname`),
       address: connection.address,
       kind,
       active: connection.active,

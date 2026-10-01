@@ -106,6 +106,7 @@ function createHarness(
   const probeConnection = mock(async () => true);
   const connectToRemote = mock(async () => connectionList);
   const updateConnectionToken = mock(async () => connectionList);
+  const renameConnection = mock(async () => connectionList);
   const useConnection = mock(async () => connectionList);
   const forgetConnection = mock(async () => connectionList);
   const openConnectionWindow = mock(async () => undefined);
@@ -161,6 +162,7 @@ function createHarness(
     probeConnection,
     connectToRemote,
     updateConnectionToken,
+    renameConnection,
     useConnection,
     forgetConnection,
     openConnectionWindow,
@@ -216,6 +218,7 @@ function createHarness(
     probeConnection,
     connectToRemote,
     updateConnectionToken,
+    renameConnection,
     useConnection,
     forgetConnection,
     openConnectionWindow,
@@ -750,6 +753,27 @@ describe("main IPC registration", () => {
       "replacement-token-123456",
       expect.anything(),
     );
+    await harness.invoke("orkestrator:connections:rename", "remote-1", "Studio Mac");
+    expect(harness.renameConnection).toHaveBeenCalledWith(
+      "remote-1",
+      "Studio Mac",
+      expect.anything(),
+    );
+    await harness.invoke("orkestrator:connections:rename", "remote-1", null);
+    expect(harness.renameConnection).toHaveBeenLastCalledWith("remote-1", null, expect.anything());
+    await harness.invoke("orkestrator:connections:connect", {
+      address: "https://desk.example",
+      token: "gateway-token-123456",
+      nickname: "Desk",
+    });
+    expect(harness.connectToRemote).toHaveBeenLastCalledWith(
+      {
+        address: "https://desk.example",
+        token: "gateway-token-123456",
+        nickname: "Desk",
+      },
+      expect.anything(),
+    );
     await harness.invoke("orkestrator:connections:use", "remote-1");
     expect(harness.useConnection).toHaveBeenCalledWith("remote-1", expect.anything());
     await harness.invoke("orkestrator:connections:open-window", "remote-1");
@@ -772,6 +796,20 @@ describe("main IPC registration", () => {
     await expect(
       harness.invoke("orkestrator:connections:update-token", "remote-1", null),
     ).rejects.toThrow("connection ID and gateway token");
+    await expect(
+      harness.invoke("orkestrator:connections:connect", {
+        address: "https://desk.example",
+        token: "gateway-token-123456",
+        nickname: 42,
+      }),
+    ).rejects.toThrow("nickname to be a string");
+    await expect(harness.invoke("orkestrator:connections:rename", null, "Desk")).rejects.toThrow(
+      "connection ID",
+    );
+    await expect(harness.invoke("orkestrator:connections:rename", "remote-1", 42)).rejects.toThrow(
+      "nickname string or null",
+    );
+    expect(harness.renameConnection).not.toHaveBeenCalled();
     await expect(harness.invoke("orkestrator:connections:probe", null)).rejects.toThrow(
       "connection ID",
     );

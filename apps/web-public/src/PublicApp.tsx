@@ -11,6 +11,7 @@ import {
   loadSavedConnection,
   normalizeBackendAddress,
   probeBrowserConnection,
+  renameBrowserConnection,
   saveConnection,
   selectBrowserConnection,
   updateSavedToken,
@@ -27,9 +28,14 @@ const browserConnections: NonNullable<Window["orkestrator"]>["connections"] = {
   probe: probeBrowserConnection,
   async connect(input) {
     const normalizedAddress = await checkBackendConnection(input.address, input.token);
-    saveConnection({ address: normalizedAddress, token: input.token.trim() });
+    saveConnection({
+      address: normalizedAddress,
+      token: input.token.trim(),
+      nickname: input.nickname,
+    });
     return listBrowserConnections();
   },
+  rename: async (connectionId, nickname) => renameBrowserConnection(connectionId, nickname),
   use: async (connectionId) => selectBrowserConnection(connectionId),
   updateToken: updateBrowserConnectionToken,
   forget: async (connectionId) => forgetBrowserConnection(connectionId),

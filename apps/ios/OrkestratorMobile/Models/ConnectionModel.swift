@@ -76,22 +76,29 @@ final class ConnectionModel: ObservableObject {
     }
 
     @discardableResult
-    func connect(address addressValue: String, token tokenValue: String) async throws -> ConnectionListPayload {
+    func connect(
+        address addressValue: String,
+        token tokenValue: String,
+        nickname nicknameValue: String? = nil
+    ) async throws -> ConnectionListPayload {
         let address = try validator.normalizedAddress(addressValue)
         let token = try validator.normalizedToken(tokenValue)
+        let nickname = try RemoteConnection.normalizedNickname(nicknameValue)
         try await validator.check(address: address, token: token)
 
         var nextVault = vault
         if let index = nextVault.connections.firstIndex(where: { $0.address == address }) {
             nextVault.connections[index].token = token
             nextVault.connections[index].lastConnectedAt = Date()
+            if let nickname { nextVault.connections[index].nickname = nickname }
             nextVault.activeConnectionID = nextVault.connections[index].id
         } else {
             let connection = RemoteConnection(
                 id: UUID(),
                 address: address,
                 token: token,
-                lastConnectedAt: Date()
+                lastConnectedAt: Date(),
+                nickname: nickname
             )
             nextVault.connections.insert(connection, at: 0)
             nextVault.activeConnectionID = connection.id
@@ -134,6 +141,21 @@ final class ConnectionModel: ObservableObject {
         return true
     }
 
+    /// Sets or clears (`nil`/blank) a saved connection's display nickname.
+    @discardableResult
+    func rename(connectionID: String, nickname nicknameValue: String?) throws -> ConnectionListPayload {
+        let connection = try savedConnection(connectionID: connectionID)
+        let nickname = try RemoteConnection.normalizedNickname(nicknameValue)
+        var nextVault = vault
+        guard let index = nextVault.connections.firstIndex(where: { $0.id == connection.id }) else {
+            throw ConnectionModelError.missingConnection
+        }
+        nextVault.connections[index].nickname = nickname
+        try credentialStore.save(nextVault)
+        vault = nextVault
+        return connectionListPayload()
+    }
+
     @discardableResult
     func forget(connectionID: String) throws -> ConnectionListPayload {
         guard let id = UUID(uuidString: connectionID) else { throw ConnectionModelError.missingConnection }
@@ -160,6 +182,7 @@ final class ConnectionModel: ObservableObject {
                 ConnectionListPayload.Summary(
                     id: connection.id.uuidString,
                     name: connection.name,
+                    nickname: connection.nickname,
                     address: connection.address.absoluteString,
                     active: connection.id == vault.activeConnectionID,
                     lastConnectedAt: formatter.string(from: connection.lastConnectedAt)

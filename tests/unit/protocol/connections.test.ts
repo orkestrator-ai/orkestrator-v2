@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+  connectionDisplayName,
+  normalizeConnectionNickname,
   parseConnectionList,
   parseStoredDesktopConnections,
 } from "../../../packages/protocol/src/connections";
@@ -23,6 +25,74 @@ describe("connection protocol validation", () => {
     expect(parsed).toEqual(input);
     expect(parsed).not.toBe(input);
     expect(parsed.connections[0]).not.toBe(input.connections[0]);
+  });
+
+  test("keeps optional nicknames on stored records and summaries", () => {
+    const stored = parseStoredDesktopConnections({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          nickname: "Desk",
+          address: "https://desk.example",
+          encryptedToken: "",
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+        {
+          id: "remote-2",
+          name: "lab.example",
+          nickname: "",
+          address: "https://lab.example",
+          encryptedToken: "",
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(stored.connections[0]?.nickname).toBe("Desk");
+    expect(stored.connections[1]).not.toHaveProperty("nickname");
+    expect(() =>
+      parseStoredDesktopConnections({
+        activeConnectionId: "local",
+        connections: [
+          {
+            id: "remote-1",
+            name: "desk.example",
+            nickname: 7,
+            address: "https://desk.example",
+            encryptedToken: "",
+            lastConnectedAt: "2026-07-14T00:00:00.000Z",
+          },
+        ],
+      }),
+    ).toThrow("connections[0].nickname");
+
+    const list = parseConnectionList({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "Desk",
+          nickname: "Desk",
+          address: "https://desk.example",
+          kind: "remote",
+          active: false,
+          requiresToken: false,
+        },
+      ],
+    });
+    expect(list.connections[0]?.nickname).toBe("Desk");
+  });
+
+  test("normalizes nicknames and falls back to the hostname for display", () => {
+    expect(normalizeConnectionNickname("  Studio \t\n Mac ")).toBe("Studio Mac");
+    expect(normalizeConnectionNickname("   ")).toBeUndefined();
+    expect(normalizeConnectionNickname(null)).toBeUndefined();
+    expect(normalizeConnectionNickname(undefined)).toBeUndefined();
+    expect(normalizeConnectionNickname("🖥️".repeat(32))).toBe("🖥️".repeat(32));
+    expect(() => normalizeConnectionNickname("x".repeat(65))).toThrow("64 characters");
+    expect(connectionDisplayName({ name: "desk.example", nickname: "Desk" })).toBe("Desk");
+    expect(connectionDisplayName({ name: "desk.example" })).toBe("desk.example");
   });
 
   test("publishes the connection contract from the protocol package", () => {

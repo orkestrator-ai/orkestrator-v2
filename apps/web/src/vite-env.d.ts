@@ -71,6 +71,11 @@ interface Window {
         connectionId: string,
         token: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      /** Sets a display nickname; `null` or a blank value restores the hostname. */
+      rename?(
+        connectionId: string,
+        nickname: string | null,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       use(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;

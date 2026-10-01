@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  connectionDisplayName,
   expandTailscaleMachineName,
   LOCAL_CONNECTION_ID,
+  normalizeConnectionNickname,
   parseStoredDesktopConnections,
   type ConnectToRemoteInput,
   type ConnectionList,
@@ -90,6 +92,14 @@ function connectionName(address: string): string {
   return new URL(address).hostname;
 }
 
+function withNickname(
+  record: StoredDesktopConnection,
+  nickname: string | undefined,
+): StoredDesktopConnection {
+  const { nickname: _previous, ...rest } = record;
+  return nickname ? { ...rest, nickname } : rest;
+}
+
 export class ConnectionManager {
   private readonly localBackend: LocalBackend;
   private readonly secureStorage: SecureStorage;
@@ -164,7 +174,8 @@ export class ConnectionManager {
         },
         ...this.stored.connections.map((connection) => ({
           id: connection.id,
-          name: connection.name,
+          name: connectionDisplayName(connection),
+          ...(connection.nickname ? { nickname: connection.nickname } : {}),
           address: connection.address,
           kind: "remote" as const,
           active: activeConnectionId === connection.id,
@@ -195,6 +206,7 @@ export class ConnectionManager {
         ].flatMap((connection) => (connection ? [connection.address] : [])),
       );
       const token = normalizeGatewayToken(input.token);
+      const requestedNickname = normalizeConnectionNickname(input.nickname);
       this.secureStorageAvailable = await this.detectSecureStorage();
       this.assertScopeGeneration(scope, generation);
 
@@ -206,9 +218,11 @@ export class ConnectionManager {
         : "";
       this.assertScopeGeneration(scope, generation);
       const existing = this.stored.connections.find((connection) => connection.address === address);
+      const nickname = requestedNickname ?? existing?.nickname;
       const record: StoredDesktopConnection = {
         id: existing?.id ?? randomUUID(),
         name: connectionName(address),
+        ...(nickname ? { nickname } : {}),
         address,
         encryptedToken,
         lastConnectedAt: new Date().toISOString(),
@@ -277,6 +291,34 @@ export class ConnectionManager {
       this.stored = candidate;
       this.sessionTokens.delete(connectionId);
       for (const activeScope of activeScopes) this.setScopeLocal(activeScope);
+      return this.getList(scope);
+    });
+  }
+
+  /** Set or clear (`null`/blank) the display nickname of a saved remote connection. */
+  async rename(
+    connectionId: string,
+    value: string | null,
+    scope = DEFAULT_CONNECTION_SCOPE,
+  ): Promise<ConnectionList> {
+    const generation = this.captureScopeGeneration(scope);
+    return this.enqueueMutation(async () => {
+      this.assertScopeGeneration(scope, generation);
+      if (connectionId === LOCAL_CONNECTION_ID) {
+        throw new Error("The Local connection cannot be renamed.");
+      }
+      const storedRecord = this.stored.connections.find(
+        (connection) => connection.id === connectionId,
+      );
+      if (!storedRecord) throw new Error("That saved connection no longer exists.");
+      const nickname = normalizeConnectionNickname(value);
+      const record = withNickname(storedRecord, nickname);
+      const candidate = this.replaceStoredRecord(record);
+      await this.persist(candidate);
+      this.assertScopeGeneration(scope, generation);
+      this.stored = candidate;
+      const remote = this.remoteConnections.get(connectionId);
+      if (remote) remote.record = withNickname(remote.record, nickname);
       return this.getList(scope);
     });
   }

@@ -11,6 +11,12 @@ environment's designs, including the recycle bin) and **Import** (`.orkdes`).
 A readiness panel reports backend storage, the headless Chromium renderer and
 agent availability separately; a missing renderer never hides existing work.
 
+Images pasted into the **New design** brief are written into the environment
+(`.orkestrator/clipboard/`, like a composer paste) and seeded into the new
+agent tab's draft before it mounts, so they travel as attachments of its first
+message. The chat beside the canvas is an ordinary native conversation, so
+pasting an image into its composer attaches it as usual.
+
 The chat keeps the existing approval, question, cancellation, transcript and
 background-session behavior. Closing or hiding the canvas does not stop its
 agent or any admitted edit. A canvas tab stores only
@@ -235,7 +241,8 @@ include the legacy message plus a typed JSON failure.
 A canvas remembers bounded links (≤8) to the conversations that worked on it
 (environment + tab id, platform, role design/implementation). **Ask agent**
 adds a removable, revisioned design-context annotation to a conversation's
-draft without sending it; the agent is told to re-read the canvas before
+draft without sending it (images pasted into its note or brief are added to
+that draft's attachments); the agent is told to re-read the canvas before
 editing, and every edit is still revision checked. **Use as implementation
 reference** prepares a reviewable handoff draft for an ordinary conversation;
 nothing is submitted, approved, committed or deployed automatically. Closing a

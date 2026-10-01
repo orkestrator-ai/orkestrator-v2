@@ -22,7 +22,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { invoke } from "@/lib/native/backend";
+import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import { designAction, designApi, designBackendKey, failureOf } from "./design-client";
@@ -54,6 +56,13 @@ import {
 } from "./design-open";
 import { DESIGN_AGENT_LABELS, DesignReadinessPanel } from "./DesignReadinessPanel";
 import { DesignLibrary, type DesignLibraryClient } from "./DesignLibrary";
+import {
+  addDesignImagesToDraft,
+  DESIGN_PROMPT_IMAGE_HINT,
+  DesignPromptImages,
+  useDesignPromptImagePaste,
+  type DesignPromptImage,
+} from "./design-prompt-images";
 
 export type DesignWorkspaceMode = "new" | "open" | "import";
 type AgentChoice = DesignAgent | "none";
@@ -121,6 +130,10 @@ export function DesignWorkspaceDialog({
   const [nameTouched, setNameTouched] = useState(false);
   const [agentChoice, setAgentChoice] = useState<AgentChoice | null>(null);
   const [brief, setBrief] = useState("");
+  // Pasted images live in this environment's workspace and travel with the
+  // brief as attachments of the agent's first message.
+  const [briefImages, setBriefImages] = useState<DesignPromptImage[]>([]);
+  const briefRef = useRef<HTMLDivElement>(null);
   const [preset, setPreset] = useState<DesignFramePresetId>("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -181,6 +194,8 @@ export function DesignWorkspaceDialog({
     setError(null);
     setRecovery(null);
     setNotice(null);
+    // Images were written into the previous environment's workspace.
+    setBriefImages([]);
   }, [scope]);
 
   // Layout facts follow the pane store so open/focus choices stay current.
@@ -207,6 +222,14 @@ export function DesignWorkspaceDialog({
             : !plan.ok
               ? plan.message
               : null;
+
+  useDesignPromptImagePaste({
+    containerRef: briefRef,
+    environmentId,
+    enabled: environmentReady && withAgent,
+    images: briefImages,
+    onImagesChange: setBriefImages,
+  });
 
   const openDesign = useCallback(
     (canvasId: string, placement: DesignPlacement): string | null => {
@@ -235,6 +258,7 @@ export function DesignWorkspaceDialog({
       .getState()
       .environments.get(environmentId)?.activePaneId;
     const sessions = view?.protocol === "v2" && view.capabilities?.sessions;
+    const images = withAgent ? briefImages : [];
     setBusy(true);
     setError(null);
     setRecovery(null);
@@ -263,12 +287,24 @@ export function DesignWorkspaceDialog({
           // The agent sits beside the canvas in the pane the user started from.
           if (originPaneId)
             usePaneLayoutStore.getState().setActivePane(originPaneId, environmentId);
-          return createTab(platform, {
-            tabId,
-            agentLaunchMode: "native",
-            displayTitle: "Design",
-            initialPrompt,
-          });
+          // Seed the images before the tab mounts so the initial prompt,
+          // which the tab sends from its draft, carries them.
+          const sessionKey = createSessionKey(environmentId, tabId);
+          addDesignImagesToDraft(sessionKey, images);
+          let created = false;
+          try {
+            created = createTab(platform, {
+              tabId,
+              agentLaunchMode: "native",
+              displayTitle: "Design",
+              initialPrompt,
+            });
+            return created;
+          } finally {
+            const store = usePaneLayoutStore.getState();
+            if (!created && images.length > 0 && !store.findPaneWithTab(tabId, environmentId))
+              useNativeComposeStore.getState().clearDraft(sessionKey);
+          }
         },
         hasTab: (tabId) =>
           Boolean(usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId)),
@@ -294,6 +330,7 @@ export function DesignWorkspaceDialog({
       if (launchScope !== scopeRef.current) return;
       if (result.linkWarning) toast.warning(result.linkWarning);
       setBrief("");
+      setBriefImages([]);
       setName("Untitled design");
       setNameTouched(false);
       onOpenChange(false);
@@ -431,16 +468,29 @@ export function DesignWorkspaceDialog({
               </div>
               {withAgent && (
                 <div className="grid gap-1">
-                  <label className="grid gap-1 text-sm">
-                    Design brief
-                    <Textarea
-                      className="min-h-24"
-                      maxLength={DESIGN_BRIEF_MAX}
-                      placeholder="Review this repo and mock up…"
-                      value={brief}
-                      onChange={(event) => setBrief(event.target.value)}
+                  <div ref={briefRef} className="grid gap-1">
+                    <label className="grid gap-1 text-sm">
+                      Design brief
+                      <Textarea
+                        className="min-h-24"
+                        maxLength={DESIGN_BRIEF_MAX}
+                        placeholder="Review this repo and mock up…"
+                        value={brief}
+                        aria-describedby="design-brief-images-hint"
+                        onChange={(event) => setBrief(event.target.value)}
+                      />
+                    </label>
+                    <DesignPromptImages
+                      images={briefImages}
+                      disabled={busy}
+                      onRemove={(id) =>
+                        setBriefImages((current) => current.filter((image) => image.id !== id))
+                      }
                     />
-                  </label>
+                    <p id="design-brief-images-hint" className="text-xs text-muted-foreground">
+                      {DESIGN_PROMPT_IMAGE_HINT}
+                    </p>
+                  </div>
                   <div className="flex flex-wrap gap-1" aria-label="Brief examples">
                     {DESIGN_BRIEF_EXAMPLES.map((example) => (
                       <Button

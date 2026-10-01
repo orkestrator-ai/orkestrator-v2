@@ -2,12 +2,17 @@ import { afterEach, beforeEach, describe, expect, mock, test, type Mock } from "
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import { invoke } from "@/lib/native/backend";
+import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
 import type { DesignReadinessView } from "./design-launch";
 import type { DesignLibraryClient } from "./DesignLibrary";
 import { DesignWorkspaceDialog } from "./DesignWorkspaceDialog";
+import { installImagePasteSupport, pasteImage } from "./design-paste-test-support";
 
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
@@ -75,6 +80,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // After unmount, so the reset does not re-render a mounted dialog outside act().
+  useEnvironmentStore.setState({ environments: [] });
   invokeMock.mockImplementation(() => Promise.resolve());
   useConfigStore.setState({ config: originalConfig });
 });
@@ -174,6 +181,93 @@ describe("DesignWorkspaceDialog", () => {
       { canvasId: canvas.id, designPlacement: "split" },
     ]);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("a pasted image is attached to the agent's initial prompt", async () => {
+    const restorePaste = installImagePasteSupport();
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          containerId: null,
+          status: "running",
+          environmentType: "local",
+          worktreePath: "/tmp/wt",
+        } as Environment,
+      ],
+    });
+    useNativeComposeStore.setState({ drafts: new Map() });
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const request = args as { action?: string; worktreePath?: string; filePath?: string };
+      if (command === "design_action" && request.action === "create_canvas") return canvas;
+      if (command === "write_local_file") return `${request.worktreePath}/${request.filePath}`;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    let draftAtLaunch: ReturnType<typeof nativeComposeDraft> | null = null;
+    const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
+      if (type === "claude")
+        draftAtLaunch = nativeComposeDraft(
+          useNativeComposeStore.getState(),
+          createSessionKey("env-1", options!.tabId!),
+        );
+      usePaneLayoutStore
+        .getState()
+        .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
+      return true;
+    });
+    try {
+      const { onOpenChange } = mount(createTab);
+      await flush();
+      fireEvent.change(brief(), { target: { value: "Match this screenshot" } });
+      await pasteImage(brief());
+
+      const attached = screen.getByRole("list", { name: "Attached images" });
+      expect(attached.querySelectorAll("img")).toHaveLength(1);
+      expect(brief().value).toBe("Match this screenshot");
+
+      fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+      await flush();
+
+      const agentCall = createTab.mock.calls.find((call) => call[0] === "claude");
+      expect(agentCall?.[1]?.initialPrompt).toContain("Match this screenshot");
+      expect(draftAtLaunch).not.toBeNull();
+      expect(draftAtLaunch!.attachments).toHaveLength(1);
+      expect(draftAtLaunch!.attachments[0]).toMatchObject({ type: "image" });
+      expect(draftAtLaunch!.attachments[0]!.path).toStartWith("/tmp/wt/.orkestrator/clipboard/");
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    } finally {
+      restorePaste();
+    }
+  });
+
+  test("a pasted image can be removed before launch", async () => {
+    const restorePaste = installImagePasteSupport();
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          containerId: null,
+          status: "running",
+          environmentType: "local",
+          worktreePath: "/tmp/wt",
+        } as Environment,
+      ],
+    });
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const request = args as { worktreePath?: string; filePath?: string };
+      if (command === "write_local_file") return `${request.worktreePath}/${request.filePath}`;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    try {
+      mount(() => true);
+      await flush();
+      await pasteImage(brief());
+      const remove = screen.getByRole("button", { name: /^Remove clipboard-.*\.png$/ });
+      fireEvent.click(remove);
+      expect(screen.queryByRole("list", { name: "Attached images" }) === null).toBe(true);
+    } finally {
+      restorePaste();
+    }
   });
 
   test("a blank canvas needs no agent and closes when opened", async () => {

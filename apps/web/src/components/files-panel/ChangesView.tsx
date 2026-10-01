@@ -1,5 +1,5 @@
 import { useFilesPanelStore } from "@/stores";
-import { useTerminalContext } from "@/contexts";
+import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { ChangedFileItem } from "./ChangedFileItem";
 import { Loader2, GitBranch } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
@@ -8,9 +8,11 @@ interface ChangesViewProps {
   onReveal?: (path: string) => void;
   onRevert?: (path: string) => void;
   onDelete?: (path: string) => void;
+  /** Opens a file when no environment panes are mounted (the project root). */
+  onOpenFile?: (path: string, options?: CreateFileTabOptions) => void;
 }
 
-export function ChangesView({ onReveal, onRevert, onDelete }: ChangesViewProps = {}) {
+export function ChangesView({ onReveal, onRevert, onDelete, onOpenFile }: ChangesViewProps = {}) {
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
   const closePanel = useFilesPanelStore((state) => state.closePanel);
@@ -18,9 +20,10 @@ export function ChangesView({ onReveal, onRevert, onDelete }: ChangesViewProps =
   const isMobile = useMediaQuery("(max-width: 767px)");
 
   const handleFileClick = (path: string, status: string) => {
-    if (!createFileTab) return;
+    const openFile = createFileTab ?? onOpenFile;
+    if (!openFile) return;
     // Open in diff mode when clicking from Changes view
-    createFileTab(path, { isDiff: true, gitStatus: status });
+    openFile(path, { isDiff: true, gitStatus: status });
     if (isMobile) closePanel();
   };
 

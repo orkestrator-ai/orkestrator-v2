@@ -490,6 +490,37 @@ describe("Orkestrator control MCP server", () => {
     ).not.toBe(true);
   });
 
+  test("never lets a coordinator credential act on the project home", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+    }));
+    overrides.set("get_environment", () => ({
+      id: "env-home",
+      projectId: "project-1",
+      projectHome: true,
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "discovery"],
+    });
+
+    const result = await rpc(credential.url, credential.token, "tools/call", {
+      name: "start_environment",
+      arguments: { environmentId: "env-home" },
+    });
+
+    expect(result.body.result?.isError).toBe(true);
+    expect(invocations.some((entry) => entry.command.startsWith("start_environment"))).toBe(false);
+  });
+
   test("rejects cross-project environments and invalidates paused, superseded, and expired credentials", async () => {
     let lifecycleState = "ready";
     let incarnation = "incarnation-1";

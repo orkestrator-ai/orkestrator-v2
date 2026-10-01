@@ -2,13 +2,14 @@ import { useEffect, useCallback, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
-import { useUIStore, useEnvironmentStore } from "@/stores";
+import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { resolveComparisonRef } from "@/lib/diff-baseline";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
+import type { Environment } from "@/types";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
@@ -112,6 +113,28 @@ export function findWorkspaceMoveConflicts(
   return [...conflicts];
 }
 
+/** Pseudo target id used for the project root before its home environment exists. */
+export function projectRootFilesTargetId(projectId: string): string {
+  return `project-root:${projectId}`;
+}
+
+/**
+ * Returns the project's home environment, creating it on first use, and makes
+ * it visible in the environment store. File mutations on the project root go
+ * through it, because every backend file mutation is authorised by an
+ * environment record.
+ */
+export async function ensureProjectHomeInStore(projectId: string): Promise<Environment> {
+  const environment = await backend.ensureProjectHomeEnvironment(projectId);
+  const store = useEnvironmentStore.getState();
+  if (store.environments.some((candidate) => candidate.id === environment.id)) {
+    store.updateEnvironment(environment.id, environment);
+  } else {
+    store.addEnvironment(environment);
+  }
+  return environment;
+}
+
 function formatBatchFailure(completed: number, total: number, message: string): string {
   if (completed <= 0) return message;
   return `${completed} of ${total} files were changed before the failure: ${message}`;
@@ -121,6 +144,13 @@ function formatBatchFailure(completed: number, total: number, message: string): 
  * Hook for managing files panel data loading.
  * Loads git changes and file tree data from the active environment.
  * Supports both containerized (Docker) and local (worktree) environments.
+ *
+ * With a project selected and no environment (the project board, e.g.
+ * Coordinator), the panel targets the project's own checkout. Reads go
+ * straight to `Project.localPath`; mutations (drops, moves, reverts, deletes,
+ * new folders) are applied through the project home environment, which is
+ * created on the first mutation, so a dropped file lands in the root checkout
+ * and is reported as a change like any other edit.
  * Auto-refreshes every 5 seconds when the panel is open and the document is
  * visible (scheduled by the shared read coordinator).
  *
@@ -135,6 +165,7 @@ function formatBatchFailure(completed: number, total: number, message: string): 
  */
 export function useFilesPanel() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const { isOpen, activeTab } = useFilesPanelStore(
     useShallow((state) => ({ isOpen: state.isOpen, activeTab: state.activeTab })),
   );
@@ -157,17 +188,58 @@ export function useFilesPanel() {
         : null) ?? null,
   );
 
+  // Project scope: a project is selected without an environment, so the panel
+  // shows that project's own checkout.
+  const rootProject = useProjectStore((state) =>
+    !selectedEnvironmentId && selectedProjectId
+      ? (state.projects.find((project) => project.id === selectedProjectId) ?? null)
+      : null,
+  );
+  const isProjectScope = !selectedEnvironmentId && !!rootProject;
+  const projectHomeEnvironment = useEnvironmentStore((state) =>
+    isProjectScope && rootProject
+      ? (state.environments.find(
+          (environment) =>
+            environment.projectId === rootProject.id &&
+            environment.projectHome === true &&
+            !environment.deletionRequestedAt,
+        ) ?? null)
+      : null,
+  );
+  // The environment whose snapshots and tabs describe what the panel shows.
+  const snapshotEnvironmentId = isProjectScope
+    ? (projectHomeEnvironment?.id ?? null)
+    : selectedEnvironmentId;
+  // Identifies the panel's target even before a project home exists.
+  const targetId = isProjectScope
+    ? projectRootFilesTargetId(rootProject!.id)
+    : selectedEnvironmentId;
+
   // Detect environment type and get appropriate identifiers
-  const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
-  const containerId = selectedEnvironment?.containerId ?? null;
-  const worktreePath = selectedEnvironment?.worktreePath ?? null;
-  const projectId = selectedEnvironment?.projectId ?? null;
+  const isLocalEnvironment = isProjectScope || selectedEnvironment?.environmentType === "local";
+  const containerId = isProjectScope ? null : (selectedEnvironment?.containerId ?? null);
+  // Prefer the home's canonical root so reads match its tracked watcher.
+  const worktreePath = isProjectScope
+    ? projectHomeEnvironment?.worktreePath || rootProject?.localPath?.trim() || null
+    : (selectedEnvironment?.worktreePath ?? null);
+  const projectId = isProjectScope ? rootProject!.id : (selectedEnvironment?.projectId ?? null);
 
   // Local environments are always "available" - they exist or don't exist
   // Container environments need to be running
   const isAvailable = isLocalEnvironment
     ? !!worktreePath
     : selectedEnvironment?.status === "running" && !!containerId;
+
+  // The environment id that authorises a file mutation. In project scope the
+  // project home is created on demand.
+  const resolveMutationEnvironmentId = useCallback(async (): Promise<string> => {
+    if (!isProjectScope) {
+      if (!selectedEnvironmentId) throw new Error("The selected environment is not available");
+      return selectedEnvironmentId;
+    }
+    if (projectHomeEnvironment) return projectHomeEnvironment.id;
+    return (await ensureProjectHomeInStore(projectId!)).id;
+  }, [isProjectScope, selectedEnvironmentId, projectHomeEnvironment, projectId]);
 
   // Prefer the commit captured when the environment was created. Older
   // environments fall back to the repository PR base branch, then its default
@@ -177,9 +249,14 @@ export function useFilesPanel() {
   const repoConfig = useConfigStore(
     (state) => (projectId ? state.config.repositories[projectId] : null) ?? null,
   );
-  const comparisonRef = resolveComparisonRef(selectedEnvironment?.createdFromCommit, repoConfig);
+  const comparisonRef = resolveComparisonRef(
+    isProjectScope
+      ? projectHomeEnvironment?.createdFromCommit
+      : selectedEnvironment?.createdFromCommit,
+    repoConfig,
+  );
   const environmentSnapshotKey = [
-    selectedEnvironmentId ?? "",
+    targetId ?? "",
     containerId ?? "",
     worktreePath ?? "",
     comparisonRef,
@@ -503,16 +580,17 @@ export function useFilesPanel() {
 
   const revertFile = useCallback(
     async (filePath: string) => {
-      if (!isAvailable || !selectedEnvironmentId) {
+      if (!isAvailable || !targetId) {
         throw new Error("The selected environment is not available");
       }
 
       setFileActionPending(filePath);
       try {
+        const environmentId = await resolveMutationEnvironmentId();
         if (isLocalEnvironment && worktreePath) {
-          await backend.revertLocalFile(selectedEnvironmentId, filePath, comparisonRef);
+          await backend.revertLocalFile(environmentId, filePath, comparisonRef);
         } else if (containerId) {
-          await backend.revertContainerFile(selectedEnvironmentId, filePath, comparisonRef);
+          await backend.revertContainerFile(environmentId, filePath, comparisonRef);
         }
         await refreshAllFilesData();
         toast.success("File reverted", { description: filePath });
@@ -526,7 +604,8 @@ export function useFilesPanel() {
     },
     [
       isAvailable,
-      selectedEnvironmentId,
+      targetId,
+      resolveMutationEnvironmentId,
       isLocalEnvironment,
       worktreePath,
       containerId,
@@ -537,7 +616,7 @@ export function useFilesPanel() {
 
   const deleteFile = useCallback(
     async (filePath: string | string[]) => {
-      if (!isAvailable || !selectedEnvironmentId) {
+      if (!isAvailable || !targetId) {
         throw new Error("The selected environment is not available");
       }
 
@@ -548,15 +627,22 @@ export function useFilesPanel() {
       const completedPaths: string[] = [];
       const failures: Array<{ path: string; message: string }> = [];
       try {
+        const environmentId = await resolveMutationEnvironmentId().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          toast.error(paths.length === 1 ? "Failed to delete file" : "Failed to delete files", {
+            description: message,
+          });
+          throw error;
+        });
         // Attempt every path even if one fails, so a single collision cannot
         // abandon the rest of the selection and a retry only has to target the
         // paths that actually failed.
         for (const path of paths) {
           try {
             if (isLocalEnvironment && worktreePath) {
-              await backend.deleteLocalFile(selectedEnvironmentId, path);
+              await backend.deleteLocalFile(environmentId, path);
             } else if (containerId) {
-              await backend.deleteContainerFile(selectedEnvironmentId, path);
+              await backend.deleteContainerFile(environmentId, path);
             }
             completedPaths.push(path);
           } catch (error) {
@@ -598,7 +684,8 @@ export function useFilesPanel() {
     },
     [
       isAvailable,
-      selectedEnvironmentId,
+      targetId,
+      resolveMutationEnvironmentId,
       isLocalEnvironment,
       worktreePath,
       containerId,
@@ -608,14 +695,16 @@ export function useFilesPanel() {
 
   const moveFile = useCallback(
     async (sourcePath: string | string[], destinationDirectory: string) => {
-      if (!isAvailable || !selectedEnvironmentId) {
+      if (!isAvailable || !targetId) {
         throw new Error("The selected environment is not available");
       }
 
       const sourcePaths = Array.isArray(sourcePath) ? [...new Set(sourcePath)] : [sourcePath];
       if (sourcePaths.length === 0) return;
 
-      const openTabs = usePaneLayoutStore.getState().getAllTabs(selectedEnvironmentId);
+      const openTabs = snapshotEnvironmentId
+        ? usePaneLayoutStore.getState().getAllTabs(snapshotEnvironmentId)
+        : [];
       const openPaths = sourcePaths.filter((path) =>
         openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === path),
       );
@@ -648,18 +737,21 @@ export function useFilesPanel() {
       const completedPaths: string[] = [];
       const failures: Array<{ path: string; message: string }> = [];
       try {
+        const environmentId = await resolveMutationEnvironmentId().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          toast.error(sourcePaths.length === 1 ? "Failed to move file" : "Failed to move files", {
+            description: message,
+          });
+          throw error;
+        });
         // Attempt every path even if one fails so a retry targets only the
         // paths that did not move.
         for (const path of sourcePaths) {
           try {
             const destination =
               isLocalEnvironment && worktreePath
-                ? await backend.moveLocalFile(selectedEnvironmentId, path, destinationDirectory)
-                : await backend.moveContainerFile(
-                    selectedEnvironmentId,
-                    path,
-                    destinationDirectory,
-                  );
+                ? await backend.moveLocalFile(environmentId, path, destinationDirectory)
+                : await backend.moveContainerFile(environmentId, path, destinationDirectory);
             destinations.push(destination);
             completedPaths.push(path);
           } catch (error) {
@@ -699,26 +791,31 @@ export function useFilesPanel() {
         setFileActionPending(null);
       }
     },
-    [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, refreshAllFilesData],
+    [
+      isAvailable,
+      targetId,
+      snapshotEnvironmentId,
+      resolveMutationEnvironmentId,
+      isLocalEnvironment,
+      worktreePath,
+      refreshAllFilesData,
+    ],
   );
 
   const createFolder = useCallback(
     async (parentDirectory: string, folderName: string) => {
-      if (!isAvailable || !selectedEnvironmentId) {
+      if (!isAvailable || !targetId) {
         throw new Error("The selected environment is not available");
       }
 
       const pendingKey = `${parentDirectory}\0${folderName}`;
       setFileActionPending(pendingKey);
       try {
+        const environmentId = await resolveMutationEnvironmentId();
         const created =
           isLocalEnvironment && worktreePath
-            ? await backend.createLocalFolder(selectedEnvironmentId, parentDirectory, folderName)
-            : await backend.createContainerFolder(
-                selectedEnvironmentId,
-                parentDirectory,
-                folderName,
-              );
+            ? await backend.createLocalFolder(environmentId, parentDirectory, folderName)
+            : await backend.createContainerFolder(environmentId, parentDirectory, folderName);
         await refreshAllFilesData();
         toast.success("Folder created", { description: created });
         return created;
@@ -730,12 +827,19 @@ export function useFilesPanel() {
         setFileActionPending(null);
       }
     },
-    [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, refreshAllFilesData],
+    [
+      isAvailable,
+      targetId,
+      resolveMutationEnvironmentId,
+      isLocalEnvironment,
+      worktreePath,
+      refreshAllFilesData,
+    ],
   );
 
   const copyExternalFiles = useCallback(
     async (files: File[], destinationDirectory: string) => {
-      if (!isAvailable || !selectedEnvironmentId) {
+      if (!isAvailable || !targetId) {
         const error = new Error("The selected environment is not available");
         toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
           description: error.message,
@@ -759,11 +863,19 @@ export function useFilesPanel() {
       const completedPaths: string[] = [];
       const failures: Array<{ name: string; message: string }> = [];
       try {
+        // In project scope this lands in the root checkout via its home.
+        const environmentId = await resolveMutationEnvironmentId().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
+            description: message,
+          });
+          throw error;
+        });
         for (const file of files) {
           try {
             const contents = new Uint8Array(await file.arrayBuffer());
             const destination = await backend.copyExternalFile(
-              selectedEnvironmentId,
+              environmentId,
               destinationDirectory,
               file.name,
               encodeBytesAsBase64(contents),
@@ -803,13 +915,13 @@ export function useFilesPanel() {
         setFileActionPending(null);
       }
     },
-    [isAvailable, selectedEnvironmentId, refreshAllFilesData],
+    [isAvailable, targetId, resolveMutationEnvironmentId, refreshAllFilesData],
   );
 
   // Announced revisions: subscribe (and hydrate) only while the panel is open.
   useWorktreeSnapshotRevisions({ enabled: isOpen });
   const announced = useWorktreeSnapshotStore((state) =>
-    selectedEnvironmentId ? state.entries.get(selectedEnvironmentId) : undefined,
+    snapshotEnvironmentId ? state.entries.get(snapshotEnvironmentId) : undefined,
   );
   const ownerGeneration = useWorktreeSnapshotStore((state) => state.generation);
 
@@ -880,7 +992,10 @@ export function useFilesPanel() {
     containerId,
     worktreePath,
     isLocalEnvironment,
-    environmentId: selectedEnvironmentId,
+    /** Target identity: the selected environment, or the project root pseudo id. */
+    environmentId: targetId,
+    /** Set when the panel shows a project's root checkout instead of an environment. */
+    projectScopeProjectId: isProjectScope ? projectId : null,
     revertFile,
     deleteFile,
     moveFile,

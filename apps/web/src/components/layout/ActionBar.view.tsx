@@ -40,6 +40,7 @@ import {
   Eye,
   FolderGit2,
   FolderTree,
+  House,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -233,6 +234,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     tabCount,
     filesPanelOpen,
     toggleFilesPanel,
+    canToggleFilesPanel,
+    canShowProjectFiles,
+    openProjectHome,
+    projectHomeOpening,
     changes,
     sidebarOpen,
     toggleSidebar,
@@ -1340,6 +1345,38 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       )}
                     </Button>
                   )}
+                  {canShowProjectFiles && (
+                    <ToolbarTooltipTrigger
+                      tooltip={
+                        <>
+                          <p>Open project home</p>
+                          <p className="text-xs text-muted-foreground">
+                            Review, Multi Review, fix and PR on the project checkout
+                          </p>
+                        </>
+                      }
+                    >
+                      <Button
+                        variant={isGrid ? "ghost" : "outline"}
+                        size={isGrid ? "icon" : "sm"}
+                        className="gap-1.5"
+                        onClick={() => void openProjectHome()}
+                        aria-label="Open project home"
+                        disabled={projectHomeOpening}
+                      >
+                        {projectHomeOpening ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <House className="h-3.5 w-3.5" />
+                        )}
+                        {isGrid ? (
+                          <span className="truncate text-xs">Project home</span>
+                        ) : (
+                          "Project Home"
+                        )}
+                      </Button>
+                    </ToolbarTooltipTrigger>
+                  )}
                   <SegmentedSelector
                     value={projectBoardTab}
                     onValueChange={openProjectBoardTab}
@@ -1400,7 +1437,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
               {!isGrid && selectedEnvironment && !hasPR && createPrControl}
 
-              {(isGrid || selectedEnvironment) && (
+              {(isGrid || canToggleFilesPanel) && (
                 <ToolbarTooltipTrigger
                   tooltip={
                     <>
@@ -1420,7 +1457,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     onClick={toggleFilesPanel}
                     aria-label={`${filesPanelOpen ? "Hide" : "Show"} file panel`}
                     aria-pressed={filesPanelOpen}
-                    disabled={!selectedEnvironment}
+                    disabled={!canToggleFilesPanel}
                   >
                     <FolderTree className="h-4 w-4" />
                     {isGrid ? (

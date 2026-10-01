@@ -183,6 +183,15 @@ export async function forkEnvironment(
   return invoke<Environment>("fork_environment", { environmentId, environmentType });
 }
 
+/**
+ * Returns the project's home environment — the one that works directly in the
+ * project's own checkout — creating it on first use. Idempotent; refreshes the
+ * stored branch from the checkout on every call.
+ */
+export async function ensureProjectHomeEnvironment(projectId: string): Promise<Environment> {
+  return invoke<Environment>("ensure_project_home_environment", { projectId });
+}
+
 export async function deleteEnvironment(environmentId: string): Promise<void> {
   return invoke("delete_environment", { environmentId });
 }

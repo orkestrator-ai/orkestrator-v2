@@ -231,6 +231,15 @@ describe("createPRPrompt", () => {
     expect(result).toContain("`git add .`");
   });
 
+  test("branches off the target branch instead of committing or pushing to it", () => {
+    // The project home works in the main checkout, which usually has the PR
+    // base branch checked out.
+    const result = createPRPrompt("develop");
+    expect(result).toContain("git switch -c <type>/<short-description>");
+    expect(result).toContain("Never commit the PR's changes onto `develop`");
+    expect(result).toContain("Never push to `develop` itself");
+  });
+
   test("uses the provided target branch for PR creation", () => {
     const result = createPRPrompt("develop");
     expect(result).toContain("gh pr create --base develop --fill");

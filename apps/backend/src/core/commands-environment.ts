@@ -86,6 +86,7 @@ import {
   setDockerContainerStateCache,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import type {
   Environment,
   EnvironmentStatus,
@@ -895,6 +896,18 @@ export async function startEnvironmentSetupOnce(
 ): Promise<EnvironmentSetupStartResult> {
   assertEnvironmentNotDraining(environment.id);
   const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
+  if (isProjectHomeEnvironment(current)) {
+    // Setup scripts provision disposable workspaces; the user's checkout is
+    // already provisioned and must not have them run against it.
+    const ready =
+      current.setupScriptsComplete && current.setupPhase === "ready"
+        ? current
+        : await context.storage.updateEnvironment(current.id, {
+            setupScriptsComplete: true,
+            setupPhase: "ready",
+          });
+    return { setupStarted: false, environment: ready };
+  }
   if (
     (current.setupScriptsComplete ||
       current.setupPhase === "ready" ||
@@ -1542,6 +1555,11 @@ export async function startEnvironmentOnce(
         await syncDiffStatsTracking(context);
         await syncPrMonitorTracking(context);
         return result;
+      }
+      // The project home works in the user's checkout. A missing checkout is
+      // an error to surface, never a reason to create a worktree in its place.
+      if (isProjectHomeEnvironment(environment)) {
+        throw new Error("The project checkout is unavailable");
       }
       const project = await storage.getProject(environment.projectId);
       if (!project?.localPath)

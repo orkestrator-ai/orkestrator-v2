@@ -195,3 +195,21 @@ describe("EnvironmentItem build pipeline activity", () => {
     expectWorking(environmentIcon());
   });
 });
+
+describe("EnvironmentItem project home", () => {
+  test("labels the project checkout instead of showing the record's name", () => {
+    renderItem(environmentFixture({ name: "project-home", projectHome: true }));
+
+    const row = screen.getByRole("button", { name: /Project home/ });
+    expect(row.textContent).toContain("Project home");
+    expect(row.textContent).not.toContain("project-home");
+    expect(row.querySelector("svg")?.classList).toContain("lucide-house");
+  });
+
+  test("keeps the worktree icon and name for ordinary local environments", () => {
+    renderItem(environmentFixture({ name: "feature-work" }));
+
+    const row = screen.getByRole("button", { name: /feature-work/ });
+    expect(row.querySelector("svg")?.classList).toContain("lucide-laptop");
+  });
+});

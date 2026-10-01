@@ -180,6 +180,43 @@ describe("files panel views", () => {
     expect(useFilesPanelStore.getState().isOpen).toBe(false);
   });
 
+  test("without environment panes, file clicks fall back to the project-root opener", async () => {
+    const onOpenFile = mock((_path: string, _options?: unknown) => undefined);
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      fileTree,
+      expandedFolders: ["src"],
+      changes: [change],
+    });
+    // No RegisterFileTab: the project board has no editor panes of its own.
+    const allFiles = render(
+      <TerminalProvider>
+        <AllFilesView onOpenFile={onOpenFile} />
+      </TerminalProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx");
+    allFiles.unmount();
+
+    render(
+      <TerminalProvider>
+        <ChangesView onOpenFile={onOpenFile} />
+      </TerminalProvider>,
+    );
+    fireEvent.click(await screen.findByTitle("src/App.tsx"));
+    expect(onOpenFile).toHaveBeenLastCalledWith("src/App.tsx", { isDiff: true, gitStatus: "M" });
+    expect(createFileTab).not.toHaveBeenCalled();
+  });
+
+  test("environment panes take precedence over the project-root opener", async () => {
+    const onOpenFile = mock((_path: string, _options?: unknown) => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onOpenFile={onOpenFile} />);
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+
   test("ChangedFileItem copies a workspace-relative path for deleted files", async () => {
     render(<ChangedFileItem change={{ ...change, status: "D" }} />);
 

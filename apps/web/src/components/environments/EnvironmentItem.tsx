@@ -51,6 +51,7 @@ import {
   Network,
   Copy,
   MoreVertical,
+  House,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
@@ -263,6 +264,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   );
 
   const isLocalEnvironment = environment.environmentType === "local";
+  // The project home works in the project's own checkout, not a worktree.
+  const isProjectHome = environment.projectHome === true;
+  const displayName = isProjectHome ? "Project home" : environment.name;
+  const LocalEnvironmentIcon = isProjectHome ? House : Laptop;
   // Local environments are always considered "running" - they exist or they don't
   const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
@@ -488,9 +493,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               ) : isMultiSelectMode ? null : isTransitioning ? (
                 // Show spinner when creating/stopping
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-              ) : // Show Laptop for local environments, Container for containerized
+              ) : // Show House for the project home, Laptop for local environments,
+              // Container for containerized
               environment.environmentType === "local" ? (
-                <Laptop
+                <LocalEnvironmentIcon
                   className={cn(
                     "h-4 w-4 shrink-0 transition-colors",
                     !isRunning && "text-muted-foreground",
@@ -527,9 +533,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                       isBuildEnvironment && "text-yellow-400",
                     )}
                   >
-                    {isBuildEnvironment
-                      ? environment.name.replace(/^Build:\s*/, "")
-                      : environment.name}
+                    {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
                   </span>
                   {hasUnreadActivity && (
                     <Bell
@@ -624,9 +628,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           onMouseLeave={tooltip.hide}
         >
           <div className="space-y-1">
-            <p className="font-medium">{environment.name}</p>
+            <p className="font-medium">{displayName}</p>
             <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
-            {isLocalEnvironment ? (
+            {isProjectHome ? (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <House className="h-3 w-3" />
+                Project checkout · {environment.branch}
+              </p>
+            ) : isLocalEnvironment ? (
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Laptop className="h-3 w-3" />
                 Local worktree
@@ -710,8 +719,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Environment</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{environment.name}</strong>?
-              {isLocalEnvironment ? (
+              Are you sure you want to delete <strong>{displayName}</strong>?
+              {isProjectHome ? (
+                <span className="block mt-2">
+                  Only Orkestrator&apos;s sessions for it are removed. Your project checkout, its
+                  files and its branch are not touched.
+                </span>
+              ) : isLocalEnvironment ? (
                 <span className="block mt-2 text-orange-500">
                   This will delete the git worktree from your machine.
                 </span>

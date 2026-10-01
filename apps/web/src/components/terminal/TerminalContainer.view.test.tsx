@@ -18,6 +18,7 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
 
 import {
   armWindowStartupAgentActivation,
@@ -5536,6 +5537,64 @@ describe("TerminalContainer", () => {
         }),
       );
     });
+  });
+
+  test("opens a file requested from the project board once its environment is active", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+      containerId: null,
+      environmentType: "local",
+      worktreePath: "/tmp/env-visible-worktree",
+    });
+    useFilesPanelStore.getState().requestFileOpen({
+      environmentId: "env-visible",
+      filePath: "src/App.tsx",
+      options: { isDiff: true, gitStatus: "?" },
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer environmentId="env-visible" containerId={null} isActive />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect.objectContaining({
+          type: "file",
+          fileData: expect.objectContaining({ filePath: "src/App.tsx", isDiff: true }),
+        }),
+      );
+    });
+    expect(useFilesPanelStore.getState().pendingFileOpen).toBeNull();
+  });
+
+  test("leaves a file requested for another environment pending", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+      containerId: null,
+      environmentType: "local",
+      worktreePath: "/tmp/env-visible-worktree",
+    });
+    const request = { environmentId: "env-other", filePath: "README.md" };
+    useFilesPanelStore.getState().requestFileOpen(request);
+
+    const view = render(
+      <TerminalProvider>
+        <TerminalContainer environmentId="env-visible" containerId={null} isActive />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible").length).toBeGreaterThan(0);
+    });
+    expect(useFilesPanelStore.getState().pendingFileOpen).toBe(request);
+    expect(
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-visible")
+        .some((tab) => tab.type === "file"),
+    ).toBe(false);
+    act(() => view.unmount());
+    useFilesPanelStore.getState().clearPendingFileOpen(request);
   });
 
   test("rejects a file tab path outside the active workspace", async () => {

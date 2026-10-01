@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useFilesPanelStore } from "@/stores";
-import { useTerminalContext } from "@/contexts";
+import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import {
   externalFilesFromDataTransfer,
   FILE_DRAG_TYPE,
@@ -57,6 +57,8 @@ interface AllFilesViewProps {
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
   movePending?: boolean;
+  /** Opens a file when no environment panes are mounted (the project root). */
+  onOpenFile?: (path: string, options?: CreateFileTabOptions) => void;
 }
 
 function WorkspaceCreateFolderMenu({
@@ -90,6 +92,7 @@ export function AllFilesView({
   onCopyFiles,
   onCreateFolder,
   movePending = false,
+  onOpenFile,
 }: AllFilesViewProps = {}) {
   const fileTree = useFilesPanelStore((state) => state.fileTree);
   const changes = useFilesPanelStore((state) => state.changes);
@@ -156,8 +159,9 @@ export function AllFilesView({
 
     setSelectedPaths([path]);
     setAnchorPath(path);
-    if (!createFileTab) return;
-    createFileTab(path);
+    const openFile = createFileTab ?? onOpenFile;
+    if (!openFile) return;
+    openFile(path);
     if (isMobile) closePanel();
   };
 

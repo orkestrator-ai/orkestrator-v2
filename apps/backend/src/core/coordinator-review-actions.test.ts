@@ -515,6 +515,49 @@ test("scoped launch/open reject another project and another conversation", async
   await expect(launch({ environmentId: env.id })).rejects.toThrow("this project");
 });
 
+test("the project home is never a coordinator worker for launch or address", async () => {
+  // `projectHome` is creation-only: an update cannot turn a worker into one.
+  const worker = await storage.getEnvironment(environmentId);
+  await storage.updateEnvironment(environmentId, { projectHome: true });
+  expect((await storage.getEnvironment(environmentId))?.projectHome).toBeUndefined();
+  const home = createEnvironment(scope.projectId, {
+    name: "project-home",
+    environmentType: "local",
+  });
+  Object.assign(home, {
+    projectHome: true,
+    status: "running",
+    setupPhase: "ready",
+    worktreePath: worker!.worktreePath,
+  });
+  await storage.addEnvironment(home);
+  environmentId = home.id;
+  await expect(launch()).rejects.toThrow("project checkout");
+  expect(start).not.toHaveBeenCalled();
+
+  // A review the user started on the project home stays theirs: the
+  // coordinator may not address it, because the fix session writes there.
+  const rendererStarted = await start(
+    {
+      environmentId,
+      projectId: scope.projectId,
+      targetBranch: "main",
+      reviewers: [selection],
+      fixModel: selection,
+    },
+    "project-home-review",
+  );
+  const address = mock(async () => rendererStarted);
+  context.multiReviews!.address = address;
+  await expect(
+    commands.get("address_coordinator_multi_review_action")!(
+      { scope, workflowId: rendererStarted.id },
+      context,
+    ),
+  ).rejects.toThrow("project checkout");
+  expect(address).not.toHaveBeenCalled();
+});
+
 test("Fix opening is presentation-only, stable, and refuses pending handoffs", async () => {
   const launched = await launch();
   const workflow = {

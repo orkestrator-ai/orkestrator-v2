@@ -19,6 +19,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
+import { readCheckoutBranch, refreshProjectHomeBranch } from "./project-home-environment.js";
 
 /**
  * Merge cleanup is owned by `commands-servers` (it ends in
@@ -457,8 +458,11 @@ export async function wakePrMonitorForCompletion(
   context: CommandContext,
 ): Promise<void> {
   setPrMonitorRuntime(context);
-  const environment = await context.storage.getEnvironment(environmentId);
-  if (!environment) return;
+  const stored = await context.storage.getEnvironment(environmentId);
+  if (!stored) return;
+  // A turn in the project home may have switched the checkout's branch (a PR
+  // session branches off the base before pushing); follow it first.
+  const environment = await refreshProjectHomeBranch(stored, context.storage, readCheckoutBranch);
   prMonitorService.wakeForCompletion(environmentToPrMonitorTarget(environment));
 }
 

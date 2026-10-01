@@ -1956,6 +1956,12 @@ export class ControlMcpServer {
               if (!isRecord(environment) || environment.projectId !== coordinatorScope.projectId) {
                 throw new Error("Coordinator credential cannot access that environment");
               }
+              // The project home runs writable sessions in the checkout the
+              // coordinator may only read. Delegating to it would bypass that
+              // boundary, so it is never a worker.
+              if (environment.projectHome === true) {
+                throw new Error("Coordinator credential cannot act on the project checkout");
+              }
             }
           }
           const denied = new Set([

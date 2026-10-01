@@ -294,6 +294,12 @@ export interface Environment {
   hostEntryPort?: number;
   environmentType: EnvironmentType;
   worktreePath?: string;
+  /**
+   * Marks the project home: a local environment whose `worktreePath` is the
+   * project's own checkout. Never a disposable workspace — see
+   * `project-home-environment.ts` for the paths that must honour it.
+   */
+  projectHome?: boolean;
   opencodePid?: number;
   claudeBridgePid?: number;
   codexBridgePid?: number;

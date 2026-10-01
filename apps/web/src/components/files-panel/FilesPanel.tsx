@@ -4,8 +4,10 @@ import { FilesPanelHeader } from "./FilesPanelHeader";
 import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
-import { useFilesPanelStore } from "@/stores";
+import { useFilesPanelStore, useUIStore } from "@/stores";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
+import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
+import type { CreateFileTabOptions } from "@/contexts";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { revealInFileManager } from "@/lib/backend";
 
@@ -29,9 +31,33 @@ export function FilesPanel() {
     copyExternalFiles,
     fileActionPending,
     environmentId,
+    projectScopeProjectId,
     isLocalEnvironment,
     worktreePath,
   } = useFilesPanel();
+
+  // The project root has no editor panes of its own. Opening a file there
+  // moves to the project home — the environment working in the same
+  // checkout — and opens the file once its panes are mounted.
+  const openInProjectHome = useCallback(
+    (filePath: string, options?: CreateFileTabOptions) => {
+      if (!projectScopeProjectId) return;
+      void ensureProjectHomeInStore(projectScopeProjectId)
+        .then((home) => {
+          useFilesPanelStore
+            .getState()
+            .requestFileOpen({ environmentId: home.id, filePath, options });
+          useUIStore.getState().selectProjectAndEnvironment(projectScopeProjectId, home.id);
+        })
+        .catch((error: unknown) => {
+          toast.error("Could not open the project home", {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        });
+    },
+    [projectScopeProjectId],
+  );
+  const onOpenFile = projectScopeProjectId ? openInProjectHome : undefined;
 
   const moveFileInTree = useCallback(
     (sourcePaths: string[], destinationDirectory: string) => {
@@ -102,6 +128,7 @@ export function FilesPanel() {
             onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
+            onOpenFile={onOpenFile}
           />
         ) : (
           <AllFilesView
@@ -112,6 +139,7 @@ export function FilesPanel() {
             onCopyFiles={copyFilesIntoTree}
             onCreateFolder={createFolder}
             movePending={fileActionPending !== null}
+            onOpenFile={onOpenFile}
           />
         )}
       </ScrollArea>

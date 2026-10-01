@@ -59,6 +59,7 @@ import {
   requestPaneTabActivation,
 } from "@/lib/pane-layout-authoritative";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
+import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
@@ -126,6 +127,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const selectProject = useUIStore((state) => state.selectProject);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectEnvironment = useUIStore((state) => state.selectEnvironment);
+  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
   const setProjectBoardNotesOpen = useUIStore((state) => state.setProjectBoardNotesOpen);
@@ -142,7 +144,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const config = useConfigStore((state) => state.config);
   const { createTab, selectTab, tabCount } = useTerminalContext();
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
-  const toggleFilesPanel = useFilesPanelStore((state) => state.togglePanel);
+  const toggleFilesPanelStore = useFilesPanelStore((state) => state.togglePanel);
+  const openFilesPanelOnAllFiles = useFilesPanelStore((state) => state.openPanelOnAllFiles);
   const changes = useFilesPanelStore((state) => state.changes);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
@@ -276,6 +279,44 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     }
   }, [envSettingsEnvironment, envSettingsEnvironmentId]);
   const isProjectBoardView = !!selectedProject && !selectedEnvironment;
+  // The project board shows the project's own checkout in the files panel, so
+  // the toggle stays available whenever the project has one configured.
+  const hasProjectCheckout = !!selectedProject?.localPath?.trim();
+  const canShowProjectFiles = isProjectBoardView && hasProjectCheckout;
+  const canToggleFilesPanel = !!selectedEnvironment || canShowProjectFiles;
+  const toggleFilesPanel = useCallback(() => {
+    // Nothing is being changed on the project board, so the checkout opens on
+    // its file tree rather than an empty change list.
+    if (!filesPanelOpen && !selectedEnvironment && canShowProjectFiles) {
+      openFilesPanelOnAllFiles();
+      return;
+    }
+    toggleFilesPanelStore();
+  }, [
+    filesPanelOpen,
+    selectedEnvironment,
+    canShowProjectFiles,
+    openFilesPanelOnAllFiles,
+    toggleFilesPanelStore,
+  ]);
+
+  // Review, Multi Review, fix and PR sessions run in an environment. The
+  // project home is the environment that works directly in the checkout.
+  const [projectHomeOpening, setProjectHomeOpening] = useState(false);
+  const openProjectHome = useCallback(async () => {
+    if (!selectedProject || !hasProjectCheckout) return;
+    setProjectHomeOpening(true);
+    try {
+      const home = await ensureProjectHomeInStore(selectedProject.id);
+      selectProjectAndEnvironment(selectedProject.id, home.id);
+    } catch (error) {
+      toast.error("Could not open the project home", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setProjectHomeOpening(false);
+    }
+  }, [selectedProject, hasProjectCheckout, selectProjectAndEnvironment]);
 
   const openProjectBoardTab = useCallback(
     (tab: typeof projectBoardTab) => {
@@ -1563,7 +1604,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           break;
         case "e":
           // Toggle files panel
-          if (selectedEnvironment) {
+          if (canToggleFilesPanel) {
             e.preventDefault();
             toggleFilesPanel();
           }
@@ -1589,6 +1630,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     canRunCommands,
     handleRun,
     toggleFilesPanel,
+    canToggleFilesPanel,
     enabledAgents,
   ]);
 
@@ -2249,6 +2291,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     tabCount,
     filesPanelOpen,
     toggleFilesPanel,
+    canToggleFilesPanel,
+    canShowProjectFiles,
+    openProjectHome,
+    projectHomeOpening,
     changes,
     sidebarOpen,
     toggleSidebar,

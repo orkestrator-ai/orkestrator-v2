@@ -163,6 +163,20 @@ describe("environment cleanup entry", () => {
     });
   });
 
+  test("never schedules the project checkout or its branch for a project home", () => {
+    const dataDir = "/data";
+    const entry = buildEnvironmentCleanupEntry(
+      environment({ projectHome: true, worktreePath: "/project", branch: "main" }),
+      { localPath: "/project" },
+      dataDir,
+    );
+    expect(entry).toMatchObject({
+      worktreePath: null,
+      branch: null,
+      pending: ["state-dirs"],
+    });
+  });
+
   test("redacts failures to codes and exit statuses", () => {
     expect(
       redactCleanupError(Object.assign(new Error("open /secret/path"), { code: "EACCES" })),

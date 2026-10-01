@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
-import type { Environment } from "@/types";
+import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
 
@@ -21,8 +21,20 @@ const getLocalGitStatusSnapshotMock = mock(async () => ({
   value: [],
 }));
 
+const projectHome = {
+  id: "project-home-1",
+  projectId: "project-1",
+  projectHome: true,
+  environmentType: "local",
+  worktreePath: "/checkout",
+  status: "running",
+  branch: "main",
+} as Environment;
+const ensureProjectHomeEnvironmentMock = mock(async (_projectId: string) => projectHome);
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
   copyExternalFile: copyExternalFileMock,
   getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
   getLocalGitStatusSnapshot: getLocalGitStatusSnapshotMock,
@@ -51,7 +63,9 @@ beforeEach(() => {
   getLocalGitStatusSnapshotMock.mockClear();
   mockToastError.mockClear();
   mockToastSuccess.mockClear();
-  useUIStore.setState({ selectedEnvironmentId: "environment-1" });
+  ensureProjectHomeEnvironmentMock.mockClear();
+  useProjectStore.setState({ projects: [] });
+  useUIStore.setState({ selectedEnvironmentId: "environment-1", selectedProjectId: null });
   useEnvironmentStore.setState({
     environments: [
       {
@@ -214,6 +228,106 @@ describe("useFilesPanel external file copies", () => {
       description: "The selected environment is not available",
     });
     expect(copyExternalFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFilesPanel on the project root", () => {
+  beforeEach(() => {
+    useProjectStore.setState({
+      projects: [{ id: "project-1", name: "Project", localPath: "/checkout" } as Project],
+    });
+    useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
+    useEnvironmentStore.setState({ environments: [] });
+  });
+
+  test("reads the project's own checkout when no environment is selected", async () => {
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    const { result } = renderHook(() => useFilesPanel());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.isAvailable).toBe(true);
+    expect(result.current.worktreePath).toBe("/checkout");
+    expect(result.current.projectScopeProjectId).toBe("project-1");
+    const firstPath = (calls: unknown[][]) => calls[0]?.[0];
+    expect(firstPath(getLocalFileTreeSnapshotMock.mock.calls)).toBe("/checkout");
+    expect(firstPath(getLocalGitStatusSnapshotMock.mock.calls)).toBe("/checkout");
+    expect(ensureProjectHomeEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("drops land in the root checkout through the project home and refresh changes", async () => {
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.copyExternalFiles([droppedFile("notes.txt", [1])], ".");
+    });
+
+    expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
+    expect(copyExternalFileMock).toHaveBeenCalledWith(
+      "project-home-1",
+      ".",
+      "notes.txt",
+      expect.any(String),
+    );
+    // The home is now visible to the sidebar and the rest of the renderer.
+    expect(useEnvironmentStore.getState().environments.map((e) => e.id)).toEqual([
+      "project-home-1",
+    ]);
+    expect(getLocalGitStatusSnapshotMock).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("File copied", { description: "notes.txt" });
+  });
+
+  test("an existing project home authorises mutations without another ensure", async () => {
+    useEnvironmentStore.setState({ environments: [projectHome] });
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.copyExternalFiles([droppedFile("a.txt", [1])], "docs");
+    });
+
+    expect(ensureProjectHomeEnvironmentMock).not.toHaveBeenCalled();
+    expect(copyExternalFileMock).toHaveBeenCalledWith(
+      "project-home-1",
+      "docs",
+      "a.txt",
+      expect.any(String),
+    );
+  });
+
+  test("reports a project home that cannot be created", async () => {
+    ensureProjectHomeEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("The configured local checkout is unavailable");
+    });
+    const { result } = renderHook(() => useFilesPanel());
+
+    let failure: unknown;
+    await act(async () => {
+      await result.current
+        .copyExternalFiles([droppedFile("a.txt", [1])], ".")
+        .catch((error: unknown) => {
+          failure = error;
+        });
+    });
+    expect(failure).toMatchObject({ message: "The configured local checkout is unavailable" });
+    expect(copyExternalFileMock).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to copy file", {
+      description: "The configured local checkout is unavailable",
+    });
+  });
+
+  test("a project without a checkout has nothing to show", () => {
+    useProjectStore.setState({
+      projects: [{ id: "project-1", name: "Project", localPath: null } as Project],
+    });
+    const { result } = renderHook(() => useFilesPanel());
+    expect(result.current.isAvailable).toBe(false);
+  });
+
+  test("opening from the project board starts on all files", () => {
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
+    useFilesPanelStore.getState().openPanelOnAllFiles();
+    expect(useFilesPanelStore.getState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
   });
 });
 

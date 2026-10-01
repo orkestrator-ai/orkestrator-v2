@@ -134,6 +134,7 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 
 /**
  * Answers a file-list or tree read in the command's legacy shapes.
@@ -836,9 +837,19 @@ export function registerTerminalCommands(
       asString(branch, "branch"),
     ),
   );
-  register("read_file_base64", ({ filePath }, context) =>
-    readFileBase64(asString(filePath, "filePath"), [getWorktreeBaseDir(context)]),
-  );
+  register("read_file_base64", async ({ filePath }, context) => {
+    // A project home works in the user's checkout, outside the workspaces
+    // root, so its own directory is an allowed root too.
+    const projectHomeRoots = (await context.storage.loadEnvironments()).flatMap((environment) =>
+      isProjectHomeEnvironment(environment) && environment.worktreePath
+        ? [environment.worktreePath]
+        : [],
+    );
+    return readFileBase64(asString(filePath, "filePath"), [
+      getWorktreeBaseDir(context),
+      ...projectHomeRoots,
+    ]);
+  });
   register("write_local_file", ({ worktreePath, filePath, base64Data }) =>
     writeFileBase64(
       asString(worktreePath, "worktreePath"),

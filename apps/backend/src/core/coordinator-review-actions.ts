@@ -13,6 +13,7 @@ import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-helpers.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 
 function requestAlias(
   association: { requestAliases?: Array<{ requestId: string; payloadHash: string }> },
@@ -83,6 +84,8 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
       const environment = await context.storage.getEnvironment(input.environmentId);
       if (!environment || environment.projectId !== caller.projectId)
         throw new Error("Environment not found in this project");
+      if (isProjectHomeEnvironment(environment))
+        throw new Error("Coordinator credential cannot act on the project checkout");
       const config = await context.storage.loadConfig();
       const instructionWasProvided = Object.hasOwn(input, "reviewInstruction");
       const start: StartMultiReviewInput = {
@@ -303,6 +306,13 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
           saved.snapshot.projectId !== caller.projectId
         )
           throw new Error("Multi Review not found in this project");
+        if (surface === "address") {
+          // Addressing starts a writable fix session in the workflow's
+          // environment; on the project home that is the read-only checkout.
+          const environment = await context.storage.getEnvironment(saved.snapshot.environmentId);
+          if (isProjectHomeEnvironment(environment))
+            throw new Error("Coordinator credential cannot act on the project checkout");
+        }
         const associations = await context.storage.listCoordinatorWorkflowAssociations(
           caller.projectId,
         );

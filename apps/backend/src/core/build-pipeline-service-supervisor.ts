@@ -68,7 +68,11 @@ import {
   type ReviewFanoutStep,
 } from "./build-pipeline-review-fanout.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
-import { probeReviewWorktreeOnce } from "./review-worktree-probe.js";
+import {
+  probeReviewWorktree,
+  probeReviewWorktreeOnce,
+  type ReviewWorktreeProbeOptions,
+} from "./review-worktree-probe.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   createDiscoveryPrompt,
@@ -96,6 +100,13 @@ import {
   discardSessionReviewReports,
 } from "./build-pipeline-service-helpers.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
+
+/**
+ * Shown in the build header while the pipeline waits for a person. Says what
+ * happened, the likely reason, and what each available control will do.
+ */
+export const UNCHANGED_FIX_PAUSE_MESSAGE =
+  "Paused: the fix stage finished without changing the branch, so another review and verification round would check identical code. The verification failure may not be caused by this branch (for example a test that also fails on the target branch, or one this host cannot run). Read the Fix transcript, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
 
 export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
   /**
@@ -583,6 +594,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     switch (pipeline.phase) {
       case "building":
       case "fixing":
+        if (await this.pauseUnchangedFix(pipeline, session)) return;
         if (
           (usesReviewFanout(pipeline) || pipeline.reviewPreparation) &&
           session.label !== REVIEW_PACKAGE_SESSION_LABEL
@@ -639,11 +651,71 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     return last;
   }
 
-  protected async probeWorktreeOnce(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
+  protected async probeWorktreeOnce(
+    pipeline: BuildPipeline,
+    options: ReviewWorktreeProbeOptions = {},
+  ): Promise<ReviewWorktreeSnapshot> {
     return probeReviewWorktreeOnce(
       (command, args) => this.invoke(command, args),
       pipeline.environmentId,
+      options,
     );
+  }
+
+  /**
+   * Content identity of the worktree, or undefined when it cannot be observed.
+   *
+   * Undefined is not an error: the only consumer is the unchanged-fix check,
+   * which then lets the loop continue exactly as it did before the check
+   * existed rather than failing a stage over an optional optimisation.
+   */
+  protected async worktreeFingerprint(pipeline: BuildPipeline): Promise<string | undefined> {
+    const snapshot = await probeReviewWorktree(
+      (command, args) => this.invoke(command, args),
+      pipeline.environmentId,
+      WORKTREE_PROBE_ATTEMPTS,
+      { fingerprint: true },
+    );
+    return snapshot.status === "unknown" ? undefined : snapshot.fingerprint;
+  }
+
+  /**
+   * Pauses the pipeline when a fix turn ended without changing the worktree.
+   *
+   * Review and verification of byte-identical code reach the same verdict, so
+   * continuing would only spend full review rounds until the iteration cap and
+   * then fail a branch whose work may be finished. The usual cause is a failure
+   * the fix agent judged unrelated to this branch — a test that also fails on
+   * the target branch, or one the host cannot run — and that is a call for a
+   * person, not for another round.
+   *
+   * The baseline is consumed on the first comparison, so Resume runs the next
+   * round as before instead of pausing again on the same turn.
+   */
+  protected async pauseUnchangedFix(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    const baseline = session.fixWorktreeFingerprintAtStart;
+    if (session.phase !== "fix" || !baseline) return false;
+    // Every attempt in this fix stage shares the original baseline. Consume
+    // all copies so a restart or Resume cannot compare this same stage again.
+    for (const attempt of pipeline.sessions) {
+      if (attempt.phase === "fix" && attempt.iteration === session.iteration) {
+        delete attempt.fixWorktreeFingerprintAtStart;
+      }
+    }
+    const current = await this.worktreeFingerprint(pipeline);
+    if (current !== baseline) {
+      await this.save(pipeline, pipeline.backendRevision);
+      return false;
+    }
+    pipeline.pausedFromPhase = "fixing";
+    pipeline.phase = "paused";
+    pipeline.error = UNCHANGED_FIX_PAUSE_MESSAGE;
+    delete pipeline.stallWarning;
+    await this.save(pipeline, pipeline.backendRevision);
+    return true;
   }
 
   /**
@@ -1126,6 +1198,22 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         !override && sessionPhase === "verify"
           ? await this.validationBaseline(pipeline, sessionPhase)
           : undefined;
+      // Only a real fix turn: the dedicated package-preparation session also
+      // runs as "fix" but always arrives with an override and never edits code.
+      const originalFix = pipeline.sessions.find(
+        (session) =>
+          session.phase === "fix" &&
+          session.iteration === pipeline.iteration &&
+          session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+      );
+      // A retry/restart must compare with the code before the first attempt,
+      // including when that attempt's probe was unavailable or already consumed.
+      const fixWorktreeFingerprint =
+        !override && sessionPhase === "fix"
+          ? originalFix
+            ? originalFix.fixWorktreeFingerprintAtStart
+            : await this.worktreeFingerprint(pipeline)
+          : undefined;
       const { agent, model, effort, fastMode } = override?.settings
         ? await this.settingsForSelection(pipeline, override.settings)
         : await this.stepSettings(pipeline, sessionPhase);
@@ -1212,6 +1300,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             ? [...validationWorktree.paths]
             : []
           : undefined,
+        ...(fixWorktreeFingerprint
+          ? { fixWorktreeFingerprintAtStart: fixWorktreeFingerprint }
+          : {}),
       };
       pipeline.sessions.push(session);
       pipeline.currentSessionIndex = pipeline.sessions.length - 1;

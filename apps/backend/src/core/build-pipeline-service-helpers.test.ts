@@ -17,8 +17,11 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { StorageService } from "./storage.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
+import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { UNCHANGED_FIX_PAUSE_MESSAGE } from "./build-pipeline-service-supervisor.js";
 import {
   connectionDefaultsFor,
   fastModeForModel,
@@ -238,9 +241,15 @@ class FakeProvider implements BuildPipelineProvider {
   async abort(_sessionId: string): Promise<void> {}
 }
 
+class RecoveryTestService extends BuildPipelineService {
+  recoverMissingStage(snapshot: BuildPipeline): Promise<void> {
+    return this.restartMissingStage(snapshot);
+  }
+}
+
 async function withService(
   run: (
-    service: BuildPipelineService,
+    service: RecoveryTestService,
     storage: StorageService,
     provider: FakeProvider,
     invocations: Array<{ command: string; args: Record<string, unknown> }>,
@@ -255,6 +264,9 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
+      fingerprint?: string;
+      probeError?: Error;
+      workflowResults?: WorkflowResultService;
       kanbanTasks: Map<
         string,
         {
@@ -267,6 +279,7 @@ async function withService(
       >;
     },
   ) => Promise<void>,
+  options: { toolMode?: boolean } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
   const storage = new StorageService(dataDir);
@@ -320,6 +333,11 @@ async function withService(
     failCommandsOnce: new Map<string, number>(),
     currentHead: "1111111111111111111111111111111111111111",
     uncommittedPaths: [] as string[],
+    // Content identity is opt-in, matching the real probe: absent unless a
+    // test sets it, so the unchanged-fix check stays disabled by default.
+    fingerprint: undefined as string | undefined,
+    probeError: undefined as Error | undefined,
+    workflowResults: options.toolMode ? new WorkflowResultService(dataDir) : undefined,
     kanbanTasks,
   };
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
@@ -336,9 +354,11 @@ async function withService(
       return controls.detection as T;
     }
     if (command === "get_environment_uncommitted_paths") {
+      if (args.fingerprint && controls.probeError) throw controls.probeError;
       return {
         head: controls.currentHead,
         paths: [...controls.uncommittedPaths],
+        ...(args.fingerprint && controls.fingerprint ? { fingerprint: controls.fingerprint } : {}),
       } as T;
     }
     if (command === "generate_looped_review_package") {
@@ -389,10 +409,36 @@ async function withService(
     }
     throw new Error(`Unexpected command: ${command}`);
   };
-  const service = new BuildPipelineService(storage, invoke, {
+  const service = new RecoveryTestService(storage, invoke, {
     autoAdvance: false,
     provider: async () => provider,
+    ...(controls.workflowResults
+      ? {
+          workflowResults: controls.workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+        }
+      : {}),
   });
+  if (controls.workflowResults) {
+    const send = provider.send.bind(provider);
+    provider.send = async (sessionId, prompt, sendOptions) => {
+      await send(sessionId, prompt, sendOptions);
+      if (["build", "review", "verify", "fix"].includes(provider.phases.get(sessionId)!)) {
+        const result = await provider.structured(sessionId, sendOptions.requestId);
+        if (!result.ok) throw new Error("Test provider returned no submission");
+        expect(
+          await controls.workflowResults!.submit(
+            { environmentId: "env-1", projectId: "project-1" },
+            sendOptions.requestId,
+            result.value,
+          ),
+        ).toMatchObject({ ok: true });
+      }
+    };
+  }
   try {
     await run(service, storage, provider, invocations, controls);
   } finally {
@@ -405,6 +451,26 @@ async function pipeline(storage: StorageService, id: string): Promise<BuildPipel
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
+}
+
+/** Simulates another process changing the authoritative snapshot. */
+async function mutateStored(
+  storage: StorageService,
+  id: string,
+  mutation: (snapshot: BuildPipeline) => void,
+): Promise<void> {
+  const record = await storage.getBuildPipeline(id);
+  if (!record) throw new Error("Pipeline disappeared");
+  const snapshot = record.snapshot as BuildPipeline;
+  mutation(snapshot);
+  await storage.saveBuildPipeline(
+    id,
+    snapshot.projectId,
+    snapshot.environmentId,
+    record.version,
+    snapshot,
+    record.revision,
+  );
 }
 
 function startInput(
@@ -445,8 +511,9 @@ async function startBuilding(
 async function startVerifying(
   service: BuildPipelineService,
   storage: StorageService,
+  overrides: Partial<Parameters<BuildPipelineService["start"]>[0]> = {},
 ): Promise<BuildPipeline> {
-  const started = await service.start(startInput());
+  const started = await service.start(startInput(overrides));
   for (let pass = 0; pass < 4; pass += 1) {
     await service.advanceNow(started.id);
   }
@@ -605,6 +672,338 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(verifying.id);
 
       expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
+    });
+  });
+
+  describe("a fix that leaves the worktree unchanged", () => {
+    const UNCHANGED = "a".repeat(64);
+    const CHANGED = "b".repeat(64);
+
+    /** Fails the first verification and returns the pipeline in its fix stage. */
+    async function startFixing(
+      service: BuildPipelineService,
+      storage: StorageService,
+      provider: FakeProvider,
+    ): Promise<BuildPipeline> {
+      const structured = provider.structured.bind(provider);
+      provider.structured = async <T>(sessionId: string, requestId: string) =>
+        provider.phases.get(sessionId) === "verify"
+          ? ({
+              ok: true,
+              provider: "claude",
+              requestId,
+              value: { complete: false, rationale: "options.test.ts fails on this host." },
+            } as StructuredOutputResult<T>)
+          : structured<T>(sessionId, requestId);
+      const verifying = await startVerifying(service, storage);
+      await service.advanceNow(verifying.id);
+      const fixing = await pipeline(storage, verifying.id);
+      expect(fixing.phase).toBe("fixing");
+      return fixing;
+    }
+
+    test("a requested repair failing on both refs remains incomplete and opens a fix", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const structured = provider.structured.bind(provider);
+        provider.structured = async <T>(id: string, requestId: string) =>
+          provider.phases.get(id) === "verify"
+            ? ({
+                ok: true,
+                provider: "claude",
+                requestId,
+                value: {
+                  complete: false,
+                  rationale:
+                    "The requested runner repair still fails on HEAD and origin/main; ticket acceptance criteria take precedence.",
+                },
+              } as StructuredOutputResult<T>)
+            : structured<T>(id, requestId);
+        const verifying = await startVerifying(service, storage, {
+          taskSnapshot: {
+            ...startInput().taskSnapshot,
+            acceptanceCriteria: "Repair the runner hang in options.test.ts.",
+          },
+        });
+        expect(provider.sent.at(-1)?.prompt).toContain(
+          "If any ticket-required repair remains unmet on this branch, report complete: false",
+        );
+        await service.advanceNow(verifying.id);
+        const fixing = await pipeline(storage, verifying.id);
+        expect(fixing.phase).toBe("fixing");
+        expect(fixing.verificationResult).toBe("fail");
+        expect(provider.sent.at(-1)?.prompt).toContain(
+          "including requested repairs that also fail on origin/main",
+        );
+        await service.advanceNow(verifying.id);
+        expect((await pipeline(storage, verifying.id)).phase).toBe("paused");
+        expect(provider.created.some((session) => session.phase === "pr")).toBe(false);
+      });
+    });
+
+    test("pauses instead of re-reviewing identical code", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+        expect(fixing.sessions.at(-1)).toMatchObject({
+          phase: "fix",
+          fixWorktreeFingerprintAtStart: UNCHANGED,
+        });
+
+        await service.advanceNow(fixing.id);
+
+        const paused = await pipeline(storage, fixing.id);
+        expect(paused).toMatchObject({
+          phase: "paused",
+          pausedFromPhase: "fixing",
+          error: UNCHANGED_FIX_PAUSE_MESSAGE,
+        });
+        expect(paused.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+        expect(
+          paused.sessions.some((session) => session.phase === "review" && session.iteration === 1),
+        ).toBe(false);
+      });
+    });
+
+    test("continues to review when the fix changed the worktree", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+
+        controls.fingerprint = CHANGED;
+        await service.advanceNow(fixing.id);
+
+        const next = await pipeline(storage, fixing.id);
+        expect(next.phase).toBe("reviewing");
+        expect(next.error).toBeUndefined();
+      });
+    });
+
+    test("a new verification failure opens a new fix-stage baseline", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+        controls.fingerprint = CHANGED;
+        await service.advanceNow(fixing.id);
+        await service.advanceNow(fixing.id);
+        expect((await pipeline(storage, fixing.id)).phase).toBe("verifying");
+        await service.advanceNow(fixing.id);
+        const nextFix = await pipeline(storage, fixing.id);
+        expect(nextFix).toMatchObject({ phase: "fixing", iteration: 2 });
+        expect(nextFix.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBe(CHANGED);
+        await service.advanceNow(fixing.id);
+        expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
+      });
+    });
+
+    test("continues the loop when the fingerprint cannot be established", async () => {
+      await withService(async (service, storage, provider) => {
+        const fixing = await startFixing(service, storage, provider);
+        expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+
+        await service.advanceNow(fixing.id);
+
+        expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+      });
+    });
+
+    for (const recovery of ["retry", "restart", "missing-stage"] as const) {
+      test(`${recovery} preserves the baseline before a failed fix changed code`, async () => {
+        await withService(async (service, storage, provider, invocations, controls) => {
+          controls.fingerprint = UNCHANGED;
+          const fixing = await startFixing(service, storage, provider);
+          const originalSessionId = fixing.sessions.at(-1)!.sdkSessionId;
+          controls.fingerprint = CHANGED;
+          const before = invocations.filter((call) => call.args.fingerprint).length;
+          if (recovery === "retry") {
+            const status = provider.status.bind(provider);
+            provider.status = async (id) => (id === originalSessionId ? "error" : status(id));
+            await service.advanceNow(fixing.id);
+            expect((await pipeline(storage, fixing.id)).phase).toBe("failed");
+            await service.retryStage(fixing.id);
+          } else if (recovery === "restart") {
+            await service.restartCurrentStep(fixing.id);
+          } else {
+            // Recovery receives a missing current session in memory. Storage
+            // rejects invalid indexes, so enter the recovery method directly.
+            const record = (await storage.getBuildPipeline(fixing.id))!;
+            const snapshot = record.snapshot as BuildPipeline;
+            snapshot.backendRevision = record.revision;
+            snapshot.currentSessionIndex = snapshot.sessions.length;
+            await service.recoverMissingStage(snapshot);
+          }
+          const retried = await pipeline(storage, fixing.id);
+          expect(retried.sessions.at(-1)).toMatchObject({
+            phase: "fix",
+            fixWorktreeFingerprintAtStart: UNCHANGED,
+          });
+          expect(retried.sessions.at(-1)!.sdkSessionId).not.toBe(originalSessionId);
+          expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(before);
+          // The replacement makes no further changes, but the stage as a whole did.
+          await service.advanceNow(fixing.id);
+          const next = await pipeline(storage, fixing.id);
+          expect(next.phase).toBe("reviewing");
+          expect(
+            next.sessions
+              .filter((session) => session.phase === "fix")
+              .every((session) => session.fixWorktreeFingerprintAtStart === undefined),
+          ).toBe(true);
+        });
+      });
+    }
+
+    test("restart keeps an unavailable initial baseline disabled", async () => {
+      await withService(async (service, storage, provider, invocations, controls) => {
+        const fixing = await startFixing(service, storage, provider);
+        controls.fingerprint = UNCHANGED;
+        const before = invocations.filter((call) => call.args.fingerprint).length;
+        await service.restartCurrentStep(fixing.id);
+        expect(
+          (await pipeline(storage, fixing.id)).sessions.at(-1)?.fixWorktreeFingerprintAtStart,
+        ).toBeUndefined();
+        await service.advanceNow(fixing.id);
+        expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+        expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(before);
+      });
+    });
+
+    for (const failure of ["unavailable", "failed", "transient"] as const) {
+      test(`consumes the persisted baseline after ${failure} completion probes`, async () => {
+        await withService(async (service, storage, provider, invocations, controls) => {
+          controls.fingerprint = UNCHANGED;
+          const fixing = await startFixing(service, storage, provider);
+          const before = invocations.filter((call) => call.args.fingerprint).length;
+          if (failure === "unavailable") controls.fingerprint = undefined;
+          else if (failure === "failed") controls.probeError = new Error("busy");
+          else controls.failCommandsOnce.set("get_environment_uncommitted_paths", 2);
+          await service.advanceNow(fixing.id);
+          const next = await pipeline(storage, fixing.id);
+          expect(next.phase).toBe(failure === "transient" ? "paused" : "reviewing");
+          expect(
+            next.sessions
+              .filter((session) => session.phase === "fix")
+              .every((session) => session.fixWorktreeFingerprintAtStart === undefined),
+          ).toBe(true);
+          expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(before + 3);
+          controls.probeError = undefined;
+          controls.fingerprint = UNCHANGED;
+          // Reload the durable snapshot through the next pass; no stale comparison remains.
+          await service.advanceNow(fixing.id);
+          expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(before + 3);
+        });
+      });
+    }
+
+    test("does not retry an oversized fingerprint at fix start or completion", async () => {
+      await withService(async (service, storage, provider, invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        controls.probeError = new Error("review-worktree-probe:too-large");
+        const fixing = await startFixing(service, storage, provider);
+        expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(1);
+        expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+        // Install a persisted baseline to exercise the same policy on completion.
+        await mutateStored(storage, fixing.id, (snapshot) => {
+          snapshot.sessions.at(-1)!.fixWorktreeFingerprintAtStart = UNCHANGED;
+        });
+        await service.advanceNow(fixing.id);
+        expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(2);
+        expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+      });
+    });
+
+    for (const preparation of ["fanout", "preparation"] as const) {
+      test(`pauses before ${preparation} package preparation and excludes its override turn`, async () => {
+        await withService(async (service, storage, provider, invocations, controls) => {
+          controls.fingerprint = UNCHANGED;
+          const fixing = await startFixing(service, storage, provider);
+          await mutateStored(storage, fixing.id, (snapshot) => {
+            if (preparation === "fanout") {
+              snapshot.reviewers = [{ agent: "claude" }, { agent: "codex" }];
+            } else snapshot.reviewPreparation = { agent: "claude" };
+          });
+          const before = invocations.length;
+          const sessionCount = provider.created.length;
+          await service.advanceNow(fixing.id);
+          expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
+          expect(provider.created).toHaveLength(sessionCount);
+          expect(
+            invocations
+              .slice(before)
+              .some((call) => call.command === "generate_looped_review_package"),
+          ).toBe(false);
+
+          // Explicit resume moves to the preparation override, without a new fingerprint.
+          await service.resume(fixing.id);
+          await service.advanceNow(fixing.id);
+          const probes = invocations.filter((call) => call.args.fingerprint).length;
+          await service.advanceNow(fixing.id);
+          const preparing = await pipeline(storage, fixing.id);
+          expect(preparing.sessions.at(-1)).toMatchObject({
+            phase: "fix",
+            label: REVIEW_PACKAGE_SESSION_LABEL,
+          });
+          expect(preparing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+          expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(probes);
+          // Completion of that override also must not trigger the unchanged-fix check.
+          await service.advanceNow(fixing.id);
+          expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+          expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(probes);
+        });
+      });
+    }
+
+    for (const action of ["resume", "cancel"] as const) {
+      test(`tool-mode auto-pause retains the unused submission until ${action} closes it`, async () => {
+        await withService(
+          async (service, storage, provider, _invocations, controls) => {
+            controls.fingerprint = UNCHANGED;
+            const fixing = await startFixing(service, storage, provider);
+            const session = fixing.sessions.at(-1)!;
+            expect(session.resultTransport).toBe("tool-v1");
+            const key = session.structuredRequestId!;
+            const scope = { environmentId: "env-1", projectId: "project-1" };
+            await service.advanceNow(fixing.id);
+            expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
+            expect(await controls.workflowResults!.status(scope, key)).toMatchObject({
+              lifecycle: "accepted",
+            });
+            await service[action](fixing.id);
+            expect(await controls.workflowResults!.status(scope, key)).toMatchObject({
+              lifecycle: action === "resume" ? "superseded" : "cancelled",
+              completion: "blocked",
+            });
+            expect(
+              await controls.workflowResults!.submit(scope, key, TEST_REVIEW_PREPARATION),
+            ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+            if (action === "resume") {
+              expect(
+                (await pipeline(storage, fixing.id)).sessions.at(-1)!.structuredRequestId,
+              ).not.toBe(key);
+            }
+          },
+          { toolMode: true },
+        );
+      });
+    }
+
+    test("resume runs the next round instead of pausing again", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+        await service.advanceNow(fixing.id);
+        expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
+
+        const resumed = await service.resume(fixing.id);
+        expect(resumed.phase).toBe("fixing");
+        expect(resumed.error).toBeUndefined();
+        // The first pass dispatches the resume prompt to the idle fix session;
+        // the second sees that turn finish on the same, unchanged worktree.
+        await service.advanceNow(fixing.id);
+        expect(provider.sent.at(-1)?.prompt).toContain("Resume fixing");
+        await service.advanceNow(fixing.id);
+
+        expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+      });
     });
   });
 });

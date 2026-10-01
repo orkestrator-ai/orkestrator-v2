@@ -513,6 +513,11 @@ ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 ${wrapSystemInstructions(ADDRESS_REVIEW_FINDINGS_TAIL, MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
 }
 
+/** Failures unrelated to the ticket need evidence before they can be excused. */
+export function preexistingFailureInstruction(targetBranch: string): string {
+  return `Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. If any ticket-required repair remains unmet on this branch, report complete: false. Only failures unrelated to the ticket acceptance criteria may be excused as pre-existing or environmental. For each failure, check whether it involves code this branch changes (git diff origin/${targetBranch}...HEAD). If that does not settle it, rerun only that check against origin/${targetBranch} in a temporary detached worktree outside this checkout (git worktree add --detach), and remove that worktree before reporting. An unrelated failure reproduced on origin/${targetBranch}, or demonstrably caused by a missing tool or an operating-system path difference rather than the code, does not fail verification. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause; without that evidence, report complete: false. List every excused failure in the rationale as pre-existing or environmental, with the target-branch reproduction or demonstrated environmental-cause evidence, and judge all ticket acceptance criteria.`;
+}
+
 export const VERIFICATION_OUTPUT_CONTRACT =
   'Send interim progress only through the provider\'s commentary or update channel, using ordinary prose sentences. Do not use the final-response channel for an update. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant response the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}';
 
@@ -526,6 +531,7 @@ export function verificationPrompt(
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
+    preexistingFailureInstruction(targetBranch),
     VERIFICATION_OUTPUT_CONTRACT,
   ]
     .filter(Boolean)
@@ -544,6 +550,7 @@ export function fixPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
+    `Fix every unmet ticket acceptance criterion, including requested repairs that also fail on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be left alone. For those unrelated failures, establish target-branch reproduction or a demonstrated environmental cause before treating them as pre-existing or environmental; do not change unrelated code or tests to hide them. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. Name any excused unrelated failure in your final message with the target-branch reproduction or demonstrated environmental-cause evidence.`,
     usesReviewFanout(pipeline) || pipeline.reviewPreparation
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),

@@ -565,6 +565,71 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Use Bun.");
   });
 
+  test("verificationPrompt requires evidence to excuse unrelated failures", () => {
+    const prompt = verificationPrompt(pipeline(), "", "release/2026.07-hotfix");
+
+    expect(prompt).toContain(
+      "Only failures unrelated to the ticket acceptance criteria may be excused",
+    );
+    expect(prompt).toContain("git diff origin/release/2026.07-hotfix...HEAD");
+    expect(prompt).toContain("temporary detached worktree outside this checkout");
+    expect(prompt).toContain("remove that worktree before reporting");
+    expect(prompt).toContain("does not fail verification");
+    expect(prompt).toContain("pre-existing or environmental");
+    // The guidance precedes the output contract so the JSON stays the last word.
+    expect(
+      prompt.indexOf("Only failures unrelated to the ticket acceptance criteria"),
+    ).toBeLessThan(prompt.indexOf("make the final assistant response the only JSON object"));
+  });
+
+  test("fixPrompt leaves failures the branch did not cause alone", () => {
+    const prompt = fixPrompt(pipeline(), "", "options.test.ts fails.", "release/2026.07-hotfix");
+
+    expect(prompt).toContain("Fix every unmet ticket acceptance criterion");
+    expect(prompt).toContain("also fail on origin/release/2026.07-hotfix");
+    expect(prompt).toContain("do not change unrelated code or tests to hide them");
+    expect(prompt).toContain("pre-existing or environmental");
+  });
+
+  test("ticket-required repairs override baseline failures in both prompts", () => {
+    const ticket = pipeline();
+    ticket.taskSnapshot.acceptanceCriteria = "Repair the runner hang in options.test.ts.";
+    const verification = verificationPrompt(ticket, "", "main");
+    const fix = fixPrompt(ticket, "", "options.test.ts hangs on both refs.", "main");
+    for (const prompt of [verification, fix]) {
+      expect(prompt).toContain("Repair the runner hang in options.test.ts.");
+      expect(prompt).toContain("Only failures unrelated to the ticket acceptance criteria");
+    }
+    expect(verification).toContain("Ticket acceptance criteria take precedence");
+    expect(verification).toContain(
+      "a requested repair remains mandatory even if the failure also occurs on origin/main",
+    );
+    expect(verification).toContain(
+      "If any ticket-required repair remains unmet on this branch, report complete: false",
+    );
+    expect(fix).toContain("including requested repairs that also fail on origin/main");
+  });
+
+  test("timeouts and silent checks require target reproduction or a demonstrated missing tool", () => {
+    for (const prompt of [
+      verificationPrompt(pipeline(), "", "release"),
+      fixPrompt(pipeline(), "", "", "release"),
+    ]) {
+      expect(prompt).toContain(
+        "A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/release or the cause is demonstrably a missing tool",
+      );
+      expect(prompt).toContain(
+        "A timeout or silence alone is not evidence of an environmental cause",
+      );
+      expect(prompt).toContain(
+        "with the target-branch reproduction or demonstrated environmental-cause evidence",
+      );
+    }
+    expect(verificationPrompt(pipeline(), "", "release")).toContain(
+      "without that evidence, report complete: false",
+    );
+  });
+
   test("fixPrompt carries verification feedback into a committed fix request", () => {
     const prompt = fixPrompt(pipeline(), "", "The inactive-tab case still fails.");
 

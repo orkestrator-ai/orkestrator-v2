@@ -184,6 +184,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       updateToken(connectionId: string, token: string): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:update-token", connectionId, token);
       },
+      rename(connectionId: string, nickname: string | null): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:rename", connectionId, nickname);
+      },
       use(connectionId: string): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:use", connectionId);
       },

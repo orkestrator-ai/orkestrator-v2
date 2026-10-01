@@ -470,6 +470,17 @@ async function createWindow(connectionId?: string): Promise<void> {
   }
 }
 
+function refreshConnectionTitles(): void {
+  for (const context of windowContexts.values()) {
+    if (context.window.isDestroyed()) continue;
+    try {
+      setConnectionTitle(context.window, context.scope);
+    } catch {
+      // A window still binding its connection sets its title once bound.
+    }
+  }
+}
+
 function publishConnectionLists(): void {
   if (!connectionManager) return;
   for (const context of windowContexts.values()) {
@@ -514,7 +525,7 @@ function registerIpc(): void {
     },
     connectToRemote: async (input, event) => {
       const list = await manager().connect(input, scopeForEvent(event));
-      updateWindowTitle(event);
+      refreshConnectionTitles();
       publishConnectionLists();
       return list;
     },
@@ -522,6 +533,15 @@ function registerIpc(): void {
       const list = await manager().updateToken(connectionId, token, scopeForEvent(event));
       publishConnectionLists();
       return list;
+    },
+    renameConnection: async (connectionId, nickname, event) => {
+      try {
+        return await manager().rename(connectionId, nickname, scopeForEvent(event));
+      } finally {
+        // A durable rename survives the requesting window closing during its save.
+        refreshConnectionTitles();
+        publishConnectionLists();
+      }
     },
     useConnection: async (connectionId, event) => {
       const context = contextForEvent(event);

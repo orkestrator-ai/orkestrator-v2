@@ -3,7 +3,11 @@ import {
   normalizeGatewayToken,
 } from "@orkestrator/protocol/gateway-token";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
-import { expandTailscaleMachineName } from "@orkestrator/protocol/connections";
+import {
+  connectionDisplayName,
+  expandTailscaleMachineName,
+  normalizeConnectionNickname,
+} from "@orkestrator/protocol/connections";
 
 const ADDRESS_KEY = "orkestrator.public.backend-address";
 const SESSION_TOKENS_KEY = "orkestrator.public.gateway-tokens";
@@ -22,6 +26,7 @@ export interface SavedConnection {
 interface RecentConnection {
   id: string;
   name: string;
+  nickname?: string;
   address: string;
   lastConnectedAt: string;
 }
@@ -78,9 +83,16 @@ function loadRecentConnections(): RecentConnection[] {
         )
           return [];
         try {
-          const address = normalizeBackendAddress((entry as RecentConnection).address);
-          if ((entry as RecentConnection).id !== connectionId(address)) return [];
-          return [{ ...(entry as RecentConnection), address }];
+          const { nickname, ...recent } = entry as RecentConnection;
+          const address = normalizeBackendAddress(recent.address);
+          if (recent.id !== connectionId(address)) return [];
+          return [
+            {
+              ...recent,
+              ...(typeof nickname === "string" && nickname ? { nickname } : {}),
+              address,
+            },
+          ];
         } catch {
           return [];
         }
@@ -159,13 +171,18 @@ export function loadSavedConnection(): SavedConnection {
   };
 }
 
-export function saveConnection(connection: SavedConnection): void {
+export function saveConnection(connection: SavedConnection & { nickname?: string }): void {
   const address = normalizeBackendAddress(connection.address);
   const id = connectionId(address);
   const now = new Date().toISOString();
+  const recentConnections = loadRecentConnections();
+  const nickname =
+    normalizeConnectionNickname(connection.nickname) ??
+    recentConnections.find((entry) => entry.id === id)?.nickname;
   const recent: RecentConnection = {
     id,
     name: new URL(address).hostname,
+    ...(nickname ? { nickname } : {}),
     address,
     lastConnectedAt: now,
   };
@@ -173,7 +190,7 @@ export function saveConnection(connection: SavedConnection): void {
   localStorage.setItem(
     CONNECTIONS_KEY,
     JSON.stringify(
-      [recent, ...loadRecentConnections().filter((entry) => entry.id !== id)].slice(
+      [recent, ...recentConnections.filter((entry) => entry.id !== id)].slice(
         0,
         MAX_RECENT_CONNECTIONS,
       ),
@@ -210,6 +227,7 @@ export function listBrowserConnections(): ConnectionList {
     credentialStorage: "session-only",
     connections: loadRecentConnections().map<ConnectionSummary>((connection) => ({
       ...connection,
+      name: connectionDisplayName(connection),
       kind: "remote",
       active: connection.id === activeConnectionId,
       requiresToken: !tokens[connection.id],
@@ -237,6 +255,25 @@ export function selectBrowserConnection(id: string): ConnectionList {
   if (!loadSessionTokens()[id])
     throw new Error("Enter the gateway token to reconnect to this server.");
   localStorage.setItem(ADDRESS_KEY, connection.address);
+  return listBrowserConnections();
+}
+
+export function renameBrowserConnection(id: string, value: string | null): ConnectionList {
+  const connections = loadRecentConnections();
+  if (!connections.some((entry) => entry.id === id)) {
+    throw new Error("That saved connection no longer exists.");
+  }
+  const nickname = normalizeConnectionNickname(value);
+  localStorage.setItem(
+    CONNECTIONS_KEY,
+    JSON.stringify(
+      connections.map((entry) => {
+        if (entry.id !== id) return entry;
+        const { nickname: _previous, ...recent } = entry;
+        return nickname ? { ...recent, nickname } : recent;
+      }),
+    ),
+  );
   return listBrowserConnections();
 }
 

@@ -95,6 +95,7 @@ struct RemoteWebView: UIViewRepresentable {
             list: () => call("list"),
             probe: (connectionId) => call("probe", { connectionId }),
             connect: (input) => call("connect", input || {}),
+            rename: (connectionId, nickname) => call("rename", { connectionId, nickname }),
             use: (connectionId) => call("use", { connectionId }),
             forget: (connectionId) => call("forget", { connectionId }),
           };
@@ -144,23 +145,40 @@ struct RemoteWebView: UIViewRepresentable {
         /// `UIViewRepresentableContext` cannot be constructed outside SwiftUI.
         /// `state` has already been rebound by the caller.
         func synchronizeAuthentication(with connection: RemoteConnection) {
+            // Saving the active connection is an explicit recovery action. A
+            // nickname-only update must still preserve the current WebView.
+            let previousConnection = requestedConnection ?? authenticatedConnection
+            let wasReconnected = previousConnection.map {
+                connection.hasSameAuthenticationIdentity(as: $0)
+                    && connection.lastConnectedAt != $0.lastConnectedAt
+            } ?? false
+            if case .failed = state.wrappedValue, wasReconnected, !isSwitchingThroughBridge {
+                authenticate(connection)
+                return
+            }
+            if connection.hasSameAuthenticationIdentity(as: requestedConnection) {
+                requestedConnection = connection
+            }
+            if connection.hasSameAuthenticationIdentity(as: authenticatedConnection) {
+                authenticatedConnection = connection
+            }
             if case .retrying = state.wrappedValue {
                 authenticate(connection)
                 return
             }
-            guard authenticatedConnection != connection,
+            guard !connection.hasSameAuthenticationIdentity(as: authenticatedConnection),
                   !isSwitchingThroughBridge else { return }
             authenticate(connection)
         }
 
         func authenticate(_ connection: RemoteConnection) {
             if case .retrying(let retryID) = state.wrappedValue {
-                guard handledRetryID != retryID || requestedConnection != connection else { return }
+                guard handledRetryID != retryID || !connection.hasSameAuthenticationIdentity(as: requestedConnection) else { return }
                 handledRetryID = retryID
             } else {
                 handledRetryID = nil
             }
-            guard requestedConnection != connection || state.wrappedValue != .loading else { return }
+            guard !connection.hasSameAuthenticationIdentity(as: requestedConnection) || state.wrappedValue != .loading else { return }
             authenticationTask?.cancel()
             invalidateReadiness()
             beginAuthenticationState(for: connection)
@@ -169,10 +187,10 @@ struct RemoteWebView: UIViewRepresentable {
                 do {
                     let cookie = try await self.loginCookie(for: connection)
                     try Task.checkCancellation()
-                    guard self.requestedConnection == connection else { return }
+                    guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
                     await self.set(cookie: cookie, in: webView)
                     try Task.checkCancellation()
-                    guard self.requestedConnection == connection else { return }
+                    guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
 
                     var request = URLRequest(
                         url: connection.address,
@@ -188,7 +206,7 @@ struct RemoteWebView: UIViewRepresentable {
                 } catch is CancellationError {
                     return
                 } catch {
-                    guard self.requestedConnection == connection else { return }
+                    guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
                     self.state.wrappedValue = .failed(error.localizedDescription)
                 }
             }
@@ -375,7 +393,7 @@ struct RemoteWebView: UIViewRepresentable {
         ) -> Bool {
             !Task.isCancelled
                 && readinessGeneration == generation
-                && requestedConnection == connection
+                && connection.hasSameAuthenticationIdentity(as: requestedConnection)
         }
 
         static func javaScriptBoolean(_ value: Any?) -> Bool {
@@ -571,8 +589,16 @@ struct RemoteWebView: UIViewRepresentable {
                           let token = body["token"] as? String else {
                         throw ConnectionBridgeError.invalidInput
                     }
+                    let nickname = body["nickname"]
+                    guard nickname == nil || nickname is String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
                     isSwitchingThroughBridge = true
-                    let result = try await model.connect(address: address, token: token)
+                    let result = try await model.connect(
+                        address: address,
+                        token: token,
+                        nickname: nickname as? String
+                    )
                     defer { finishBridgeSwitch() }
                     try await reply(id: requestID, result: result)
                 case "use":
@@ -582,6 +608,18 @@ struct RemoteWebView: UIViewRepresentable {
                     isSwitchingThroughBridge = true
                     let result = try await model.use(connectionID: connectionID)
                     defer { finishBridgeSwitch() }
+                    try await reply(id: requestID, result: result)
+                case "rename":
+                    // JSON null arrives as NSNull; both it and a missing key clear the nickname.
+                    let nickname = body["nickname"]
+                    guard let connectionID = body["connectionId"] as? String,
+                          nickname == nil || nickname is NSNull || nickname is String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    let result = try model.rename(
+                        connectionID: connectionID,
+                        nickname: nickname as? String
+                    )
                     try await reply(id: requestID, result: result)
                 case "forget":
                     guard let connectionID = body["connectionId"] as? String else {

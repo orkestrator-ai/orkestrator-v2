@@ -164,6 +164,11 @@ export type MainIpcDependencies = {
     token: string,
     event?: IpcEventLike,
   ) => Promise<ConnectionList>;
+  renameConnection: (
+    connectionId: string,
+    nickname: string | null,
+    event?: IpcEventLike,
+  ) => Promise<ConnectionList>;
   useConnection: (connectionId: string, event?: IpcEventLike) => Promise<ConnectionList>;
   forgetConnection: (connectionId: string, event?: IpcEventLike) => Promise<ConnectionList>;
   openConnectionWindow: (connectionId: string, event?: IpcEventLike) => Promise<void>;
@@ -250,6 +255,7 @@ export function registerMainIpc({
   probeConnection,
   connectToRemote,
   updateConnectionToken,
+  renameConnection,
   useConnection,
   forgetConnection,
   openConnectionWindow,
@@ -383,11 +389,21 @@ export function registerMainIpc({
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new Error("Expected connection details");
     }
-    const { address, token } = input as { address?: unknown; token?: unknown };
+    const { address, token, nickname } = input as {
+      address?: unknown;
+      token?: unknown;
+      nickname?: unknown;
+    };
     if (typeof address !== "string" || typeof token !== "string") {
       throw new Error("Expected an address and gateway token");
     }
-    return connectToRemote({ address, token }, event);
+    if (nickname !== undefined && typeof nickname !== "string") {
+      throw new Error("Expected the nickname to be a string");
+    }
+    return connectToRemote(
+      { address, token, ...(nickname === undefined ? {} : { nickname }) },
+      event,
+    );
   });
   handle("orkestrator:connections:use", (event, connectionId: unknown) => {
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
@@ -398,6 +414,13 @@ export function registerMainIpc({
       throw new Error("Expected a connection ID and gateway token");
     }
     return updateConnectionToken(connectionId, token, event);
+  });
+  handle("orkestrator:connections:rename", (event, connectionId: unknown, nickname: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    if (nickname !== null && typeof nickname !== "string") {
+      throw new Error("Expected a nickname string or null");
+    }
+    return renameConnection(connectionId, nickname, event);
   });
   handle("orkestrator:connections:forget", (event, connectionId: unknown) => {
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");

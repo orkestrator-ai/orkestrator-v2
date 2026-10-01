@@ -8,6 +8,7 @@ import {
   loadSavedConnection,
   normalizeBackendAddress,
   probeBrowserConnection,
+  renameBrowserConnection,
   saveConnection,
   selectBrowserConnection,
   updateSavedToken,
@@ -112,6 +113,29 @@ describe("saved public connection", () => {
     forgetConnection();
     expect(loadSavedConnection()).toEqual({ address: "", token: "" });
     expect(listBrowserConnections().connections).toEqual([]);
+  });
+
+  test("renames a saved server, keeps the nickname on reconnect, and restores the hostname", () => {
+    saveConnection({ address: "https://one.example", token });
+    const id = listBrowserConnections().connections[0]?.id ?? "missing";
+
+    expect(renameBrowserConnection(id, "  Home   lab ").connections[0]).toMatchObject({
+      name: "Home lab",
+      nickname: "Home lab",
+      address: "https://one.example",
+    });
+    saveConnection({ address: "https://one.example", token });
+    expect(listBrowserConnections().connections[0]?.name).toBe("Home lab");
+    saveConnection({ address: "https://one.example", token, nickname: "Desk" });
+    expect(listBrowserConnections().connections[0]?.name).toBe("Desk");
+
+    const cleared = renameBrowserConnection(id, null).connections[0];
+    expect(cleared?.name).toBe("one.example");
+    expect(cleared).not.toHaveProperty("nickname");
+    expect(() => renameBrowserConnection("remote:https://missing.example", "x")).toThrow(
+      "no longer exists",
+    );
+    expect(() => renameBrowserConnection(id, "x".repeat(65))).toThrow("64 characters");
   });
 
   test("verifies and replaces the token for a saved server without selecting it", async () => {

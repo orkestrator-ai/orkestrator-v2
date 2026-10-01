@@ -38,6 +38,7 @@ function installConnections(
     probe: (connectionId: string) => Promise<boolean>;
     connect: (input: { address: string; token: string }) => Promise<ConnectionList>;
     updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
+    rename: ((connectionId: string, nickname: string | null) => Promise<ConnectionList>) | null;
     use: (connectionId: string) => Promise<ConnectionList>;
     forget: (connectionId: string) => Promise<ConnectionList>;
     openWindow: (connectionId: string) => Promise<void>;
@@ -48,6 +49,19 @@ function installConnections(
   const connect = mock(overrides.connect ?? (async () => connectionList));
   const updateToken = mock(overrides.updateToken ?? (async () => connectionList));
   const use = mock(overrides.use ?? (async () => connectionList));
+  const rename = mock(
+    overrides.rename ??
+      (async (connectionId: string, nickname: string | null) => ({
+        ...connectionList,
+        connections: connectionList.connections.map((connection) => {
+          if (connection.id !== connectionId) return connection;
+          const { nickname: _previous, ...rest } = connection;
+          return nickname
+            ? { ...rest, name: nickname, nickname }
+            : { ...rest, name: new URL(connection.address!).hostname };
+        }),
+      })),
+  );
   const forget = mock(
     overrides.forget ??
       (async () => ({
@@ -68,11 +82,20 @@ function installConnections(
       writeImage: mock(async () => undefined),
     },
     dialog: { open: mock(async () => null) },
-    connections: { list, probe, connect, updateToken, use, forget, openWindow },
+    connections: {
+      list,
+      probe,
+      connect,
+      updateToken,
+      ...(overrides.rename === null ? {} : { rename }),
+      use,
+      forget,
+      openWindow,
+    },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { list, probe, connect, updateToken, use, forget, openWindow };
+  return { list, probe, connect, updateToken, rename, use, forget, openWindow };
 }
 
 afterEach(() => {
@@ -143,6 +166,144 @@ describe("ConnectionsSettings", () => {
         token: "gateway-token-123456",
       }),
     );
+  });
+
+  test("adds a connection with an optional nickname", async () => {
+    const api = installConnections();
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
+      target: { value: "workstation" },
+    });
+    fireEvent.change(screen.getByLabelText(/Nickname/), { target: { value: "Studio" } });
+    fireEvent.change(screen.getByLabelText("Gateway token"), {
+      target: { value: "gateway-token-123456" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "Connect" }).closest("form")!);
+
+    await waitFor(() =>
+      expect(api.connect).toHaveBeenCalledWith({
+        address: "workstation",
+        token: "gateway-token-123456",
+        nickname: "Studio",
+      }),
+    );
+  });
+
+  test("gives a saved connection a nickname that replaces its hostname", async () => {
+    const api = installConnections();
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename desk.tailnet.ts.net" }));
+    const dialog = screen.getByRole("dialog", { name: "Rename connection" });
+    expect(dialog.className).toContain("z-[80]");
+    const input = screen.getByLabelText("Nickname") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("desk.tailnet.ts.net");
+    fireEvent.change(input, { target: { value: "Studio Mac" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(api.rename).toHaveBeenCalledWith("remote-1", "Studio Mac"));
+    expect(await screen.findByText("Studio Mac")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Rename connection" }) === null).toBe(true);
+    expect(screen.getByText("https://desk.tailnet.ts.net")).toBeTruthy();
+    expect(api.use).not.toHaveBeenCalled();
+  });
+
+  test.each(["add", "rename"])("validates normalized Unicode nicknames in %s", async (flow) => {
+    const api = installConnections();
+    window.__orkestratorClientPlatform = "ios-wkwebview";
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+    if (flow === "add") {
+      fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+      fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
+        target: { value: "workstation" },
+      });
+      fireEvent.change(screen.getByLabelText("Gateway token"), {
+        target: { value: "gateway-token-123456" },
+      });
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "Rename desk.tailnet.ts.net" }));
+    }
+    const input = screen.getByLabelText(/Nickname/) as HTMLInputElement;
+    expect(input.hasAttribute("maxlength")).toBe(false);
+    const nickname = "🖥️".repeat(32);
+    fireEvent.change(input, { target: { value: nickname + "x" } });
+    fireEvent.click(screen.getByRole("button", { name: flow === "add" ? "Connect" : "Save" }));
+    expect(await screen.findByText("Use a nickname of 64 characters or fewer.")).toBeTruthy();
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(api.rename).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "  " + nickname + "  " } });
+    fireEvent.click(screen.getByRole("button", { name: flow === "add" ? "Connect" : "Save" }));
+    await waitFor(() => {
+      if (flow === "add") {
+        expect(api.connect).toHaveBeenCalledWith({
+          address: "workstation",
+          token: "gateway-token-123456",
+          nickname,
+        });
+      } else {
+        expect(api.rename).toHaveBeenCalledWith("remote-1", nickname);
+      }
+    });
+  });
+
+  test("clears a nickname to show the hostname again", async () => {
+    const api = installConnections({
+      ...initialList,
+      connections: initialList.connections.map((connection) =>
+        connection.id === "remote-1"
+          ? { ...connection, name: "Desk", nickname: "Desk" }
+          : connection,
+      ),
+    });
+    render(<ConnectionsSettings />);
+    await screen.findByText("Desk");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename Desk" }));
+    const input = screen.getByLabelText("Nickname") as HTMLInputElement;
+    expect(input.value).toBe("Desk");
+    fireEvent.change(input, { target: { value: "  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(api.rename).toHaveBeenCalledWith("remote-1", null));
+    expect(await screen.findByText("desk.tailnet.ts.net")).toBeTruthy();
+  });
+
+  test("shows rename errors and keeps the dialog open", async () => {
+    installConnections(initialList, {
+      rename: async () => {
+        throw new Error("Use a nickname of 64 characters or fewer.");
+      },
+    });
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename desk.tailnet.ts.net" }));
+    fireEvent.change(screen.getByLabelText("Nickname"), { target: { value: "Desk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Use a nickname of 64 characters or fewer.")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Rename connection" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  test("hides nickname controls when the client cannot save them", async () => {
+    installConnections(initialList, { rename: null });
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    expect(screen.queryByRole("button", { name: "Rename desk.tailnet.ts.net" }) === null).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    expect(screen.queryByLabelText(/Nickname/) === null).toBe(true);
   });
 
   test("keeps the add flow busy while the native client navigates", async () => {

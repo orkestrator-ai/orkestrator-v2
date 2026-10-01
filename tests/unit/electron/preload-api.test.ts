@@ -209,6 +209,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:connections:update-token",
       args: ["remote-1", "replacement-token-123456"],
     });
+    await expect(api.connections.rename("remote-1", "Studio Mac")).resolves.toEqual({
+      channel: "orkestrator:connections:rename",
+      args: ["remote-1", "Studio Mac"],
+    });
     await expect(api.connections.use("remote-1")).resolves.toEqual({
       channel: "orkestrator:connections:use",
       args: ["remote-1"],

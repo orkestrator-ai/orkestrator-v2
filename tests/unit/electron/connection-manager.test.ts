@@ -471,6 +471,180 @@ describe("Electron connection manager", () => {
     );
   });
 
+  test("saves, displays, and clears a connection nickname without touching credentials", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    globalThis.fetch = mock(async () => {
+      throw new Error("renaming must not contact the server");
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    const renamed = await manager.rename("remote-1", "  Studio\n  Mac  ");
+    expect(renamed.connections[1]).toMatchObject({
+      id: "remote-1",
+      name: "Studio Mac",
+      nickname: "Studio Mac",
+      address: "https://desk.example",
+    });
+    expect(local.getStored().connections[0]).toEqual({
+      id: "remote-1",
+      name: "desk.example",
+      nickname: "Studio Mac",
+      address: "https://desk.example",
+      encryptedToken: encrypted(token),
+      lastConnectedAt: "2026-07-14T00:00:00.000Z",
+    });
+
+    const cleared = await manager.rename("remote-1", "   ");
+    expect(cleared.connections[1]?.name).toBe("desk.example");
+    expect(cleared.connections[1]).not.toHaveProperty("nickname");
+    expect(local.getStored().connections[0]).not.toHaveProperty("nickname");
+
+    await manager.rename("remote-1", "Desk");
+    await manager.rename("remote-1", null);
+    expect(manager.getList().connections[1]?.name).toBe("desk.example");
+
+    await expect(manager.rename("local", "Laptop")).rejects.toThrow("cannot be renamed");
+    await expect(manager.rename("missing", "Desk")).rejects.toThrow("no longer exists");
+    await expect(manager.rename("remote-1", "x".repeat(65))).rejects.toThrow("64 characters");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  test("keeps the previous nickname when persisting a rename fails", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          nickname: "Desk",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    local.failNextSave();
+
+    await expect(manager.rename("remote-1", "Studio")).rejects.toThrow("config disk full");
+    expect(manager.getList().connections[1]?.name).toBe("Desk");
+    expect(local.getStored().connections[0]?.nickname).toBe("Desk");
+  });
+
+  test("reconciles a durable rename after its initiating scope closes", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    let finishSave!: () => void;
+    let startedSave!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      startedSave = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      finishSave = resolve;
+    });
+    let deferSave = false;
+    const manager = new ConnectionManager({
+      localBackend: {
+        ...local.backend,
+        invoke: async (command, args) => {
+          if (command === "save_desktop_connections" && deferSave) {
+            deferSave = false;
+            startedSave();
+            await saveGate;
+          }
+          return local.backend.invoke(command, args);
+        },
+      },
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.bind("closing-window", "local");
+    const list = await manager.connect(
+      { address: "https://desk.example", token },
+      "closing-window",
+    );
+    await manager.bind("surviving-window", list.activeConnectionId);
+    deferSave = true;
+    const rename = manager.rename(list.activeConnectionId, "Studio", "closing-window");
+    // Attach the rejection handler before releasing the scope.
+    const result = rename.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await saveStarted;
+    manager.release("closing-window");
+    finishSave();
+    const error = await result;
+    expect(error instanceof Error ? error.message : null).toContain(
+      "window is no longer available",
+    );
+    expect(manager.getList("surviving-window").connections[1]?.name).toBe("Studio");
+    expect(local.getStored().connections[0]?.nickname).toBe("Studio");
+    // A different record's save must retain the already committed rename.
+    await manager.connect({ address: "https://lab.example", token }, "surviving-window");
+    expect(
+      local.getStored().connections.find((record) => record.id === list.activeConnectionId)
+        ?.nickname,
+    ).toBe("Studio");
+    manager.release("surviving-window");
+  });
+
+  test("sets a nickname on connect and keeps it when reconnecting to the same address", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    const first = await manager.connect({
+      address: "https://desk.example",
+      token,
+      nickname: "Desk",
+    });
+    expect(first.connections[1]).toMatchObject({ name: "Desk", nickname: "Desk" });
+
+    const reconnected = await manager.connect({ address: "https://desk.example", token });
+    expect(reconnected.connections).toHaveLength(2);
+    expect(reconnected.connections[1]).toMatchObject({ name: "Desk", nickname: "Desk" });
+    expect(local.getStored().connections[0]).toMatchObject({
+      name: "desk.example",
+      nickname: "Desk",
+    });
+
+    const renamed = await manager.connect({
+      address: "https://desk.example",
+      token,
+      nickname: "Workstation",
+    });
+    expect(renamed.connections[1]?.name).toBe("Workstation");
+    await manager.use("local");
+  });
+
   test("keeps the previous saved token when replacement verification is rejected", async () => {
     const local = localBackendHarness({
       activeConnectionId: "local",

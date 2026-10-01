@@ -7,12 +7,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type {
+  BuildPhase,
   BuildPipeline,
   PipelineSession,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
-import { VERIFICATION_VERDICT_SCHEMA } from "@orkestrator/protocol/build-pipeline";
+import {
+  REVIEW_PACKAGE_SESSION_LABEL,
+  VERIFICATION_VERDICT_SCHEMA,
+} from "@orkestrator/protocol/build-pipeline";
 
 import { type StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
@@ -32,6 +36,7 @@ import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./looped-review-prompts.j
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
+  ProviderSessionObservation,
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
@@ -104,6 +109,9 @@ class FakeProvider implements BuildPipelineProvider {
   }> = [];
   private counter = 0;
   reviewReport: StructuredReviewReport = cleanReview;
+  verificationComplete = true;
+  settleTurn?: BuildPipelineProvider["settleTurn"];
+  observeSession?: BuildPipelineProvider["observeSession"];
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
@@ -164,7 +172,12 @@ class FakeProvider implements BuildPipelineProvider {
         ? this.reviewReport
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : {
+              complete: this.verificationComplete,
+              rationale: this.verificationComplete
+                ? "All criteria pass."
+                : "A criterion still fails.",
+            }) as T,
     };
   }
 
@@ -1140,6 +1153,255 @@ describe("BuildPipelineService", () => {
       expect(recordedError).toContain(
         "Selected model is at capacity. Please try a different model.",
       );
+    });
+  });
+
+  describe("idle turns with pending background work", () => {
+    const signals: Array<{ name: string; observation: ProviderSessionObservation }> = [
+      { name: "live background work", observation: { status: "idle", backgroundWorkLive: true } },
+      {
+        name: "a retained continuation",
+        observation: { status: "idle", retainedContinuationRequestIds: ["dispatch-1"] },
+      },
+    ];
+    const stages: Array<{
+      phase: BuildPhase;
+      nextPhase: BuildPhase;
+      overrides?: Partial<Parameters<BuildPipelineService["start"]>[0]>;
+      name: string;
+    }> = [
+      { name: "build", phase: "building", nextPhase: "reviewing" },
+      { name: "review", phase: "reviewing", nextPhase: "verifying" },
+      { name: "address", phase: "addressing", nextPhase: "verifying" },
+      { name: "verify", phase: "verifying", nextPhase: "creating-pr" },
+      { name: "fix", phase: "fixing", nextPhase: "reviewing" },
+      { name: "PR creation", phase: "creating-pr", nextPhase: "complete" },
+      { name: "conflict resolution", phase: "resolving-conflicts", nextPhase: "complete" },
+      {
+        name: "build with review preparation",
+        phase: "building",
+        nextPhase: "fixing",
+        overrides: { reviewPreparation: { agent: "claude" } },
+      },
+      {
+        name: "build with review fan-out",
+        phase: "building",
+        nextPhase: "fixing",
+        overrides: { reviewers: [{ agent: "claude" }, { agent: "claude" }] },
+      },
+    ];
+
+    for (const { name: signalName, observation } of signals) {
+      for (const { name, phase, nextPhase, overrides } of stages) {
+        test(`holds ${name} for ${signalName} and advances successfully once cleared`, async () => {
+          await withService(async (service, storage, provider, invocations, controls) => {
+            if (phase === "addressing") {
+              provider.reviewReport = {
+                ...cleanReview,
+                testCoverageGaps: [
+                  { file: "src/app.ts", untestedBehavior: "Missing boundary test" },
+                ],
+                verdict: { ready: "with-fixes", reasoning: "Add the boundary test." },
+              };
+            }
+            if (phase === "fixing") provider.verificationComplete = false;
+            if (phase === "resolving-conflicts") controls.detection!.hasMergeConflicts = true;
+            const { started } = await startBuilding(service, storage, overrides);
+            for (let pass = 0; pass < 6; pass++) {
+              if ((await pipeline(storage, started.id)).phase === phase) break;
+              await service.advanceNow(started.id);
+            }
+            const active = await pipeline(storage, started.id);
+            expect(active.phase).toBe(phase);
+            const session = active.sessions[active.currentSessionIndex]!;
+            provider.verificationComplete = true;
+            controls.detection!.hasMergeConflicts = false;
+            provider.observeSession = async () => observation;
+            const sentCount = provider.sent.length;
+            const createdCount = provider.created.length;
+            const invocationCount = invocations.length;
+
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await service.advanceNow(started.id);
+              const waiting = await pipeline(storage, started.id);
+              expect(waiting.phase).toBe(phase);
+              expect(waiting.error).toBeUndefined();
+              expect(waiting.failureContext).toBeUndefined();
+              expect(waiting.sessions[waiting.currentSessionIndex]).toMatchObject({
+                sdkSessionId: session.sdkSessionId,
+                status: "running",
+              });
+              expect(provider.sent).toHaveLength(sentCount);
+              expect(provider.created).toHaveLength(createdCount);
+              expect(invocations).toHaveLength(invocationCount);
+            }
+
+            provider.observeSession = async () => ({
+              status: "idle",
+              backgroundWorkLive: false,
+              retainedContinuationRequestIds: [],
+            });
+            await service.advanceNow(started.id);
+            const advanced = await pipeline(storage, started.id);
+            expect(advanced.phase).toBe(nextPhase);
+            expect(advanced.error).toBeUndefined();
+            expect(advanced.failureContext).toBeUndefined();
+            if (overrides) {
+              expect(advanced.sessions[advanced.currentSessionIndex]).toMatchObject({
+                phase: "fix",
+                label: REVIEW_PACKAGE_SESSION_LABEL,
+                status: "running",
+              });
+              expect(provider.sent.at(-1)?.schema).toBeDefined();
+              expect(
+                invocations.some(({ command }) => command === "generate_looped_review_package"),
+              ).toBe(false);
+            }
+          });
+        });
+      }
+
+      for (const request of ["message", "review retry", "both"] as const) {
+        test(`defers ${request} while the idle build has ${signalName}`, async () => {
+          await withService(async (service, storage, provider) => {
+            const { started, session } = await startBuilding(service, storage);
+            provider.observeSession = async () => observation;
+            const sentCount = provider.sent.length;
+            const createdCount = provider.created.length;
+            if (request !== "review retry")
+              await service.sendMessage(started.id, "also update the README");
+            if (request !== "message") await service.retryReview(started.id);
+            await service.advanceNow(started.id);
+            const queued = await pipeline(storage, started.id);
+
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await service.advanceNow(started.id);
+              const waiting = await pipeline(storage, started.id);
+              expect(waiting.phase).toBe("building");
+              expect(waiting.pendingUserMessages).toEqual(queued.pendingUserMessages);
+              expect(waiting.reviewRetryRequested).toBe(queued.reviewRetryRequested);
+              expect(waiting.sessions[waiting.currentSessionIndex]?.sdkSessionId).toBe(
+                session.sdkSessionId,
+              );
+              expect(waiting.error).toBeUndefined();
+              expect(waiting.failureContext).toBeUndefined();
+              expect(provider.sent).toHaveLength(sentCount);
+              expect(provider.created).toHaveLength(createdCount);
+            }
+            if (request !== "review retry") {
+              expect(queued.pendingUserMessages?.map(({ text }) => text)).toEqual([
+                "also update the README",
+              ]);
+            }
+            if (request !== "message") expect(queued.reviewRetryRequested).toBe(true);
+
+            provider.observeSession = async () => ({ status: "idle" });
+            await service.advanceNow(started.id);
+            const resumed = await pipeline(storage, started.id);
+            expect(resumed.error).toBeUndefined();
+            expect(resumed.failureContext).toBeUndefined();
+            expect(provider.sent).toHaveLength(sentCount + 1);
+            if (request === "message") {
+              expect(resumed.phase).toBe("building");
+              expect(resumed.pendingUserMessages).toBeUndefined();
+              expect(provider.sent.at(-1)).toMatchObject({
+                sessionId: session.sdkSessionId,
+                prompt: "also update the README",
+              });
+            } else {
+              expect(resumed.phase).toBe("fixing");
+              expect(resumed.reviewRetryRequested).toBeUndefined();
+              expect(resumed.pendingUserMessages).toEqual(queued.pendingUserMessages);
+              expect(resumed.sessions[resumed.currentSessionIndex]?.label).toBe(
+                REVIEW_PACKAGE_SESSION_LABEL,
+              );
+            }
+          });
+        });
+      }
+
+      test.each([false, true])(
+        `holds the build with ${signalName} when settleTurn returns %s`,
+        async (settled) => {
+          await withService(async (service, storage, provider) => {
+            const { started, session } = await startBuilding(service, storage);
+            expect(session.structuredRequestId).toBeString();
+            const settleTurn = mock(async () => settled);
+            provider.settleTurn = settleTurn;
+            provider.observeSession = async () => observation;
+            const sentCount = provider.sent.length;
+
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await service.advanceNow(started.id);
+              const waiting = await pipeline(storage, started.id);
+              expect(waiting.phase).toBe("building");
+              expect(waiting.error).toBeUndefined();
+              expect(waiting.failureContext).toBeUndefined();
+              expect(waiting.sessions[waiting.currentSessionIndex]?.status).toBe("running");
+              expect(provider.sent).toHaveLength(sentCount);
+            }
+            expect(settleTurn).toHaveBeenCalledTimes(3);
+            expect(settleTurn).toHaveBeenLastCalledWith(
+              session.sdkSessionId,
+              session.structuredRequestId,
+            );
+
+            // Clearing background work alone cannot bypass the settlement guard.
+            provider.observeSession = async () => ({ status: "idle" });
+            await service.advanceNow(started.id);
+            const cleared = await pipeline(storage, started.id);
+            expect(cleared.phase).toBe(settled ? "reviewing" : "building");
+            expect(cleared.error).toBeUndefined();
+            expect(cleared.failureContext).toBeUndefined();
+            if (!settled) {
+              expect(provider.sent).toHaveLength(sentCount);
+              provider.settleTurn = mock(async () => true);
+              await service.advanceNow(started.id);
+              const advanced = await pipeline(storage, started.id);
+              expect(advanced.phase).toBe("reviewing");
+              expect(advanced.error).toBeUndefined();
+              expect(advanced.failureContext).toBeUndefined();
+            }
+          });
+        },
+      );
+    }
+
+    test("does not settle the structured request while its own continuation is retained", async () => {
+      await withService(async (service, storage, provider) => {
+        const { started, session } = await startBuilding(service, storage);
+        const requestId = session.structuredRequestId!;
+        expect(requestId).toBeString();
+        const settleTurn = mock(async () => true);
+        provider.settleTurn = settleTurn;
+        provider.observeSession = async () => ({
+          status: "idle",
+          retainedContinuationRequestIds: [requestId],
+        });
+        const sentCount = provider.sent.length;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await service.advanceNow(started.id);
+          const waiting = await pipeline(storage, started.id);
+          expect(waiting.phase).toBe("building");
+          expect(waiting.error).toBeUndefined();
+          expect(waiting.failureContext).toBeUndefined();
+          expect(provider.sent).toHaveLength(sentCount);
+          expect(settleTurn).not.toHaveBeenCalled();
+        }
+
+        provider.observeSession = async () => ({
+          status: "idle",
+          retainedContinuationRequestIds: [],
+        });
+        await service.advanceNow(started.id);
+        const advanced = await pipeline(storage, started.id);
+        expect(advanced.phase).toBe("reviewing");
+        expect(advanced.error).toBeUndefined();
+        expect(advanced.failureContext).toBeUndefined();
+        expect(settleTurn).toHaveBeenCalledTimes(1);
+        expect(settleTurn).toHaveBeenLastCalledWith(session.sdkSessionId, requestId);
+      });
     });
   });
 

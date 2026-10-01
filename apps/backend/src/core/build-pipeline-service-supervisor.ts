@@ -453,6 +453,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       status,
       error: statusDetail,
       turnSettled,
+      backgroundWorkLive,
+      retainedContinuationRequestIds,
     } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
@@ -504,7 +506,16 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
     if (status === "idle" && turnSettled === false) return;
-    if (status === "running") {
+    // Claude releases a turn to idle while background agents it launched are
+    // still running, then re-enters the same session once they settle — and a
+    // retained continuation covers the gap between the two. Either way the
+    // stage's work is not done: advancing here would start the next stage
+    // against a worktree this session is still about to change. Only this
+    // pipeline drives the session, so any retained continuation is its own.
+    const backgroundWorkPending =
+      status === "idle" &&
+      (backgroundWorkLive === true || (retainedContinuationRequestIds?.length ?? 0) > 0);
+    if (status === "running" || backgroundWorkPending) {
       const transcriptChanged = await this.refreshTranscript(session, provider);
       const statusChanged = session.status !== "running";
       session.status = "running";

@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+  createTerminalLinkActivator,
   getTerminalLinkTarget,
   listenForTerminalBrowserTabRequests,
   requestTerminalBrowserTab,
@@ -49,6 +50,48 @@ describe("getTerminalLinkTarget", () => {
         shiftKey: true,
       }),
     ).toBe("browser-tab");
+  });
+});
+
+describe("createTerminalLinkActivator", () => {
+  const click = (modifiers: Partial<MouseEvent>) => modifiers as MouseEvent;
+
+  test("opens modified clicks externally and ignores plain or right clicks", () => {
+    const openExternal = mock((_url: string) => Promise.resolve());
+    const activate = createTerminalLinkActivator({
+      environmentId: "environment-1",
+      sourceTabId: "terminal-1",
+      openExternal,
+    });
+
+    activate(click({ metaKey: true }), "https://example.com/a");
+    activate(click({}), "https://example.com/b");
+
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(openExternal).toHaveBeenCalledWith("https://example.com/a");
+  });
+
+  test("routes shifted clicks to a browser tab request", () => {
+    const openExternal = mock((_url: string) => Promise.resolve());
+    const listener = mock((_request: TerminalBrowserTabRequest) => undefined);
+    const stopListening = listenForTerminalBrowserTabRequests(listener);
+    const activate = createTerminalLinkActivator({
+      environmentId: "environment-1",
+      sourceTabId: "terminal-1",
+      openExternal,
+    });
+
+    try {
+      activate(click({ metaKey: true, shiftKey: true }), "https://example.com/");
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledWith({
+        environmentId: "environment-1",
+        sourceTabId: "terminal-1",
+        url: "https://example.com/",
+      });
+    } finally {
+      stopListening();
+    }
   });
 });
 

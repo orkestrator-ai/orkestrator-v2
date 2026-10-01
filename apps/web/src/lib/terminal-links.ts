@@ -25,6 +25,36 @@ export function requestTerminalBrowserTab(request: TerminalBrowserTabRequest): v
   );
 }
 
+interface TerminalLinkActivatorOptions {
+  environmentId: string;
+  sourceTabId: string;
+  openExternal: (url: string) => Promise<void>;
+}
+
+/**
+ * Builds the click handler shared by xterm's plain-URL addon and its OSC 8
+ * `linkHandler` option. xterm's built-in OSC 8 handler falls back to
+ * `confirm()` + `window.open()`, which never launches a browser in Electron.
+ */
+export function createTerminalLinkActivator({
+  environmentId,
+  sourceTabId,
+  openExternal,
+}: TerminalLinkActivatorOptions): (event: MouseEvent, uri: string) => void {
+  return (event, uri) => {
+    const target = getTerminalLinkTarget(event);
+    if (target === "browser-tab") {
+      requestTerminalBrowserTab({ environmentId, sourceTabId, url: uri });
+      return;
+    }
+    if (target === "external") {
+      void openExternal(uri).catch((err) => {
+        console.error("[terminal-links] Failed to open URL:", err);
+      });
+    }
+  };
+}
+
 export function listenForTerminalBrowserTabRequests(
   listener: (request: TerminalBrowserTabRequest) => void,
 ): () => void {

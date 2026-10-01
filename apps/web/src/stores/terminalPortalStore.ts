@@ -5,7 +5,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openInBrowser } from "@/lib/backend";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
-import { getTerminalLinkTarget, requestTerminalBrowserTab } from "@/lib/terminal-links";
+import { createTerminalLinkActivator } from "@/lib/terminal-links";
 
 /**
  * Data for a persistent terminal instance that survives tab moves.
@@ -143,7 +143,14 @@ function createXtermTerminal(
   const scrollbackLines =
     typeof scrollback === "number" && scrollback > 0 ? scrollback : DEFAULT_TERMINAL_SCROLLBACK;
 
+  const activateLink = createTerminalLinkActivator({
+    environmentId: linkSource.environmentId,
+    sourceTabId: linkSource.tabId,
+    openExternal: openInBrowser,
+  });
+
   const terminal = new Terminal({
+    linkHandler: { activate: activateLink },
     cursorBlink: true,
     cursorStyle: "block",
     fontFamily: `"${fontFamily}", "Fira Code", "Menlo", "DejaVu Sans Mono", "Courier New", monospace`,
@@ -177,22 +184,7 @@ function createXtermTerminal(
 
   const fitAddon = new FitAddon();
   const serializeAddon = new SerializeAddon();
-  const webLinksAddon = new WebLinksAddon((event: MouseEvent, uri: string) => {
-    const target = getTerminalLinkTarget(event);
-    if (target === "browser-tab") {
-      requestTerminalBrowserTab({
-        environmentId: linkSource.environmentId,
-        sourceTabId: linkSource.tabId,
-        url: uri,
-      });
-      return;
-    }
-    if (target === "external") {
-      void openInBrowser(uri).catch((err) => {
-        console.error("[terminalPortalStore] Failed to open URL:", err);
-      });
-    }
-  });
+  const webLinksAddon = new WebLinksAddon(activateLink);
 
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(serializeAddon);

@@ -217,5 +217,5 @@ describe("EnvironmentItem project home", () => {
 test("a renamed project home shows its saved display name", () => {
   renderItem(environmentFixture({ projectHome: true, name: "Release checkout" }));
   expect(screen.getByRole("button", { name: /Release checkout/ })).toBeTruthy();
-  expect(screen.queryByText("Project home")).toBeNull();
+  expect(Boolean(screen.queryByText("Project home"))).toBe(false);
 });

@@ -1,6 +1,6 @@
 import type { Environment, Project } from "./models.js";
 import { runCommand } from "./shell.js";
-import { resolveProjectGitRoot } from "./project-git-service.js";
+import { resolveProjectGitRoot } from "./project-git-root.js";
 import type { StorageService } from "./storage.js";
 
 /**

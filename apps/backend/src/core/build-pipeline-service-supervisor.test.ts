@@ -104,6 +104,7 @@ class FakeProvider implements BuildPipelineProvider {
   }> = [];
   private counter = 0;
   reviewReport: StructuredReviewReport = cleanReview;
+  observeSession?: BuildPipelineProvider["observeSession"];
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
@@ -1140,6 +1141,45 @@ describe("BuildPipelineService", () => {
       expect(recordedError).toContain(
         "Selected model is at capacity. Please try a different model.",
       );
+    });
+  });
+
+  // Claude ends a turn while the background agents it launched are still
+  // running and re-enters the session once they settle. Advancing on that idle
+  // started review and verification while the build was still writing files.
+  test("keeps the build stage open while its idle turn has live background work", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session } = await startBuilding(service, storage);
+      provider.observeSession = async () => ({ status: "idle", backgroundWorkLive: true });
+
+      for (let attempt = 0; attempt < 3; attempt++) await service.advanceNow(started.id);
+      const waiting = await pipeline(storage, started.id);
+      expect(waiting.phase).toBe("building");
+      expect(waiting.sessions[waiting.currentSessionIndex]).toMatchObject({
+        sdkSessionId: session.sdkSessionId,
+        status: "running",
+      });
+
+      provider.observeSession = async () => ({ status: "idle" });
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).not.toBe("building");
+    });
+  });
+
+  test("keeps the build stage open while a background continuation is retained", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started } = await startBuilding(service, storage);
+      provider.observeSession = async () => ({
+        status: "idle",
+        retainedContinuationRequestIds: ["dispatch-1"],
+      });
+
+      for (let attempt = 0; attempt < 3; attempt++) await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("building");
+
+      provider.observeSession = async () => ({ status: "idle" });
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).not.toBe("building");
     });
   });
 

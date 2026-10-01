@@ -321,7 +321,7 @@ export function SortableProjectGroup({
           <CollapsibleContent>
             {orderedEnvironments.length > 0 && (
               <SortableContext
-                items={orderedEnvironments.map((e) => e.id)}
+                items={orderedEnvironments.filter((e) => !e.projectHome).map((e) => e.id)}
                 strategy={verticalListSortingStrategy}
               >
                 {orderedEnvironments.map((environment) => (

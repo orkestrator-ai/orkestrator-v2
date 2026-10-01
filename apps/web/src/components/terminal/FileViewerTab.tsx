@@ -326,9 +326,8 @@ export function FileViewerTab({
           }
           let base64Content: string;
           if (isLocalEnvironment && worktreePath) {
-            // Build full path for local filesystem read
-            const fullPath = filePath.startsWith("/") ? filePath : `${worktreePath}/${filePath}`;
-            base64Content = await backend.readFileBase64(fullPath);
+            if (!environmentId) throw new Error("The image has no owning environment");
+            base64Content = await backend.readEnvironmentFileBase64(environmentId, filePath);
           } else if (containerId) {
             base64Content = await backend.readContainerFileBase64(containerId, filePath);
           } else {

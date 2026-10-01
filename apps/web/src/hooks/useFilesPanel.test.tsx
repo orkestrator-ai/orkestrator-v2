@@ -10,7 +10,7 @@ const copyExternalFileMock = mock(
   async (_environmentId: string, directory: string, fileName: string, _base64Data: string) =>
     directory === "." ? fileName : `${directory}/${fileName}`,
 );
-const getLocalFileTreeSnapshotMock = mock(async () => ({
+const getLocalFileTreeSnapshotMock = mock(async (_worktreePath: string) => ({
   unchanged: false,
   digest: "tree",
   value: [],
@@ -278,7 +278,7 @@ describe("useFilesPanel on the project root", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("File copied", { description: "notes.txt" });
   });
 
-  test("an existing project home authorises mutations without another ensure", async () => {
+  test("an existing project home is reconciled before mutations", async () => {
     useEnvironmentStore.setState({ environments: [projectHome] });
     const { result } = renderHook(() => useFilesPanel());
 
@@ -286,7 +286,7 @@ describe("useFilesPanel on the project root", () => {
       await result.current.copyExternalFiles([droppedFile("a.txt", [1])], "docs");
     });
 
-    expect(ensureProjectHomeEnvironmentMock).not.toHaveBeenCalled();
+    expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
     expect(copyExternalFileMock).toHaveBeenCalledWith(
       "project-home-1",
       "docs",
@@ -420,4 +420,44 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     });
     expect(refreshed).toBe(true);
   });
+});
+
+test("the board follows a changed checkout and stops reading or mutating when it is cleared", async () => {
+  useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
+  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
+  useEnvironmentStore.setState({ environments: [projectHome] });
+  useFilesPanelStore.setState({ isOpen: true });
+  const { result } = renderHook(() => useFilesPanel());
+  await act(async () => {
+    await Promise.resolve();
+  });
+  ensureProjectHomeEnvironmentMock.mockImplementationOnce(async () => ({
+    ...projectHome,
+    worktreePath: "/checkout-B",
+  }));
+  await act(async () => {
+    useProjectStore.setState({
+      projects: [{ id: "project-1", localPath: "/checkout-B" } as Project],
+    });
+  });
+  expect(result.current.worktreePath).toBe("/checkout-B");
+  await act(async () => {
+    await result.current.copyExternalFiles([droppedFile("B.txt", [1])], ".");
+  });
+  expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
+  expect(useEnvironmentStore.getState().environments[0]?.worktreePath).toBe("/checkout-B");
+  expect(getLocalFileTreeSnapshotMock.mock.calls.at(-1)?.[0]).toBe("/checkout-B");
+  const staleAction = result.current.copyExternalFiles;
+  await act(async () => {
+    useProjectStore.setState({ projects: [{ id: "project-1", localPath: null } as Project] });
+  });
+  expect(result.current.isAvailable).toBe(false);
+  expect(result.current.worktreePath).toBeNull();
+  const reads = getLocalFileTreeSnapshotMock.mock.calls.length;
+  await act(async () => {
+    await result.current.refresh();
+  });
+  expect(getLocalFileTreeSnapshotMock.mock.calls).toHaveLength(reads);
+  await expect(staleAction([droppedFile("A.txt", [1])], ".")).rejects.toThrow("checkout changed");
+  expect(copyExternalFileMock).toHaveBeenCalledTimes(1);
 });

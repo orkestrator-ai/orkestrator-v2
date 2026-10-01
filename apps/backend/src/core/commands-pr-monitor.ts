@@ -19,7 +19,11 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
-import { readCheckoutBranch, refreshProjectHomeBranch } from "./project-home-environment.js";
+import {
+  readCheckoutBranch,
+  refreshProjectHomeBranch,
+  reconcileProjectHomeEnvironment,
+} from "./project-home-environment.js";
 
 /**
  * Merge cleanup is owned by `commands-servers` (it ends in
@@ -148,6 +152,7 @@ export interface PrMonitorDetectionRequest {
   shellCommand: string;
   knownPrUrl: string | null;
   branch: string;
+  homeBase?: string;
 }
 
 export interface PrMonitorCheckRequest {
@@ -165,12 +170,21 @@ export interface PrMonitorCheckRequest {
 export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitorDetectionRequest {
   const headBranch = validatePrDetectionBranch(target.branch);
   if (target.prUrl && target.prState !== "merged" && target.prState !== "closed") {
-    const args = ["pr", "view", target.prUrl, "--json", "url,state,mergeable"];
+    const args = [
+      "pr",
+      "view",
+      target.prUrl,
+      "--json",
+      target.projectHome
+        ? "url,state,mergeable,headRefName,baseRefName,isCrossRepository"
+        : "url,state,mergeable",
+    ];
     return {
       args,
-      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable`,
+      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json ${args.at(-1)}`,
       knownPrUrl: target.prUrl,
       branch: headBranch,
+      homeBase: target.projectHome ? target.defaultBranch : undefined,
     };
   }
   const args = [
@@ -183,13 +197,16 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "--limit",
     "30",
     "--json",
-    "url,state,mergeable,updatedAt",
+    target.projectHome
+      ? "url,state,mergeable,updatedAt,headRefName,baseRefName,isCrossRepository"
+      : "url,state,mergeable,updatedAt",
   ];
   return {
     args,
-    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
+    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json ${args.at(-1)}`,
     knownPrUrl: null,
     branch: headBranch,
+    homeBase: target.projectHome ? target.defaultBranch : undefined,
   };
 }
 
@@ -223,6 +240,18 @@ export function parsePrMonitorDetectionResponse(
   request: PrMonitorDetectionRequest,
   stdout: string,
 ): PrDetectionResult | null {
+  if (request.homeBase) {
+    const parsed = JSON.parse(stdout);
+    const matches = (entry: Record<string, unknown>) =>
+      entry.headRefName === request.branch &&
+      entry.baseRefName === request.homeBase &&
+      entry.isCrossRepository === false;
+    if (request.knownPrUrl) {
+      if (!matches(parsed)) return null;
+    } else {
+      stdout = JSON.stringify(Array.isArray(parsed) ? parsed.filter(matches) : []);
+    }
+  }
   return request.knownPrUrl
     ? parseKnownPrDetectionOutput(stdout, request.knownPrUrl)
     : parsePrDetectionOutput(stdout, request.branch);
@@ -298,6 +327,20 @@ export async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
   options: { includeCheckSummary?: boolean } = {},
 ): Promise<PrDetection | null> {
+  if (target.projectHome) {
+    if (prMonitorStorage) {
+      const current = await prMonitorStorage.getEnvironment(target.environmentId);
+      if (!current) return null;
+      target = await projectHomePrTarget(current, prMonitorStorage);
+    }
+    const branch = target.worktreePath ? await readCheckoutBranch(target.worktreePath) : "";
+    if (!branch || !target.defaultBranch || branch === target.defaultBranch) return null;
+    target = {
+      ...target,
+      branch,
+      ...(branch !== target.branch ? { prUrl: null, prState: null } : {}),
+    };
+  }
   const detectionTarget =
     target.prUrl && target.prState !== "merged" && target.prState !== "closed"
       ? target
@@ -391,7 +434,7 @@ export const prMonitorService = new PrMonitorService({
     },
     readTarget: async (environmentId) => {
       const environment = await requirePrMonitorStorage().getEnvironment(environmentId);
-      return environment ? environmentToPrMonitorTarget(environment) : null;
+      return environment ? projectHomePrTarget(environment, requirePrMonitorStorage()) : null;
     },
     // Called once the terminal state is persisted and the linked task is
     // reconciled, so a cleanup deletion can no longer orphan the task comment.
@@ -443,6 +486,31 @@ export function environmentToPrMonitorTarget(environment: Environment): PrMonito
     prUrl: environment.prUrl ?? null,
     prState: environment.prState ?? null,
     hasMergeConflicts: environment.hasMergeConflicts ?? null,
+    projectHome: environment.projectHome,
+  };
+}
+
+/** A home is eligible only on a live feature branch of its configured checkout. */
+export async function projectHomePrTarget(
+  environment: Environment,
+  storage: StorageService,
+): Promise<PrMonitorTarget> {
+  if (!environment.projectHome) return environmentToPrMonitorTarget(environment);
+  const current = await reconcileProjectHomeEnvironment(environment, storage);
+  const { defaultBranch } = await storage.getRepositoryConfig(current.projectId);
+  const eligible = current.branch !== "HEAD" && current.branch !== defaultBranch;
+  if (!eligible && current.prUrl) {
+    await storage.updateEnvironment(current.id, {
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    });
+  }
+  return {
+    ...environmentToPrMonitorTarget(current),
+    defaultBranch,
+    ready: eligible,
+    ...(!eligible ? { prUrl: null, prState: null } : {}),
   };
 }
 
@@ -463,7 +531,7 @@ export async function wakePrMonitorForCompletion(
   // A turn in the project home may have switched the checkout's branch (a PR
   // session branches off the base before pushing); follow it first.
   const environment = await refreshProjectHomeBranch(stored, context.storage, readCheckoutBranch);
-  prMonitorService.wakeForCompletion(environmentToPrMonitorTarget(environment));
+  prMonitorService.wakeForCompletion(await projectHomePrTarget(environment, context.storage));
 }
 
 /**
@@ -498,7 +566,22 @@ export async function syncPrMonitorTracking(context: CommandContext): Promise<vo
       // while storage was loading; applying this older snapshot would recreate
       // a poller the later lifecycle action deliberately removed.
       if (generation !== prMonitorSyncGeneration) return;
-      prMonitorService.sync(environments.map(environmentToPrMonitorTarget));
+      const targets = await Promise.all(
+        environments.map(async (environment) => {
+          try {
+            return await projectHomePrTarget(environment, context.storage);
+          } catch {
+            return {
+              ...environmentToPrMonitorTarget(environment),
+              ready: false,
+              prUrl: null,
+              prState: null,
+            };
+          }
+        }),
+      );
+      if (generation !== prMonitorSyncGeneration) return;
+      prMonitorService.sync(targets);
     });
   prMonitorSyncQueue = operation;
   await operation;

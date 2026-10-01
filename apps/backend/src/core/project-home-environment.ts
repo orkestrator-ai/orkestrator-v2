@@ -1,5 +1,6 @@
 import type { Environment, Project } from "./models.js";
 import { runCommand } from "./shell.js";
+import { resolveProjectGitRoot } from "./project-git-service.js";
 import type { StorageService } from "./storage.js";
 
 /**
@@ -102,7 +103,10 @@ async function ensureOnce(
   const existing = findProjectHomeEnvironment(await storage.getEnvironmentsByProject(projectId));
   if (existing) {
     const updates: Record<string, unknown> = {};
-    if (existing.worktreePath !== root) updates.worktreePath = root;
+    if (existing.worktreePath !== root) {
+      updates.worktreePath = root;
+      Object.assign(updates, { prUrl: null, prState: null, hasMergeConflicts: null });
+    }
     Object.assign(updates, projectHomeBranchUpdates(existing, branch));
     if (existing.status !== "running") {
       await clearTerminalSessions?.(existing.id);
@@ -159,7 +163,15 @@ export function projectHomeBranchUpdates(
   if (environment.branch === branch) return null;
   // A pull request is a fact about a branch; the old branch's PR no longer
   // describes what the checkout has checked out.
-  return { branch, prUrl: null, prState: null, hasMergeConflicts: null };
+  return {
+    branch,
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    prRecheckAfterAgentCompletionArmedAt: undefined,
+    cleanupAfterMergeRequestedAt: null,
+    cleanupAfterMergeError: null,
+  };
 }
 
 /**
@@ -190,3 +202,29 @@ export const projectHomeTesting = {
     ensureTasks.clear();
   },
 };
+
+/** Reconcile against the configured checkout before exposing home actions. */
+export async function reconcileProjectHomeEnvironment(
+  environment: Environment,
+  storage: StorageService,
+): Promise<Environment> {
+  if (!isProjectHomeEnvironment(environment)) return environment;
+  const root = await resolveProjectGitRoot(storage, environment.projectId);
+  const branch = await readCheckoutBranch(root);
+  const updates = {
+    ...(environment.worktreePath !== root
+      ? {
+          worktreePath: root,
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          cleanupAfterMergeRequestedAt: null,
+          cleanupAfterMergeError: null,
+        }
+      : {}),
+    ...projectHomeBranchUpdates(environment, branch),
+  };
+  return Object.keys(updates).length
+    ? storage.updateEnvironment(environment.id, updates)
+    : environment;
+}

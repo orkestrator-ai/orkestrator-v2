@@ -189,6 +189,29 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     return scan;
   }
 
+  /** Fresh no-touch admission read, including background work and persisted sessions after reload. */
+  async hasActiveCheckoutWork(environmentId: string): Promise<boolean> {
+    const sessions = (await this.storage.listNativeAgentSessions()).filter(
+      (session) => session.environmentId === environmentId,
+    );
+    for (const session of sessions) {
+      if (session.pendingDispatch) return true;
+      const provider = await this.observeProvider(session);
+      if (!provider) continue;
+      if (this.providerDispatchCounts.has(provider)) return true;
+      let active = false;
+      await readActivityGroup({
+        provider,
+        sessions: [session],
+        apply: async (_session, activity) => {
+          if (activity.state !== "idle" && activity.state !== "missing") active = true;
+        },
+      });
+      if (active) return true;
+    }
+    return false;
+  }
+
   protected async reconcileAgentActivityOnce(): Promise<void> {
     const [environments, sessions] = await Promise.all([
       this.storage.loadEnvironments(),

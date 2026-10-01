@@ -1,3 +1,4 @@
+import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   fsConstants,
   fs,
@@ -1552,7 +1553,7 @@ export async function requireLocalMutationEnvironment(
   if (environment.environmentType !== "local" || !environment.worktreePath) {
     throw new Error(`Environment is not a local worktree: ${environmentId}`);
   }
-  return environment;
+  return reconcileProjectHomeEnvironment(environment, storage);
 }
 
 export async function requireContainerMutationEnvironment(

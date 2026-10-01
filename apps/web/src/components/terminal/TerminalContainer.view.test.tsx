@@ -5551,6 +5551,9 @@ describe("TerminalContainer", () => {
       options: { isDiff: true, gitStatus: "?" },
     });
 
+    useFilesPanelStore
+      .getState()
+      .requestFileOpen({ environmentId: "env-visible", filePath: "README.md" });
     render(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
@@ -5565,7 +5568,16 @@ describe("TerminalContainer", () => {
         }),
       );
     });
-    expect(useFilesPanelStore.getState().pendingFileOpen).toBeNull();
+    await waitFor(() => {
+      expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
+      expect(
+        usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .filter((tab) => tab.type === "file")
+          .map((tab) => tab.fileData?.filePath),
+      ).toEqual(["src/App.tsx", "README.md"]);
+    });
   });
 
   test("leaves a file requested for another environment pending", async () => {
@@ -5586,7 +5598,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible").length).toBeGreaterThan(0);
     });
-    expect(useFilesPanelStore.getState().pendingFileOpen).toBe(request);
+    expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([request]);
     expect(
       usePaneLayoutStore
         .getState()

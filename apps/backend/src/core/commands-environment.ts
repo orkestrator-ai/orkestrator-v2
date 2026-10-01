@@ -86,7 +86,7 @@ import {
   setDockerContainerStateCache,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
-import { isProjectHomeEnvironment } from "./project-home-environment.js";
+import { isProjectHomeEnvironment, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import type {
   Environment,
   EnvironmentStatus,
@@ -1503,7 +1503,7 @@ export async function startEnvironmentOnce(
   identity: ContainerMutationIdentity = {},
 ): Promise<EnvironmentSetupStartResult> {
   const { storage } = context;
-  const environment = await storage.getEnvironment(environmentId);
+  let environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   // Admission checks make the common case fail early. This second check is
   // required because the start may have waited behind another lifecycle
@@ -1545,6 +1545,7 @@ export async function startEnvironmentOnce(
       lifecycleError: null,
     });
     if (environment.environmentType === "local") {
+      environment = await reconcileProjectHomeEnvironment(environment, storage);
       if (environment.worktreePath && (await pathExists(environment.worktreePath))) {
         const running = await storage.updateEnvironment(environment.id, {
           status: "running",
@@ -2245,6 +2246,7 @@ export async function removeLocalWorktree(
 }
 
 export async function deleteMergedEnvironmentRemoteBranch(environment: Environment): Promise<void> {
+  if (isProjectHomeEnvironment(environment)) return;
   if (environment.prState !== "merged" || !environment.prUrl) return;
 
   if (environment.environmentType === "local") {

@@ -266,7 +266,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isLocalEnvironment = environment.environmentType === "local";
   // The project home works in the project's own checkout, not a worktree.
   const isProjectHome = environment.projectHome === true;
-  const displayName = isProjectHome ? "Project home" : environment.name;
+  const displayName =
+    isProjectHome && environment.name === "project-home" ? "Project home" : environment.name;
   const LocalEnvironmentIcon = isProjectHome ? House : Laptop;
   // Local environments are always considered "running" - they exist or they don't
   const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");

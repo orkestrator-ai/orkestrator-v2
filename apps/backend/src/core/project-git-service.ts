@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import { CommandFailedError, runCommand } from "./shell.js";
+import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 
 const FETCH_COOLDOWN_MS = 60_000;
@@ -491,6 +492,11 @@ export class ProjectGitService {
   }
 
   private async persist(projectId: string, status: ProjectGitStatus): Promise<ProjectGitStatus> {
+    for (const environment of await this.storage.getEnvironmentsByProject(projectId)) {
+      if (!isProjectHomeEnvironment(environment)) continue;
+      const updates = projectHomeBranchUpdates(environment, status.branch ?? "");
+      if (updates) await this.storage.updateEnvironment(environment.id, updates);
+    }
     let persisted = status;
     await this.storage.mutateCoordinatorWorkspace(projectId, (workspace) => {
       if (!workspace) return null;

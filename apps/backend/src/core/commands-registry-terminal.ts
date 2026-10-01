@@ -1,3 +1,5 @@
+import type { CommandContext } from "./commands-context.js";
+import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -134,7 +136,23 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
-import { isProjectHomeEnvironment } from "./project-home-environment.js";
+
+/** Hold shared-checkout admission across a home file mutation. */
+async function withLocalFileMutation<T>(
+  context: CommandContext,
+  environmentId: string,
+  action: (environment: Environment) => Promise<T>,
+): Promise<T> {
+  const stored = await context.storage.getEnvironment(environmentId);
+  const release = stored?.projectHome
+    ? context.projectGit?.beginCoordinatorTurn(stored.projectId)
+    : undefined;
+  try {
+    return await action(await requireLocalMutationEnvironment(context.storage, environmentId));
+  } finally {
+    release?.();
+  }
+}
 
 /**
  * Answers a file-list or tree read in the command's legacy shapes.
@@ -837,17 +855,18 @@ export function registerTerminalCommands(
       asString(branch, "branch"),
     ),
   );
-  register("read_file_base64", async ({ filePath }, context) => {
-    // A project home works in the user's checkout, outside the workspaces
-    // root, so its own directory is an allowed root too.
-    const projectHomeRoots = (await context.storage.loadEnvironments()).flatMap((environment) =>
-      isProjectHomeEnvironment(environment) && environment.worktreePath
-        ? [environment.worktreePath]
-        : [],
+  register("read_file_base64", ({ filePath }, context) =>
+    readFileBase64(asString(filePath, "filePath"), [getWorktreeBaseDir(context)]),
+  );
+  register("read_environment_file_base64", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "filePath"], "arguments");
+    const environment = await requireLocalMutationEnvironment(
+      context.storage,
+      asString(args.environmentId, "environmentId"),
     );
-    return readFileBase64(asString(filePath, "filePath"), [
-      getWorktreeBaseDir(context),
-      ...projectHomeRoots,
+    const relative = validateRelativeFilePath(asString(args.filePath, "filePath"));
+    return readFileBase64(path.join(environment.worktreePath!, relative), [
+      environment.worktreePath!,
     ]);
   });
   register("write_local_file", ({ worktreePath, filePath, base64Data }) =>
@@ -859,52 +878,59 @@ export function registerTerminalCommands(
   );
   register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const id = asString(environmentId, "environmentId");
-    const environment = await requireLocalMutationEnvironment(context.storage, id);
-    const result = await revertLocalFile(
-      environment.worktreePath!,
-      asString(filePath, "filePath"),
-      asString(targetBranch, "targetBranch"),
-    );
-    diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-    diffStatsService.refresh(id);
-    return result;
+    return withLocalFileMutation(context, id, async (environment) => {
+      const result = await revertLocalFile(
+        environment.worktreePath!,
+        asString(filePath, "filePath"),
+        asString(targetBranch, "targetBranch"),
+      );
+      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+      diffStatsService.refresh(id);
+      return result;
+    });
   });
   register("delete_local_file", async ({ environmentId, filePath }, context) => {
     const id = asString(environmentId, "environmentId");
-    const environment = await requireLocalMutationEnvironment(context.storage, id);
-    const result = await deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
-    diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-    diffStatsService.refresh(id);
-    return result;
+    return withLocalFileMutation(context, id, async (environment) => {
+      const result = await deleteLocalFile(
+        environment.worktreePath!,
+        asString(filePath, "filePath"),
+      );
+      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+      diffStatsService.refresh(id);
+      return result;
+    });
   });
   register(
     "move_local_file",
     async ({ environmentId, sourcePath, destinationDirectory }, context) => {
       const id = asString(environmentId, "environmentId");
-      const environment = await requireLocalMutationEnvironment(context.storage, id);
-      const result = await moveLocalFile(
-        environment.worktreePath!,
-        asString(sourcePath, "sourcePath"),
-        asString(destinationDirectory, "destinationDirectory"),
-      );
-      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-      diffStatsService.refresh(id);
-      return result;
+      return withLocalFileMutation(context, id, async (environment) => {
+        const result = await moveLocalFile(
+          environment.worktreePath!,
+          asString(sourcePath, "sourcePath"),
+          asString(destinationDirectory, "destinationDirectory"),
+        );
+        diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+        diffStatsService.refresh(id);
+        return result;
+      });
     },
   );
   register(
     "create_local_folder",
     async ({ environmentId, parentDirectory, folderName }, context) => {
       const id = asString(environmentId, "environmentId");
-      const environment = await requireLocalMutationEnvironment(context.storage, id);
-      const result = await createLocalFolder(
-        environment.worktreePath!,
-        asString(parentDirectory, "parentDirectory"),
-        asString(folderName, "folderName"),
-      );
-      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-      diffStatsService.refresh(id);
-      return result;
+      return withLocalFileMutation(context, id, async (environment) => {
+        const result = await createLocalFolder(
+          environment.worktreePath!,
+          asString(parentDirectory, "parentDirectory"),
+          asString(folderName, "folderName"),
+        );
+        diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+        diffStatsService.refresh(id);
+        return result;
+      });
     },
   );
 
@@ -1168,9 +1194,10 @@ export function registerTerminalCommands(
       if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
 
       if (environment.environmentType === "local") {
-        const local = await requireLocalMutationEnvironment(context.storage, environmentIdString);
-        await copyExternalFileToLocalWorkspace(local.worktreePath!, directory, name, data);
-        diffStatsService.invalidateChanges({ worktreePath: local.worktreePath! });
+        await withLocalFileMutation(context, environmentIdString, async (local) => {
+          await copyExternalFileToLocalWorkspace(local.worktreePath!, directory, name, data);
+          diffStatsService.invalidateChanges({ worktreePath: local.worktreePath! });
+        });
       } else {
         const container = await requireContainerMutationEnvironment(
           context.storage,

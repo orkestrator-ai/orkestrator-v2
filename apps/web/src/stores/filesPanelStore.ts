@@ -42,7 +42,7 @@ interface FilesPanelState {
   targetBranch: string;
 
   // File open waiting for its environment's panes to mount (not persisted)
-  pendingFileOpen: PendingFileOpen | null;
+  pendingFileOpens: PendingFileOpen[];
 
   // Actions
   togglePanel: () => void;
@@ -76,7 +76,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       fileTree: [],
       isLoadingTree: false,
       targetBranch: "main",
-      pendingFileOpen: null,
+      pendingFileOpens: [],
 
       // Actions
       togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
@@ -98,9 +98,17 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       setLoadingChanges: (loading) => set({ isLoadingChanges: loading }),
       setLoadingTree: (loading) => set({ isLoadingTree: loading }),
       setTargetBranch: (branch) => set({ targetBranch: branch }),
-      requestFileOpen: (request) => set({ pendingFileOpen: request }),
+      requestFileOpen: (request) =>
+        set((state) => {
+          if (state.pendingFileOpens.length >= 100 || request.filePath.length > 4096) {
+            throw new Error("Too many pending file opens; wait for the editor to open");
+          }
+          return { pendingFileOpens: [...state.pendingFileOpens, request] };
+        }),
       clearPendingFileOpen: (request) =>
-        set((state) => (state.pendingFileOpen === request ? { pendingFileOpen: null } : {})),
+        set((state) => ({
+          pendingFileOpens: state.pendingFileOpens.filter((pending) => pending !== request),
+        })),
     }),
     {
       name: desktopConnectionStorageKey("files-panel-storage"),

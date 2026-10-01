@@ -1,3 +1,5 @@
+import { projectHomePrTarget } from "./commands-pr-monitor.js";
+import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   isReviewPackageReference,
@@ -140,13 +142,16 @@ export function registerPullRequestCommands(
   });
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {
-    const env = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    let env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env) throw new Error(`Environment not found: ${environmentId}`);
     if (!env.worktreePath)
       throw new Error("Environment is not a local environment (no worktree path)");
+    env = await reconcileProjectHomeEnvironment(env, storage);
+    const target = await projectHomePrTarget(env, storage);
+    if (!target.ready) return null;
     const detection = await detectEnvironmentPullRequest({
-      ...environmentToPrMonitorTarget(env),
-      branch: validatePrDetectionBranch(branch),
+      ...target,
+      branch: env.projectHome ? env.branch : validatePrDetectionBranch(branch),
       prUrl: null,
       prState: null,
     });

@@ -124,8 +124,28 @@ export function projectRootFilesTargetId(projectId: string): string {
  * through it, because every backend file mutation is authorised by an
  * environment record.
  */
-export async function ensureProjectHomeInStore(projectId: string): Promise<Environment> {
+const pendingHomeEnsures = new Map<string, Promise<Environment>>();
+export function ensureProjectHomeInStore(projectId: string): Promise<Environment> {
+  const key = `${projectId}\0${useProjectStore.getState().projects.find((project) => project.id === projectId)?.localPath ?? ""}`;
+  const pending = pendingHomeEnsures.get(key);
+  if (pending) return pending;
+  const task = reconcileHomeInStore(projectId).finally(() => {
+    if (pendingHomeEnsures.get(key) === task) pendingHomeEnsures.delete(key);
+  });
+  pendingHomeEnsures.set(key, task);
+  return task;
+}
+async function reconcileHomeInStore(projectId: string): Promise<Environment> {
+  const configuredPath = useProjectStore
+    .getState()
+    .projects.find((project) => project.id === projectId)?.localPath;
   const environment = await backend.ensureProjectHomeEnvironment(projectId);
+  if (
+    useProjectStore.getState().projects.find((project) => project.id === projectId)?.localPath !==
+    configuredPath
+  ) {
+    throw new Error("The project checkout changed; try the file action again");
+  }
   const store = useEnvironmentStore.getState();
   if (store.environments.some((candidate) => candidate.id === environment.id)) {
     store.updateEnvironment(environment.id, environment);
@@ -208,7 +228,9 @@ export function useFilesPanel() {
   );
   // The environment whose snapshots and tabs describe what the panel shows.
   const snapshotEnvironmentId = isProjectScope
-    ? (projectHomeEnvironment?.id ?? null)
+    ? projectHomeEnvironment?.worktreePath === rootProject?.localPath?.trim()
+      ? (projectHomeEnvironment?.id ?? null)
+      : null
     : selectedEnvironmentId;
   // Identifies the panel's target even before a project home exists.
   const targetId = isProjectScope
@@ -218,9 +240,9 @@ export function useFilesPanel() {
   // Detect environment type and get appropriate identifiers
   const isLocalEnvironment = isProjectScope || selectedEnvironment?.environmentType === "local";
   const containerId = isProjectScope ? null : (selectedEnvironment?.containerId ?? null);
-  // Prefer the home's canonical root so reads match its tracked watcher.
+  // Always follow the configured checkout; cached home records may name an old path.
   const worktreePath = isProjectScope
-    ? projectHomeEnvironment?.worktreePath || rootProject?.localPath?.trim() || null
+    ? rootProject?.localPath?.trim() || null
     : (selectedEnvironment?.worktreePath ?? null);
   const projectId = isProjectScope ? rootProject!.id : (selectedEnvironment?.projectId ?? null);
 
@@ -237,9 +259,14 @@ export function useFilesPanel() {
       if (!selectedEnvironmentId) throw new Error("The selected environment is not available");
       return selectedEnvironmentId;
     }
-    if (projectHomeEnvironment) return projectHomeEnvironment.id;
+    const currentPath = useProjectStore
+      .getState()
+      .projects.find((project) => project.id === projectId)
+      ?.localPath?.trim();
+    if (!currentPath || currentPath !== worktreePath)
+      throw new Error("The project checkout changed; try the file action again");
     return (await ensureProjectHomeInStore(projectId!)).id;
-  }, [isProjectScope, selectedEnvironmentId, projectHomeEnvironment, projectId]);
+  }, [isProjectScope, selectedEnvironmentId, projectId, worktreePath]);
 
   // Prefer the commit captured when the environment was created. Older
   // environments fall back to the repository PR base branch, then its default

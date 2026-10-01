@@ -1,3 +1,4 @@
+import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   containerLifecycleSnapshot,
   parseContainerLifecycle,
@@ -170,9 +171,10 @@ export function registerEnvironmentCommands(
       ),
     ),
   );
-  register("get_environment", ({ environmentId }, { storage }) =>
-    storage.getEnvironment(asString(environmentId, "environmentId")),
-  );
+  register("get_environment", async ({ environmentId }, { storage }) => {
+    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    return environment ? reconcileProjectHomeEnvironment(environment, storage) : null;
+  });
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
     storage
       .reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds))

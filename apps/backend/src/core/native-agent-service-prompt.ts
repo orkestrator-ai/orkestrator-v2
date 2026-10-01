@@ -1,3 +1,7 @@
+import {
+  isProjectHomeEnvironment,
+  reconcileProjectHomeEnvironment,
+} from "./project-home-environment.js";
 import * as shared from "./native-agent-service-shared.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import {
@@ -592,11 +596,22 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       input.owner?.kind === "coordinator"
         ? Number(input.prompt.match(/Repository context revision: (\d+)/)?.[1] ?? Number.NaN)
         : Number.NaN;
-    const releaseCoordinatorTurn =
+    const home =
       input.owner?.kind === "coordinator"
-        ? this.options.beginCoordinatorTurn?.(input.owner.projectId)
-        : undefined;
+        ? null
+        : await this.storage.getEnvironment(input.environmentId);
+    const checkoutProjectId =
+      input.owner?.kind === "coordinator"
+        ? input.owner.projectId
+        : isProjectHomeEnvironment(home)
+          ? home!.projectId
+          : undefined;
+    const releaseCoordinatorTurn = checkoutProjectId
+      ? this.options.beginCoordinatorTurn?.(checkoutProjectId)
+      : undefined;
     try {
+      if (isProjectHomeEnvironment(home))
+        await reconcileProjectHomeEnvironment(home!, this.storage);
       this.assertAcceptingWork();
       // A rebuild or reset of this environment's runtime is in progress.
       assertEnvironmentAcceptsAgentWork(input.environmentId);

@@ -49,10 +49,18 @@ export async function getAgentAccountUsage(
   });
 }
 
+/**
+ * Start a sign-in. By default it adds an account; with `reauthenticate` it
+ * signs the platform's active account in again (Claude only).
+ */
 export async function startAgentAccountLogin(
   platform: AgentAccountPlatform,
+  options: { reauthenticate?: boolean } = {},
 ): Promise<AgentAccountLoginProgress> {
-  return invoke<AgentAccountLoginProgress>("start_agent_account_login", { platform });
+  return invoke<AgentAccountLoginProgress>("start_agent_account_login", {
+    platform,
+    ...(options.reauthenticate ? { reauthenticate: true } : {}),
+  });
 }
 
 export async function getAgentAccountLogin(): Promise<AgentAccountLoginProgress> {
@@ -65,6 +73,11 @@ export async function submitAgentAccountLoginCode(
   return invoke<AgentAccountLoginProgress>("submit_agent_account_login_code", { code });
 }
 
-export async function cancelAgentAccountLogin(): Promise<AgentAccountLoginProgress> {
-  return invoke<AgentAccountLoginProgress>("cancel_agent_account_login", {});
+export async function cancelAgentAccountLogin(
+  operationId?: string,
+): Promise<AgentAccountLoginProgress> {
+  return invoke<AgentAccountLoginProgress>(
+    "cancel_agent_account_login",
+    operationId ? { operationId } : {},
+  );
 }

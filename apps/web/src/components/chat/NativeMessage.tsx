@@ -200,7 +200,11 @@ export const NativeMessage = memo(function NativeMessage({
           </div>
         </div>
         {isClaudeAuthError ? (
-          <ClaudeAuthRecoveryCard error={message.content} containerId={containerId} />
+          <ClaudeAuthRecoveryCard
+            error={message.content}
+            failureAt={message.createdAt}
+            containerId={containerId}
+          />
         ) : null}
       </>
     );

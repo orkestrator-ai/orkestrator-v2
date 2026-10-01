@@ -11,7 +11,7 @@ import { CoordinatorService } from "./coordinator-service.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
+import { localAgentAccountIds, staleLoginLocalBridges } from "./agent-account-bridge-state.js";
 
 describe("Coordinator Codex server", () => {
   let root: string;
@@ -84,6 +84,7 @@ describe("Coordinator Codex server", () => {
       );
     }
     commandTesting.resetLocalServerLifecycle();
+    staleLoginLocalBridges.clear();
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -188,6 +189,21 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
       conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
     });
+    // A renewed login must retain busy work, then replace an idle bridge and
+    // acknowledge the refresh only after the replacement has launched.
+    const key = `claude:${runtimeId}`;
+    staleLoginLocalBridges.add(key);
+    let busy = true;
+    context.nativeAgents = {
+      hasObservedLiveWork: async () => busy,
+    } as unknown as CommandContext["nativeAgents"];
+    const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
+    expect(retained.pid).toBe(started.pid);
+    expect(staleLoginLocalBridges.has(key)).toBe(true);
+    busy = false;
+    const replaced = await startLocalServerUnlocked(runtimeId, context, "claude");
+    expect(replaced.pid).not.toBe(started.pid);
+    expect(staleLoginLocalBridges.has(key)).toBe(false);
   });
 
   test("a Cursor coordinator clears inherited project-settings opt-in", async () => {

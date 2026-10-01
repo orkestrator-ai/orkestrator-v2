@@ -29,6 +29,7 @@ import {
   type InputSourceRoots,
 } from "./portable-inputs.js";
 import { containerLabel, providerCredentialsAllowed } from "./portable-input-status.js";
+import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import { prepareAgentAccountHome } from "./agent-accounts-homes.js";
 import { readAddedClaudeCredentials, resolveActiveAgentAccount } from "./agent-accounts-active.js";
 
@@ -131,7 +132,11 @@ async function accountHasBeenUsed(
   platform: AgentAccountPlatform,
 ): Promise<boolean> {
   const store = await context.storage.loadAgentAccounts();
-  return Boolean(store.active[platform]) || store.accounts.some((a) => a.platform === platform);
+  return (
+    Boolean(store.loginGeneration?.[platform]) ||
+    Boolean(store.active[platform]) ||
+    store.accounts.some((a) => a.platform === platform)
+  );
 }
 
 /**
@@ -242,6 +247,16 @@ async function containerClaudeCredentials(
     : await resolveContainerClaudeCredentials(global);
 }
 
+async function currentAccountMarker(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+): Promise<string> {
+  const store = await context.storage.loadAgentAccounts();
+  const accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+  const generation = store.loginGeneration?.[platform];
+  return generation ? `${accountId}:${generation}` : accountId;
+}
+
 async function writeMarker(
   runners: ContainerRunners,
   containerId: string,
@@ -281,6 +296,9 @@ export async function syncContainerAgentAccountsOnStart(
 ): Promise<void> {
   if (providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "claude")) {
     try {
+      // Capture before reading/copying: a concurrent renewal must not stamp
+      // an older credential with the newer generation.
+      const marker = await currentAccountMarker(context, "claude");
       const credentials = await containerClaudeCredentials(context, global);
       if (credentials) {
         await runners.pipe(containerId, SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND, credentials);
@@ -291,12 +309,7 @@ export async function syncContainerAgentAccountsOnStart(
         await runners.exec(containerId, `rm -f ${CONTAINER_CLAUDE_CREDENTIAL_FILE}`);
       }
       if (await accountHasBeenUsed(context, "claude")) {
-        await writeMarker(
-          runners,
-          containerId,
-          "claude",
-          (await resolveActiveAgentAccount(context, "claude")).accountId,
-        );
+        await writeMarker(runners, containerId, "claude", marker);
       }
     } catch (error) {
       logFailure("Failed to sync Claude credentials into container", error);
@@ -377,8 +390,12 @@ export async function reconcileContainerAgentAccount(
   );
   if (!environment) return;
   const { global } = await context.storage.loadConfig();
+  // The account was signed in again: the container still holds the login it
+  // was given before, whichever account that was.
+  const loginRenewed = platform === "claude" && staleLoginEnvironmentIds.has(environment.id);
   // An opt-out must revoke a credential already placed in an older container.
   if (
+    !loginRenewed &&
     !(await accountHasBeenUsed(context, platform)) &&
     !(platform === "claude" && global.useHostClaudeCredentials === false)
   )
@@ -387,8 +404,14 @@ export async function reconcileContainerAgentAccount(
     return;
   }
   const active = await resolveActiveAgentAccount(context, platform);
-  const markerMatches = (await readMarker(runners, containerId, platform)) === active.accountId;
-  if (markerMatches && !(platform === "claude" && global.useHostClaudeCredentials === false))
+  const generation = (await context.storage.loadAgentAccounts()).loginGeneration?.[platform];
+  const expectedMarker = generation ? `${active.accountId}:${generation}` : active.accountId;
+  const markerMatches = (await readMarker(runners, containerId, platform)) === expectedMarker;
+  if (
+    markerMatches &&
+    !loginRenewed &&
+    !(platform === "claude" && global.useHostClaudeCredentials === false)
+  )
     return;
   if (await context.nativeAgents?.hasObservedLiveWork(environment.id, platform)) {
     return;
@@ -401,6 +424,32 @@ export async function reconcileContainerAgentAccount(
       logFailure("Failed to refresh the staged login", error),
     );
   }
-  await writeMarker(runners, containerId, platform, active.accountId);
   if (running) await bridge.stop();
+  // Publish completion only after the old bridge has relinquished its login.
+  await writeMarker(runners, containerId, platform, expectedMarker);
+  if (platform === "claude") staleLoginEnvironmentIds.delete(environment.id);
+}
+
+/**
+ * After the active Claude login was renewed on the host: have each container
+ * that uses it take the new login the next time its idle bridge starts or is
+ * reused. Containers with their own isolated login keep it.
+ */
+export async function markContainersForClaudeLoginRefresh(
+  context: CommandContext,
+  generationPersisted = false,
+): Promise<void> {
+  if (!generationPersisted)
+    await context.storage.mutateAgentAccounts((store) => ({
+      store: {
+        ...store,
+        loginGeneration: { ...store.loginGeneration, claude: crypto.randomUUID() },
+      },
+      result: undefined,
+    }));
+  const { global } = await context.storage.loadConfig();
+  if (global.useHostClaudeCredentials === false) return;
+  for (const environment of await context.storage.loadEnvironments()) {
+    if (environment.containerId) staleLoginEnvironmentIds.add(environment.id);
+  }
 }

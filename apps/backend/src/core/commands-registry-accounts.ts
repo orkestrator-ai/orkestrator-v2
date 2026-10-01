@@ -80,8 +80,13 @@ export function registerAgentAccountCommands(
    * is human-paced and must not hold a request open.
    */
   register("start_agent_account_login", async (args, context) => {
-    assertOnlyKeys(args, ["platform"], "arguments");
-    return startAgentAccountLogin(context, asAccountPlatform(args.platform));
+    assertOnlyKeys(args, ["platform", "reauthenticate"], "arguments");
+    return startAgentAccountLogin(context, asAccountPlatform(args.platform), {
+      reauthenticate:
+        args.reauthenticate === undefined
+          ? false
+          : asRequiredBoolean(args.reauthenticate, "reauthenticate"),
+    });
   });
   register("get_agent_account_login", async (args) => {
     assertOnlyKeys(args, [], "arguments");
@@ -92,7 +97,11 @@ export function registerAgentAccountCommands(
     return submitAgentAccountLoginCode(asNonBlankString(args.code, "code"));
   });
   register("cancel_agent_account_login", async (args) => {
-    assertOnlyKeys(args, [], "arguments");
-    return cancelAgentAccountLogin();
+    assertOnlyKeys(args, ["operationId"], "arguments");
+    return cancelAgentAccountLogin(
+      args.operationId === undefined
+        ? undefined
+        : asNonBlankString(args.operationId, "operationId"),
+    );
   });
 }

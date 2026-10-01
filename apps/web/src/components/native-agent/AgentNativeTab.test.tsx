@@ -13,6 +13,7 @@ import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
+import type { AgentAccountLoginProgress } from "@orkestrator/protocol/agent-accounts";
 import type {
   NativeAgentAuthStatus,
   NativeAgentDispatchOutcome,
@@ -278,6 +279,25 @@ const defaultProjection = async (input: {
   generation: "test-generation",
 });
 const getNativeAgentProjectionMock = mock(defaultProjection);
+// The backend-driven Claude sign-in: what `get_agent_account_login` reports now.
+let accountLoginProgress: AgentAccountLoginProgress = { state: "idle" };
+const startAgentAccountLoginMock = mock(
+  async (_platform: string, _options?: { reauthenticate?: boolean }) => {
+    accountLoginProgress = {
+      state: "pending",
+      platform: "claude",
+      mode: "reauthenticate",
+      url: "https://claude.com/cai/oauth/authorize?state=test",
+      needsCode: true,
+    };
+    return accountLoginProgress;
+  },
+);
+const getAgentAccountLoginMock = mock(async () => accountLoginProgress);
+const cancelAgentAccountLoginMock = mock(async () => {
+  accountLoginProgress = { state: "idle" };
+  return accountLoginProgress;
+});
 const stopNativeAgentBackgroundTaskMock = mock(async () =>
   getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
@@ -350,6 +370,9 @@ mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   beginNativeAgentSignIn: beginNativeAgentSignInMock,
   getNativeAgentAuthStatus: getNativeAgentAuthStatusMock,
+  startAgentAccountLogin: startAgentAccountLoginMock,
+  getAgentAccountLogin: getAgentAccountLoginMock,
+  cancelAgentAccountLogin: cancelAgentAccountLoginMock,
   openInBrowser: openInBrowserMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   recoverMultiReviewFixSession: recoverMultiReviewFixSessionMock,
@@ -987,16 +1010,61 @@ describe("AgentNativeTab", () => {
     );
   });
 
-  test("opens an interactive Claude sign-in terminal for an isolated-container failure", async () => {
-    renderVirtualizedMessages = true;
-    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
-    const createTab = mock(() => true);
-    const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
+  test.each(["pending", "succeeded"] as const)(
+    "keeps isolated-container recovery terminal-only during host reauthentication %s",
+    async (state) => {
+      accountLoginProgress = {
+        state,
+        platform: "claude",
+        mode: "reauthenticate",
+        operationId: "host-reauth",
+        accountId: "default",
+      };
+      getAgentAccountLoginMock.mockClear();
+      startAgentAccountLoginMock.mockClear();
+      renderVirtualizedMessages = true;
+      useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+      const createTab = mock(() => true);
+      const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        messages: [
+          {
+            id: "native-terminal:error:auth-failure",
+            role: "system",
+            content: error,
+            createdAt: "2026-09-03T14:45:00.000Z",
+            parts: [{ type: "text", content: error }],
+          },
+        ],
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalTabHarness createTab={createTab}>
+            <AgentNativeTab tabId="tab-auth-recovery" data={identity("claude")} isActive />
+          </TerminalTabHarness>
+        </TerminalProvider>,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+      expect(screen.queryByText("Signed in. Resend your message to continue.") === null).toBe(true);
+      expect(screen.queryByLabelText("Sign-in code") === null).toBe(true);
+      expect(getAgentAccountLoginMock).not.toHaveBeenCalled();
+      expect(startAgentAccountLoginMock).not.toHaveBeenCalled();
+      expect(createTab).toHaveBeenCalledWith("plain", {
+        displayTitle: "Claude sign-in",
+        initialCommands: [CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND],
+      });
+    },
+  );
+
+  function claudeAuthFailureProjection(id: string, error: string) {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       messages: [
         {
-          id: "native-terminal:error:auth-failure",
+          id,
           role: "system",
           content: error,
           createdAt: "2026-09-03T14:45:00.000Z",
@@ -1004,38 +1072,17 @@ describe("AgentNativeTab", () => {
         },
       ],
     }));
+  }
 
-    render(
-      <TerminalProvider>
-        <TerminalTabHarness createTab={createTab}>
-          <AgentNativeTab tabId="tab-auth-recovery" data={identity("claude")} isActive />
-        </TerminalTabHarness>
-      </TerminalProvider>,
+  test("signs the host Claude login in from the app for a local environment", async () => {
+    renderVirtualizedMessages = true;
+    accountLoginProgress = { state: "idle" };
+    startAgentAccountLoginMock.mockClear();
+    const createTab = mock(() => true);
+    claudeAuthFailureProjection(
+      "native-terminal:error:auth-local",
+      "authentication_error: Invalid authentication credentials",
     );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
-    expect(createTab).toHaveBeenCalledWith("plain", {
-      displayTitle: "Claude sign-in",
-      initialCommands: [CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND],
-    });
-  });
-
-  test("uses a local environment terminal to repair the host Claude login", async () => {
-    renderVirtualizedMessages = true;
-    const createTab = mock(() => true);
-    const error = "authentication_error: Invalid authentication credentials";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-      ...(await defaultProjection(input as never)),
-      messages: [
-        {
-          id: "native-terminal:error:auth-local",
-          role: "system",
-          content: error,
-          createdAt: "2026-09-03T14:45:00.000Z",
-          parts: [{ type: "text", content: error }],
-        },
-      ],
-    }));
 
     render(
       <TerminalProvider>
@@ -1050,29 +1097,51 @@ describe("AgentNativeTab", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+
+    expect(await screen.findByLabelText("Sign-in code")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open sign-in page" })).toBeTruthy();
+    expect(startAgentAccountLoginMock).toHaveBeenCalledWith("claude", { reauthenticate: true });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("still offers the terminal for a local environment", async () => {
+    renderVirtualizedMessages = true;
+    accountLoginProgress = { state: "idle" };
+    const createTab = mock(() => true);
+    claudeAuthFailureProjection(
+      "native-terminal:error:auth-local-terminal",
+      "authentication_error: Invalid authentication credentials",
+    );
+
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab
+            tabId="tab-auth-recovery-local-terminal"
+            data={{ ...identity("claude"), containerId: undefined, isLocal: true }}
+            isActive
+          />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use a terminal instead" }));
     expect(createTab).toHaveBeenCalledWith("plain", {
       displayTitle: "Claude sign-in",
       initialCommands: [CLAUDE_AUTH_LOGIN_COMMAND],
     });
   });
 
-  test("directs shared Docker credential recovery to the host", async () => {
+  test("signs in a container that shares the host login from the app, not a terminal", async () => {
     renderVirtualizedMessages = true;
+    accountLoginProgress = { state: "idle" };
+    startAgentAccountLoginMock.mockClear();
     useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: true });
     const createTab = mock(() => true);
-    const error = "API Error: 401 unauthorized";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-      ...(await defaultProjection(input as never)),
-      messages: [
-        {
-          id: "native-terminal:error:auth-shared-docker",
-          role: "system",
-          content: error,
-          createdAt: "2026-09-03T14:45:00.000Z",
-          parts: [{ type: "text", content: error }],
-        },
-      ],
-    }));
+    claudeAuthFailureProjection(
+      "native-terminal:error:auth-shared-docker",
+      "API Error: 401 unauthorized",
+    );
 
     render(
       <TerminalProvider>
@@ -1082,11 +1151,68 @@ describe("AgentNativeTab", () => {
       </TerminalProvider>,
     );
 
-    expect(await screen.findByText(/This container uses your host Claude login/)).toBeTruthy();
-    expect(screen.getByText(/restart this environment/i)).toBeTruthy();
-    expect(screen.getByText(CLAUDE_AUTH_LOGIN_COMMAND)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Sign in to Claude" }) === null).toBe(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+
+    expect(await screen.findByLabelText("Sign-in code")).toBeTruthy();
+    expect(startAgentAccountLoginMock).toHaveBeenCalledWith("claude", { reauthenticate: true });
+    expect(screen.queryByRole("button", { name: "Use a terminal instead" }) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("offers sign-in under Claude's own not-logged-in reply until the user sends again", async () => {
+    accountLoginProgress = { state: "idle" };
+    const notice = "Not logged in · Please run /login";
+    const prompt = {
+      id: "user-1",
+      role: "user" as const,
+      content: "hello",
+      createdAt: "2026-09-03T14:44:00.000Z",
+      parts: [{ type: "text" as const, content: "hello" }],
+    };
+    const reply = {
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: notice,
+      createdAt: "2026-09-03T14:45:00.000Z",
+      parts: [{ type: "text" as const, content: notice }],
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [prompt, reply],
+    }));
+
+    const { unmount } = render(
+      <AgentNativeTab tabId="tab-not-logged-in" data={identity("claude")} isActive />,
+    );
+    expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
+    unmount();
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [prompt, reply, { ...prompt, id: "user-2", createdAt: "2026-09-03T14:46:00.000Z" }],
+    }));
+    render(<AgentNativeTab tabId="tab-not-logged-in-later" data={identity("claude")} isActive />);
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
+  });
+
+  test("does not mistake another provider's reply for Claude's notice", async () => {
+    const notice = "Not logged in · Please run /login";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: notice,
+          createdAt: "2026-09-03T14:45:00.000Z",
+          parts: [{ type: "text" as const, content: notice }],
+        },
+      ],
+    }));
+    render(<AgentNativeTab tabId="tab-not-logged-in-codex" data={identity("codex")} isActive />);
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
   });
 
   test("does not duplicate createTab's own failure notification", async () => {

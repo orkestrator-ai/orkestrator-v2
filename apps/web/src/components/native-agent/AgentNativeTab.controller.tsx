@@ -157,6 +157,8 @@ import {
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
+import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
@@ -781,6 +783,18 @@ export function SharedNativeAgentController({
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
+  // Claude answers a turn it cannot run with this notice as an ordinary reply.
+  // Only while it is still the latest exchange: once the user sends again, the
+  // moment to sign in has passed and the card would be stale history.
+  const claudeNotLoggedInNotice =
+    platform === "claude" &&
+    latestAssistantMessage !== undefined &&
+    isClaudeNotLoggedInNotice(latestAssistantMessage) &&
+    normalizedMessages.at(-1)?.role !== "user" &&
+    normalizedMessages.lastIndexOf(latestAssistantMessage) >
+      normalizedMessages.findLastIndex((message) => message.role === "user")
+      ? latestAssistantMessage.content
+      : null;
   const planContent = useMemo(
     () => extractNativePlanContent(normalizedMessages),
     [normalizedMessages],
@@ -2130,6 +2144,15 @@ export function SharedNativeAgentController({
         onApproveAndBuild={() => switchPlanToBuild(true)}
         onSwitchToBuild={() => switchPlanToBuild(false)}
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
+      />
+    ) : null,
+    claudeNotLoggedInNotice !== null ? (
+      <ClaudeAuthRecoveryCard
+        key="claude-not-logged-in"
+        placement="pinned"
+        error={claudeNotLoggedInNotice}
+        failureAt={latestAssistantMessage?.createdAt}
+        containerId={data.containerId}
       />
     ) : null,
     authenticationRequired ? (

@@ -47,7 +47,9 @@ export class StorageService extends StoragePublicOperations {
    * unchanged (the same object) skips the write.
    */
   mutateAgentAccounts<T>(
-    mutate: (store: AgentAccountStore) => { store: AgentAccountStore; result: T },
+    mutate: (
+      store: AgentAccountStore,
+    ) => { store: AgentAccountStore; result: T } | Promise<{ store: AgentAccountStore; result: T }>,
   ): Promise<T> {
     const run = async (): Promise<T> => {
       const release = await this.acquireMutationLock(
@@ -56,7 +58,7 @@ export class StorageService extends StoragePublicOperations {
       );
       try {
         const current = await this.loadAgentAccounts();
-        const { store, result } = mutate(current);
+        const { store, result } = await mutate(current);
         if (store !== current) {
           await this.saveSensitiveJson(this.agentAccountsFile(), parseAgentAccountStore(store));
         }

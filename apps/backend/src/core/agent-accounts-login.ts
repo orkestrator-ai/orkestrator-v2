@@ -90,19 +90,23 @@ export const INHERITED_CREDENTIAL_ENV = [
 export function agentAccountLoginCommand(options: {
   platform: AgentAccountPlatform;
   executable: string;
-  accountHome: string;
+  /**
+   * The account directory to sign in to. Absent for Claude's host login, which
+   * the CLI writes wherever it always does (Keychain or `~/.claude`).
+   */
+  accountHome?: string;
   browserShimDirectory: string;
   env?: NodeJS.ProcessEnv;
 }): AgentAccountLoginCommand {
   const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), NO_COLOR: "1" };
   for (const key of INHERITED_CREDENTIAL_ENV) delete env[key];
   if (options.platform === "claude") {
-    env.CLAUDE_CONFIG_DIR = options.accountHome;
+    if (options.accountHome) env.CLAUDE_CONFIG_DIR = options.accountHome;
     env.PATH = [options.browserShimDirectory, env.PATH].filter(Boolean).join(path.delimiter);
     env.BROWSER = path.join(options.browserShimDirectory, "open");
     return { command: options.executable, args: ["auth", "login"], env };
   }
-  env.CODEX_HOME = options.accountHome;
+  if (options.accountHome) env.CODEX_HOME = options.accountHome;
   return { command: options.executable, args: ["login", "--device-auth"], env };
 }
 

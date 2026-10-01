@@ -2,6 +2,7 @@ import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
+import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -1585,6 +1586,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
   if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;
   if (window.location.pathname === "/browser") return <BrowserFixture />;

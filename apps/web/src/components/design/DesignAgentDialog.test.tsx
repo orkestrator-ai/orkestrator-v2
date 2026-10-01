@@ -17,10 +17,21 @@ import {
 } from "@/contexts/TerminalContext";
 import { createSessionKey } from "@/lib/utils";
 import { emptyProjection, type DesignProjection } from "@/stores/designStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { Environment } from "@/types";
 import type { TabInfo } from "@/types/paneLayout";
+import { toast } from "sonner";
+import { DESIGN_PROMPT_IMAGE_LIMIT } from "./design-prompt-images";
 import { DesignAgentDialog } from "./DesignAgentDialog";
+import {
+  deferred,
+  dispatchImagePaste,
+  installImagePasteSupport,
+  pasteImage,
+  settlePaste,
+} from "./design-paste-test-support";
 
 const invokeMock = invoke as unknown as Mock<
   (command: string, args?: Record<string, unknown>) => Promise<unknown>
@@ -170,11 +181,166 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // After unmount, so the reset does not re-render a mounted dialog outside act().
+  useEnvironmentStore.setState({ environments: [] });
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
 });
 
 describe("DesignAgentDialog", () => {
+  function supportPaste(write?: Promise<string>) {
+    const restore = installImagePasteSupport();
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          containerId: null,
+          status: "running",
+          environmentType: "local",
+          worktreePath: "/tmp/wt",
+        } as Environment,
+      ],
+    });
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "write_local_file") return write ?? `/tmp/wt/${args?.filePath}`;
+      if (command === "design_session_link")
+        return {
+          ok: true,
+          value: { ...(args?.link as object), id: "new-link", createdAt: "2026-09-24T00:00:00Z" },
+        };
+      return { ok: false, failure: { code: "unsupported", message: "no", retry: "never" } };
+    });
+    return restore;
+  }
+
+  for (const scope of ["discuss", "implement"] as const) {
+    test(`blocks pending paste and carries its image into a new ${scope} conversation exactly once`, async () => {
+      const write = deferred<string>();
+      const restore = supportPaste(write.promise);
+      seedTabs([]);
+      try {
+        const { onOpenChange } = await renderDialog({ context: { ...context, scope } });
+        const prompt = screen.getByPlaceholderText(
+          scope === "discuss"
+            ? "What would you like to know or change?"
+            : "What should be built, and where?",
+        );
+        const submit = screen.getByRole("button", {
+          name: "Start a new conversation",
+        }) as HTMLButtonElement;
+        act(() => {
+          dispatchImagePaste(prompt);
+          fireEvent.click(submit);
+        });
+        expect(submit.disabled).toBe(true);
+        await settlePaste();
+        expect(createTabMock).not.toHaveBeenCalled();
+        expect(onOpenChange).not.toHaveBeenCalled();
+        await act(async () => write.resolve("/tmp/wt/shot.png"));
+        expect(submit.disabled).toBe(false);
+        await act(async () => {
+          fireEvent.click(submit);
+          fireEvent.click(submit);
+          dispatchImagePaste(prompt);
+        });
+        expect(createTabMock).toHaveBeenCalledTimes(1);
+        expect(commandCalls("write_local_file")).toHaveLength(1);
+        const tabId = createTabMock.mock.calls[0]![1]!.tabId!;
+        const draft = nativeComposeDraft(
+          useNativeComposeStore.getState(),
+          createSessionKey("env-1", tabId),
+        );
+        expect(draft.attachments).toHaveLength(1);
+        expect(draft.attachments[0]!.path).toBe("/tmp/wt/shot.png");
+        expect(draft.annotations).toHaveLength(0);
+        expect(draft.text).toContain(
+          scope === "implement" ? "static visual reference" : "source=design",
+        );
+        expect(commandCalls("design_session_link")).toHaveLength(1);
+        expect(onOpenChange).toHaveBeenCalledTimes(1);
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  for (const existingCount of [DESIGN_PROMPT_IMAGE_LIMIT, DESIGN_PROMPT_IMAGE_LIMIT - 1]) {
+    test(`keeps an existing conversation with ${existingCount} attachments unchanged on cap refusal`, async () => {
+      const restore = supportPaste();
+      seedTabs([agentTab("agent-open", "claude")]);
+      const key = createSessionKey("env-1", "agent-open");
+      useNativeComposeStore.getState().updateDraft(key, {
+        text: "keep me",
+        annotations: [{ id: "existing", text: "existing", comment: "" }],
+        attachments: Array.from({ length: existingCount }, (_, i) => ({
+          id: `image-${i}`,
+          type: "image" as const,
+          path: `/tmp/wt/${i}.png`,
+          name: `${i}.png`,
+        })),
+      });
+      const original = nativeComposeDraft(useNativeComposeStore.getState(), key);
+      try {
+        const { onOpenChange } = await renderDialog({ sessions: [link("open", "agent-open")] });
+        await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
+        if (existingCount < DESIGN_PROMPT_IMAGE_LIMIT)
+          await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
+        fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
+        await settlePaste();
+        expect(nativeComposeDraft(useNativeComposeStore.getState(), key)).toEqual(original);
+        expect(screen.getByRole("alert").textContent).toContain("maximum number of attachments");
+        expect(onOpenChange).not.toHaveBeenCalled();
+        expect(createTabMock).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  test("surfaces the paste cap in the dialog without starting another file write", async () => {
+    const restore = supportPaste();
+    seedTabs([]);
+    try {
+      await renderDialog({});
+      const prompt = screen.getByPlaceholderText("What would you like to know or change?");
+      for (let i = 0; i < DESIGN_PROMPT_IMAGE_LIMIT; i += 1) await pasteImage(prompt);
+      expect(commandCalls("write_local_file")).toHaveLength(DESIGN_PROMPT_IMAGE_LIMIT);
+      await pasteImage(prompt);
+      expect(commandCalls("write_local_file")).toHaveLength(DESIGN_PROMPT_IMAGE_LIMIT);
+      expect(toast.error).toHaveBeenCalledWith("Too many images", expect.anything());
+      expect(
+        screen.getByRole("list", { name: "Attached images" }).querySelectorAll("img"),
+      ).toHaveLength(DESIGN_PROMPT_IMAGE_LIMIT);
+    } finally {
+      restore();
+    }
+  });
+
+  test("blocks adding to an existing composer until its image write settles", async () => {
+    const write = deferred<string>();
+    const restore = supportPaste(write.promise);
+    seedTabs([agentTab("agent-open", "claude")]);
+    try {
+      const { onOpenChange } = await renderDialog({ sessions: [link("open", "agent-open")] });
+      await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
+      const submit = screen.getByRole("button", { name: "Add to composer" }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(true);
+      fireEvent.click(submit);
+      expect(onOpenChange).not.toHaveBeenCalled();
+      await act(async () => write.resolve("/tmp/wt/shot.png"));
+      fireEvent.click(submit);
+      await settlePaste();
+      expect(
+        nativeComposeDraft(
+          useNativeComposeStore.getState(),
+          createSessionKey("env-1", "agent-open"),
+        ).attachments,
+      ).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
   test("lists linked conversations and marks closed ones with a remove action", async () => {
     seedTabs([agentTab("agent-open", "claude")]);
     invokeMock.mockImplementation((command) =>
@@ -234,6 +400,56 @@ describe("DesignAgentDialog", () => {
     expect(createTabMock).not.toHaveBeenCalled();
     expect(commandCalls("design_session_link")).toHaveLength(0);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("attaches a pasted image to the chosen conversation's draft", async () => {
+    const restorePaste = installImagePasteSupport();
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          containerId: null,
+          status: "running",
+          environmentType: "local",
+          worktreePath: "/tmp/wt",
+        } as Environment,
+      ],
+    });
+    invokeMock.mockImplementation(async (command, args) =>
+      command === "write_local_file"
+        ? `${args?.worktreePath}/${args?.filePath}`
+        : { ok: false, failure: { code: "unsupported", message: "no", retry: "never" } },
+    );
+    try {
+      seedTabs([agentTab("agent-open", "claude")]);
+      const sessionKey = createSessionKey("env-1", "agent-open");
+      await renderDialog({ sessions: [link("open", "agent-open")] });
+
+      const note = screen.getByPlaceholderText(
+        "What would you like to know or change?",
+      ) as HTMLTextAreaElement;
+      await pasteImage(note);
+      expect(
+        screen.getByRole("list", { name: "Attached images" }).querySelectorAll("img"),
+      ).toHaveLength(1);
+      // Nothing reaches the conversation until the user confirms.
+      expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual(
+        [],
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
+      });
+
+      const draft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      expect(draft.attachments).toHaveLength(1);
+      expect(draft.attachments[0]).toMatchObject({ type: "image" });
+      expect(draft.attachments[0]!.path).toStartWith("/tmp/wt/.orkestrator/clipboard/");
+      expect(draft.annotations.at(-1)).toMatchObject({ source: "design" });
+      expect(createTabMock).not.toHaveBeenCalled();
+    } finally {
+      restorePaste();
+    }
   });
 
   test("starts one new conversation without an initial prompt and links it once", async () => {

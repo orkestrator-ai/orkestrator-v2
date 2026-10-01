@@ -45,6 +45,7 @@ import {
   projectFolderDragId,
   resolveSortProjectFolder,
 } from "../../apps/web/src/lib/project-folders";
+import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { useProjectStore } from "../../apps/web/src/stores";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import type { Project } from "../../apps/web/src/types";
@@ -117,6 +118,17 @@ function CreateEnvironmentFixture() {
 
 function DesignLaunchFixture() {
   useEffect(() => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "design-fixture",
+          environmentType: "local",
+          status: "running",
+          containerId: null,
+          worktreePath: "/tmp/design-fixture",
+        } as import("../../apps/web/src/types").Environment,
+      ],
+    });
     usePaneLayoutStore.setState((state) => ({
       hydration: new Map(state.hydration).set("design-fixture", "done"),
     }));
@@ -141,7 +153,9 @@ function DesignLaunchFixture() {
   };
   const ok = <T,>(value: unknown) => ({ ok: true, value }) as T;
   window.orkestrator = {
-    invoke: async <T,>(command: string) => {
+    invoke: async <T,>(command: string, args?: unknown) => {
+      if (command === "write_local_file")
+        return `/tmp/design-fixture/${(args as { filePath: string }).filePath}` as T;
       if (command === "design_status") return { ready: true } as T;
       if (command === "design_action") return [] as T;
       if (command === "design_capabilities") return ok<T>(capabilities);

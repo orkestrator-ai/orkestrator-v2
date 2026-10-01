@@ -45,3 +45,34 @@ test("opens from the keyboard with New, Open and Import modes", async ({ page },
     "A calmer checkout",
   );
 });
+
+test("pasted image removal stays visible without hover at desktop and touch viewports", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/design-launch");
+  await page.getByRole("button", { name: "New design workspace" }).click();
+  const prompt = page.getByRole("textbox", { name: "Design brief" });
+  await prompt.focus();
+  await prompt.evaluate((element) => {
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHhoAAAAASUVORK5CYII=";
+    const bytes = Uint8Array.from(atob(png), (character) => character.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([bytes], "shot.png", { type: "image/png" }));
+    element.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  });
+  const remove = page.getByRole("button", { name: /^Remove clipboard-.*\.png$/ });
+  await expect(remove).toBeVisible();
+  await expect(remove).toHaveCSS("opacity", "1");
+  if (testInfo.project.name === "mobile-chromium") {
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    await remove.tap();
+  } else {
+    await remove.focus();
+    await expect(remove).toBeFocused();
+    await page.keyboard.press("Enter");
+  }
+  await expect(page.getByRole("list", { name: "Attached images" })).toHaveCount(0);
+});

@@ -22,7 +22,7 @@ import type { DesignProjection } from "@/stores/designStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
-import { designApi, failureOf } from "./design-client";
+import { designApi, designBackendKey, failureOf } from "./design-client";
 import {
   boundDesignContextReference,
   buildDesignContextAnnotation,
@@ -38,6 +38,13 @@ import {
   type DesignContextScope,
   type DesignDraftAddition,
 } from "./design-agent-context";
+import {
+  addDesignImagesToDraft,
+  DESIGN_PROMPT_IMAGE_HINT,
+  DesignPromptImages,
+  useDesignPromptImagePaste,
+  type DesignPromptImage,
+} from "./design-prompt-images";
 
 type AgentChoice = "claude" | "codex";
 type LinkStatus = "open" | "closed" | "checking";
@@ -103,7 +110,7 @@ export function DesignAgentDialog({
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       {context ? (
         <DesignAgentDialogBody
-          key={`${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
+          key={`${designBackendKey()}:${context.environmentId}:${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
           context={context}
           projection={projection}
           onClose={() => onOpenChange(false)}
@@ -135,6 +142,8 @@ function DesignAgentDialogBody({
   const [scope, setScope] = useState<DesignContextScope>(context.scope);
   const [note, setNote] = useState("");
   const [brief, setBrief] = useState("");
+  const [images, setImages] = useState<DesignPromptImage[]>([]);
+  const promptRef = useRef<HTMLDivElement>(null);
   const [agent, setAgent] = useState<AgentChoice>("claude");
   const [replaceId, setReplaceId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -153,6 +162,15 @@ function DesignAgentDialogBody({
     return new Set(initial ? [initial] : []);
   });
   const currentRevision = projection?.revision ?? context.canvasRevision;
+
+  const imagePaste = useDesignPromptImagePaste({
+    containerRef: promptRef,
+    environmentId,
+    scopeKey: designBackendKey(),
+    enabled: !pending,
+    images,
+    onImagesChange: setImages,
+  });
 
   // Best effort: label the checkpoint with the revision it depicts. Absence is
   // stated in the draft instead of guessed.
@@ -221,6 +239,7 @@ function DesignAgentDialogBody({
 
   const canSubmit =
     !pending &&
+    !imagePaste.isPasting &&
     (!handoff || chosenFrames.length > 0) &&
     (!needsReplacement || replacement !== undefined) &&
     (effectiveDestination.kind === "link" ? destinationLink !== undefined : createTab !== null);
@@ -269,7 +288,8 @@ function DesignAgentDialogBody({
     const sessionKey = createSessionKey(environmentId, tabId);
     const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
     const plan = planDesignDraft(current, addition, { inlineText });
-    if (!plan.ok) {
+    // Both checks run before either change, so a refusal leaves the draft as it was.
+    if (!plan.ok || !addDesignImagesToDraft(sessionKey, images)) {
       setError(
         "That conversation's composer already has the maximum number of attachments. Send or remove some first.",
       );
@@ -315,7 +335,7 @@ function DesignAgentDialogBody({
       setError("Could not open a new conversation. Close a tab or pane and try again.");
       return;
     }
-    applyDraft(tabId, addition, true);
+    if (!applyDraft(tabId, addition, true)) return;
     try {
       const link = await designApi.linkSession(
         environmentId,
@@ -350,7 +370,7 @@ function DesignAgentDialogBody({
   };
 
   const submit = async () => {
-    if (pendingRef.current || !canSubmit) return;
+    if (pendingRef.current || !canSubmit || !imagePaste.tryBeginSubmission()) return;
     pendingRef.current = true;
     setPending(true);
     setError(null);
@@ -360,6 +380,7 @@ function DesignAgentDialogBody({
     } catch (reason) {
       setError(messageOf(reason));
     } finally {
+      imagePaste.endSubmission();
       pendingRef.current = false;
       setPending(false);
     }
@@ -383,6 +404,19 @@ function DesignAgentDialogBody({
   };
 
   const summary = designContextSummaryLines(reference);
+  const promptImages = (
+    <>
+      <DesignPromptImages
+        images={images}
+        disabled={pending}
+        onRemove={(id) => setImages((current) => current.filter((image) => image.id !== id))}
+      />
+      <p id="design-agent-images-hint" className="text-xs text-muted-foreground">
+        {imagePaste.isPasting ? "Attaching image…" : DESIGN_PROMPT_IMAGE_HINT} Images are added to
+        the conversation&apos;s draft.
+      </p>
+    </>
+  );
   const actionLabel =
     effectiveDestination.kind === "new"
       ? "Start a new conversation"
@@ -490,30 +524,38 @@ function DesignAgentDialogBody({
               </label>
             </fieldset>
           ) : null}
+          <div ref={promptRef} className="space-y-1">
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-muted-foreground">Brief (optional)</span>
+              <Textarea
+                value={brief}
+                maxLength={4_000}
+                onChange={(event) => setBrief(event.target.value)}
+                placeholder="What should be built, and where?"
+                aria-describedby="design-agent-images-hint"
+                disabled={pending}
+              />
+            </label>
+            {promptImages}
+          </div>
+        </section>
+      ) : (
+        <div ref={promptRef} className="space-y-1 text-sm">
           <label className="block space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">Brief (optional)</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              Note for the agent (optional)
+            </span>
             <Textarea
-              value={brief}
-              maxLength={4_000}
-              onChange={(event) => setBrief(event.target.value)}
-              placeholder="What should be built, and where?"
+              value={note}
+              maxLength={2_000}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="What would you like to know or change?"
+              aria-describedby="design-agent-images-hint"
               disabled={pending}
             />
           </label>
-        </section>
-      ) : (
-        <label className="block space-y-1 text-sm">
-          <span className="text-xs font-medium text-muted-foreground">
-            Note for the agent (optional)
-          </span>
-          <Textarea
-            value={note}
-            maxLength={2_000}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="What would you like to know or change?"
-            disabled={pending}
-          />
-        </label>
+          {promptImages}
+        </div>
       )}
 
       <section aria-label="Linked conversations" className="space-y-2 text-sm">

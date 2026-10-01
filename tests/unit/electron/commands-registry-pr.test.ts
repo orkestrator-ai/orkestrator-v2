@@ -3102,7 +3102,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
-    ).rejects.toThrow("Failed to start and clean up local server");
+    ).rejects.toThrow(
+      /Failed to start and clean up local server: codex:.*\(startup: codex server exited before becoming healthy.*; cleanup: Local server process tree did not exit/,
+    );
     expect(updates).toContainEqual({
       localCodexPort: null,
       codexBridgePid: null,

@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -56,10 +56,32 @@ function valueAfter(args: string[], name: string): string | undefined {
  * directory someone filled by hand, the plain `toolchains/bin` is what was always
  * searched. The choice is made at startup: a backend that was already running
  * when a new set was installed keeps the executables it resolved until restarted.
+ *
+ * The desktop app provisions the same data directory but hands its backend the
+ * set directory directly and never writes `current`. A headless backend started
+ * on that directory would find nothing in `toolchains/bin` itself, so when the
+ * only thing there is a single non-empty set, that set is the answer. Several
+ * sets are ambiguous and are left to `toolchain install` to resolve.
  */
 export function defaultToolchainBinDir(dataDir: string): string {
   const current = currentToolchainBinDir(dataDir);
-  return existsSync(current) ? realpathSync(current) : path.join(toolchainRootDir(dataDir), "bin");
+  if (existsSync(current)) return realpathSync(current);
+  const binRoot = path.join(toolchainRootDir(dataDir), "bin");
+  return soleActivatedToolchainSet(binRoot) ?? binRoot;
+}
+
+function soleActivatedToolchainSet(binRoot: string): string | undefined {
+  try {
+    const entries = readdirSync(binRoot, { withFileTypes: true }).filter(
+      (entry) => !entry.name.startsWith("."),
+    );
+    const [only] = entries;
+    if (entries.length !== 1 || !only?.isDirectory()) return undefined;
+    const set = path.join(binRoot, only.name);
+    return readdirSync(set).length > 0 ? realpathSync(set) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function defaultTailscaleExecutable(

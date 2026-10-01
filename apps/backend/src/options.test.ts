@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rename, rm, symlink } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -185,6 +186,37 @@ describe("standalone backend options", () => {
       await rm(path.join(binRoot, "current"));
       await symlink("missing", path.join(binRoot, "current"), "dir");
       expect(parseOptions(["--data-dir", dataDir], {}).toolchainBinDir).toBe(binRoot);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the only activated set when no current link exists", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-options-"));
+    try {
+      const binRoot = path.join(dataDir, "toolchains", "bin");
+      const setA = path.join(binRoot, "set-a");
+      await mkdir(setA, { recursive: true });
+      await writeFile(path.join(setA, "opencode"), "");
+      expect(parseOptions(["--data-dir", dataDir], {}).toolchainBinDir).toBe(realpathSync(setA));
+
+      // Two sets cannot be told apart without a pointer.
+      await mkdir(path.join(binRoot, "set-b"));
+      await writeFile(path.join(binRoot, "set-b", "opencode"), "");
+      expect(parseOptions(["--data-dir", dataDir], {}).toolchainBinDir).toBe(realpathSync(binRoot));
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a hand-filled toolchain directory even when a set sits beside its executables", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-options-"));
+    try {
+      const binRoot = path.join(dataDir, "toolchains", "bin");
+      await mkdir(path.join(binRoot, "set-a"), { recursive: true });
+      await writeFile(path.join(binRoot, "set-a", "opencode"), "");
+      await writeFile(path.join(binRoot, "codex"), "");
+      expect(parseOptions(["--data-dir", dataDir], {}).toolchainBinDir).toBe(realpathSync(binRoot));
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

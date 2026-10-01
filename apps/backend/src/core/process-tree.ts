@@ -145,6 +145,12 @@ export async function terminateProcessTree(
   child: ProcessTreeChild,
   options: TerminateProcessTreeOptions,
 ): Promise<boolean> {
+  // A failed spawn (a missing executable, say) never gets a pid, and Bun leaves
+  // `exitCode` null for it where Node reports a negative errno. There is nothing
+  // to signal, so waiting out the grace period would only report a process that
+  // never existed as one that would not die.
+  if (child.pid === undefined) return true;
+
   const runtime = options.runtime ?? defaultRuntime;
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 25);
   const descendants = new Set(await snapshotDescendants(child.pid, runtime));

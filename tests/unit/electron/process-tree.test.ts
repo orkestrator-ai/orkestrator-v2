@@ -123,6 +123,23 @@ describe("process-tree termination", () => {
     ).resolves.toBe(false);
   });
 
+  test("treats a child that never spawned as drained without waiting", async () => {
+    const child = createChild();
+    (child as { pid?: number }).pid = undefined;
+    const { runtime, signals } = createRuntime();
+
+    await expect(
+      terminateProcessTree(child, {
+        graceMs: 1_000,
+        killWaitMs: 1_000,
+        pollIntervalMs: 1,
+        runtime,
+      }),
+    ).resolves.toBe(true);
+    expect(signals).toEqual([]);
+    expect(runtime.listDescendants).not.toHaveBeenCalled();
+  });
+
   test("treats an already-exited child with no descendants as drained", async () => {
     const child = createChild();
     child.exitCode = 0;

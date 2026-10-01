@@ -16,8 +16,59 @@ export const MULTI_REVIEW_AUTO_PR_TAB_TITLE = "PR";
 export const MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE =
   "A pull request already exists for this environment, so no PR agent was launched.";
 
+/** How the interactive Fix tab's handoff turn ended, as the native-agent layer records it. */
+export type InteractiveFixTurnOutcome =
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "superseded"
+  | "pending"
+  | "unknown";
+
+const INTERACTIVE_FIX_AUTO_PR_SKIPPED: Record<
+  Exclude<InteractiveFixTurnOutcome, "completed" | "pending">,
+  string
+> = {
+  failed: "The Fix turn failed, so no PR agent was launched.",
+  interrupted:
+    "The Fix was stopped before it finished, so no PR agent was launched. Use the PR button when the changes are ready.",
+  superseded:
+    "The Fix conversation continued after the automatic request, so no PR agent was launched. Use the PR button when the changes are ready.",
+  unknown:
+    "Whether the Fix finished could not be confirmed, so no PR agent was launched. Use the PR button when the changes are ready.",
+};
+
+export const MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE =
+  "Review the interactive Fix, then use the PR button to create a pull request.";
+
 /**
- * Records the auto-PR intent in the same save as a complete structured Fix result.
+ * Whether an interactive Fix can authorize an automatic PR at all: only the
+ * standard handoff in its own interactive session. A custom instruction asks
+ * for something narrower than "address the report", so its result is the
+ * user's to judge.
+ */
+export function interactiveFixCanQueueAutoPr(workflow: MultiReviewWorkflow): boolean {
+  const session = workflow.fixSession;
+  return (
+    workflow.autoPr === true &&
+    workflow.fixLaunch?.kind !== "custom" &&
+    session !== undefined &&
+    session.requestIds.length > 0 &&
+    session.sessionKey.startsWith(`multi-review:${workflow.id}:interactive`)
+  );
+}
+
+/** Why a settled interactive Fix launched no PR, for an outcome that is not proof of completion. */
+export function interactiveFixAutoPrSkipMessage(
+  outcome: Exclude<InteractiveFixTurnOutcome, "completed" | "pending">,
+): string {
+  return INTERACTIVE_FIX_AUTO_PR_SKIPPED[outcome];
+}
+
+/**
+ * Records the auto-PR intent in the same save as the proof that the Fix
+ * completed: a complete structured result, or an interactive handoff turn
+ * that finished on its own as the conversation's last turn.
  *
  * A launch that already reached the agent is never repeated. A skipped or
  * failed one may be retried by a later successful Fix, because the condition
@@ -28,6 +79,18 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
   const state = workflow.autoPrLaunch?.state;
   if (state === "pending" || state === "launched") return;
   workflow.autoPrLaunch = { state: "pending", requestId: `multi-review-pr:${workflow.id}` };
+}
+
+/** Records why a settled Fix launched no PR, unless a launch is already queued or delivered. */
+export function skipAutoPr(workflow: MultiReviewWorkflow, message: string): void {
+  if (workflow.autoPr !== true) return;
+  const state = workflow.autoPrLaunch?.state;
+  if (state === "pending" || state === "launched") return;
+  workflow.autoPrLaunch = {
+    state: "skipped",
+    requestId: `multi-review-pr:${workflow.id}`,
+    message,
+  };
 }
 
 /**

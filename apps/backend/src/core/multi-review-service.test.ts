@@ -1015,7 +1015,7 @@ test("MultiReviewService delivers a persisted pending PR launch once", async () 
   );
 });
 
-test("MultiReviewService skips a legacy interactive PR intent without completion proof", async () => {
+test("MultiReviewService skips a PR intent whose Fix has not settled", async () => {
   const provider = new Provider();
   const pr = autoPrInvoker();
   await withService(
@@ -1025,10 +1025,13 @@ test("MultiReviewService skips a legacy interactive PR intent without completion
       const started = await start();
       await runInteractiveFix(service, provider, snapshot, started.id);
       await restorePendingAutoPr(storage, started.id);
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        workflow.fixSession!.status = "running";
+      });
       await service.advanceNow(started.id);
       expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
         state: "skipped",
-        message: expect.stringContaining("structured Fix result"),
+        message: expect.stringContaining("requires a completed Fix"),
       });
       expect(pr.launches).toHaveLength(0);
     },
@@ -1036,6 +1039,227 @@ test("MultiReviewService skips a legacy interactive PR intent without completion
       autoPr: true,
       invoke: pr.invoke,
       serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+test("MultiReviewService launches a PR once an interactive Fix finishes on its own", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  const reads: Array<{ workflowId: string; sessionKey: string; requestIds: string[] }> = [];
+  await withService(
+    "env-auto-pr-interactive",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      const settled = await runInteractiveFix(service, provider, snapshot, started.id);
+      expect(settled.phase).toBe("interactive");
+      expect(settled.autoPrLaunch).toEqual({
+        state: "pending",
+        requestId: `multi-review-pr:${started.id}`,
+      });
+      expect(reads).toEqual([
+        {
+          workflowId: started.id,
+          sessionKey: `multi-review:${started.id}:interactive`,
+          requestIds: [`multi-review-address:${started.id}`],
+        },
+      ]);
+
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toEqual({
+        state: "launched",
+        requestId: `multi-review-pr:${started.id}`,
+        tabId: "agent-job-pr",
+      });
+      expect(pr.launches).toHaveLength(1);
+      expect(pr.launches[0]).toMatchObject({
+        requestId: `multi-review-pr:${started.id}`,
+        title: "PR",
+        activateTab: false,
+      });
+      await service.advanceNow(started.id);
+      expect(pr.launches).toHaveLength(1);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: {
+        dispatchAddressPrompt: autoPrFixDispatch,
+        interactiveFixTurnOutcome: async (workflow, session) => {
+          reads.push({
+            workflowId: workflow.id,
+            sessionKey: session.sessionKey,
+            requestIds: [...session.requestIds],
+          });
+          return "completed";
+        },
+      },
+    },
+  );
+});
+
+test.each([
+  ["interrupted", "stopped before it finished"],
+  ["superseded", "conversation continued"],
+  ["failed", "Fix turn failed"],
+  ["unknown", "could not be confirmed"],
+] as const)(
+  "MultiReviewService launches no PR when the interactive Fix turn was %s",
+  async (outcome, message) => {
+    const provider = new Provider();
+    const pr = autoPrInvoker();
+    await withService(
+      `env-auto-pr-interactive-${outcome}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        const settled = await runInteractiveFix(service, provider, snapshot, started.id);
+        expect(settled.autoPrLaunch).toMatchObject({
+          state: "skipped",
+          message: expect.stringContaining(message),
+        });
+        await service.advanceNow(started.id);
+        expect(pr.launches).toHaveLength(0);
+      },
+      {
+        autoPr: true,
+        invoke: pr.invoke,
+        serviceOptions: {
+          dispatchAddressPrompt: autoPrFixDispatch,
+          interactiveFixTurnOutcome: async () => outcome,
+        },
+      },
+    );
+  },
+);
+
+test("MultiReviewService holds the interactive Fix open until its turn outcome settles", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  const outcomes: Array<"pending" | "completed"> = ["pending", "pending", "completed"];
+  await withService(
+    "env-auto-pr-interactive-pending",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.addressPromptPending !== true;
+      });
+      provider.statusValue = "running";
+      await service.advanceNow(started.id);
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const waiting = (await snapshot(started.id))!;
+      expect(waiting.stepRuntimes?.fix?.completedAt).toBeUndefined();
+      expect(waiting.autoPrLaunch).toBeUndefined();
+
+      await service.advanceNow(started.id);
+      const settled = (await snapshot(started.id))!;
+      expect(settled.stepRuntimes?.fix?.completedAt).toEqual(expect.any(String));
+      expect(settled.autoPrLaunch?.state).toBe("pending");
+      await service.advanceNow(started.id);
+      expect(pr.launches).toHaveLength(1);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: {
+        dispatchAddressPrompt: autoPrFixDispatch,
+        interactiveFixTurnOutcome: async () => outcomes.shift() ?? "completed",
+      },
+    },
+  );
+});
+
+test("MultiReviewService treats a turn outcome that never settles as unknown", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-auto-pr-interactive-stuck",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.addressPromptPending !== true;
+      });
+      provider.statusValue = "running";
+      await service.advanceNow(started.id);
+      provider.statusValue = "idle";
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.stepRuntimes?.fix?.completedAt !== undefined;
+      });
+      expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+        state: "skipped",
+        message: expect.stringContaining("could not be confirmed"),
+      });
+      expect(pr.launches).toHaveLength(0);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: {
+        dispatchAddressPrompt: autoPrFixDispatch,
+        interactiveFixTurnOutcome: async () => "pending",
+      },
+    },
+  );
+});
+
+test("MultiReviewService leaves the PR to the user after a custom Fix", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  let reads = 0;
+  await withService(
+    "env-auto-pr-interactive-custom",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await runInteractiveFix(service, provider, snapshot, started.id);
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        workflow.fixLaunch = {
+          kind: "custom",
+          instruction: "Address only the first finding",
+          model: workflow.fixModel,
+        };
+        delete workflow.autoPrLaunch;
+        delete workflow.stepRuntimes!.fix!.completedAt;
+        workflow.fixSession!.status = "running";
+        workflow.fixSession!.observedRunning = true;
+      });
+      reads = 0;
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+        state: "skipped",
+        message: expect.stringContaining("use the PR button"),
+      });
+      expect(reads).toBe(0);
+      expect(pr.launches).toHaveLength(0);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: {
+        dispatchAddressPrompt: autoPrFixDispatch,
+        interactiveFixTurnOutcome: async () => {
+          reads += 1;
+          return "completed";
+        },
+      },
     },
   );
 });
@@ -1048,7 +1272,7 @@ test.each(["keyed", "adaptive"] as const)(
     await withService(
       `env-auto-pr-${driver}`,
       provider,
-      async ({ service, storage, start, snapshot }) => {
+      async ({ service, start, snapshot }) => {
         await service.init();
         const started = await start();
         await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
@@ -1056,9 +1280,6 @@ test.each(["keyed", "adaptive"] as const)(
         await service.address(started.id);
         await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "running");
         provider.statusValue = "idle";
-        await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "idle");
-        await restoreCompletedAutoPr(storage, started.id);
-        await service.advanceNow(started.id);
         await waitUntil(
           async () => (await snapshot(started.id))?.autoPrLaunch?.state === "launched",
         );
@@ -1072,6 +1293,7 @@ test.each(["keyed", "adaptive"] as const)(
           keyedScheduling: driver === "keyed",
           pollIntervalMs: 5,
           dispatchAddressPrompt: autoPrFixDispatch,
+          interactiveFixTurnOutcome: async () => "completed",
         },
       },
     );

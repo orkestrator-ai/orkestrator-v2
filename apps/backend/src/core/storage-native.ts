@@ -1414,6 +1414,48 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
+  /**
+   * Record that a stop reached a dispatched request's turn while it was still
+   * active. Ignores requests this provider session never dispatched or whose
+   * outcome is already settled.
+   */
+  async recordNativeAgentTurnInterrupt(
+    key: string,
+    providerSessionId: string,
+    requestId: string,
+  ): Promise<boolean> {
+    if (
+      !isNonBlankString(key) ||
+      !isNonBlankString(providerSessionId) ||
+      !isNonBlankString(requestId)
+    ) {
+      throw new Error("Native agent turn interrupt is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (
+        !session ||
+        session.providerSessionId !== providerSessionId ||
+        !session.dispatchedRequestIds?.includes(requestId) ||
+        session.turnOutcomes?.some((entry) => entry.requestId === requestId) ||
+        session.interruptedRequestIds?.includes(requestId)
+      ) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = {
+        ...session,
+        interruptedRequestIds: [...(session.interruptedRequestIds ?? []).slice(-49), requestId],
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      return true;
+    });
+  }
+
   protected schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {
     if (this.promptQueueClaimRecoveryTimer) {
       clearTimeout(this.promptQueueClaimRecoveryTimer);

@@ -286,3 +286,46 @@ describe("native turn outcomes", () => {
     });
   });
 });
+
+describe("native request outcomes", () => {
+  test("a stop marks only an active turn, and a later prompt supersedes an earlier one", async () => {
+    const stub = providerStub("codex");
+    Object.assign(stub.provider, {
+      abort: async () => stub.setStatus(async () => "idle"),
+    });
+    await withService(stub.provider, async ({ service, storage }) => {
+      const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+      const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+      const session = await service.dispatchPrompt({
+        ...input,
+        prompt: "fix",
+        requestId: "fix-1",
+      });
+      markIdle(service, "codex", session.providerSessionId);
+      expect(await service.sessionRequestOutcome({ ...input, requestId: "fix-1" })).toEqual({
+        outcome: "completed",
+      });
+
+      // Stopping a session that already finished is not an interruption.
+      await service.stopProjectionSession(input);
+      expect((await storage.getNativeAgentSession(key))?.interruptedRequestIds).toBeUndefined();
+
+      await service.dispatchPrompt({ ...input, prompt: "follow-up", requestId: "user-2" });
+      expect(await service.sessionRequestOutcome({ ...input, requestId: "fix-1" })).toEqual({
+        outcome: "superseded",
+      });
+
+      stub.setStatus(async () => "running");
+      await service.stopProjectionSession(input);
+      expect((await storage.getNativeAgentSession(key))?.interruptedRequestIds).toEqual(["user-2"]);
+      // The stopped turn now reads idle, but it did not finish on its own.
+      markIdle(service, "codex", session.providerSessionId);
+      expect(await service.sessionRequestOutcome({ ...input, requestId: "user-2" })).toEqual({
+        outcome: "interrupted",
+      });
+      expect(await service.sessionRequestOutcome({ ...input, requestId: "never-sent" })).toEqual({
+        outcome: "unknown",
+      });
+    });
+  });
+});

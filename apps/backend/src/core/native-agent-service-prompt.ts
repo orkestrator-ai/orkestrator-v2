@@ -253,6 +253,27 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   >();
 
   /**
+   * Whether the turn started by `requestId` finished on its own as the
+   * session's last word. Beyond {@link sessionTurnOutcome}, a turn a stop
+   * reached is `interrupted`, and one followed by any later prompt or steer is
+   * `superseded`, because the conversation then no longer ends with it.
+   */
+  async sessionRequestOutcome(input: NativeAgentProjectionInput & { requestId: string }): Promise<{
+    outcome: "completed" | "failed" | "interrupted" | "superseded" | "pending" | "unknown";
+    error?: string;
+  }> {
+    const session = await this.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+    if (!session) return { outcome: "unknown" };
+    if (session.interruptedRequestIds?.includes(input.requestId)) return { outcome: "interrupted" };
+    const ids = session.dispatchedRequestIds ?? [];
+    if (!ids.includes(input.requestId)) return { outcome: "unknown" };
+    if (ids[ids.length - 1] !== input.requestId) return { outcome: "superseded" };
+    return this.sessionTurnOutcome(input);
+  }
+
+  /**
    * How the turn started by `requestId` ended, without reading the transcript.
    *
    * A durable record (written by the queue drain's own status read, or by an

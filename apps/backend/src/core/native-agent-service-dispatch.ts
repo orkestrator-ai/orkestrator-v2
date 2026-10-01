@@ -513,6 +513,24 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
     const providerSessionId = resolved.session.providerSessionId;
+    // Mark the active turn before stopping it: a stopped turn reads as idle,
+    // and an observer must never mistake it for one that finished on its own.
+    const requestId = resolved.session.dispatchedRequestIds?.at(-1);
+    if (requestId) {
+      const before = await resolved.provider
+        .status(providerSessionId)
+        .catch(() => "running" as const);
+      if (before === "running" || before === "blocked") {
+        await this.storage
+          .recordNativeAgentTurnInterrupt(resolved.key, providerSessionId, requestId)
+          .catch((error: unknown) => {
+            console.warn(
+              "[native-agent] Could not record a turn interrupt:",
+              error instanceof Error ? error.message : error,
+            );
+          });
+      }
+    }
     await resolved.provider.abort(providerSessionId);
     const graceMs = Math.max(0, this.options.abortGraceMs ?? 5_000);
     const deadline = this.now() + graceMs;

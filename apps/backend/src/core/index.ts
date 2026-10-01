@@ -604,6 +604,15 @@ export class OrkestratorBackend {
           ),
         recoverAddressSession: (workflow, replacement) =>
           recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
+        interactiveFixTurnOutcome: async (workflow, session) =>
+          (
+            await this.nativeAgents.sessionRequestOutcome({
+              environmentId: workflow.environmentId,
+              agent: session.agent,
+              logicalSessionKey: session.sessionKey,
+              requestId: session.requestIds[session.requestIds.length - 1]!,
+            })
+          ).outcome,
         workflowAdmission: this.workflowAdmission,
         invalidateAddressSession: async (workflow, session) => {
           await storage.invalidateNativeAgentSession(

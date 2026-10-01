@@ -69,6 +69,7 @@ import {
 } from "./build-pipeline-review-fanout.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import {
+  probeReviewWorktree,
   probeReviewWorktreeOnce,
   type ReviewWorktreeProbeOptions,
 } from "./review-worktree-probe.js";
@@ -669,11 +670,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * existed rather than failing a stage over an optional optimisation.
    */
   protected async worktreeFingerprint(pipeline: BuildPipeline): Promise<string | undefined> {
-    for (let attempt = 0; attempt < WORKTREE_PROBE_ATTEMPTS; attempt += 1) {
-      const snapshot = await this.probeWorktreeOnce(pipeline, { fingerprint: true });
-      if (snapshot.status !== "unknown") return snapshot.fingerprint;
-    }
-    return undefined;
+    const snapshot = await probeReviewWorktree(
+      (command, args) => this.invoke(command, args),
+      pipeline.environmentId,
+      WORKTREE_PROBE_ATTEMPTS,
+      { fingerprint: true },
+    );
+    return snapshot.status === "unknown" ? undefined : snapshot.fingerprint;
   }
 
   /**
@@ -695,7 +698,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   ): Promise<boolean> {
     const baseline = session.fixWorktreeFingerprintAtStart;
     if (session.phase !== "fix" || !baseline) return false;
-    delete session.fixWorktreeFingerprintAtStart;
+    // Every attempt in this fix stage shares the original baseline. Consume
+    // all copies so a restart or Resume cannot compare this same stage again.
+    for (const attempt of pipeline.sessions) {
+      if (attempt.phase === "fix" && attempt.iteration === session.iteration) {
+        delete attempt.fixWorktreeFingerprintAtStart;
+      }
+    }
     const current = await this.worktreeFingerprint(pipeline);
     if (current !== baseline) {
       await this.save(pipeline, pipeline.backendRevision);
@@ -1191,8 +1200,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           : undefined;
       // Only a real fix turn: the dedicated package-preparation session also
       // runs as "fix" but always arrives with an override and never edits code.
+      const originalFix = pipeline.sessions.find(
+        (session) =>
+          session.phase === "fix" &&
+          session.iteration === pipeline.iteration &&
+          session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+      );
+      // A retry/restart must compare with the code before the first attempt,
+      // including when that attempt's probe was unavailable or already consumed.
       const fixWorktreeFingerprint =
-        !override && sessionPhase === "fix" ? await this.worktreeFingerprint(pipeline) : undefined;
+        !override && sessionPhase === "fix"
+          ? originalFix
+            ? originalFix.fixWorktreeFingerprintAtStart
+            : await this.worktreeFingerprint(pipeline)
+          : undefined;
       const { agent, model, effort, fastMode } = override?.settings
         ? await this.settingsForSelection(pipeline, override.settings)
         : await this.stepSettings(pipeline, sessionPhase);

@@ -477,13 +477,15 @@ export interface PipelineSession {
   validationUncommittedPathsAtStart?: string[];
   /**
    * Content fingerprint of the worktree (HEAD, status, diff and untracked
-   * files) taken when a fix turn started.
+   * files) taken when the first fix attempt in this iteration started and
+   * carried across retries and restarts of that stage.
    *
    * A fix that leaves the worktree byte-identical would send the same code
    * back through review and verification, which repeats the same verdict until
    * the iteration cap. Comparing against this at the end of the turn lets the
-   * supervisor pause instead. Cleared once compared, and absent when the probe
-   * could not establish a fingerprint, which disables the check for that turn.
+   * supervisor pause instead. All attempts' copies are cleared once compared,
+   * and absent when the initial probe could not establish a fingerprint, which
+   * disables the check for that stage.
    */
   fixWorktreeFingerprintAtStart?: string;
   /**

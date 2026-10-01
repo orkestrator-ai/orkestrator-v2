@@ -513,14 +513,9 @@ ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 ${wrapSystemInstructions(ADDRESS_REVIEW_FINDINGS_TAIL, MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
 }
 
-/**
- * Verification judges the branch, not the repository. Without this a test that
- * already fails on the target branch, or one the host cannot run, fails every
- * round: the fix stage rightly declines to touch it and the loop repeats until
- * the iteration cap.
- */
+/** Failures unrelated to the ticket need evidence before they can be excused. */
 export function preexistingFailureInstruction(targetBranch: string): string {
-  return `A failing check counts against this branch only when the branch causes it. For each failure, check whether it involves code this branch changes (git diff origin/${targetBranch}...HEAD). If that does not settle it, you may rerun only that check against origin/${targetBranch} in a temporary detached worktree outside this checkout (git worktree add --detach), and remove that worktree before reporting. A failure that also occurs on origin/${targetBranch}, or that comes from the host environment rather than the code (a missing tool, an operating-system path difference, a timeout or a check that produced no output), does not fail verification: list it in the rationale as pre-existing or environmental, with the evidence, and judge the ticket on everything else.`;
+  return `Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. If any ticket-required repair remains unmet on this branch, report complete: false. Only failures unrelated to the ticket acceptance criteria may be excused as pre-existing or environmental. For each failure, check whether it involves code this branch changes (git diff origin/${targetBranch}...HEAD). If that does not settle it, rerun only that check against origin/${targetBranch} in a temporary detached worktree outside this checkout (git worktree add --detach), and remove that worktree before reporting. An unrelated failure reproduced on origin/${targetBranch}, or demonstrably caused by a missing tool or an operating-system path difference rather than the code, does not fail verification. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause; without that evidence, report complete: false. List every excused failure in the rationale as pre-existing or environmental, with the target-branch reproduction or demonstrated environmental-cause evidence, and judge all ticket acceptance criteria.`;
 }
 
 export const VERIFICATION_OUTPUT_CONTRACT =
@@ -555,7 +550,7 @@ export function fixPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
-    `Fix only what this branch causes. If a reported failure also occurs on origin/${targetBranch}, or comes from the host environment rather than the code (a missing tool, an operating-system path difference, a timeout or a check that produced no output), do not change unrelated code or tests to hide it. Leave it alone and name it in your final message as pre-existing or environmental, with the evidence.`,
+    `Fix every unmet ticket acceptance criterion, including requested repairs that also fail on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be left alone. For those unrelated failures, establish target-branch reproduction or a demonstrated environmental cause before treating them as pre-existing or environmental; do not change unrelated code or tests to hide them. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. Name any excused unrelated failure in your final message with the target-branch reproduction or demonstrated environmental-cause evidence.`,
     usesReviewFanout(pipeline) || pipeline.reviewPreparation
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),

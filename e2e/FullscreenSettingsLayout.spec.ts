@@ -27,7 +27,12 @@ test.describe("desktop settings sections", () => {
     await expect(last).not.toBeInViewport();
     expect(await nav.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
     const titleBefore = await title.boundingBox();
-    const content = page.getByTestId("settings-content").locator("..");
+    const content = page.locator('[data-slot="settings-content-scrollport"]');
+    expect(await content.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+    // Establish that this is the real scrollport before checking isolation.
+    await content.hover();
+    await page.mouse.wheel(0, 150);
+    await expect.poll(() => content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
     const contentScrollBefore = await content.evaluate((node) => node.scrollTop);
 
     // Use a real input event before clicking: Playwright's click would otherwise

@@ -214,7 +214,10 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
             </div>
 
             {/* Content body */}
-            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6">
+            <div
+              data-slot="settings-content-scrollport"
+              className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6"
+            >
               <div className="flex-1">{children(activeSection)}</div>
               {footer && (
                 <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">

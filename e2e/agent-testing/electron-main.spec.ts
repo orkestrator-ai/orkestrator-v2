@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
+import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload-api";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -129,7 +130,7 @@ test.beforeAll(() => {
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 });
 
-test("real Electron main process shares one backend across independent windows", async () => {
+async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-smoke-"));
   let vite: ChildProcess | null = null;
   let launchedApp: ElectronApplication | null = null;
@@ -306,6 +307,81 @@ test("real Electron main process shares one backend across independent windows",
     ]);
     expect(windowMenu.selected).toHaveLength(1);
 
+    if (nicknamesOnly) {
+      // Treat this disposable backend as a remote through the production IPC path.
+      // The token stays inside the renderer and is never returned or logged.
+      const remoteAddress = `http://127.0.0.1:${gatewayPort}`;
+      const remoteId = await window.evaluate(async (address) => {
+        const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+          .orkestrator;
+        const { token } = await api.webClient.getTokenSettings();
+        return (await api.connections.connect({ address, token, nickname: "Desk" }))
+          .activeConnectionId;
+      }, remoteAddress);
+      await secondWindow.evaluate(async (id) => {
+        const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+          .orkestrator;
+        await api.connections.use(id);
+      }, remoteId);
+      const readTitles = () =>
+        app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((candidate) => candidate.getTitle()),
+        );
+      const assertRemoteLabels = async (nickname: string) => {
+        await expect
+          .poll(readTitles)
+          .toEqual([
+            `${profile.electronTitle} — ${nickname}`,
+            `${profile.electronTitle} — ${nickname}`,
+          ]);
+        await expect
+          .poll(async () => (await readWindowMenu()).labels)
+          .toEqual([
+            `${profile.electronTitle} — ${nickname} (1)`,
+            `${profile.electronTitle} — ${nickname} (2)`,
+          ]);
+      };
+      await assertRemoteLabels("Desk");
+      await window.evaluate(async (id) => {
+        const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+          .orkestrator;
+        await api.connections.rename(id, "Studio");
+      }, remoteId);
+      await assertRemoteLabels("Studio");
+      await window.evaluate(async (address) => {
+        const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+          .orkestrator;
+        const { token } = await api.webClient.getTokenSettings();
+        await api.connections.connect({ address, token, nickname: "Workstation" });
+      }, remoteAddress);
+      await assertRemoteLabels("Workstation");
+      // Reload the other renderer: its list must rehydrate the shared nickname.
+      await secondWindow.reload();
+      await expect
+        .poll(() =>
+          secondWindow.evaluate(async (id) => {
+            const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+              .orkestrator;
+            return (await api.connections.list()).connections.find((entry) => entry.id === id)
+              ?.name;
+          }, remoteId),
+        )
+        .toBe("Workstation");
+      for (const page of [window, secondWindow]) {
+        await page.evaluate(async () => {
+          const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+            .orkestrator;
+          await api.connections.use("local");
+        });
+      }
+      await expect.poll(async () => (await readWindowMenu()).labels).toEqual(windowMenu.labels);
+
+      await app.close();
+      launchedApp = null;
+      await expect.poll(() => processExists(backendPid!), { timeout: 10_000 }).toBe(false);
+      return;
+    }
+
     // Selecting the other entry must move focus to that window.
     const targetLabel = windowMenu.labels.find((label) => !windowMenu.selected.includes(label));
     if (!targetLabel) throw new Error("Window menu has no inactive entry to switch to");
@@ -403,6 +479,14 @@ test("real Electron main process shares one backend across independent windows",
     }
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+test("real Electron main process shares one backend across independent windows", async () => {
+  await testIndependentWindows();
+});
+
+test("remote nicknames refresh all native titles and Window menu entries", async () => {
+  await testIndependentWindows(true);
 });
 
 test("a real window with a missing preload reaches recovery without mounting the workspace", async () => {

@@ -145,23 +145,29 @@ struct RemoteWebView: UIViewRepresentable {
         /// `UIViewRepresentableContext` cannot be constructed outside SwiftUI.
         /// `state` has already been rebound by the caller.
         func synchronizeAuthentication(with connection: RemoteConnection) {
+            if connection.hasSameAuthenticationIdentity(as: requestedConnection) {
+                requestedConnection = connection
+            }
+            if connection.hasSameAuthenticationIdentity(as: authenticatedConnection) {
+                authenticatedConnection = connection
+            }
             if case .retrying = state.wrappedValue {
                 authenticate(connection)
                 return
             }
-            guard authenticatedConnection != connection,
+            guard !connection.hasSameAuthenticationIdentity(as: authenticatedConnection),
                   !isSwitchingThroughBridge else { return }
             authenticate(connection)
         }
 
         func authenticate(_ connection: RemoteConnection) {
             if case .retrying(let retryID) = state.wrappedValue {
-                guard handledRetryID != retryID || requestedConnection != connection else { return }
+                guard handledRetryID != retryID || !connection.hasSameAuthenticationIdentity(as: requestedConnection) else { return }
                 handledRetryID = retryID
             } else {
                 handledRetryID = nil
             }
-            guard requestedConnection != connection || state.wrappedValue != .loading else { return }
+            guard !connection.hasSameAuthenticationIdentity(as: requestedConnection) || state.wrappedValue != .loading else { return }
             authenticationTask?.cancel()
             invalidateReadiness()
             beginAuthenticationState(for: connection)
@@ -170,10 +176,10 @@ struct RemoteWebView: UIViewRepresentable {
                 do {
                     let cookie = try await self.loginCookie(for: connection)
                     try Task.checkCancellation()
-                    guard self.requestedConnection == connection else { return }
+                    guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
                     await self.set(cookie: cookie, in: webView)
                     try Task.checkCancellation()
-                    guard self.requestedConnection == connection else { return }
+                    guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
 
                     var request = URLRequest(
                         url: connection.address,
@@ -189,7 +195,7 @@ struct RemoteWebView: UIViewRepresentable {
                 } catch is CancellationError {
                     return
                 } catch {
-                    guard self.requestedConnection == connection else { return }
+                    guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
                     self.state.wrappedValue = .failed(error.localizedDescription)
                 }
             }
@@ -376,7 +382,7 @@ struct RemoteWebView: UIViewRepresentable {
         ) -> Bool {
             !Task.isCancelled
                 && readinessGeneration == generation
-                && requestedConnection == connection
+                && connection.hasSameAuthenticationIdentity(as: requestedConnection)
         }
 
         static func javaScriptBoolean(_ value: Any?) -> Bool {

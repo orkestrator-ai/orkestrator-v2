@@ -95,6 +95,37 @@ describe("connection protocol validation", () => {
     expect(connectionDisplayName({ name: "desk.example" })).toBe("desk.example");
   });
 
+  test("preserves emoji joiners, variation selectors, and format characters", () => {
+    for (const value of ["👨‍👩‍👧‍👦", "👩‍💻", "🖥️", "\u200d\u200e\u202e", "\u0085"]) {
+      expect(normalizeConnectionNickname(value)).toBe(value);
+    }
+    expect(normalizeConnectionNickname("Desk\u0000\u001f\u007fMac")).toBe("Desk Mac");
+    expect(normalizeConnectionNickname("\ufeff\u00a0\u2028")).toBeUndefined();
+    expect(normalizeConnectionNickname(" \u200d ")).toBe("\u200d");
+  });
+
+  test("treats null nicknames as absent on stored records and summaries", () => {
+    const record = {
+      id: "remote-1",
+      name: "desk.example",
+      nickname: null,
+      address: "https://desk.example",
+      encryptedToken: "",
+      lastConnectedAt: "2026-07-14T00:00:00.000Z",
+    };
+    const stored = parseStoredDesktopConnections({
+      activeConnectionId: "local",
+      connections: [record],
+    });
+    expect(stored.connections[0]).not.toHaveProperty("nickname");
+    const list = parseConnectionList({
+      activeConnectionId: "remote-1",
+      connections: [{ ...record, kind: "remote", active: true, requiresToken: false }],
+    });
+    expect(list.connections[0]).not.toHaveProperty("nickname");
+    expect(list.connections[0]?.name).toBe("desk.example");
+  });
+
   test("publishes the connection contract from the protocol package", () => {
     const packageJson = JSON.parse(
       readFileSync(new URL("../../../packages/protocol/package.json", import.meta.url), "utf8"),

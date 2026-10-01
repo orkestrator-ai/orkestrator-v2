@@ -552,6 +552,65 @@ describe("Electron connection manager", () => {
     expect(local.getStored().connections[0]?.nickname).toBe("Desk");
   });
 
+  test("reconciles a durable rename after its initiating scope closes", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    let finishSave!: () => void;
+    let startedSave!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      startedSave = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      finishSave = resolve;
+    });
+    let deferSave = false;
+    const manager = new ConnectionManager({
+      localBackend: {
+        ...local.backend,
+        invoke: async (command, args) => {
+          if (command === "save_desktop_connections" && deferSave) {
+            deferSave = false;
+            startedSave();
+            await saveGate;
+          }
+          return local.backend.invoke(command, args);
+        },
+      },
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.bind("closing-window", "local");
+    const list = await manager.connect(
+      { address: "https://desk.example", token },
+      "closing-window",
+    );
+    await manager.bind("surviving-window", list.activeConnectionId);
+    deferSave = true;
+    const rename = manager.rename(list.activeConnectionId, "Studio", "closing-window");
+    // Attach the rejection handler before releasing the scope.
+    const result = rename.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await saveStarted;
+    manager.release("closing-window");
+    finishSave();
+    const error = await result;
+    expect(error instanceof Error ? error.message : null).toContain(
+      "window is no longer available",
+    );
+    expect(manager.getList("surviving-window").connections[1]?.name).toBe("Studio");
+    expect(local.getStored().connections[0]?.nickname).toBe("Studio");
+    // A different record's save must retain the already committed rename.
+    await manager.connect({ address: "https://lab.example", token }, "surviving-window");
+    expect(
+      local.getStored().connections.find((record) => record.id === list.activeConnectionId)
+        ?.nickname,
+    ).toBe("Studio");
+    manager.release("surviving-window");
+  });
+
   test("sets a nickname on connect and keeps it when reconnecting to the same address", async () => {
     const local = localBackendHarness();
     installHealthyRemoteFetch();

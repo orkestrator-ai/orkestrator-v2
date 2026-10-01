@@ -315,10 +315,12 @@ export class ConnectionManager {
       const record = withNickname(storedRecord, nickname);
       const candidate = this.replaceStoredRecord(record);
       await this.persist(candidate);
-      this.assertScopeGeneration(scope, generation);
+      // Once durable, reconcile shared state even if the initiating window closed.
+      // The caller's scoped response may fail, but later saves must preserve this rename.
       this.stored = candidate;
       const remote = this.remoteConnections.get(connectionId);
       if (remote) remote.record = withNickname(remote.record, nickname);
+      this.assertScopeGeneration(scope, generation);
       return this.getList(scope);
     });
   }

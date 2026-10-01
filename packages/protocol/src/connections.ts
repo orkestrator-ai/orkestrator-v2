@@ -118,7 +118,7 @@ function asString(value: unknown, label: string): string {
 }
 
 function optionalNickname(value: unknown, label: string): { nickname?: string } {
-  if (value === undefined) return {};
+  if (value === undefined || value === null) return {};
   const nickname = asString(value, label);
   return nickname ? { nickname } : {};
 }

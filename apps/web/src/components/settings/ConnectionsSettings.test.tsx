@@ -208,7 +208,7 @@ describe("ConnectionsSettings", () => {
 
     await waitFor(() => expect(api.rename).toHaveBeenCalledWith("remote-1", "Studio Mac"));
     expect(await screen.findByText("Studio Mac")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Rename connection" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Rename connection" }) === null).toBe(true);
     expect(screen.getByText("https://desk.tailnet.ts.net")).toBeTruthy();
     expect(api.use).not.toHaveBeenCalled();
   });
@@ -260,9 +260,11 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    expect(screen.queryByRole("button", { name: "Rename desk.tailnet.ts.net" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rename desk.tailnet.ts.net" }) === null).toBe(
+      true,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
-    expect(screen.queryByLabelText(/Nickname/)).toBeNull();
+    expect(screen.queryByLabelText(/Nickname/) === null).toBe(true);
   });
 
   test("keeps the add flow busy while the native client navigates", async () => {

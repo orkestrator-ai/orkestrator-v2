@@ -16,6 +16,12 @@ struct RemoteConnection: Codable, Equatable, Identifiable, Sendable {
         nickname ?? hostname
     }
 
+    /// Metadata changes must not restart authentication or invalidate in-flight work.
+    func hasSameAuthenticationIdentity(as other: RemoteConnection?) -> Bool {
+        guard let other else { return false }
+        return id == other.id && address == other.address && token == other.token
+    }
+
     static let maxNicknameLength = 64
 
     /// Collapses whitespace and removes control characters. Blank input means
@@ -24,11 +30,17 @@ struct RemoteConnection: Codable, Equatable, Identifiable, Sendable {
         guard let value else { return nil }
         let space: Unicode.Scalar = " "
         let scalars = value.unicodeScalars.map { scalar in
-            CharacterSet.controlCharacters.contains(scalar) ? space : scalar
+            // Match the protocol's C0/DEL replacement and ECMAScript whitespace.
+            // Foundation also classifies emoji joiners as controls and NEL as whitespace.
+            let code = scalar.value
+            let isWhitespace = code == 0x20 || code == 0xa0 || code == 0x1680
+                || (0x2000...0x200a).contains(code) || code == 0x2028 || code == 0x2029
+                || code == 0x202f || code == 0x205f || code == 0x3000 || code == 0xfeff
+            return (code <= 0x1f || code == 0x7f || isWhitespace) ? space : scalar
         }
-        let cleaned = String(String.UnicodeScalarView(scalars))
-        let nickname = cleaned
-            .split(whereSeparator: { $0.isWhitespace })
+        let nickname = scalars
+            .split(whereSeparator: { $0 == space })
+            .map { String(String.UnicodeScalarView($0)) }
             .joined(separator: " ")
         guard !nickname.isEmpty else { return nil }
         guard nickname.unicodeScalars.count <= maxNicknameLength else {

@@ -413,6 +413,19 @@ final class ConnectionModelTests: XCTestCase {
 }
 
 final class RemoteConnectionTests: XCTestCase {
+    func testNicknameNormalizationMatchesProtocolUnicodeVectors() throws {
+        for value in ["👨‍👩‍👧‍👦", "👩‍💻", "🖥️", "\u{200d}\u{200e}\u{202e}", "\u{0085}"] {
+            XCTAssertEqual(try RemoteConnection.normalizedNickname(value), value)
+        }
+        XCTAssertEqual(try RemoteConnection.normalizedNickname("Desk\u{0000}\u{001f}\u{007f}Mac"), "Desk Mac")
+        XCTAssertNil(try RemoteConnection.normalizedNickname(" \t\n "))
+        XCTAssertNil(try RemoteConnection.normalizedNickname("\u{feff}\u{00a0}\u{2028}"))
+        XCTAssertEqual(try RemoteConnection.normalizedNickname(" \u{200d} "), "\u{200d}")
+        XCTAssertNil(try RemoteConnection.normalizedNickname(nil))
+        XCTAssertEqual(try RemoteConnection.normalizedNickname(String(repeating: "🖥️", count: 32)), String(repeating: "🖥️", count: 32))
+        XCTAssertThrowsError(try RemoteConnection.normalizedNickname(String(repeating: "x", count: 65)))
+    }
+
     func testDerivedNameActiveLookupAndPayloadEncoding() throws {
         let saved = connection(address: "https://Desk.Example:8443")
         let vault = ConnectionVault(activeConnectionID: saved.id, connections: [saved])
@@ -1495,6 +1508,107 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         withExtendedLifetime(webView) {}
     }
 
+    func testNicknameUpdatesPreserveReadyAndInFlightAuthentication() async throws {
+        let (coordinator, state) = makeCoordinator(initialState: .ready)
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.authenticatedConnection = saved
+        state.value = .ready
+        let attempt = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        coordinator.authenticationTask = attempt
+        defer { coordinator.teardown() }
+        var renamed = saved
+        renamed.nickname = "Studio"
+        renamed.lastConnectedAt = .now
+        coordinator.synchronizeAuthentication(with: renamed)
+        XCTAssertEqual(state.value, .ready)
+        XCTAssertFalse(attempt.isCancelled)
+        XCTAssertEqual(coordinator.authenticatedConnection, renamed)
+        XCTAssertEqual(coordinator.requestedConnection, renamed)
+
+        // Metadata updates while login is pending must not cancel that attempt.
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.synchronizeAuthentication(with: renamed)
+        XCTAssertEqual(state.value, .loading)
+        XCTAssertFalse(attempt.isCancelled)
+        XCTAssertEqual(coordinator.requestedConnection, renamed)
+
+        // Changing any authentication field still starts a new attempt.
+        for changed in [
+            connection(id: renamed.id, address: renamed.address.absoluteString, token: "replacement-token-123456"),
+            connection(id: renamed.id, address: "https://other.example", token: renamed.token),
+            connection(address: renamed.address.absoluteString, token: renamed.token),
+        ] {
+            coordinator.beginAuthenticationState(for: renamed)
+            coordinator.authenticatedConnection = renamed
+            state.value = .ready
+            coordinator.synchronizeAuthentication(with: changed)
+            XCTAssertEqual(coordinator.requestedConnection, changed)
+            XCTAssertEqual(state.value, .loading)
+            await coordinator.authenticationTask?.value
+        }
+        XCTAssertTrue(attempt.isCancelled)
+    }
+
+    func testBridgeRenameSetsAndClearsMetadataWithoutReloading() async throws {
+        let store = MemoryCredentialStore(vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved]))
+        let validator = MockValidator()
+        let model = ConnectionModel(credentialStore: store, validator: validator)
+        let (coordinator, state) = makeCoordinator(model: model, initialState: .ready)
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.authenticatedConnection = saved
+        state.value = .ready
+        let webView = WKWebView()
+        coordinator.webView = webView
+        // A real WKWebView draft must survive the native metadata update.
+        webView.loadHTMLString("<textarea id='draft'>Unsent draft</textarea>", baseURL: nil)
+        var draftLoaded = false
+        for _ in 0..<100 {
+            if let value = try? await webView.evaluateJavaScript("document.getElementById('draft')?.value"),
+               value as? String == "Unsent draft" {
+                draftLoaded = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(draftLoaded)
+        var loads = 0
+        coordinator.requestLoader = { _, _ in loads += 1 }
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = { scripts.append($0); return nil }
+        defer { coordinator.teardown() }
+
+        for (index, nickname) in ["Studio" as Any?, NSNull(), nil].enumerated() {
+            // Restore a nickname so both null and missing test a real clear.
+            _ = try model.rename(connectionID: saved.id.uuidString, nickname: "Before")
+            var body: [String: Any] = ["connectionId": saved.id.uuidString]
+            if let nickname { body["nickname"] = nickname }
+            await coordinator.handleBridgeRequest(id: "rename-\(index)", action: "rename", body: body)
+            let active = try XCTUnwrap(model.activeConnection)
+            coordinator.synchronizeAuthentication(with: active)
+            XCTAssertEqual(active.nickname, index == 0 ? "Studio" : nil)
+            XCTAssertEqual(store.vault.activeConnection?.nickname, active.nickname)
+            XCTAssertTrue(try XCTUnwrap(scripts.last).contains("\"rename-\(index)\", true"))
+            XCTAssertFalse(try XCTUnwrap(scripts.last).contains(saved.token))
+            XCTAssertEqual(state.value, .ready)
+            XCTAssertEqual(coordinator.authenticatedConnection, active)
+            XCTAssertNil(coordinator.authenticationTask)
+            XCTAssertEqual(loads, 0)
+            let draft = try await webView.evaluateJavaScript("document.getElementById('draft')?.value")
+            XCTAssertEqual(draft as? String, "Unsent draft")
+        }
+        for body in [
+            ["nickname": "Desk"],
+            ["connectionId": saved.id.uuidString, "nickname": 7],
+            ["connectionId": "invalid", "nickname": "Desk"],
+        ] as [[String: Any]] {
+            await coordinator.handleBridgeRequest(id: "bad-rename", action: "rename", body: body)
+            XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""bad-rename", false"#))
+        }
+        XCTAssertTrue(validator.checks.isEmpty)
+        XCTAssertEqual(model.activeConnection?.token, saved.token)
+        withExtendedLifetime(webView) {}
+    }
+
     func testViewUpdatesRetryEagerlyAndYieldToBridgeSwitches() async {
         let other = connection(address: "https://other.example")
 
@@ -1669,7 +1783,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             .components(separatedBy: "call(\"")
             .dropFirst()
             .map { String($0.prefix(while: { $0 != "\"" })) }
-        XCTAssertEqual(actions, ["list", "probe", "connect", "use", "forget"])
+        XCTAssertEqual(actions, ["list", "probe", "connect", "rename", "use", "forget"])
     }
 }
 

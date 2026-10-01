@@ -525,7 +525,7 @@ function registerIpc(): void {
     },
     connectToRemote: async (input, event) => {
       const list = await manager().connect(input, scopeForEvent(event));
-      updateWindowTitle(event);
+      refreshConnectionTitles();
       publishConnectionLists();
       return list;
     },
@@ -535,11 +535,13 @@ function registerIpc(): void {
       return list;
     },
     renameConnection: async (connectionId, nickname, event) => {
-      const list = await manager().rename(connectionId, nickname, scopeForEvent(event));
-      // Every window bound to the renamed server shows the new name in its title.
-      refreshConnectionTitles();
-      publishConnectionLists();
-      return list;
+      try {
+        return await manager().rename(connectionId, nickname, scopeForEvent(event));
+      } finally {
+        // A durable rename survives the requesting window closing during its save.
+        refreshConnectionTitles();
+        publishConnectionLists();
+      }
     },
     useConnection: async (connectionId, event) => {
       const context = contextForEvent(event);

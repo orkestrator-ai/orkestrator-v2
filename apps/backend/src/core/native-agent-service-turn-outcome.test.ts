@@ -329,3 +329,312 @@ describe("native request outcomes", () => {
     });
   });
 });
+
+function barrier() {
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  return { gate, started, release, entered };
+}
+
+test.each([false, true])("queued work fences completion (reserved %s)", async (reserved) => {
+  const stub = providerStub("codex");
+  await withService(stub.provider, async ({ service, storage }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", session.providerSessionId);
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "completed",
+    );
+    const queueKey = `codex\0${logicalSessionKey}`;
+    await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
+      id: "later",
+      text: "continue fixing",
+    });
+    if (reserved) await storage.reservePromptQueueHeadForDispatch(queueKey);
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "pending",
+    );
+    // Historical completion remains available to request-specific consumers.
+    expect((await service.sessionTurnOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "completed",
+    );
+  });
+});
+
+test.each(["stop", "follow-up", "replace"] as const)(
+  "rechecks %s after awaited provider outcome",
+  async (mutation) => {
+    const stub = providerStub("codex");
+    await withService(stub.provider, async ({ service }) => {
+      const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+      const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+      markIdle(service, "codex", session.providerSessionId);
+      const read = barrier();
+      stub.setStatus(async () => {
+        read.entered();
+        await read.gate;
+        return "idle";
+      });
+      const outcome = service.sessionRequestOutcome({ ...input, requestId: "fix" });
+      await read.started;
+      stub.setStatus(async () => (mutation === "stop" ? "running" : "idle"));
+      if (mutation === "stop") {
+        Object.assign(stub.provider, { abort: async () => stub.setStatus(async () => "idle") });
+        await service.stopProjectionSession(input);
+      } else if (mutation === "follow-up") {
+        await service.dispatchPrompt({ ...input, prompt: "follow-up", requestId: "later" });
+      } else {
+        await service.adoptSession({
+          ...input,
+          providerSessionId: "replacement",
+          expectedProviderSessionId: session.providerSessionId,
+        });
+      }
+      read.release();
+      expect((await outcome).outcome).toBe(
+        mutation === "stop" ? "interrupted" : mutation === "follow-up" ? "superseded" : "unknown",
+      );
+    });
+  },
+);
+
+test.each(["stop", "follow-up"] as const)(
+  "rechecks %s between initial classification and delegated durable outcome",
+  async (mutation) => {
+    const stub = providerStub("codex");
+    await withService(stub.provider, async ({ service }) => {
+      const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+      const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+      markIdle(service, "codex", session.providerSessionId);
+      await service.sessionTurnOutcome({ ...input, requestId: "fix" });
+      const delegated = service.sessionTurnOutcome.bind(service);
+      const read = barrier();
+      service.sessionTurnOutcome = async (args) => {
+        read.entered();
+        await read.gate;
+        return delegated(args);
+      };
+      const outcome = service.sessionRequestOutcome({ ...input, requestId: "fix" });
+      await read.started;
+      if (mutation === "stop") {
+        stub.setStatus(async () => "running");
+        Object.assign(stub.provider, { abort: async () => stub.setStatus(async () => "idle") });
+        await service.stopProjectionSession(input);
+      } else {
+        await service.dispatchPrompt({ ...input, prompt: "follow-up", requestId: "later" });
+      }
+      read.release();
+      expect((await outcome).outcome).toBe(mutation === "stop" ? "interrupted" : "superseded");
+    });
+  },
+);
+
+test.each(["blocked", "unreadable"] as const)(
+  "Stop records an interrupt when pre-abort status is %s",
+  async (status) => {
+    const stub = providerStub("codex");
+    await withService(stub.provider, async ({ service, storage }) => {
+      const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+      const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+      stub.setStatus(async () => {
+        if (status === "unreadable") throw new Error("offline");
+        return "blocked";
+      });
+      Object.assign(stub.provider, { abort: async () => stub.setStatus(async () => "idle") });
+      await service.stopProjectionSession(input);
+      expect((await storage.getNativeAgentSession(session.key))?.interruptedRequestIds).toEqual([
+        "fix",
+      ]);
+      expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+        "interrupted",
+      );
+    });
+  },
+);
+
+test("failed interrupt persistence honors Stop and retains publication denial until durable reconciliation", async () => {
+  const stub = providerStub("codex");
+  const abort = mock(async () => stub.setStatus(async () => "idle"));
+  Object.assign(stub.provider, { abort });
+  await withService(stub.provider, async ({ service, storage }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    const persist = storage.recordNativeAgentTurnInterrupt.bind(storage);
+    storage.recordNativeAgentTurnInterrupt = async () => {
+      throw new Error("disk unavailable");
+    };
+    stub.setStatus(async () => "running");
+    await service.stopProjectionSession(input);
+    expect(abort).toHaveBeenCalledTimes(1);
+    markIdle(service, "codex", session.providerSessionId);
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "interrupted",
+    );
+    // Even a concurrent historical read cannot erase the retained Stop intent.
+    await service.sessionTurnOutcome({ ...input, requestId: "fix" });
+    storage.recordNativeAgentTurnInterrupt = persist;
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "interrupted",
+    );
+    expect((await storage.getNativeAgentSession(session.key))?.interruptedRequestIds).toEqual([
+      "fix",
+    ]);
+    const restarted = new NativeAgentService(storage, async <T>() => undefined as T, {
+      provider: async () => stub.provider,
+    });
+    try {
+      expect((await restarted.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+        "interrupted",
+      );
+    } finally {
+      await restarted.shutdown();
+    }
+  });
+});
+
+test("publication fence orders a later dispatch without blocking other sessions", async () => {
+  const stub = providerStub("codex");
+  await withService(stub.provider, async ({ service }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", session.providerSessionId);
+    const admission = barrier();
+    const publishing = service.withSessionWorkFence(input, async () => {
+      expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+        "completed",
+      );
+      admission.entered();
+      await admission.gate;
+    });
+    await admission.started;
+    const followUp = service.dispatchPrompt({ ...input, prompt: "continue", requestId: "later" });
+    await service.dispatchPrompt({
+      ...input,
+      logicalSessionKey: "other",
+      prompt: "independent",
+      requestId: "other",
+    });
+    expect(stub.send.mock.calls.map((call) => call[2].requestId)).toEqual(["fix", "other"]);
+    admission.release();
+    await publishing;
+    await followUp;
+    expect(stub.send.mock.calls.at(-1)?.[2].requestId).toBe("later");
+  });
+});
+
+test("temporary provider absence uses bounded pending retries", async () => {
+  const stub = providerStub("codex");
+  await withService(stub.provider, async ({ service }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", session.providerSessionId);
+    const internal = service as unknown as {
+      observeProvider: () => Promise<NativeAgentRuntimeProvider | undefined>;
+      turnOutcomeAttempts: Map<string, { attempts: number; retryAt: number }>;
+    };
+    internal.observeProvider = async () => undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (const entry of internal.turnOutcomeAttempts.values()) entry.retryAt = 0;
+      expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+        attempt < 2 ? "pending" : "unknown",
+      );
+    }
+    internal.observeProvider = async () => stub.provider;
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "completed",
+    );
+  });
+});
+
+test("a follow-up waiting at publication admission keeps authorization pending", async () => {
+  const stub = providerStub("codex");
+  await withService(stub.provider, async ({ service }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", session.providerSessionId);
+    await service.sessionTurnOutcome({ ...input, requestId: "fix" });
+    const admission = barrier();
+    const publishing = service.withSessionWorkFence(input, async () => {
+      admission.entered();
+      await admission.gate;
+      expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+        "pending",
+      );
+    });
+    await admission.started;
+    const followUp = service.dispatchPrompt({ ...input, prompt: "continue", requestId: "later" });
+    admission.release();
+    await publishing;
+    await followUp;
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "superseded",
+    );
+  });
+});
+
+test("Stop bypasses an in-flight attach and still fences publication", async () => {
+  const stub = providerStub("codex");
+  await withService(stub.provider, async ({ service }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", session.providerSessionId);
+    const attach = barrier();
+    Object.assign(stub.provider, {
+      prepareDispatch: async () => {
+        attach.entered();
+        await attach.gate;
+      },
+    });
+    const followUp = service.dispatchPrompt({ ...input, prompt: "continue", requestId: "later" });
+    await attach.started;
+    stub.setStatus(async () => "running");
+    const abort = mock(async () => stub.setStatus(async () => "idle"));
+    Object.assign(stub.provider, { abort });
+    await service.stopProjectionSession(input);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "interrupted",
+    );
+    attach.release();
+    await followUp;
+  });
+});
+
+test("stopping background work leaves a released turn eligible for natural completion", async () => {
+  const stub = providerStub("codex");
+  await withService(stub.provider, async ({ service, storage }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", session.providerSessionId);
+    await service.sessionTurnOutcome({ ...input, requestId: "fix" });
+    Object.assign(stub.provider, {
+      observeActivity: async () => ({ state: "working", readyForInput: true }),
+    });
+    const abort = mock(async () =>
+      Object.assign(stub.provider, {
+        observeActivity: async () => ({ state: "idle", readyForInput: true }),
+      }),
+    );
+    stub.setStatus(async () => "running");
+    Object.assign(stub.provider, {
+      abort: async () => {
+        await abort();
+        stub.setStatus(async () => "idle");
+      },
+    });
+    await service.stopProjectionSession(input);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(
+      (await storage.getNativeAgentSession(session.key))?.interruptedRequestIds,
+    ).toBeUndefined();
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+      "completed",
+    );
+  });
+});

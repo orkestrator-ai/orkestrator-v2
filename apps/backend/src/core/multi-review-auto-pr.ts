@@ -102,6 +102,7 @@ export function supersedePendingAutoPr(workflow: MultiReviewWorkflow): void {
 }
 
 export type AutoPrLaunchOutcome =
+  | { kind: "pending" }
   | { kind: "launched"; tabId: string }
   | { kind: "skipped"; message: string }
   | { kind: "rejected"; message: string }
@@ -121,6 +122,7 @@ export async function launchMultiReviewAutoPr(
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">,
   workflow: MultiReviewWorkflow,
   requestId: string,
+  beforeLaunch?: () => Promise<AutoPrLaunchOutcome | undefined>,
 ): Promise<AutoPrLaunchOutcome> {
   const environment = await storage.getEnvironment(workflow.environmentId);
   if (!environment) return { kind: "rejected", message: "Review environment no longer exists" };
@@ -140,6 +142,10 @@ export async function launchMultiReviewAutoPr(
       : (enabled[0] ?? configuredFallback),
     enabledAgents: enabled,
   });
+
+  // Settings reads can await; authorize at the final publication boundary.
+  const admission = await beforeLaunch?.();
+  if (admission) return admission;
 
   let result: { tabId?: unknown; status?: unknown; error?: unknown };
   try {

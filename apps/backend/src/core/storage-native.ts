@@ -1247,6 +1247,24 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
+  /** Brief, storage-only snapshot ordered against both dispatch journals and queued work. */
+  async readNativeAgentPublicationState(
+    key: string,
+    queueKey: string,
+  ): Promise<{
+    session: PersistedNativeAgentSession | null;
+    queue: PersistedPromptQueue | null;
+  }> {
+    return this.enqueueNativeAgentSessionMutation(() =>
+      this.enqueuePromptQueueMutation(async () => {
+        const loaded = await this.loadNativeAgentSessions();
+        this.assertReadableNativeAgentSession(loaded, key);
+        const queues = await this.loadPromptQueues();
+        return { session: loaded.sessions[key] ?? null, queue: queues[queueKey] ?? null };
+      }),
+    );
+  }
+
   protected enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
@@ -1416,8 +1434,8 @@ export abstract class StorageNative extends StorageReviews {
 
   /**
    * Record that a stop reached a dispatched request's turn while it was still
-   * active. Ignores requests this provider session never dispatched or whose
-   * outcome is already settled.
+   * active. Ignores requests this provider session never dispatched. A recorded
+   * outcome may have raced Stop, so it must not suppress the interrupt marker.
    */
   async recordNativeAgentTurnInterrupt(
     key: string,
@@ -1440,7 +1458,6 @@ export abstract class StorageNative extends StorageReviews {
         !session ||
         session.providerSessionId !== providerSessionId ||
         !session.dispatchedRequestIds?.includes(requestId) ||
-        session.turnOutcomes?.some((entry) => entry.requestId === requestId) ||
         session.interruptedRequestIds?.includes(requestId)
       ) {
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);

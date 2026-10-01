@@ -495,6 +495,12 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     workflow: MultiReviewWorkflow,
     session: MultiReviewFixSession,
   ) => Promise<InteractiveFixTurnOutcome>;
+  /** Holds the native session's dispatch/Stop fence through PR admission. */
+  withInteractiveFixSessionFence?: <T>(
+    workflow: MultiReviewWorkflow,
+    session: MultiReviewFixSession,
+    operation: () => Promise<T>,
+  ) => Promise<T>;
   /** Removes a failed custom launch from the native-agent identity store. */
   invalidateAddressSession?: (
     workflow: MultiReviewWorkflow,
@@ -1095,6 +1101,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const recovered = await this.options.recoverAddressSession!(workflow, replacement);
         await this.assertFence(workflow.id, token);
         this.pollGate.clearPrefix(`${workflow.id}\0fix\0`);
+        supersedePendingAutoPr(workflow);
+        this.autoPrRetryAt.delete(workflow.id);
+        this.fixOutcomePolls.delete(workflow.id);
         workflow.fixSession = recovered.fixSession;
         workflow.fixSession.status = "running";
         workflow.fixSession.startedAt = nowIso();
@@ -2583,17 +2592,48 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       let outcome: AutoPrLaunchOutcome;
       try {
-        outcome = await launchMultiReviewAutoPr(
-          this.invoke,
-          this.storage,
-          workflow,
-          launch.requestId,
-        );
+        const authorize = async (): Promise<AutoPrLaunchOutcome | undefined> => {
+          const read = await this.interactiveFixOutcome(workflow, workflow.fixSession!);
+          await this.assertFence(workflow.id, token);
+          if (read === "pending") return { kind: "pending" };
+          this.fixOutcomePolls.delete(workflow.id);
+          if (read !== "completed") {
+            return {
+              kind: "skipped",
+              message:
+                read === "manual"
+                  ? MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE
+                  : interactiveFixAutoPrSkipMessage(read),
+            };
+          }
+          return undefined;
+        };
+        const deliver = () =>
+          launchMultiReviewAutoPr(
+            this.invoke,
+            this.storage,
+            workflow,
+            launch.requestId,
+            interactiveFixSettled ? authorize : undefined,
+          );
+        outcome =
+          interactiveFixSettled && this.options.withInteractiveFixSessionFence
+            ? await this.options.withInteractiveFixSessionFence(
+                workflow,
+                workflow.fixSession!,
+                deliver,
+              )
+            : await deliver();
       } catch (error) {
         // A follow-up failure must never fail the review that already finished.
         outcome = { kind: "retry", message: errorMessage(error) };
       }
       await this.assertFence(workflow.id, token);
+      if (outcome.kind === "pending") {
+        this.autoPrRetryAt.set(workflow.id, Date.now() + this.addressDispatchRetryMs());
+        await this.save(workflow, token);
+        return;
+      }
       if (outcome.kind === "launched") {
         workflow.autoPrLaunch = {
           state: "launched",
@@ -2873,7 +2913,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       );
       outcome = "pending";
     }
-    if (outcome !== "pending") return outcome;
+    if (outcome !== "pending" && outcome !== "unknown") return outcome;
     const polls = (this.fixOutcomePolls.get(workflow.id) ?? 0) + 1;
     if (polls >= MAX_FIX_OUTCOME_POLLS) return "unknown";
     this.fixOutcomePolls.set(workflow.id, polls);

@@ -122,6 +122,15 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
+    return this.withSessionMutationIntent(input, () =>
+      this.dispatchIntentUnderIntent(input, preserveExistingPending),
+    );
+  }
+
+  private async dispatchIntentUnderIntent(
+    input: DispatchNativeAgentPromptInput,
+    preserveExistingPending: boolean,
+  ): Promise<NativeAgentDispatchOutcome> {
     input = await this.trustedSessionInput(input);
     let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
     try {
@@ -510,6 +519,12 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
   async stopProjectionSession(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
+    return this.withSessionMutationIntent(input, () => this.stopProjectionSessionWithIntent(input));
+  }
+
+  private async stopProjectionSessionWithIntent(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
     const providerSessionId = resolved.session.providerSessionId;
@@ -520,15 +535,34 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       const before = await resolved.provider
         .status(providerSessionId)
         .catch(() => "running" as const);
-      if (before === "running" || before === "blocked") {
-        await this.storage
-          .recordNativeAgentTurnInterrupt(resolved.key, providerSessionId, requestId)
-          .catch((error: unknown) => {
-            console.warn(
-              "[native-agent] Could not record a turn interrupt:",
-              error instanceof Error ? error.message : error,
-            );
-          });
+      // A live background task can keep status running after the turn released input.
+      const released =
+        (before === "running" || before === "blocked") && resolved.provider.observeActivity
+          ? await resolved.provider
+              .observeActivity(providerSessionId)
+              .then((activity) => activity.readyForInput === true)
+              .catch(() => false)
+          : false;
+      if ((before === "running" || before === "blocked") && !released) {
+        const interruptKey = `${resolved.key}\0${requestId}`;
+        if (this.pendingTurnInterrupts.size < 256 || this.pendingTurnInterrupts.has(interruptKey)) {
+          this.pendingTurnInterrupts.set(interruptKey, { providerSessionId, requestId });
+        } else {
+          // Never evict an unpersisted Stop to make room for another one.
+          this.interruptFenceOverflow = true;
+        }
+        try {
+          await this.storage.recordNativeAgentTurnInterrupt(
+            resolved.key,
+            providerSessionId,
+            requestId,
+          );
+          this.pendingTurnInterrupts.delete(interruptKey);
+        } catch {
+          console.warn(
+            "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
+          );
+        }
       }
     }
     await resolved.provider.abort(providerSessionId);
@@ -879,13 +913,24 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       throw new Error(`${provider.agent} does not support steer`);
     }
     try {
-      return await this.storage.dispatchNativeAgentSteerOnce(key, pending, () =>
-        provider.performSessionAction!(providerSessionId, {
-          kind: "steer",
-          text: pending.text,
-          requestId: pending.requestId,
-          expectedRunId: pending.expectedRunId,
-        }),
+      const session = await this.storage.getNativeAgentSession(key);
+      if (!session || session.providerSessionId !== providerSessionId)
+        return { outcome: "mismatch" };
+      return await this.withSessionMutationFence(
+        {
+          environmentId: session.environmentId,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+        },
+        () =>
+          this.storage.dispatchNativeAgentSteerOnce(key, pending, () =>
+            provider.performSessionAction!(providerSessionId, {
+              kind: "steer",
+              text: pending.text,
+              requestId: pending.requestId,
+              expectedRunId: pending.expectedRunId,
+            }),
+          ),
       );
     } catch (error) {
       if (

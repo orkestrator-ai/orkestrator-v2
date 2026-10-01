@@ -493,6 +493,66 @@ describe("FullscreenSettingsLayout", () => {
     expect(screen.getByText("section:general")).toBeTruthy();
   });
 
+  test("scrolls the section list independently on short windows", () => {
+    render(
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
+        {(section) => <div>section:{section}</div>}
+      </FullscreenSettingsLayout>,
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "Settings sections" });
+    // The nav must be allowed to shrink below its content height to overflow.
+    expect(navigation.className).toContain("min-h-0");
+    expect(navigation.className).toContain("flex-1");
+    expect(navigation.className).toContain("overflow-y-auto");
+    expect(navigation.parentElement?.className).toContain("min-h-0");
+    // The sidebar title stays pinned while the list scrolls.
+    expect(screen.getByText("Settings").parentElement?.className).toContain("shrink-0");
+  });
+
+  test("keeps the active section visible in the scrollable list", () => {
+    const original = HTMLElement.prototype.scrollIntoView;
+    const scrolled: string[] = [];
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.textContent ?? "");
+    };
+    try {
+      const view = (defaultSection: string) => (
+        <FullscreenSettingsLayout
+          open
+          onOpenChange={() => undefined}
+          title="Settings"
+          menuItems={menuItems}
+          defaultSection={defaultSection}
+        >
+          {(section) => <div>section:{section}</div>}
+        </FullscreenSettingsLayout>
+      );
+      const { rerender } = render(view("general"));
+      expect(scrolled).toEqual(["GGeneral"]);
+
+      rerender(view("network"));
+      expect(scrolled).toEqual(["GGeneral", "NNetwork"]);
+      expect(screen.getByRole("button", { name: /Network/ }).getAttribute("aria-current")).toBe(
+        "page",
+      );
+      expect(screen.getByRole("button", { name: /General/ }).hasAttribute("aria-current")).toBe(
+        false,
+      );
+
+      // Unrelated re-renders do not yank the list back to the active item.
+      rerender(view("network"));
+      expect(scrolled).toEqual(["GGeneral", "NNetwork"]);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
   test("handles an empty menu", () => {
     render(
       <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={[]}>

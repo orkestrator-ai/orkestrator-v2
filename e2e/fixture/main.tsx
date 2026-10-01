@@ -5,7 +5,7 @@ import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { StrictMode, createRef, useEffect, useRef, useState } from "react";
+import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
@@ -74,6 +74,10 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
+
+const TerminalLinksFixture = lazy(async () => ({
+  default: (await import("./TerminalLinksFixture")).TerminalLinksFixture,
+}));
 
 declare global {
   interface Window {
@@ -1587,6 +1591,13 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/terminal-links") {
+    return (
+      <Suspense fallback={null}>
+        <TerminalLinksFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;

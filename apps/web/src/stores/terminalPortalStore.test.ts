@@ -23,7 +23,7 @@ function webLinkHandler(terminalData: PersistentTerminalData): WebLinkHandler {
 function linkEvent(
   modifiers: Partial<Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">>,
 ): MouseEvent {
-  return new MouseEvent("click", modifiers);
+  return new MouseEvent("click", { button: 0, ...modifiers });
 }
 
 function createTerminal(
@@ -152,7 +152,21 @@ describe("terminal creation and lookup", () => {
   });
 });
 
-describe("terminal web link routing", () => {
+describe.each([
+  ["plain URL addon", webLinkHandler],
+  [
+    "OSC 8 constructor option",
+    (data: PersistentTerminalData): WebLinkHandler => {
+      const handler = data.terminal.options.linkHandler;
+      expect(handler).toBeDefined();
+      return (event, uri) =>
+        handler!.activate(event, uri, {
+          start: { x: 1, y: 1 },
+          end: { x: 10, y: 1 },
+        });
+    },
+  ],
+] as const)("terminal %s link routing", (_, handler) => {
   test.each([
     ["Control", { ctrlKey: true, shiftKey: true }],
     ["Command", { metaKey: true, shiftKey: true }],
@@ -165,7 +179,7 @@ describe("terminal web link routing", () => {
     window.addEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
 
     try {
-      webLinkHandler(data)(linkEvent(modifiers), "https://example.com/internal?q=1");
+      handler(data)(linkEvent(modifiers), "https://example.com/internal?q=1");
     } finally {
       window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
     }
@@ -186,7 +200,7 @@ describe("terminal web link routing", () => {
   ] as const)("opens ordinary %s-clicks externally", async (_, modifiers) => {
     const data = createTerminal();
 
-    webLinkHandler(data)(linkEvent(modifiers), "https://example.com/external");
+    handler(data)(linkEvent(modifiers), "https://example.com/external");
     await Promise.resolve();
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
@@ -204,7 +218,7 @@ describe("terminal web link routing", () => {
     window.addEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
 
     try {
-      webLinkHandler(data)(linkEvent({}), "https://example.com/ignored");
+      handler(data)(linkEvent({}), "https://example.com/ignored");
       await Promise.resolve();
     } finally {
       window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
@@ -220,9 +234,9 @@ describe("terminal web link routing", () => {
     invokeMock.mockRejectedValueOnce(error);
 
     try {
-      webLinkHandler(createTerminal())(linkEvent({ ctrlKey: true }), "https://example.com/failure");
+      handler(createTerminal())(linkEvent({ ctrlKey: true }), "https://example.com/failure");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(consoleError).toHaveBeenCalledWith("[terminalPortalStore] Failed to open URL:", error);
+      expect(consoleError).toHaveBeenCalledWith("[terminal-links] Failed to open URL:", error);
     } finally {
       consoleError.mockRestore();
     }

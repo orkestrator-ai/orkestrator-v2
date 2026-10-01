@@ -13,6 +13,8 @@ import {
   startInteractiveTerminal,
   writeInteractiveTerminal,
 } from "@/lib/claude-tmux-client";
+import { openInBrowser } from "@/lib/backend";
+import { createTerminalLinkActivator } from "@/lib/terminal-links";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
@@ -129,6 +131,13 @@ export function ClaudeTmuxInteractiveTerminal({
     if (!host) return;
 
     const terminal = new Terminal({
+      linkHandler: {
+        activate: createTerminalLinkActivator({
+          environmentId: environmentId ?? "",
+          sourceTabId: tabId,
+          openExternal: openInBrowser,
+        }),
+      },
       cursorBlink: true,
       cursorStyle: "block",
       fontFamily: `"${terminalAppearance.fontFamily}", "Fira Code", "Menlo", "DejaVu Sans Mono", "Courier New", monospace`,

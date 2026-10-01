@@ -40,7 +40,18 @@ export interface PendingPastedImage {
   name: string;
 }
 
+export interface ImagePasteOperation {
+  /** Optional reserved-slot gate, evaluated only after an image is decoded. */
+  canAttachImage?: () => boolean;
+  /** False after the owner changes scope or unmounts. */
+  isCurrent: () => boolean;
+  /** Runs on every exit, including decoding and write failures. */
+  finish: () => void;
+}
+
 interface UseNativeComposeBarPasteOptions {
+  /** Claims capacity synchronously at event receipt, before decoding begins. */
+  beginPaste?: (knownImage: boolean) => ImagePasteOperation | false;
   /** Ref to the input container — paste is only processed when focus is inside */
   inputContainerRef: RefObject<HTMLElement | null>;
   /** Container ID for containerized environments */
@@ -163,6 +174,7 @@ function captureTextPasteFallback(event: ClipboardEvent, target: Element): (() =
  */
 export function useNativeComposeBarPaste({
   inputContainerRef,
+  beginPaste,
   containerId,
   worktreePath,
   writeImage,
@@ -194,92 +206,115 @@ export function useNativeComposeBarPaste({
         event.stopPropagation();
       }
 
-      let image: Awaited<ReturnType<typeof readImage>>;
-      try {
-        image = await readImage(pastedBlob);
-      } catch (error) {
+      const operation = beginPaste?.(Boolean(pastedBlob));
+      if (operation === false) {
         restoreTextPaste();
-        if (!isExpectedClipboardError(error)) {
-          console.error(`[${logLabel}] Unexpected paste error:`, error);
-        }
         return;
       }
-
-      // Every exit below this point has already claimed the paste with
-      // preventDefault(), so it hands the user's text back rather than
-      // swallowing the whole paste and leaving the input empty.
+      const isCurrent = () => !operation || operation.isCurrent();
       try {
-        const rgba = await image.rgba();
-        const { width, height } = await image.size();
-
-        let canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
+        let image: Awaited<ReturnType<typeof readImage>>;
+        try {
+          image = await readImage(pastedBlob);
+        } catch (error) {
           restoreTextPaste();
+          if (!isExpectedClipboardError(error)) {
+            console.error(`[${logLabel}] Unexpected paste error:`, error);
+          }
+          if (pastedBlob && isCurrent())
+            toast.error("Cannot paste image", { description: "Please try pasting it again." });
           return;
         }
 
-        const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
-        ctx.putImageData(imageData, 0, 0);
+        // Every exit below this point has already claimed the paste with
+        // preventDefault(), so it hands the user's text back rather than
+        // swallowing the whole paste and leaving the input empty.
+        try {
+          if (!isCurrent()) return;
+          const rgba = await image.rgba();
+          const { width, height } = await image.size();
 
-        canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
-        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+          let canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            restoreTextPaste();
+            return;
+          }
 
-        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
-        if (!encodedImage) {
-          restoreTextPaste();
-          toast.error("Image too large", {
-            description: "The image could not be resized below the 8MB attachment limit.",
+          const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
+          ctx.putImageData(imageData, 0, 0);
+
+          canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
+          canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+
+          const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+          if (!encodedImage) {
+            restoreTextPaste();
+            toast.error("Image too large", {
+              description: "The image could not be resized below the 8MB attachment limit.",
+            });
+            return;
+          }
+          canvas = encodedImage.canvas;
+          const { dataUrl, base64Data } = encodedImage;
+
+          canvas.width = 0;
+          canvas.height = 0;
+
+          const filename = generateImageFilename();
+          const filePath = `.orkestrator/clipboard/${filename}`;
+
+          if (!isCurrent()) return;
+
+          if (operation?.canAttachImage && !operation.canAttachImage()) {
+            restoreTextPaste();
+            return;
+          }
+
+          // Runs before the first write, so a refused image cannot orphan a file
+          // in the environment.
+          if (canAttachImage && !canAttachImage({ type: "image", name: filename })) {
+            restoreTextPaste();
+            onImageRejected?.();
+            return;
+          }
+
+          let savedPath: string | null = null;
+          if (writeImage) {
+            savedPath = await writeImage(filename, base64Data);
+          } else if (containerId) {
+            await writeContainerFile(containerId, filePath, base64Data);
+            savedPath = `/workspace/${filePath}`;
+          } else if (worktreePath) {
+            savedPath = await writeLocalFile(worktreePath, filePath, base64Data);
+          }
+
+          if (!isCurrent()) return;
+          if (!savedPath) {
+            restoreTextPaste();
+            toast.error("Cannot save image", {
+              description: "Environment not properly configured for attachments",
+            });
+            return;
+          }
+
+          onAttach({
+            id: Math.random().toString(36).substring(2, 9),
+            type: "image",
+            path: savedPath,
+            previewUrl: dataUrl,
+            name: filename,
           });
-          return;
-        }
-        canvas = encodedImage.canvas;
-        const { dataUrl, base64Data } = encodedImage;
-
-        canvas.width = 0;
-        canvas.height = 0;
-
-        const filename = generateImageFilename();
-        const filePath = `.orkestrator/clipboard/${filename}`;
-
-        // Runs before the first write, so a refused image cannot orphan a file
-        // in the environment.
-        if (canAttachImage && !canAttachImage({ type: "image", name: filename })) {
+        } catch (error) {
           restoreTextPaste();
-          onImageRejected?.();
-          return;
+          console.error(`[${logLabel}] Unexpected paste error:`, error);
+          if (isCurrent())
+            toast.error("Cannot paste image", { description: "Please try pasting it again." });
         }
-
-        let savedPath: string | null = null;
-        if (writeImage) {
-          savedPath = await writeImage(filename, base64Data);
-        } else if (containerId) {
-          await writeContainerFile(containerId, filePath, base64Data);
-          savedPath = `/workspace/${filePath}`;
-        } else if (worktreePath) {
-          savedPath = await writeLocalFile(worktreePath, filePath, base64Data);
-        }
-
-        if (!savedPath) {
-          restoreTextPaste();
-          toast.error("Cannot save image", {
-            description: "Environment not properly configured for attachments",
-          });
-          return;
-        }
-
-        onAttach({
-          id: Math.random().toString(36).substring(2, 9),
-          type: "image",
-          path: savedPath,
-          previewUrl: dataUrl,
-          name: filename,
-        });
-      } catch (error) {
-        restoreTextPaste();
-        console.error(`[${logLabel}] Unexpected paste error:`, error);
+      } finally {
+        operation?.finish();
       }
     };
 
@@ -289,6 +324,7 @@ export function useNativeComposeBarPaste({
     };
   }, [
     inputContainerRef,
+    beginPaste,
     containerId,
     worktreePath,
     writeImage,

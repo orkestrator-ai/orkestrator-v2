@@ -22,7 +22,7 @@ import type { DesignProjection } from "@/stores/designStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
-import { designApi, failureOf } from "./design-client";
+import { designApi, designBackendKey, failureOf } from "./design-client";
 import {
   boundDesignContextReference,
   buildDesignContextAnnotation,
@@ -110,7 +110,7 @@ export function DesignAgentDialog({
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       {context ? (
         <DesignAgentDialogBody
-          key={`${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
+          key={`${designBackendKey()}:${context.environmentId}:${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
           context={context}
           projection={projection}
           onClose={() => onOpenChange(false)}
@@ -163,10 +163,11 @@ function DesignAgentDialogBody({
   });
   const currentRevision = projection?.revision ?? context.canvasRevision;
 
-  useDesignPromptImagePaste({
+  const imagePaste = useDesignPromptImagePaste({
     containerRef: promptRef,
     environmentId,
-    enabled: true,
+    scopeKey: designBackendKey(),
+    enabled: !pending,
     images,
     onImagesChange: setImages,
   });
@@ -238,6 +239,7 @@ function DesignAgentDialogBody({
 
   const canSubmit =
     !pending &&
+    !imagePaste.isPasting &&
     (!handoff || chosenFrames.length > 0) &&
     (!needsReplacement || replacement !== undefined) &&
     (effectiveDestination.kind === "link" ? destinationLink !== undefined : createTab !== null);
@@ -333,7 +335,7 @@ function DesignAgentDialogBody({
       setError("Could not open a new conversation. Close a tab or pane and try again.");
       return;
     }
-    applyDraft(tabId, addition, true);
+    if (!applyDraft(tabId, addition, true)) return;
     try {
       const link = await designApi.linkSession(
         environmentId,
@@ -368,7 +370,7 @@ function DesignAgentDialogBody({
   };
 
   const submit = async () => {
-    if (pendingRef.current || !canSubmit) return;
+    if (pendingRef.current || !canSubmit || !imagePaste.tryBeginSubmission()) return;
     pendingRef.current = true;
     setPending(true);
     setError(null);
@@ -378,6 +380,7 @@ function DesignAgentDialogBody({
     } catch (reason) {
       setError(messageOf(reason));
     } finally {
+      imagePaste.endSubmission();
       pendingRef.current = false;
       setPending(false);
     }
@@ -409,7 +412,8 @@ function DesignAgentDialogBody({
         onRemove={(id) => setImages((current) => current.filter((image) => image.id !== id))}
       />
       <p id="design-agent-images-hint" className="text-xs text-muted-foreground">
-        {DESIGN_PROMPT_IMAGE_HINT} Images are added to the conversation&apos;s draft.
+        {imagePaste.isPasting ? "Attaching image…" : DESIGN_PROMPT_IMAGE_HINT} Images are added to
+        the conversation&apos;s draft.
       </p>
     </>
   );

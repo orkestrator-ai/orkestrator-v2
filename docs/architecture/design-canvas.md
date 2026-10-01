@@ -15,7 +15,12 @@ Images pasted into the **New design** brief are written into the environment
 (`.orkestrator/clipboard/`, like a composer paste) and seeded into the new
 agent tab's draft before it mounts, so they travel as attachments of its first
 message. The chat beside the canvas is an ordinary native conversation, so
-pasting an image into its composer attaches it as usual.
+pasting an image into its composer attaches it as usual. New design and Ask
+agent reserve attachment slots as paste events arrive and disable confirmation
+until decoding and file writes settle. Submission freezes further image pastes;
+failed writes release their slots for a retry. Completions from a previous
+backend or environment scope are discarded, and image removal stays visible on
+touch devices.
 
 The chat keeps the existing approval, question, cancellation, transcript and
 background-session behavior. Closing or hiding the canvas does not stop its

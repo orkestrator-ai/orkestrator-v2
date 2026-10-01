@@ -1,4 +1,4 @@
-import { useCallback, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { toast } from "sonner";
 import type { WorkspaceAttachment } from "@/components/chat/NativeAttachmentMenu";
@@ -37,8 +37,6 @@ export function addDesignImagesToDraft(
   return true;
 }
 
-type PasteRejection = "unavailable" | "limit";
-
 /**
  * Attaches clipboard images pasted while focus is inside `containerRef`.
  * Text pastes are left to the field. `enabled` is false while the environment
@@ -47,16 +45,18 @@ type PasteRejection = "unavailable" | "limit";
 export function useDesignPromptImagePaste({
   containerRef,
   environmentId,
+  scopeKey = environmentId,
   enabled,
   images,
   onImagesChange,
 }: {
   containerRef: RefObject<HTMLElement | null>;
   environmentId: string;
+  scopeKey?: string;
   enabled: boolean;
   images: readonly DesignPromptImage[];
   onImagesChange: (images: DesignPromptImage[]) => void;
-}): void {
+}) {
   const environment = useEnvironmentStore((state) =>
     state.environments.find((candidate) => candidate.id === environmentId),
   );
@@ -65,48 +65,104 @@ export function useDesignPromptImagePaste({
   const worktreePath = containerId ? undefined : environment?.worktreePath;
   const writable = enabled && Boolean(containerId || worktreePath);
 
-  // Several pastes can resolve before React re-renders; count against the
-  // latest list rather than the rendered one.
+  // Each destination owns its reservations. Old writes may finish, but cannot
+  // append to a replacement scope or alter its pending count.
+  const operationScope = useMemo(
+    () => ({
+      scopeKey,
+      environmentId,
+      containerId,
+      worktreePath,
+      pending: 0,
+      submitting: false,
+      active: true,
+    }),
+    [scopeKey, environmentId, containerId, worktreePath],
+  );
+  const currentScope = useRef(operationScope);
+  currentScope.current = operationScope;
+  const [, refresh] = useState(0);
   const imagesRef = useRef(images);
   imagesRef.current = images;
-  const rejection = useRef<PasteRejection>("unavailable");
+  const enabledRef = useRef(writable);
+  enabledRef.current = writable;
+  const onChangeRef = useRef(onImagesChange);
+  onChangeRef.current = onImagesChange;
+  const previousScope = useRef(operationScope);
+  useEffect(() => {
+    operationScope.active = true;
+    if (previousScope.current !== operationScope) {
+      previousScope.current = operationScope;
+      imagesRef.current = [];
+      onChangeRef.current([]);
+    }
+    return () => {
+      operationScope.active = false;
+    };
+  }, [operationScope]);
 
-  const canAttachImage = useCallback(() => {
-    if (!writable) {
-      rejection.current = "unavailable";
-      return false;
-    }
-    if (imagesRef.current.length >= DESIGN_PROMPT_IMAGE_LIMIT) {
-      rejection.current = "limit";
-      return false;
-    }
-    return true;
-  }, [writable]);
-  const onImageRejected = useCallback(() => {
-    if (rejection.current === "limit")
-      toast.error("Too many images", {
-        description: `Up to ${DESIGN_PROMPT_IMAGE_LIMIT} images can be attached.`,
-      });
-    else toast.error("Start this environment to attach images");
-  }, []);
-  const onAttach = useCallback(
-    (attachment: PastedImageAttachment) => {
-      const next = [...imagesRef.current, attachment];
-      imagesRef.current = next;
-      onImagesChange(next);
+  const beginPaste = useCallback(
+    (knownImage: boolean) => {
+      if (operationScope.submitting) return false;
+      const writableAtStart = enabledRef.current;
+      const hasSlot = imagesRef.current.length + operationScope.pending < DESIGN_PROMPT_IMAGE_LIMIT;
+      const canAttachImage = () => {
+        if (!writableAtStart) {
+          toast.error("Start this environment to attach images");
+          return false;
+        }
+        if (!hasSlot) {
+          toast.error("Too many images", {
+            description: `Up to ${DESIGN_PROMPT_IMAGE_LIMIT} images can be attached.`,
+          });
+          return false;
+        }
+        return true;
+      };
+      // Native clipboard probes can represent text. Delay their rejection until
+      // decoding proves they are images, so ordinary text has no error toast.
+      if (knownImage && !canAttachImage()) return false;
+      operationScope.pending += 1;
+      refresh((revision) => revision + 1);
+      const isCurrent = () => operationScope.active && currentScope.current === operationScope;
+      return {
+        isCurrent,
+        canAttachImage,
+        finish: () => {
+          operationScope.pending -= 1;
+          if (isCurrent()) refresh((revision) => revision + 1);
+        },
+      };
     },
-    [onImagesChange],
+    [operationScope],
   );
+  const onAttach = useCallback((attachment: PastedImageAttachment) => {
+    const next = [...imagesRef.current, attachment];
+    imagesRef.current = next;
+    onChangeRef.current(next);
+  }, []);
 
   useNativeComposeBarPaste({
     inputContainerRef: containerRef,
     containerId,
     worktreePath,
+    beginPaste,
     onAttach,
-    canAttachImage,
-    onImageRejected,
     logLabel: "DesignPromptImages",
   });
+
+  return {
+    isPasting: operationScope.pending > 0,
+    // The synchronous guard also covers paste and click in the same event turn.
+    tryBeginSubmission: () => {
+      if (operationScope.pending > 0 || operationScope.submitting) return false;
+      operationScope.submitting = true;
+      return true;
+    },
+    endSubmission: () => {
+      operationScope.submitting = false;
+    },
+  };
 }
 
 /** Thumbnails of the images attached to a design prompt. */
@@ -134,7 +190,7 @@ export function DesignPromptImages({
             type="button"
             onClick={() => onRemove(image.id)}
             disabled={disabled}
-            className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 shadow-sm"
             aria-label={`Remove ${image.name}`}
           >
             <X className="h-3 w-3" />

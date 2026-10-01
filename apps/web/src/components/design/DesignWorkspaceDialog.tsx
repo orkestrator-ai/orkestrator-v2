@@ -223,10 +223,11 @@ export function DesignWorkspaceDialog({
               ? plan.message
               : null;
 
-  useDesignPromptImagePaste({
+  const imagePaste = useDesignPromptImagePaste({
     containerRef: briefRef,
     environmentId,
-    enabled: environmentReady && withAgent,
+    scopeKey: scope,
+    enabled: environmentReady && withAgent && open && !busy,
     images: briefImages,
     onImagesChange: setBriefImages,
   });
@@ -252,7 +253,15 @@ export function DesignWorkspaceDialog({
 
   const create = async () => {
     setNameTouched(true);
-    if (nameProblem || createBlocker || !createTab || !plan.ok) return;
+    if (
+      busy ||
+      nameProblem ||
+      createBlocker ||
+      !createTab ||
+      !plan.ok ||
+      !imagePaste.tryBeginSubmission()
+    )
+      return;
     const launchScope = scopeRef.current;
     const originPaneId = usePaneLayoutStore
       .getState()
@@ -290,7 +299,10 @@ export function DesignWorkspaceDialog({
           // Seed the images before the tab mounts so the initial prompt,
           // which the tab sends from its draft, carries them.
           const sessionKey = createSessionKey(environmentId, tabId);
-          addDesignImagesToDraft(sessionKey, images);
+          if (!addDesignImagesToDraft(sessionKey, images))
+            throw new Error(
+              "Too many images for this conversation. Remove some images and try again.",
+            );
           let created = false;
           try {
             created = createTab(platform, {
@@ -340,6 +352,7 @@ export function DesignWorkspaceDialog({
         setRecovery({ canvasId: reason.canvas.id, name: reason.canvas.name });
       setError(errorText(reason));
     } finally {
+      imagePaste.endSubmission();
       if (launchScope === scopeRef.current) setBusy(false);
     }
   };
@@ -488,7 +501,7 @@ export function DesignWorkspaceDialog({
                       }
                     />
                     <p id="design-brief-images-hint" className="text-xs text-muted-foreground">
-                      {DESIGN_PROMPT_IMAGE_HINT}
+                      {imagePaste.isPasting ? "Attaching image…" : DESIGN_PROMPT_IMAGE_HINT}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-1" aria-label="Brief examples">
@@ -515,7 +528,7 @@ export function DesignWorkspaceDialog({
               )}
               <Button
                 type="submit"
-                disabled={busy || Boolean(createBlocker)}
+                disabled={busy || imagePaste.isPasting || Boolean(createBlocker)}
                 aria-describedby={createBlocker ? "design-create-blocker" : undefined}
               >
                 {busy ? "Opening…" : withAgent ? "Create design workspace" : "Create blank canvas"}

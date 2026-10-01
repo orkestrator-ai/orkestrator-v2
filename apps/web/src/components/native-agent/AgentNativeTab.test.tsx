@@ -3242,6 +3242,42 @@ describe("AgentNativeTab", () => {
     expect((await screen.findByRole("textbox")).textContent).toBe("");
   });
 
+  test("auto-sends design-seeded images in the first native prompt exactly once across remount", async () => {
+    const { addDesignImagesToDraft } = await import("../design/design-prompt-images");
+    const tabId = "design-agent-opening-image";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const path = "/tmp/wt/.orkestrator/clipboard/design.png";
+    expect(
+      addDesignImagesToDraft(sessionKey, [
+        { id: "design-image", type: "image", path, name: "design.png" },
+      ]),
+    ).toBe(true);
+    const props = {
+      tabId,
+      data: freshTab("claude"),
+      initialPrompt: "Create a design matching this screenshot",
+      isActive: true,
+    };
+    const view = render(<AgentNativeTab {...props} />);
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]![0]).toMatchObject({
+      agent: "claude",
+      prompt: expect.stringContaining("Create a design matching this screenshot"),
+      attachments: [{ type: "image", path, filename: "design.png" }],
+    });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments ?? []).toEqual(
+        [],
+      ),
+    );
+    view.unmount();
+    render(<AgentNativeTab {...props} initialPrompt={undefined} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+  });
+
   test("carries a coordinator-staged image through assignment as a structured attachment", async () => {
     seedUnassignedDefaultCatalog();
     useConfigStore.getState().updateGlobalConfig({

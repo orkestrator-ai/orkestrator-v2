@@ -137,6 +137,12 @@ export interface Environment {
   environmentType: EnvironmentType;
   /** Path to git worktree (only for local environments) */
   worktreePath?: string;
+  /**
+   * The project home: a local environment whose `worktreePath` is the
+   * project's own checkout rather than a disposable worktree. Deleting it only
+   * removes the record; the checkout and its branch are never touched.
+   */
+  projectHome?: boolean;
   /** Host port for opencode server (local mode) */
   localOpencodePort?: number;
   /** Host port for claude-bridge server (local mode) */

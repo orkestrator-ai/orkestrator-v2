@@ -27,6 +27,7 @@ import {
   useEnvironmentStore,
   useConfigStore,
   useTerminalSessionStore,
+  useFilesPanelStore,
   getAllLeaves,
 } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
@@ -1844,6 +1845,27 @@ export function TerminalContainer({
     setCreateFileTab,
     setOpenFilePaths,
     environmentId,
+  ]);
+
+  // A file opened from the project board's files panel names this
+  // environment (the project home) before its panes existed. Open it once
+  // this environment is active and able to host file tabs.
+  const pendingFileOpen = useFilesPanelStore((state) =>
+    state.pendingFileOpens.find((request) => request.environmentId === environmentId),
+  );
+  useEffect(() => {
+    if (!pendingFileOpen || pendingFileOpen.environmentId !== environmentId) return;
+    if (!isActive || !isEnvironmentRunning || !(containerId || isLocalEnvironmentReady)) return;
+    useFilesPanelStore.getState().clearPendingFileOpen(pendingFileOpen);
+    handleCreateFileTab(pendingFileOpen.filePath, pendingFileOpen.options);
+  }, [
+    pendingFileOpen,
+    environmentId,
+    isActive,
+    isEnvironmentRunning,
+    containerId,
+    isLocalEnvironmentReady,
+    handleCreateFileTab,
   ]);
 
   // The registration effect above owns the callable surface and its teardown,

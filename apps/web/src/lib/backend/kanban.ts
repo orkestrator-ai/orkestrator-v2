@@ -300,3 +300,11 @@ export async function appendFeatureStoryMessage(
     modelId,
   });
 }
+
+/** Binary read confined to the named local environment's checkout. */
+export async function readEnvironmentFileBase64(
+  environmentId: string,
+  filePath: string,
+): Promise<string> {
+  return invoke<string>("read_environment_file_base64", { environmentId, filePath });
+}

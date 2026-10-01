@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import { CommandFailedError, runCommand } from "./shell.js";
+import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 
 const FETCH_COOLDOWN_MS = 60_000;
@@ -86,26 +87,8 @@ function gitError(operation: ProjectGitError["operation"], error: unknown): Proj
 
 type Operation = ProjectGitStatus["operationState"];
 
-export async function resolveProjectGitRoot(
-  storage: StorageService,
-  projectId: string,
-): Promise<string> {
-  const project = await storage.getProject(projectId);
-  if (!project?.localPath?.trim()) throw new Error("This project has no local checkout configured");
-  const requested = await fs.realpath(project.localPath).catch(() => null);
-  if (!requested) throw new Error("The configured local checkout is unavailable");
-  const result = await runCommand("git", ["rev-parse", "--show-toplevel"], {
-    cwd: requested,
-    timeoutMs: 10_000,
-  }).catch(() => {
-    throw new Error("The configured local checkout is not a Git repository");
-  });
-  const root = await fs.realpath(result.stdout.trim());
-  if (path.normalize(root) !== path.normalize(requested)) {
-    throw new Error("Project.localPath must identify the repository root");
-  }
-  return root;
-}
+export { resolveProjectGitRoot } from "./project-git-root.js";
+import { resolveProjectGitRoot } from "./project-git-root.js";
 
 /** Serialized, checkout-root-bound Git operations for project coordinators. */
 export class ProjectGitService {
@@ -491,6 +474,11 @@ export class ProjectGitService {
   }
 
   private async persist(projectId: string, status: ProjectGitStatus): Promise<ProjectGitStatus> {
+    for (const environment of await this.storage.getEnvironmentsByProject(projectId)) {
+      if (!isProjectHomeEnvironment(environment)) continue;
+      const updates = projectHomeBranchUpdates(environment, status.branch ?? "");
+      if (updates) await this.storage.updateEnvironment(environment.id, updates);
+    }
     let persisted = status;
     await this.storage.mutateCoordinatorWorkspace(projectId, (workspace) => {
       if (!workspace) return null;

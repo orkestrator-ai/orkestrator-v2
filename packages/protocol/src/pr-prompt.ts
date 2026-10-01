@@ -23,20 +23,21 @@ Create a deliberate staging set:
 
 ## Step 2: Create Commit
 
-Create a well-formatted commit with all staged changes:
-1. Run \`git diff --cached\` to review what will be committed
-2. Create a commit with a well-formatted message following conventional commit format:
+Make sure the work is on its own branch, then create a well-formatted commit with all staged changes:
+1. Run \`git branch --show-current\`. If it prints nothing (a detached HEAD) or \`${targetBranch}\` — as it does when working directly in the project's main checkout — create and switch to a new descriptive branch first with \`git switch -c <type>/<short-description>\`; the staged changes carry over. Never commit the PR's changes onto \`${targetBranch}\`
+2. Run \`git diff --cached\` to review what will be committed
+3. Create a commit with a well-formatted message following conventional commit format:
    - First line: type(scope): brief description
    - Blank line
    - Bullet points describing the key changes
-3. Do NOT reference Claude or add Claude as a contributor
-4. Do NOT use --no-verify or skip any hooks
+4. Do NOT reference Claude or add Claude as a contributor
+5. Do NOT use --no-verify or skip any hooks
 
 ## Step 3: Push to Remote
 
 Push the current branch to the remote:
 1. Run \`git branch --show-current\` to get the current branch name
-2. Push with: \`git push -u origin <branch-name>\`
+2. Push with: \`git push -u origin <branch-name>\`. Never push to \`${targetBranch}\` itself
 3. If the push fails due to upstream changes, handle appropriately (pull --rebase if needed, then push again)
 
 ## Step 4: Create Pull Request

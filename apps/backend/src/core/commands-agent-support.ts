@@ -21,6 +21,7 @@ import type {
 import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 
 type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir">;
 
@@ -975,15 +976,19 @@ export async function renameEnvironmentToName(
       : 0;
   const branchRevision = currentBranchRevision + 1;
   const projectPath = knownProjectPath === undefined ? project?.localPath : knownProjectPath;
-  const newBranch = await allocateEnvironmentBranchName({
-    name: newName,
-    environmentId: environment.id,
-    branchRevision,
-    siblingEnvironments,
-    projectPath: environment.environmentType === "local" ? projectPath : null,
-    remoteUrl: knownRemoteUrl === undefined ? project?.gitUrl : knownRemoteUrl,
-    currentBranch: oldBranch,
-  });
+  // The project home's branch is whatever the user's checkout has checked
+  // out; a display rename must never rename that branch.
+  const newBranch = isProjectHomeEnvironment(environment)
+    ? oldBranch
+    : await allocateEnvironmentBranchName({
+        name: newName,
+        environmentId: environment.id,
+        branchRevision,
+        siblingEnvironments,
+        projectPath: environment.environmentType === "local" ? projectPath : null,
+        remoteUrl: knownRemoteUrl === undefined ? project?.gitUrl : knownRemoteUrl,
+        currentBranch: oldBranch,
+      });
   const branchChanged = oldBranch !== newBranch;
 
   // Rename any live git branch before persisting, and only advance the stored branch

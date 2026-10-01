@@ -90,6 +90,8 @@ import {
  */
 
 export interface PrMonitorTarget {
+  projectHome?: boolean;
+  defaultBranch?: string;
   environmentId: string;
   branch: string;
   kind: "local" | "container";

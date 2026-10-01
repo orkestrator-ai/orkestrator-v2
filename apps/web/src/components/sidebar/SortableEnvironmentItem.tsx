@@ -34,6 +34,7 @@ export function SortableEnvironmentItem({
 }: SortableEnvironmentItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: environment.id,
+    disabled: environment.projectHome === true,
   });
 
   const style = {
@@ -57,16 +58,18 @@ export function SortableEnvironmentItem({
         )}
       >
         {/* Drag handle - far left */}
-        <button
-          {...attributes}
-          {...listeners}
-          className={cn(
-            "flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing",
-            "group-hover/sortable:opacity-100",
-          )}
-        >
-          <GripVertical className="h-3 w-3" />
-        </button>
+        {!environment.projectHome && (
+          <button
+            {...attributes}
+            {...listeners}
+            className={cn(
+              "flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing",
+              "group-hover/sortable:opacity-100",
+            )}
+          >
+            <GripVertical className="h-3 w-3" />
+          </button>
+        )}
 
         {/* Environment item */}
         <div className="flex-1 min-w-0">

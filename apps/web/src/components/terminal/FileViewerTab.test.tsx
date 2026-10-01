@@ -20,7 +20,9 @@ const readContainerFileMock = mock(async (_containerId: string, _filePath: strin
   content: "container text",
   language: "plaintext",
 }));
-const readFileBase64Mock = mock(async (_filePath: string) => "aW1hZ2U=");
+const readEnvironmentFileBase64Mock = mock(
+  async (_environmentId: string, _filePath: string) => "aW1hZ2U=",
+);
 const readContainerFileBase64Mock = mock(
   async (_containerId: string, _filePath: string) => "Y29udGFpbmVyLWltYWdl",
 );
@@ -34,7 +36,7 @@ mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   readLocalFile: readLocalFileMock,
   readContainerFile: readContainerFileMock,
-  readFileBase64: readFileBase64Mock,
+  readEnvironmentFileBase64: readEnvironmentFileBase64Mock,
   readContainerFileBase64: readContainerFileBase64Mock,
   getFileDraft: getFileDraftMock,
   saveFileDraft: saveFileDraftMock,
@@ -105,7 +107,7 @@ beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
   readLocalFileMock.mockClear();
   readContainerFileMock.mockClear();
-  readFileBase64Mock.mockClear();
+  readEnvironmentFileBase64Mock.mockClear();
   readContainerFileBase64Mock.mockClear();
   getFileDraftMock.mockReset();
   saveFileDraftMock.mockReset();
@@ -118,7 +120,7 @@ beforeEach(() => {
     content: "container text",
     language: "plaintext",
   }));
-  readFileBase64Mock.mockImplementation(async () => "aW1hZ2U=");
+  readEnvironmentFileBase64Mock.mockImplementation(async () => "aW1hZ2U=");
   getFileDraftMock.mockImplementation(async () => null);
   saveFileDraftMock.mockImplementation(async () => undefined);
   deleteFileDraftMock.mockImplementation(async () => undefined);
@@ -237,6 +239,7 @@ describe("FileViewerTab component", () => {
     render(
       <FileViewerTab
         tabId="image-tab"
+        environmentId="environment-1"
         filePath="assets/logo.png"
         worktreePath="/repo"
         isLocalEnvironment
@@ -246,13 +249,14 @@ describe("FileViewerTab component", () => {
 
     const image = await screen.findByRole("img", { name: "assets/logo.png" });
     expect(image.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
-    expect(readFileBase64Mock).toHaveBeenCalledWith("/repo/assets/logo.png");
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledWith("environment-1", "assets/logo.png");
   });
 
   test("loads AVIF images with the correct MIME type", async () => {
     render(
       <FileViewerTab
         tabId="avif-image-tab"
+        environmentId="environment-1"
         filePath="assets/app-preview.avif"
         worktreePath="/repo"
         isLocalEnvironment
@@ -262,7 +266,10 @@ describe("FileViewerTab component", () => {
 
     const image = await screen.findByRole("img", { name: "assets/app-preview.avif" });
     expect(image.getAttribute("src")).toBe("data:image/avif;base64,aW1hZ2U=");
-    expect(readFileBase64Mock).toHaveBeenCalledWith("/repo/assets/app-preview.avif");
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledWith(
+      "environment-1",
+      "assets/app-preview.avif",
+    );
   });
 
   test("loads container images through the container backend", async () => {

@@ -16,6 +16,7 @@ import {
 import { environmentStateDirectories } from "./environment-state-paths.js";
 import { removeEnvironmentNetwork } from "./container-network.js";
 import type { Environment, Project } from "./models.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
@@ -59,8 +60,12 @@ export function buildEnvironmentCleanupEntry(
   now: Date = new Date(),
 ): EnvironmentCleanupEntry {
   const projectPath = project?.localPath?.trim() || null;
-  const worktreePath = environment.worktreePath?.trim() || null;
+  // The project home's directory and branch are the user's checkout: deleting
+  // the record must never schedule removal of either.
+  const projectHome = isProjectHomeEnvironment(environment);
+  const worktreePath = projectHome ? null : environment.worktreePath?.trim() || null;
   const ownsBranch =
+    !projectHome &&
     environment.environmentType === "local" &&
     !!projectPath &&
     !!worktreePath &&

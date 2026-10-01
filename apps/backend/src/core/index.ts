@@ -513,6 +513,10 @@ export class OrkestratorBackend {
     context.webAnnotations = this.webAnnotations;
     context.webAnnotationRollout = this.webAnnotationRollout;
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
+      for (const home of await storage.getEnvironmentsByProject(projectId)) {
+        if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
+          return true;
+      }
       const workspace = await storage.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
       for (const conversation of workspace.conversations) {

@@ -185,6 +185,20 @@ const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 let projectBoardActionLog: string[] = [];
 const toggleFilesPanelMock = mock(() => {});
+const openFilesPanelOnAllFilesMock = mock(() => {});
+const selectProjectAndEnvironmentMock = mock((_projectId: string, _environmentId: string) => {});
+const addEnvironmentStoreMock = mock((_environment: Environment) => {});
+const ensureProjectHomeEnvironmentMock = mock(
+  async (projectId: string): Promise<Environment> =>
+    ({
+      id: "project-home-1",
+      projectId,
+      projectHome: true,
+      environmentType: "local",
+      worktreePath: "/tmp/repo",
+      status: "running",
+    }) as Environment,
+);
 const toggleSidebarMock = mock(() => {});
 const addCommentMock = mock(async (_taskId: string, _body: string) => {});
 const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
@@ -609,54 +623,70 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useEnvironmentStore: <T,>(
-    selector?: (state: {
-      environments: Environment[];
-      getEnvironmentById: (environmentId: string) => Environment | undefined;
-      updateEnvironment: (environmentId: string, environment: Environment) => void;
-      setEnvironmentPR: () => void;
-    }) => T,
-  ) =>
-    selectState(
-      {
-        environments: [
-          ...(currentSelectedEnvironmentId ? [currentEnvironment] : []),
-          ...currentOtherEnvironments,
-        ].map((environment) =>
-          environment.id === currentEnvironment.id
-            ? {
-                ...environment,
-                setupPhase: (currentSetupScriptsRunning
-                  ? "running"
-                  : currentWorkspaceReady
-                    ? "ready"
-                    : "pending") as Environment["setupPhase"],
-              }
-            : environment,
-        ),
-        getEnvironmentById: (environmentId: string) =>
-          environmentId === currentEnvironment.id
-            ? {
-                ...currentEnvironment,
-                setupPhase: (currentSetupScriptsRunning
-                  ? "running"
-                  : currentWorkspaceReady
-                    ? "ready"
-                    : "pending") as Environment["setupPhase"],
-              }
-            : undefined,
+  useEnvironmentStore: Object.assign(
+    <T,>(
+      selector?: (state: {
+        environments: Environment[];
+        getEnvironmentById: (environmentId: string) => Environment | undefined;
+        updateEnvironment: (environmentId: string, environment: Environment) => void;
+        setEnvironmentPR: () => void;
+      }) => T,
+    ) =>
+      selectState(
+        {
+          environments: [
+            ...(currentSelectedEnvironmentId ? [currentEnvironment] : []),
+            ...currentOtherEnvironments,
+          ].map((environment) =>
+            environment.id === currentEnvironment.id
+              ? {
+                  ...environment,
+                  setupPhase: (currentSetupScriptsRunning
+                    ? "running"
+                    : currentWorkspaceReady
+                      ? "ready"
+                      : "pending") as Environment["setupPhase"],
+                }
+              : environment,
+          ),
+          getEnvironmentById: (environmentId: string) =>
+            environmentId === currentEnvironment.id
+              ? {
+                  ...currentEnvironment,
+                  setupPhase: (currentSetupScriptsRunning
+                    ? "running"
+                    : currentWorkspaceReady
+                      ? "ready"
+                      : "pending") as Environment["setupPhase"],
+                }
+              : undefined,
+          updateEnvironment: updateEnvironmentMock,
+          setEnvironmentPR: setEnvironmentPRStoreMock,
+        },
+        selector,
+      ),
+    {
+      // `ensureProjectHomeInStore` publishes the home imperatively.
+      getState: () => ({
+        environments: [] as Environment[],
+        addEnvironment: addEnvironmentStoreMock,
         updateEnvironment: updateEnvironmentMock,
-        setEnvironmentPR: setEnvironmentPRStoreMock,
-      },
-      selector,
-    ),
+      }),
+    },
+  ),
   useFilesPanelStore: <T,>(
-    selector?: (state: { isOpen: boolean; togglePanel: () => void; changes: unknown[] }) => T,
+    selector?: (state: {
+      isOpen: boolean;
+      togglePanel: () => void;
+      openPanelOnAllFiles: () => void;
+      changes: unknown[];
+    }) => T,
   ) =>
     selectState(
       {
         isOpen: currentFilesPanelOpen,
         togglePanel: toggleFilesPanelMock,
+        openPanelOnAllFiles: openFilesPanelOnAllFilesMock,
         changes: currentChanges,
       },
       selector,
@@ -685,6 +715,7 @@ mock.module("@/stores", () => ({
       selectedProjectId: string | null;
       selectEnvironment: (environmentId: string | null) => void;
       selectProject: (projectId: string | null) => void;
+      selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
       setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
       projectBoardTab: "coordinator" | "kanban" | "linear" | "github" | "features";
       setProjectBoardTab: (
@@ -701,6 +732,7 @@ mock.module("@/stores", () => ({
         selectedProjectId: currentSelectedProjectId,
         selectEnvironment: selectEnvironmentMock,
         selectProject: selectProjectMock,
+        selectProjectAndEnvironment: selectProjectAndEnvironmentMock,
         setProjectCollapsed: setProjectCollapsedMock,
         projectBoardTab: currentProjectBoardTab,
         setProjectBoardTab: setProjectBoardTabMock,
@@ -791,6 +823,7 @@ mock.module("@/lib/backend", () => ({
   cancelMultiReview: cancelMultiReviewMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
+  ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
 }));
 
 mock.module("@/lib/pane-layout-authoritative", () => ({
@@ -954,6 +987,10 @@ beforeEach(() => {
     currentProjectBoardNotesOpen = open;
   });
   toggleFilesPanelMock.mockReset();
+  openFilesPanelOnAllFilesMock.mockReset();
+  selectProjectAndEnvironmentMock.mockReset();
+  addEnvironmentStoreMock.mockReset();
+  ensureProjectHomeEnvironmentMock.mockClear();
   toggleSidebarMock.mockReset();
   addCommentMock.mockReset();
   updateTaskMock.mockReset();
@@ -2419,6 +2456,7 @@ describe("ActionBar toolbar interactions", () => {
 
   test("ignores out-of-range tab selection and disabled panel shortcuts", () => {
     currentSelectedEnvironmentId = null;
+    currentSelectedProjectId = null;
     currentTabCount = 0;
     render(<ActionBar />);
 
@@ -2429,6 +2467,58 @@ describe("ActionBar toolbar interactions", () => {
     expect(selectTabMock).not.toHaveBeenCalled();
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).not.toHaveBeenCalled();
+    expect(openFilesPanelOnAllFilesMock).not.toHaveBeenCalled();
+  });
+
+  test("shows the project checkout's files from the project board, starting on all files", () => {
+    currentSelectedEnvironmentId = null;
+    render(<ActionBar />);
+
+    const showFiles = screen.getByRole("button", { name: "Show file panel" });
+    expect(showFiles.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(showFiles);
+    fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
+
+    expect(openFilesPanelOnAllFilesMock).toHaveBeenCalledTimes(2);
+    expect(toggleFilesPanelMock).not.toHaveBeenCalled();
+  });
+
+  test("hides the project board's files toggle when the project has no checkout", () => {
+    currentSelectedEnvironmentId = null;
+    currentOtherProjects = [{ ...selectedProject, id: "project-remote", localPath: null }];
+    currentSelectedProjectId = "project-remote";
+    render(<ActionBar />);
+
+    expect(screen.queryByRole("button", { name: "Show file panel" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Open project home" }) === null).toBe(true);
+    fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
+    expect(openFilesPanelOnAllFilesMock).not.toHaveBeenCalled();
+  });
+
+  test("closes an open files panel from the project board", () => {
+    currentSelectedEnvironmentId = null;
+    currentFilesPanelOpen = true;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide file panel" }));
+
+    expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+    expect(openFilesPanelOnAllFilesMock).not.toHaveBeenCalled();
+  });
+
+  test("opens the project home so review and PR sessions can run on the checkout", async () => {
+    currentSelectedEnvironmentId = null;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open project home" }));
+
+    await waitFor(() =>
+      expect(selectProjectAndEnvironmentMock).toHaveBeenCalledWith("project-1", "project-home-1"),
+    );
+    expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
+    expect(addEnvironmentStoreMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "project-home-1", projectHome: true }),
+    );
   });
 
   test("opens a neutral native tab without routing removed provider shortcuts", () => {

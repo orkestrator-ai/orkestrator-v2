@@ -1,3 +1,4 @@
+import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   containerLifecycleSnapshot,
   parseContainerLifecycle,
@@ -80,6 +81,8 @@ import { ControlRequestConflictError } from "./storage-projects.js";
 import { forkEnvironmentRecord } from "./commands-environment-fork.js";
 import type { CommandContext } from "./commands-context.js";
 import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
+import { ensureProjectHomeEnvironment, readCheckoutBranch } from "./project-home-environment.js";
+import { resolveProjectGitRoot } from "./project-git-service.js";
 
 /**
  * A validated environment tier, or `undefined` when it expresses no opinion.
@@ -168,9 +171,10 @@ export function registerEnvironmentCommands(
       ),
     ),
   );
-  register("get_environment", ({ environmentId }, { storage }) =>
-    storage.getEnvironment(asString(environmentId, "environmentId")),
-  );
+  register("get_environment", async ({ environmentId }, { storage }) => {
+    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    return environment ? reconcileProjectHomeEnvironment(environment, storage) : null;
+  });
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
     storage
       .reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds))
@@ -311,6 +315,25 @@ export function registerEnvironmentCommands(
       return toClientEnvironment(await storage.addEnvironment(env));
     },
   );
+  register("ensure_project_home_environment", async (args, context) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    const projectId = asString(args.projectId, "projectId");
+    const { storage } = context;
+    const { environment } = await ensureProjectHomeEnvironment(projectId, {
+      storage,
+      resolveRoot: (project) => resolveProjectGitRoot(storage, project.id),
+      readBranch: readCheckoutBranch,
+      createRecord: (id, name) => createEnvironment(id, { name, environmentType: "local" }),
+      clearTerminalSessions: async (environmentId) => {
+        await storage.clearBackendTerminalSessionIds?.(environmentId);
+      },
+    });
+    // The home is a tracked worktree like any other: its watcher is what
+    // announces a dropped or edited file as a change.
+    await syncDiffStatsTracking(context);
+    await syncPrMonitorTracking(context);
+    return toClientEnvironment(environment);
+  });
   register("fork_environment", async ({ environmentId, environmentType }, context) => {
     const source = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!source) throw new Error(`Environment not found: ${environmentId}`);

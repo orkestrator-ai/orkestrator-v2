@@ -282,6 +282,56 @@ test("one command can be stopped without opening output or hiding the other rows
   await expect(stop).toHaveCount(0);
 });
 
+for (const width of [320, 390]) {
+  test(`mobile queued status and stop control fit together at ${width}px after reload`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/review-validation-output");
+    await page.reload();
+    await page.getByRole("button", { name: "Show running validation" }).click();
+
+    const row = validationRow(page, "mise run typecheck");
+    const status = row.locator("[data-slot='validation-status']");
+    const label = status.locator("[data-slot='validation-status-label']");
+    const stop = row.getByRole("button", { name: "Stop mise run typecheck" });
+    await expect(label).toHaveText("waiting for capacity");
+    await status.scrollIntoViewIfNeeded();
+    await expect(label).toBeInViewport({ ratio: 1 });
+    await expect(stop).toBeInViewport({ ratio: 1 });
+
+    const layout = await status.evaluate((cell) => {
+      const labelElement = cell.querySelector("[data-slot='validation-status-label']")!;
+      const control = cell.querySelector("button")!;
+      const range = document.createRange();
+      range.selectNodeContents(labelElement);
+      const textRects = Array.from(range.getClientRects());
+      const cellRect = cell.getBoundingClientRect();
+      const controlRect = control.getBoundingClientRect();
+      return {
+        lineCount: textRects.length,
+        textInsideCell: textRects.every(
+          (rect) => rect.left >= cellRect.left && rect.right <= cellRect.right,
+        ),
+        textControlGap: controlRect.left - Math.max(...textRects.map((rect) => rect.right)),
+        controlInsideCell: controlRect.left >= cellRect.left && controlRect.right <= cellRect.right,
+        documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    expect(layout.lineCount).toBe(1);
+    expect(layout.textInsideCell).toBe(true);
+    expect(layout.textControlGap).toBeGreaterThanOrEqual(4);
+    expect(layout.controlInsideCell).toBe(true);
+    expect(layout.documentOverflow).toBeLessThanOrEqual(1);
+
+    await stop.click();
+    await expect(stop).toBeDisabled();
+    await expect(label).toHaveText("stopping");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+}
+
 test("queue diagnostics rehydrate after an inactive view and clear on completion", async ({
   page,
 }) => {

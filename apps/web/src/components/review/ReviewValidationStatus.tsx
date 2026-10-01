@@ -434,7 +434,7 @@ export function ReviewValidationStatus({
               <th scope="col" className="px-2 py-2 font-medium">
                 Command
               </th>
-              <th scope="col" className="w-36 px-2 py-2 font-medium">
+              <th scope="col" className="w-44 px-2 py-2 font-medium">
                 Status
               </th>
               <th scope="col" className="w-20 px-2 py-2 text-right font-medium">

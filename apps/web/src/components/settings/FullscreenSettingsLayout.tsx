@@ -35,6 +35,15 @@ interface FullscreenSettingsLayoutProps<TSection extends string = string> {
   headerActions?: React.ReactNode;
 }
 
+/**
+ * Keep the active section visible in the scrollable sidebar, e.g. after a deep
+ * link selects a section below the fold. Stable identity means React only calls
+ * it when the active button changes.
+ */
+function scrollActiveItemIntoView(node: HTMLButtonElement | null) {
+  node?.scrollIntoView?.({ block: "nearest" });
+}
+
 const SettingsHeaderActionsContext = createContext<HTMLElement | null | undefined>(undefined);
 
 /** Render section-owned actions in the fullscreen settings header. */
@@ -110,17 +119,23 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
           )}
         >
           {/* Sidebar */}
-          <div className="hidden shrink-0 flex-col border-b border-white/5 md:flex md:w-56 md:border-b-0 md:border-r">
+          <div className="hidden min-h-0 shrink-0 flex-col border-b border-white/5 md:flex md:w-56 md:border-b-0 md:border-r">
             {/* Sidebar header */}
-            <div className="hidden h-12 items-center px-4 bg-zinc-900/80 md:flex">
+            <div className="hidden h-12 shrink-0 items-center px-4 bg-zinc-900/80 md:flex">
               <span className="text-sm font-medium text-foreground">{title}</span>
             </div>
 
-            {/* Menu items */}
-            <nav aria-label="Settings sections" className="block flex-1 py-2">
+            {/* Menu items scroll independently so short windows can reach every section. */}
+            <nav
+              aria-label="Settings sections"
+              data-slot="settings-sections"
+              className="block min-h-0 flex-1 overflow-y-auto overscroll-contain py-2"
+            >
               {menuItems.map((item) => (
                 <button
                   key={item.id}
+                  ref={activeSection === item.id ? scrollActiveItemIntoView : undefined}
+                  aria-current={activeSection === item.id ? "page" : undefined}
                   onClick={() => setActiveSection(item.id)}
                   className={cn(
                     "flex min-h-10 w-full shrink-0 items-center gap-3 rounded-none border-l-2 px-4 py-2 text-sm transition-colors",
@@ -199,7 +214,10 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
             </div>
 
             {/* Content body */}
-            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6">
+            <div
+              data-slot="settings-content-scrollport"
+              className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6"
+            >
               <div className="flex-1">{children(activeSection)}</div>
               {footer && (
                 <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">

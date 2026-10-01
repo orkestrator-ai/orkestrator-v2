@@ -29,18 +29,19 @@ export function isClaudeAuthenticationError(message: string | null | undefined):
   return AUTH_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
-/**
- * Authentication recovery is control state, so arbitrary assistant prose must
- * never activate it. The backend gives terminal failures a dedicated system
- * row; matching both that structured identity and its bounded error text keeps
- * ordinary explanations, tools, diffs and actions intact.
- */
+/** Matches Claude’s exact signed-out assistant notice. */
 export function isClaudeNotLoggedInNotice(
   message: Pick<NativeMessage, "role" | "content"> | null | undefined,
 ): boolean {
   return message?.role === "assistant" && NOT_LOGGED_IN_NOTICE.test(message.content.trim());
 }
 
+/**
+ * Authentication recovery is control state, so arbitrary assistant prose must
+ * never activate it. The backend gives terminal failures a dedicated system
+ * row; matching both that structured identity and its bounded error text keeps
+ * ordinary explanations, tools, diffs and actions intact.
+ */
 export function isClaudeAuthenticationFailureMessage(
   message: Pick<NativeMessage, "id" | "role" | "content">,
 ): boolean {

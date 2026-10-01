@@ -2151,6 +2151,7 @@ export function SharedNativeAgentController({
         key="claude-not-logged-in"
         placement="pinned"
         error={claudeNotLoggedInNotice}
+        failureAt={latestAssistantMessage?.createdAt}
         containerId={data.containerId}
       />
     ) : null,

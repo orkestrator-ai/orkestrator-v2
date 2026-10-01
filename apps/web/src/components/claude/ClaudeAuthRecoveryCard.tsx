@@ -9,6 +9,7 @@ import { CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND, CLAUDE_AUTH_LOGIN_COMMAND } from "
 
 interface ClaudeAuthRecoveryCardProps {
   error: string;
+  failureAt?: string;
   containerId?: string;
   /** `pinned` sits above the composer, outside the transcript's own padding. */
   placement?: "transcript" | "pinned";
@@ -26,6 +27,7 @@ interface ClaudeAuthRecoveryCardProps {
  */
 export function ClaudeAuthRecoveryCard({
   error,
+  failureAt,
   containerId,
   placement = "transcript",
 }: ClaudeAuthRecoveryCardProps) {
@@ -34,8 +36,8 @@ export function ClaudeAuthRecoveryCard({
   const useHostClaudeCredentials = useConfigStore(
     (state) => state.config.global.useHostClaudeCredentials ?? true,
   );
-  const reauth = useAgentAccountReauth("claude");
   const isolatedContainer = Boolean(containerId) && !useHostClaudeCredentials;
+  const reauth = useAgentAccountReauth("claude", !isolatedContainer, failureAt);
   const canOpenTerminal = Boolean(createTab) && (isolatedContainer || !containerId);
   const signedIn = reauth.progress.state === "succeeded";
   const signingIn = reauth.progress.state === "pending";

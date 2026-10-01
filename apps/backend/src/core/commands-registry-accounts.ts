@@ -97,7 +97,11 @@ export function registerAgentAccountCommands(
     return submitAgentAccountLoginCode(asNonBlankString(args.code, "code"));
   });
   register("cancel_agent_account_login", async (args) => {
-    assertOnlyKeys(args, [], "arguments");
-    return cancelAgentAccountLogin();
+    assertOnlyKeys(args, ["operationId"], "arguments");
+    return cancelAgentAccountLogin(
+      args.operationId === undefined
+        ? undefined
+        : asNonBlankString(args.operationId, "operationId"),
+    );
   });
 }

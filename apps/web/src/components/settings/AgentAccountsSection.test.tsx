@@ -241,6 +241,32 @@ describe("AgentAccountsSection", () => {
     );
   });
 
+  test.each(["succeeded", "failed", "idle"] as const)(
+    "observes reauthentication ending as %s without remount",
+    async (state) => {
+      const { clock } = installFakeReadCoordinator();
+      login = {
+        state: "pending",
+        platform: "claude",
+        mode: "reauthenticate",
+        operationId: "reauth-one",
+      };
+      await act(async () => {
+        render(<AgentAccountsSection platform="claude" />);
+        await clock.advance(0);
+      });
+      const add = await screen.findByRole("button", { name: /Add account/ });
+      expect((add as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByLabelText("Account sign-in") === null).toBe(true);
+      login = { ...login, state, ...(state === "failed" ? { error: "Sign-in rejected" } : {}) };
+      await act(async () => {
+        await clock.advance(2_000);
+      });
+      expect((add as HTMLButtonElement).disabled).toBe(false);
+      if (state === "failed") expect(screen.getByText("Sign-in rejected")).toBeTruthy();
+    },
+  );
+
   test("a Claude sign-in forwards the pasted code", async () => {
     login = {
       state: "pending",

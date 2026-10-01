@@ -60,13 +60,17 @@ export type AgentAccountLoginState = "idle" | "pending" | "succeeded" | "failed"
  */
 export interface AgentAccountLoginProgress {
   state: AgentAccountLoginState;
+  /** Identifies a login across polls, cancellation and remounts. */
+  operationId?: string;
+  /** Lets a recovery card ignore a result predating its authentication failure. */
+  completedAt?: string;
   platform?: AgentAccountPlatform;
   /**
    * `add` creates a new account; `reauthenticate` signs the active account in
    * again, replacing its credential in place. Absent while idle.
    */
   mode?: "add" | "reauthenticate";
-  /** The account created (or, when re-signing in, renewed) by a login that succeeded. */
+  /** The account being created or renewed, present throughout the operation. */
   accountId?: string;
   url?: string;
   userCode?: string;

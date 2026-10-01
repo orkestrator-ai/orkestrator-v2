@@ -11,5 +11,5 @@ export const localAgentAccountTokenExpiry = new Map<string, number>();
  */
 export const staleLoginLocalBridges = new Set<string>();
 
-/** Environments whose container should be given the refreshed host login. */
+/** In-process refresh hint; durable login generations and container markers recover missed hints after restart. */
 export const staleLoginEnvironmentIds = new Set<string>();

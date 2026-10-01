@@ -26,6 +26,8 @@ export interface StoredAgentAccount {
 
 export interface AgentAccountStore {
   version: 1;
+  /** Durable renewal revision compared with running containers. */
+  loginGeneration?: Partial<Record<AgentAccountPlatform, string>>;
   accounts: StoredAgentAccount[];
   active: Partial<Record<AgentAccountPlatform, string>>;
 }
@@ -90,6 +92,14 @@ export function parseAgentAccountStore(value: unknown): AgentAccountStore {
   const store = emptyAgentAccountStore();
   if (!value || typeof value !== "object" || Array.isArray(value)) return store;
   const record = value as Record<string, unknown>;
+  if (record.loginGeneration && typeof record.loginGeneration === "object") {
+    const generations: Partial<Record<AgentAccountPlatform, string>> = {};
+    for (const [platform, generation] of Object.entries(record.loginGeneration)) {
+      if (isAgentAccountPlatform(platform) && isStoredAgentAccountId(generation))
+        generations[platform] = generation;
+    }
+    if (Object.keys(generations).length) store.loginGeneration = generations;
+  }
   const seen = new Set<string>();
   for (const entry of Array.isArray(record.accounts) ? record.accounts : []) {
     const account = parseAccount(entry);

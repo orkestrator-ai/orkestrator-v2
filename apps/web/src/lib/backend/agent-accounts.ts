@@ -73,6 +73,11 @@ export async function submitAgentAccountLoginCode(
   return invoke<AgentAccountLoginProgress>("submit_agent_account_login_code", { code });
 }
 
-export async function cancelAgentAccountLogin(): Promise<AgentAccountLoginProgress> {
-  return invoke<AgentAccountLoginProgress>("cancel_agent_account_login", {});
+export async function cancelAgentAccountLogin(
+  operationId?: string,
+): Promise<AgentAccountLoginProgress> {
+  return invoke<AgentAccountLoginProgress>(
+    "cancel_agent_account_login",
+    operationId ? { operationId } : {},
+  );
 }

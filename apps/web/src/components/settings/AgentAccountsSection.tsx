@@ -286,7 +286,10 @@ export function AgentAccountsSection({
     key: { resource: "agent-account-login", target: "backend" },
     // A sign-in outlives this pane: reopening settings resumes the one running.
     readOnSubscribe: true,
-    demand: { intervalMs: loginPending ? POLL_INTERVAL_MS : null, priority: "standard" },
+    demand: {
+      intervalMs: login.state === "pending" ? POLL_INTERVAL_MS : null,
+      priority: "standard",
+    },
     read: () => getAgentAccountLogin(),
     onState: (state) => {
       if (state.status === "current" && state.value) applyLogin(state.value);
@@ -313,7 +316,8 @@ export function AgentAccountsSection({
     setError(null);
     try {
       // Dismiss a finished sign-in first so its result does not linger.
-      if (login.state !== "idle" && login.state !== "pending") await cancelAgentAccountLogin();
+      if (login.state !== "idle" && login.state !== "pending")
+        await cancelAgentAccountLogin(login.operationId);
       applyLogin(await startAgentAccountLogin(platform));
       await refreshLogin();
     } catch (cause) {
@@ -322,7 +326,9 @@ export function AgentAccountsSection({
   };
 
   const cancelLogin = async () => {
-    applyLogin(await cancelAgentAccountLogin().catch(() => ({ state: "idle" as const })));
+    applyLogin(
+      await cancelAgentAccountLogin(login.operationId).catch(() => ({ state: "idle" as const })),
+    );
     await refreshLogin();
   };
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelAgentAccountLogin,
   getAgentAccountLogin,
+  listAgentAccounts,
   startAgentAccountLogin,
 } from "@/lib/backend";
 import type {
@@ -9,91 +10,123 @@ import type {
   AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 
-/** How often to ask the backend whether the browser sign-in has finished. */
 const POLL_INTERVAL_MS = 1_500;
-
 const IDLE: AgentAccountLoginProgress = { state: "idle" };
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/**
- * Sign the platform's active account in again, driven by the backend.
- *
- * The backend runs the CLI's own login and owns the credential; this only
- * starts it, polls it and relays the pasted code. A sign-in outlives the card
- * that started it, so a remounted caller resumes the one still running.
- */
-export function useAgentAccountReauth(platform: AgentAccountPlatform) {
+/** Backend-owned sign-in survives unmount; reads are serialized and fenced by lifecycle. */
+export function useAgentAccountReauth(
+  platform: AgentAccountPlatform,
+  enabled = true,
+  failureAt?: string,
+) {
   const [progress, setProgress] = useState<AgentAccountLoginProgress>(IDLE);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const mounted = useRef(true);
+  const current = useRef(IDLE);
+  const epoch = useRef(0);
   const pending = progress.state === "pending";
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
 
   const adopt = useCallback(
     (next: AgentAccountLoginProgress) => {
-      if (!mounted.current) return;
-      // An add-account sign-in from Settings is not this card's to show.
       if (next.platform !== platform || next.mode !== "reauthenticate") {
-        setProgress(IDLE);
-        return;
+        // A result remains visible after another reader dismisses it.
+        if (current.current.state === "succeeded" || current.current.state === "failed") return;
+        next = IDLE;
       }
+      current.current = next;
       setProgress(next);
-      if (next.state === "failed") setError(next.error ?? "The sign-in did not complete");
-      // The result has been shown; do not leave it for the next reader.
-      if (next.state === "succeeded") void cancelAgentAccountLogin().catch(() => undefined);
+      setError(next.state === "failed" ? (next.error ?? "The sign-in did not complete") : null);
+      // Keep terminal results in the backend so every remounted card can recover
+      // them. A successful poll must never cancel a different operation.
     },
     [platform],
   );
 
   useEffect(() => {
-    let current = true;
-    void getAgentAccountLogin()
-      .then((existing) => {
-        if (current && existing.state === "pending") adopt(existing);
-      })
-      .catch(() => undefined);
+    const version = ++epoch.current;
+    current.current = IDLE;
+    setProgress(IDLE);
+    setError(null);
+    if (enabled) {
+      void getAgentAccountLogin()
+        .then(async (existing) => {
+          if (
+            existing.completedAt &&
+            failureAt &&
+            Date.parse(existing.completedAt) < Date.parse(failureAt)
+          )
+            return;
+          if (existing.operationId && existing.accountId && existing.state !== "pending") {
+            const accounts = await listAgentAccounts();
+            if (accounts.active[platform] !== existing.accountId) return;
+          }
+          if (epoch.current === version) adopt(existing);
+        })
+        .catch(() => undefined);
+    }
     return () => {
-      current = false;
+      epoch.current += 1;
     };
-  }, [adopt]);
+  }, [adopt, enabled, platform, failureAt]);
 
   useEffect(() => {
-    if (!pending) return;
-    const timer = setInterval(() => {
-      void getAgentAccountLogin()
-        .then(adopt)
-        .catch(() => undefined);
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [pending, adopt]);
+    if (!enabled || !pending) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const version = epoch.current;
+    const poll = async () => {
+      try {
+        const next = await getAgentAccountLogin();
+        if (active && epoch.current === version) adopt(next);
+      } catch {
+        /* Retry transient read failures while pending. */
+      }
+      if (active && epoch.current === version && current.current.state === "pending") {
+        timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      }
+    };
+    timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [enabled, pending, adopt]);
 
   const start = useCallback(async () => {
+    if (!enabled) return;
+    const version = ++epoch.current;
+    current.current = IDLE;
+    setProgress(IDLE);
     setError(null);
     setStarting(true);
     try {
-      adopt(await startAgentAccountLogin(platform, { reauthenticate: true }));
+      const next = await startAgentAccountLogin(platform, { reauthenticate: true });
+      if (epoch.current === version) adopt(next);
     } catch (cause) {
-      if (mounted.current) setError(messageOf(cause));
+      if (epoch.current === version) setError(messageOf(cause));
     } finally {
-      if (mounted.current) setStarting(false);
+      if (epoch.current === version) setStarting(false);
     }
-  }, [adopt, platform]);
+  }, [adopt, enabled, platform]);
 
   const cancel = useCallback(async () => {
+    const operationId = current.current.operationId;
+    if (!operationId) return;
+    const version = ++epoch.current;
+    current.current = IDLE;
+    setProgress(IDLE);
     setError(null);
-    await cancelAgentAccountLogin().catch(() => undefined);
-    if (mounted.current) setProgress(IDLE);
-  }, []);
+    try {
+      const next = await cancelAgentAccountLogin(operationId);
+      if (epoch.current === version) adopt(next);
+    } catch (cause) {
+      if (epoch.current === version) setError(messageOf(cause));
+    }
+  }, [adopt]);
 
   return { progress, error, starting, start, cancel, reportError: setError };
 }

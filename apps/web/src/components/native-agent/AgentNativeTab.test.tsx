@@ -1010,38 +1010,54 @@ describe("AgentNativeTab", () => {
     );
   });
 
-  test("opens an interactive Claude sign-in terminal for an isolated-container failure", async () => {
-    renderVirtualizedMessages = true;
-    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
-    const createTab = mock(() => true);
-    const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-      ...(await defaultProjection(input as never)),
-      messages: [
-        {
-          id: "native-terminal:error:auth-failure",
-          role: "system",
-          content: error,
-          createdAt: "2026-09-03T14:45:00.000Z",
-          parts: [{ type: "text", content: error }],
-        },
-      ],
-    }));
+  test.each(["pending", "succeeded"] as const)(
+    "keeps isolated-container recovery terminal-only during host reauthentication %s",
+    async (state) => {
+      accountLoginProgress = {
+        state,
+        platform: "claude",
+        mode: "reauthenticate",
+        operationId: "host-reauth",
+        accountId: "default",
+      };
+      getAgentAccountLoginMock.mockClear();
+      startAgentAccountLoginMock.mockClear();
+      renderVirtualizedMessages = true;
+      useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+      const createTab = mock(() => true);
+      const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        messages: [
+          {
+            id: "native-terminal:error:auth-failure",
+            role: "system",
+            content: error,
+            createdAt: "2026-09-03T14:45:00.000Z",
+            parts: [{ type: "text", content: error }],
+          },
+        ],
+      }));
 
-    render(
-      <TerminalProvider>
-        <TerminalTabHarness createTab={createTab}>
-          <AgentNativeTab tabId="tab-auth-recovery" data={identity("claude")} isActive />
-        </TerminalTabHarness>
-      </TerminalProvider>,
-    );
+      render(
+        <TerminalProvider>
+          <TerminalTabHarness createTab={createTab}>
+            <AgentNativeTab tabId="tab-auth-recovery" data={identity("claude")} isActive />
+          </TerminalTabHarness>
+        </TerminalProvider>,
+      );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
-    expect(createTab).toHaveBeenCalledWith("plain", {
-      displayTitle: "Claude sign-in",
-      initialCommands: [CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND],
-    });
-  });
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+      expect(screen.queryByText("Signed in. Resend your message to continue.") === null).toBe(true);
+      expect(screen.queryByLabelText("Sign-in code") === null).toBe(true);
+      expect(getAgentAccountLoginMock).not.toHaveBeenCalled();
+      expect(startAgentAccountLoginMock).not.toHaveBeenCalled();
+      expect(createTab).toHaveBeenCalledWith("plain", {
+        displayTitle: "Claude sign-in",
+        initialCommands: [CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND],
+      });
+    },
+  );
 
   function claudeAuthFailureProjection(id: string, error: string) {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({

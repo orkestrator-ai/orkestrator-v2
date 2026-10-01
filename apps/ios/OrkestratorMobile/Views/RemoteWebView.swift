@@ -145,6 +145,17 @@ struct RemoteWebView: UIViewRepresentable {
         /// `UIViewRepresentableContext` cannot be constructed outside SwiftUI.
         /// `state` has already been rebound by the caller.
         func synchronizeAuthentication(with connection: RemoteConnection) {
+            // Saving the active connection is an explicit recovery action. A
+            // nickname-only update must still preserve the current WebView.
+            let previousConnection = requestedConnection ?? authenticatedConnection
+            let wasReconnected = previousConnection.map {
+                connection.hasSameAuthenticationIdentity(as: $0)
+                    && connection.lastConnectedAt != $0.lastConnectedAt
+            } ?? false
+            if case .failed = state.wrappedValue, wasReconnected, !isSwitchingThroughBridge {
+                authenticate(connection)
+                return
+            }
             if connection.hasSameAuthenticationIdentity(as: requestedConnection) {
                 requestedConnection = connection
             }

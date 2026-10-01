@@ -122,7 +122,7 @@ final class ConnectionModel: ObservableObject {
         guard let currentConnection = vault.connections.first(where: { $0.id == id }) else {
             throw ConnectionModelError.missingConnection
         }
-        guard currentConnection == connection else {
+        guard currentConnection.hasSameAuthenticationIdentity(as: connection) else {
             throw ConnectionModelError.changedConnection
         }
         var nextVault = vault

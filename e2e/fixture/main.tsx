@@ -1,3 +1,4 @@
+import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
@@ -1586,6 +1587,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
   if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;

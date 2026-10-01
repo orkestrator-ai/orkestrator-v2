@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  MAX_CONNECTION_NICKNAME_LENGTH,
+  normalizeConnectionNickname,
   type ConnectionList,
   type ConnectionSummary,
 } from "@orkestrator/protocol/connections";
@@ -144,7 +144,12 @@ export function ConnectionsSettings() {
     setBusyId("add");
     setFormError(null);
     try {
-      await api.connect({ address, token, ...(nickname.trim() ? { nickname } : {}) });
+      const normalizedNickname = normalizeConnectionNickname(nickname);
+      await api.connect({
+        address,
+        token,
+        ...(normalizedNickname ? { nickname: normalizedNickname } : {}),
+      });
       reloadAfterConnectionChange();
     } catch (error) {
       setFormError(errorMessage(error));
@@ -188,7 +193,7 @@ export function ConnectionsSettings() {
     setBusyId(target.id);
     setFormError(null);
     try {
-      const list = await api.rename(target.id, nickname.trim() ? nickname : null);
+      const list = await api.rename(target.id, normalizeConnectionNickname(nickname) ?? null);
       publish(list);
       setRenameTarget(null);
       resetForm();
@@ -727,7 +732,6 @@ function NicknameInput({
       value={nickname}
       onChange={(event) => onNicknameChange(event.target.value)}
       placeholder={placeholder}
-      maxLength={MAX_CONNECTION_NICKNAME_LENGTH}
       autoComplete="off"
       spellCheck={false}
       disabled={disabled}

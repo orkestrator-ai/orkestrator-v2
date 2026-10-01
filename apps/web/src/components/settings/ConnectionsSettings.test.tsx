@@ -213,6 +213,45 @@ describe("ConnectionsSettings", () => {
     expect(api.use).not.toHaveBeenCalled();
   });
 
+  test.each(["add", "rename"])("validates normalized Unicode nicknames in %s", async (flow) => {
+    const api = installConnections();
+    window.__orkestratorClientPlatform = "ios-wkwebview";
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+    if (flow === "add") {
+      fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+      fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
+        target: { value: "workstation" },
+      });
+      fireEvent.change(screen.getByLabelText("Gateway token"), {
+        target: { value: "gateway-token-123456" },
+      });
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "Rename desk.tailnet.ts.net" }));
+    }
+    const input = screen.getByLabelText(/Nickname/) as HTMLInputElement;
+    expect(input.hasAttribute("maxlength")).toBe(false);
+    const nickname = "🖥️".repeat(32);
+    fireEvent.change(input, { target: { value: nickname + "x" } });
+    fireEvent.click(screen.getByRole("button", { name: flow === "add" ? "Connect" : "Save" }));
+    expect(await screen.findByText("Use a nickname of 64 characters or fewer.")).toBeTruthy();
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(api.rename).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "  " + nickname + "  " } });
+    fireEvent.click(screen.getByRole("button", { name: flow === "add" ? "Connect" : "Save" }));
+    await waitFor(() => {
+      if (flow === "add") {
+        expect(api.connect).toHaveBeenCalledWith({
+          address: "workstation",
+          token: "gateway-token-123456",
+          nickname,
+        });
+      } else {
+        expect(api.rename).toHaveBeenCalledWith("remote-1", nickname);
+      }
+    });
+  });
+
   test("clears a nickname to show the hostname again", async () => {
     const api = installConnections({
       ...initialList,

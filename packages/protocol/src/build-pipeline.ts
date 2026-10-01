@@ -476,6 +476,17 @@ export interface PipelineSession {
   validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";
   validationUncommittedPathsAtStart?: string[];
   /**
+   * Content fingerprint of the worktree (HEAD, status, diff and untracked
+   * files) taken when a fix turn started.
+   *
+   * A fix that leaves the worktree byte-identical would send the same code
+   * back through review and verification, which repeats the same verdict until
+   * the iteration cap. Comparing against this at the end of the turn lets the
+   * supervisor pause instead. Cleared once compared, and absent when the probe
+   * could not establish a fingerprint, which disables the check for that turn.
+   */
+  fixWorktreeFingerprintAtStart?: string;
+  /**
    * First tick at which this session was idle with no structured result yet.
    * A turn that ends without ever producing one would otherwise poll forever.
    */
@@ -1067,6 +1078,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.producedReviewPackagePlan === undefined ||
       typeof value.producedReviewPackagePlan === "boolean") &&
     hasValidValidationWorktreeBaseline(value) &&
+    (value.fixWorktreeFingerprintAtStart === undefined ||
+      (typeof value.fixWorktreeFingerprintAtStart === "string" &&
+        /^[0-9a-f]{64}$/i.test(value.fixWorktreeFingerprintAtStart))) &&
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
     (value.structuredReportRepairAttempts === undefined ||
       isNonNegativeInteger(value.structuredReportRepairAttempts)) &&

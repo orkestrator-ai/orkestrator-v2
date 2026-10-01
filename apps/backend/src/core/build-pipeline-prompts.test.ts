@@ -565,6 +565,32 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Use Bun.");
   });
 
+  test("verificationPrompt judges only failures the branch causes", () => {
+    const prompt = verificationPrompt(pipeline(), "", "release/2026.07-hotfix");
+
+    expect(prompt).toContain(
+      "A failing check counts against this branch only when the branch causes it",
+    );
+    expect(prompt).toContain("git diff origin/release/2026.07-hotfix...HEAD");
+    expect(prompt).toContain("temporary detached worktree outside this checkout");
+    expect(prompt).toContain("remove that worktree before reporting");
+    expect(prompt).toContain("does not fail verification");
+    expect(prompt).toContain("pre-existing or environmental");
+    // The guidance precedes the output contract so the JSON stays the last word.
+    expect(prompt.indexOf("only when the branch causes it")).toBeLessThan(
+      prompt.indexOf("make the final assistant response the only JSON object"),
+    );
+  });
+
+  test("fixPrompt leaves failures the branch did not cause alone", () => {
+    const prompt = fixPrompt(pipeline(), "", "options.test.ts fails.", "release/2026.07-hotfix");
+
+    expect(prompt).toContain("Fix only what this branch causes.");
+    expect(prompt).toContain("also occurs on origin/release/2026.07-hotfix");
+    expect(prompt).toContain("do not change unrelated code or tests to hide it");
+    expect(prompt).toContain("pre-existing or environmental");
+  });
+
   test("fixPrompt carries verification feedback into a committed fix request", () => {
     const prompt = fixPrompt(pipeline(), "", "The inactive-tab case still fails.");
 

@@ -19,6 +19,7 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { UNCHANGED_FIX_PAUSE_MESSAGE } from "./build-pipeline-service-supervisor.js";
 import {
   connectionDefaultsFor,
   fastModeForModel,
@@ -255,6 +256,7 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
+      fingerprint?: string;
       kanbanTasks: Map<
         string,
         {
@@ -320,6 +322,9 @@ async function withService(
     failCommandsOnce: new Map<string, number>(),
     currentHead: "1111111111111111111111111111111111111111",
     uncommittedPaths: [] as string[],
+    // Content identity is opt-in, matching the real probe: absent unless a
+    // test sets it, so the unchanged-fix check stays disabled by default.
+    fingerprint: undefined as string | undefined,
     kanbanTasks,
   };
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
@@ -339,6 +344,7 @@ async function withService(
       return {
         head: controls.currentHead,
         paths: [...controls.uncommittedPaths],
+        ...(args.fingerprint && controls.fingerprint ? { fingerprint: controls.fingerprint } : {}),
       } as T;
     }
     if (command === "generate_looped_review_package") {
@@ -605,6 +611,103 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(verifying.id);
 
       expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
+    });
+  });
+
+  describe("a fix that leaves the worktree unchanged", () => {
+    const UNCHANGED = "a".repeat(64);
+    const CHANGED = "b".repeat(64);
+
+    /** Fails the first verification and returns the pipeline in its fix stage. */
+    async function startFixing(
+      service: BuildPipelineService,
+      storage: StorageService,
+      provider: FakeProvider,
+    ): Promise<BuildPipeline> {
+      const structured = provider.structured.bind(provider);
+      provider.structured = async <T>(sessionId: string, requestId: string) =>
+        provider.phases.get(sessionId) === "verify"
+          ? ({
+              ok: true,
+              provider: "claude",
+              requestId,
+              value: { complete: false, rationale: "options.test.ts fails on this host." },
+            } as StructuredOutputResult<T>)
+          : structured<T>(sessionId, requestId);
+      const verifying = await startVerifying(service, storage);
+      await service.advanceNow(verifying.id);
+      const fixing = await pipeline(storage, verifying.id);
+      expect(fixing.phase).toBe("fixing");
+      return fixing;
+    }
+
+    test("pauses instead of re-reviewing identical code", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+        expect(fixing.sessions.at(-1)).toMatchObject({
+          phase: "fix",
+          fixWorktreeFingerprintAtStart: UNCHANGED,
+        });
+
+        await service.advanceNow(fixing.id);
+
+        const paused = await pipeline(storage, fixing.id);
+        expect(paused).toMatchObject({
+          phase: "paused",
+          pausedFromPhase: "fixing",
+          error: UNCHANGED_FIX_PAUSE_MESSAGE,
+        });
+        expect(paused.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+        expect(
+          paused.sessions.some((session) => session.phase === "review" && session.iteration === 1),
+        ).toBe(false);
+      });
+    });
+
+    test("continues to review when the fix changed the worktree", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+
+        controls.fingerprint = CHANGED;
+        await service.advanceNow(fixing.id);
+
+        const next = await pipeline(storage, fixing.id);
+        expect(next.phase).toBe("reviewing");
+        expect(next.error).toBeUndefined();
+      });
+    });
+
+    test("continues the loop when the fingerprint cannot be established", async () => {
+      await withService(async (service, storage, provider) => {
+        const fixing = await startFixing(service, storage, provider);
+        expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
+
+        await service.advanceNow(fixing.id);
+
+        expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+      });
+    });
+
+    test("resume runs the next round instead of pausing again", async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        controls.fingerprint = UNCHANGED;
+        const fixing = await startFixing(service, storage, provider);
+        await service.advanceNow(fixing.id);
+        expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
+
+        const resumed = await service.resume(fixing.id);
+        expect(resumed.phase).toBe("fixing");
+        expect(resumed.error).toBeUndefined();
+        // The first pass dispatches the resume prompt to the idle fix session;
+        // the second sees that turn finish on the same, unchanged worktree.
+        await service.advanceNow(fixing.id);
+        expect(provider.sent.at(-1)?.prompt).toContain("Resume fixing");
+        await service.advanceNow(fixing.id);
+
+        expect((await pipeline(storage, fixing.id)).phase).toBe("reviewing");
+      });
     });
   });
 });

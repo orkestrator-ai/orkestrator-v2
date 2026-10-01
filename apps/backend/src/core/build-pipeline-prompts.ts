@@ -513,6 +513,16 @@ ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 ${wrapSystemInstructions(ADDRESS_REVIEW_FINDINGS_TAIL, MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
 }
 
+/**
+ * Verification judges the branch, not the repository. Without this a test that
+ * already fails on the target branch, or one the host cannot run, fails every
+ * round: the fix stage rightly declines to touch it and the loop repeats until
+ * the iteration cap.
+ */
+export function preexistingFailureInstruction(targetBranch: string): string {
+  return `A failing check counts against this branch only when the branch causes it. For each failure, check whether it involves code this branch changes (git diff origin/${targetBranch}...HEAD). If that does not settle it, you may rerun only that check against origin/${targetBranch} in a temporary detached worktree outside this checkout (git worktree add --detach), and remove that worktree before reporting. A failure that also occurs on origin/${targetBranch}, or that comes from the host environment rather than the code (a missing tool, an operating-system path difference, a timeout or a check that produced no output), does not fail verification: list it in the rationale as pre-existing or environmental, with the evidence, and judge the ticket on everything else.`;
+}
+
 export const VERIFICATION_OUTPUT_CONTRACT =
   'Send interim progress only through the provider\'s commentary or update channel, using ordinary prose sentences. Do not use the final-response channel for an update. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant response the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}';
 
@@ -526,6 +536,7 @@ export function verificationPrompt(
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
+    preexistingFailureInstruction(targetBranch),
     VERIFICATION_OUTPUT_CONTRACT,
   ]
     .filter(Boolean)
@@ -544,6 +555,7 @@ export function fixPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
+    `Fix only what this branch causes. If a reported failure also occurs on origin/${targetBranch}, or comes from the host environment rather than the code (a missing tool, an operating-system path difference, a timeout or a check that produced no output), do not change unrelated code or tests to hide it. Leave it alone and name it in your final message as pre-existing or environmental, with the evidence.`,
     usesReviewFanout(pipeline) || pipeline.reviewPreparation
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),

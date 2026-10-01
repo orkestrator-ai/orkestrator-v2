@@ -255,6 +255,14 @@ describe("build pipeline protocol", () => {
       ),
     ).toBe(true);
 
+    // A fix turn's content fingerprint is a SHA-256 digest or nothing.
+    expect(isBuildPipeline(withSession({ fixWorktreeFingerprintAtStart: "a".repeat(64) }))).toBe(
+      true,
+    );
+    for (const invalid of ["", "a".repeat(63), "z".repeat(64), 1, null]) {
+      expect(isBuildPipeline(withSession({ fixWorktreeFingerprintAtStart: invalid }))).toBe(false);
+    }
+
     // The baseline path set travels with the head it was observed at.
     expect(
       isBuildPipeline(

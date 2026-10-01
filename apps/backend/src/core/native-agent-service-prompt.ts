@@ -257,6 +257,82 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   >();
 
   /**
+   * Whether the turn started by `requestId` finished on its own as the
+   * session's last word. Beyond {@link sessionTurnOutcome}, a turn a stop
+   * reached is `interrupted`, and one followed by any later prompt or steer is
+   * `superseded`, because the conversation then no longer ends with it.
+   */
+  async sessionRequestOutcome(
+    input: NativeAgentProjectionInput & {
+      requestId: string;
+      expectedProviderSessionId?: string;
+    },
+  ): Promise<{
+    outcome: "completed" | "failed" | "interrupted" | "superseded" | "pending" | "unknown";
+    error?: string;
+  }> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const initial = await this.storage.getNativeAgentSession(key);
+    if (!initial) return { outcome: "unknown" };
+    const classify = async () => {
+      const { session, queue } = await this.storage.readNativeAgentPublicationState(
+        key,
+        `${input.agent}\0${input.logicalSessionKey}`,
+      );
+      if (
+        !session ||
+        session.providerSessionId !== initial.providerSessionId ||
+        (input.expectedProviderSessionId !== undefined &&
+          session.providerSessionId !== input.expectedProviderSessionId)
+      ) {
+        return { outcome: "unknown" as const };
+      }
+      const interruptKey = `${key}\0${input.requestId}`;
+      const interrupt = this.pendingTurnInterrupts.get(interruptKey);
+      if (interrupt?.providerSessionId === session.providerSessionId) {
+        try {
+          await this.storage.recordNativeAgentTurnInterrupt(
+            key,
+            session.providerSessionId,
+            input.requestId,
+          );
+          this.pendingTurnInterrupts.delete(interruptKey);
+        } catch {
+          /* Retain the fence and retry on the next observation. */
+        }
+        return { outcome: "interrupted" as const };
+      }
+      if (session.interruptedRequestIds?.includes(input.requestId))
+        return { outcome: "interrupted" as const };
+      if (this.interruptFenceOverflow) return { outcome: "unknown" as const };
+      const ids = session.dispatchedRequestIds ?? [];
+      if (!ids.includes(input.requestId)) return { outcome: "unknown" as const };
+      if (ids.at(-1) !== input.requestId) return { outcome: "superseded" as const };
+      if (
+        this.pendingSessionMutations.has(key) ||
+        session.pendingDispatch ||
+        session.pendingSteer ||
+        queue?.messages.length ||
+        queue?.inFlight ||
+        queue?.outstandingClaim
+      ) {
+        return { outcome: "pending" as const };
+      }
+      return undefined;
+    };
+    const before = await classify();
+    if (before) return before;
+    const outcome = await this.sessionTurnOutcome(input);
+    // Provider and persistence reads await: Stop, replacement and follow-ups
+    // may have changed the authorization while historical outcome work ran.
+    return (await classify()) ?? outcome;
+  }
+
+  /**
    * How the turn started by `requestId` ended, without reading the transcript.
    *
    * A durable record (written by the queue drain's own status read, or by an
@@ -311,8 +387,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     let observation: Awaited<ReturnType<typeof readProviderStatus>>;
     try {
       provider = await this.observeProvider(input);
-      // No bridge is running: the turn is over, and its error state is gone.
-      if (!provider) return { outcome: "unknown" };
+      // An absent observation can be a temporarily unavailable bridge.
+      if (!provider) return retry();
       observation = await readProviderStatus(provider, session.providerSessionId);
     } catch {
       return retry();
@@ -590,6 +666,21 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       provider: NativeAgentRuntimeProvider,
     ) => Promise<PromptDispatchPreparation>,
     persistAmbiguousDispatch = false,
+  ): Promise<PersistedNativeAgentSession> {
+    return this.withSessionMutationFence(input, () =>
+      this.dispatchPromptUnderFence(input, prepare, persistAmbiguousDispatch),
+    );
+  }
+
+  private async dispatchPromptUnderFence(
+    input: DispatchNativeAgentPromptInput,
+    prepare:
+      | ((
+          session: PersistedNativeAgentSession,
+          provider: NativeAgentRuntimeProvider,
+        ) => Promise<PromptDispatchPreparation>)
+      | undefined,
+    persistAmbiguousDispatch: boolean,
   ): Promise<PersistedNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     const coordinatorContextRevision =

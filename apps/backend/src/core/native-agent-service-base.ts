@@ -148,6 +148,80 @@ export type NativeAgentServiceLayerTypes = [
 const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
 
 export abstract class NativeAgentServiceBase {
+  private readonly sessionWorkFences = new Map<string, Promise<void>>();
+  private sessionWorkFenceCount = 0;
+  protected readonly pendingSessionMutations = new Map<string, number>();
+
+  /** Make waiting user work visible before it can acquire the publication fence. */
+  protected withSessionMutationFence<T>(
+    input: NativeAgentProjectionInput,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.withSessionMutationIntent(input, () => this.withSessionWorkFence(input, operation));
+  }
+
+  /** Stop publishes its intent immediately, without waiting behind a cold dispatch. */
+  protected async withSessionMutationIntent<T>(
+    input: NativeAgentProjectionInput,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (!this.pendingSessionMutations.has(key) && this.pendingSessionMutations.size >= 1024) {
+      throw new Error("Native session mutation admission is at capacity");
+    }
+    this.pendingSessionMutations.set(key, (this.pendingSessionMutations.get(key) ?? 0) + 1);
+    try {
+      return await operation();
+    } finally {
+      const remaining = (this.pendingSessionMutations.get(key) ?? 1) - 1;
+      if (remaining > 0) this.pendingSessionMutations.set(key, remaining);
+      else this.pendingSessionMutations.delete(key);
+    }
+  }
+  /** Failed interrupt writes remain publication fences until storage acknowledges them. */
+  protected readonly pendingTurnInterrupts = new Map<
+    string,
+    {
+      providerSessionId: string;
+      requestId: string;
+    }
+  >();
+  protected interruptFenceOverflow = false;
+
+  /** Orders publication admission against dispatch and Stop for this session only. */
+  async withSessionWorkFence<T>(
+    input: NativeAgentProjectionInput,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (this.sessionWorkFenceCount >= 1024)
+      throw new Error("Native session work admission is at capacity");
+    this.sessionWorkFenceCount += 1;
+    const previous = this.sessionWorkFences.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.sessionWorkFences.set(key, tail);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      this.sessionWorkFenceCount -= 1;
+      if (this.sessionWorkFences.get(key) === tail) this.sessionWorkFences.delete(key);
+    }
+  }
+
   protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
    * Provider calls inside the durable at-most-once dispatch window. Deletion
@@ -803,6 +877,12 @@ export abstract class NativeAgentServiceBase {
   }
 
   async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+    return this.withSessionMutationFence(input, () => this.adoptSessionUnderFence(input));
+  }
+
+  private async adoptSessionUnderFence(
+    input: AdoptNativeAgentSessionInput,
+  ): Promise<PersistedNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
     if (

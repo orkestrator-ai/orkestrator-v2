@@ -1,3 +1,4 @@
+import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
@@ -608,6 +609,7 @@ export class OrkestratorBackend {
           ),
         recoverAddressSession: (workflow, replacement) =>
           recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
+        ...multiReviewNativeFixOptions(this.nativeAgents),
         workflowAdmission: this.workflowAdmission,
         invalidateAddressSession: async (workflow, session) => {
           await storage.invalidateNativeAgentSession(

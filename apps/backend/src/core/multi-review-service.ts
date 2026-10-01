@@ -159,10 +159,15 @@ import {
 } from "./review-fanout.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
+  interactiveFixAutoPrSkipMessage,
+  interactiveFixCanQueueAutoPr,
   launchMultiReviewAutoPr,
+  MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE,
   queueAutoPr,
+  skipAutoPr,
   supersedePendingAutoPr,
   type AutoPrLaunchOutcome,
+  type InteractiveFixTurnOutcome,
 } from "./multi-review-auto-pr.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -182,6 +187,8 @@ const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
 const ADDRESS_DISPATCH_RETRY_MS = 5_000;
 const MAX_ADDRESS_DISPATCH_ATTEMPTS = 3;
 const MAX_AUTO_PR_ATTEMPTS = 3;
+/** Observation passes an unsettled interactive Fix outcome may wait before it counts as unknown. */
+const MAX_FIX_OUTCOME_POLLS = 20;
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
 
 function nowIso(): string {
@@ -479,6 +486,21 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     workflow: MultiReviewWorkflow,
     replacement: MultiReviewFixSessionReplacement,
   ) => Promise<MultiReviewAddressDispatchResult>;
+  /**
+   * How the interactive Fix's latest handoff turn ended. Only `completed`
+   * authorizes an automatic PR; without this reader an interactive Fix never
+   * launches one.
+   */
+  interactiveFixTurnOutcome?: (
+    workflow: MultiReviewWorkflow,
+    session: MultiReviewFixSession,
+  ) => Promise<InteractiveFixTurnOutcome>;
+  /** Holds the native session's dispatch/Stop fence through PR admission. */
+  withInteractiveFixSessionFence?: <T>(
+    workflow: MultiReviewWorkflow,
+    session: MultiReviewFixSession,
+    operation: () => Promise<T>,
+  ) => Promise<T>;
   /** Removes a failed custom launch from the native-agent identity store. */
   invalidateAddressSession?: (
     workflow: MultiReviewWorkflow,
@@ -520,6 +542,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly saveTails = new WeakMap<MultiReviewWorkflow, Promise<void>>();
   private readonly addressDispatchRetryAt = new Map<string, number>();
   private readonly autoPrRetryAt = new Map<string, number>();
+  private readonly fixOutcomePolls = new Map<string, number>();
   /**
    * Focus is permission from the foreground action, not durable workflow state.
    * It is consumed by the first dispatch attempt and intentionally disappears
@@ -654,6 +677,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     this.providerReaders.clear();
     this.addressDispatchRetryAt.clear();
     this.autoPrRetryAt.clear();
+    this.fixOutcomePolls.clear();
     this.foregroundAddressDispatches.clear();
     await Promise.allSettled(
       [...this.leases].map(([workflowId, lease]) =>
@@ -1077,6 +1101,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const recovered = await this.options.recoverAddressSession!(workflow, replacement);
         await this.assertFence(workflow.id, token);
         this.pollGate.clearPrefix(`${workflow.id}\0fix\0`);
+        supersedePendingAutoPr(workflow);
+        this.autoPrRetryAt.delete(workflow.id);
+        this.fixOutcomePolls.delete(workflow.id);
         workflow.fixSession = recovered.fixSession;
         workflow.fixSession.status = "running";
         workflow.fixSession.startedAt = nowIso();
@@ -2359,10 +2386,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     )
       return;
     if (pendingAddress && (this.addressDispatchRetryAt.get(workflowId) ?? 0) > Date.now()) return;
+    // Back off a retried PR launch only while it is the sole outstanding work.
     if (
-      existingPhase === "completed" &&
-      existing.snapshot.fixResult?.complete === true &&
+      (existingPhase === "completed" || existingPhase === "interactive") &&
       !pendingAddress &&
+      !observingInteractiveFix &&
+      !existing.snapshot.pendingResultConsumptions?.length &&
       pendingAutoPr &&
       (this.autoPrRetryAt.get(workflowId) ?? 0) > Date.now()
     )
@@ -2543,11 +2572,19 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private async advanceAutoPrLaunch(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const launch = workflow.autoPrLaunch!;
     try {
-      if (workflow.phase !== "completed" || workflow.fixResult?.complete !== true) {
+      const structuredFixCompleted =
+        workflow.phase === "completed" && workflow.fixResult?.complete === true;
+      // The interactive intent is recorded only once its handoff turn finished
+      // on its own; it goes stale if the Fix was relaunched since.
+      const interactiveFixSettled =
+        workflow.phase === "interactive" &&
+        workflow.addressPromptPending !== true &&
+        workflow.fixSession?.status === "idle";
+      if (!structuredFixCompleted && !interactiveFixSettled) {
         workflow.autoPrLaunch = {
           state: "skipped",
           requestId: launch.requestId,
-          message: "Automatic PR requires a completed structured Fix result",
+          message: "Automatic PR requires a completed Fix",
         };
         this.autoPrRetryAt.delete(workflow.id);
         await this.save(workflow, token);
@@ -2555,17 +2592,48 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       let outcome: AutoPrLaunchOutcome;
       try {
-        outcome = await launchMultiReviewAutoPr(
-          this.invoke,
-          this.storage,
-          workflow,
-          launch.requestId,
-        );
+        const authorize = async (): Promise<AutoPrLaunchOutcome | undefined> => {
+          const read = await this.interactiveFixOutcome(workflow, workflow.fixSession!);
+          await this.assertFence(workflow.id, token);
+          if (read === "pending") return { kind: "pending" };
+          this.fixOutcomePolls.delete(workflow.id);
+          if (read !== "completed") {
+            return {
+              kind: "skipped",
+              message:
+                read === "manual"
+                  ? MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE
+                  : interactiveFixAutoPrSkipMessage(read),
+            };
+          }
+          return undefined;
+        };
+        const deliver = () =>
+          launchMultiReviewAutoPr(
+            this.invoke,
+            this.storage,
+            workflow,
+            launch.requestId,
+            interactiveFixSettled ? authorize : undefined,
+          );
+        outcome =
+          interactiveFixSettled && this.options.withInteractiveFixSessionFence
+            ? await this.options.withInteractiveFixSessionFence(
+                workflow,
+                workflow.fixSession!,
+                deliver,
+              )
+            : await deliver();
       } catch (error) {
         // A follow-up failure must never fail the review that already finished.
         outcome = { kind: "retry", message: errorMessage(error) };
       }
       await this.assertFence(workflow.id, token);
+      if (outcome.kind === "pending") {
+        this.autoPrRetryAt.set(workflow.id, Date.now() + this.addressDispatchRetryMs());
+        await this.save(workflow, token);
+        return;
+      }
       if (outcome.kind === "launched") {
         workflow.autoPrLaunch = {
           state: "launched",
@@ -2769,6 +2837,21 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         return;
       }
 
+      // A stop also reads as idle, so only the native-agent turn record can
+      // show that the handoff finished on its own and an automatic PR may follow.
+      let fixOutcome: Exclude<InteractiveFixTurnOutcome, "pending"> | "manual" | undefined;
+      if (observation.status === "idle" && workflow.autoPr === true) {
+        const read = await this.interactiveFixOutcome(workflow, session);
+        await this.assertFence(workflow.id, token);
+        if (read === "pending") {
+          await this.save(workflow, token);
+          await this.unclaim(workflow, token);
+          return;
+        }
+        fixOutcome = read;
+      }
+      this.fixOutcomePolls.delete(workflow.id);
+
       delete session.idleResultPolls;
       delete session.usageFinalizationPolls;
       session.completedAt = nowIso();
@@ -2776,14 +2859,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (observation.status === "idle") {
         session.status = "idle";
         delete session.error;
-        // An interactive stop also reports idle. Only a structured Fix result
-        // proves completion strongly enough to authorize an automatic PR.
-        if (workflow.autoPr === true && !workflow.autoPrLaunch) {
-          workflow.autoPrLaunch = {
-            state: "skipped",
-            requestId: `multi-review-pr:${workflow.id}`,
-            message: "Review the interactive Fix, then use the PR button to create a pull request.",
-          };
+        if (fixOutcome === "completed") {
+          queueAutoPr(workflow);
+        } else if (fixOutcome !== undefined) {
+          skipAutoPr(
+            workflow,
+            fixOutcome === "manual"
+              ? MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE
+              : interactiveFixAutoPrSkipMessage(fixOutcome),
+          );
         }
       } else {
         session.status = "failed";
@@ -2804,6 +2888,36 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       );
       await this.unclaim(workflow, token);
     }
+  }
+
+  /**
+   * How the interactive Fix's handoff turn ended, for the automatic PR.
+   * `manual` means this Fix can never authorize one. A turn that stays
+   * unsettled past a bounded number of passes counts as unknown, so a stuck
+   * record cannot hold the Fix step open.
+   */
+  private async interactiveFixOutcome(
+    workflow: MultiReviewWorkflow,
+    session: MultiReviewFixSession,
+  ): Promise<InteractiveFixTurnOutcome | "manual"> {
+    if (!interactiveFixCanQueueAutoPr(workflow) || !this.options.interactiveFixTurnOutcome) {
+      return "manual";
+    }
+    let outcome: InteractiveFixTurnOutcome;
+    try {
+      outcome = await this.options.interactiveFixTurnOutcome(workflow, session);
+    } catch (error) {
+      console.warn(
+        "[multi-review] Reading the interactive Fix outcome failed:",
+        errorMessage(error),
+      );
+      outcome = "pending";
+    }
+    if (outcome !== "pending" && outcome !== "unknown") return outcome;
+    const polls = (this.fixOutcomePolls.get(workflow.id) ?? 0) + 1;
+    if (polls >= MAX_FIX_OUTCOME_POLLS) return "unknown";
+    this.fixOutcomePolls.set(workflow.id, polls);
+    return "pending";
   }
 
   private async advanceCancellation(workflow: MultiReviewWorkflow, token: string): Promise<void> {

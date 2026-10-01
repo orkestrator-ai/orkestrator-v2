@@ -371,7 +371,11 @@ export interface MultiReviewAutoPrLaunch {
 export interface MultiReviewWorkflow {
   /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
-  /** Launch the ordinary PR tab after a structured Fix proves completion; absent means off. */
+  /**
+   * Launch the ordinary PR tab once the Fix proves completion (a complete
+   * structured result, or an interactive handoff turn that finished on its own
+   * as the conversation's last turn); absent means off.
+   */
   autoPr?: boolean;
   /** Delivery state of the automatic PR launch; absent until the Fix turn completes. */
   autoPrLaunch?: MultiReviewAutoPrLaunch;

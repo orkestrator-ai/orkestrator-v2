@@ -42,6 +42,9 @@ export function createTerminalLinkActivator({
   openExternal,
 }: TerminalLinkActivatorOptions): (event: MouseEvent, uri: string) => void {
   return (event, uri) => {
+    if (event.button !== 0) {
+      return;
+    }
     const target = getTerminalLinkTarget(event);
     if (target === "browser-tab") {
       requestTerminalBrowserTab({ environmentId, sourceTabId, url: uri });

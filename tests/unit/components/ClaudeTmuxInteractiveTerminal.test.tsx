@@ -1,5 +1,11 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
+import {
+  listenForTerminalBrowserTabRequests,
+  type TerminalBrowserTabRequest,
+} from "@/lib/terminal-links";
+import type { ITerminalOptions } from "@xterm/xterm";
 import * as realXterm from "@xterm/xterm";
 import * as realFitAddon from "@xterm/addon-fit";
 import * as realBackendEvent from "@/lib/native/events";
@@ -54,7 +60,7 @@ class MockTerminal {
   dataHandlers: Array<(data: string) => void> = [];
   keyHandler: KeyHandler | null = null;
 
-  constructor() {
+  constructor(public options: ITerminalOptions = {}) {
     terminalInstances.push(this);
   }
 
@@ -189,6 +195,8 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     outputHandler = null;
     resizeCallback = null;
     fitFailure = null;
+    (invoke as unknown as ReturnType<typeof mock>).mockReset();
+    (invoke as unknown as ReturnType<typeof mock>).mockResolvedValue(undefined);
     listenMock.mockClear();
     unlistenMock.mockClear();
     createInteractiveTerminalMock.mockClear();
@@ -249,6 +257,66 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
   });
+
+  test.each([{ ctrlKey: true }, { metaKey: true }])(
+    "registers OSC 8 routing for modifier %j with source identity",
+    async (modifier) => {
+      const requests: TerminalBrowserTabRequest[] = [];
+      const stopListening = listenForTerminalBrowserTabRequests((request) =>
+        requests.push(request),
+      );
+      const { unmount } = render(
+        <ClaudeTmuxInteractiveTerminal tabId="source-pane" environmentId="source-env" isActive />,
+      );
+      try {
+        await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+        const handler = terminalInstances[0]!.options.linkHandler;
+        expect(handler).toBeDefined();
+        const range = { start: { x: 1, y: 1 }, end: { x: 10, y: 1 } };
+        handler!.activate(
+          new MouseEvent("click", { button: 0, ...modifier }),
+          "https://example.com/external",
+          range,
+        );
+        handler!.activate(
+          new MouseEvent("click", { button: 0, ...modifier, shiftKey: true }),
+          "https://example.com/internal",
+          range,
+        );
+        for (const button of [0, 1, 2]) {
+          handler!.activate(
+            new MouseEvent("click", { button }),
+            "https://example.com/ignored",
+            range,
+          );
+          if (button !== 0) {
+            for (const shiftKey of [false, true]) {
+              handler!.activate(
+                new MouseEvent("click", { button, ...modifier, shiftKey }),
+                "https://example.com/ignored",
+                range,
+              );
+            }
+          }
+        }
+        await Promise.resolve();
+        expect(invoke).toHaveBeenCalledTimes(1);
+        expect(invoke).toHaveBeenCalledWith("open_in_browser", {
+          url: "https://example.com/external",
+        });
+        expect(requests).toEqual([
+          {
+            environmentId: "source-env",
+            sourceTabId: "source-pane",
+            url: "https://example.com/internal",
+          },
+        ]);
+      } finally {
+        stopListening();
+        unmount();
+      }
+    },
+  );
 
   test("suppresses background geometry and republishes when the Electron window gains focus", async () => {
     const originalHasFocus = document.hasFocus;
@@ -652,6 +720,26 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     await screen.findByText("No environment specified for interactive terminal");
     expect(createInteractiveTerminalMock).not.toHaveBeenCalled();
     expect(startInteractiveTerminalMock).not.toHaveBeenCalled();
+    const requests: TerminalBrowserTabRequest[] = [];
+    const stopListening = listenForTerminalBrowserTabRequests((request) => requests.push(request));
+    try {
+      const handler = terminalInstances[0]!.options.linkHandler;
+      expect(handler).toBeDefined();
+      handler!.activate(
+        new MouseEvent("click", { button: 0, ctrlKey: true, shiftKey: true }),
+        "https://example.com/fallback",
+        {
+          start: { x: 1, y: 1 },
+          end: { x: 10, y: 1 },
+        },
+      );
+      expect(requests).toEqual([
+        { environmentId: "", sourceTabId: "tab-1", url: "https://example.com/fallback" },
+      ]);
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      stopListening();
+    }
   });
 
   test("reports session creation failures without attempting to start", async () => {

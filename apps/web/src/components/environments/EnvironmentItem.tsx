@@ -266,6 +266,21 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isLocalEnvironment = environment.environmentType === "local";
   // The project home works in the project's own checkout, not a worktree.
   const isProjectHome = environment.projectHome === true;
+  useEffect(() => {
+    if (!isSelected || !isProjectHome) return;
+    // Withhold old PR controls while the backend validates an external switch.
+    useEnvironmentStore.getState().updateEnvironment(environment.id, {
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    });
+    void backend
+      .getEnvironment(environment.id)
+      .then((current) => {
+        if (current) useEnvironmentStore.getState().updateEnvironment(current.id, current);
+      })
+      .catch(() => undefined);
+  }, [isSelected, isProjectHome, environment.id]);
   const displayName =
     isProjectHome && environment.name === "project-home" ? "Project home" : environment.name;
   const LocalEnvironmentIcon = isProjectHome ? House : Laptop;

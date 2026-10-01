@@ -333,6 +333,7 @@ export async function detectEnvironmentPullRequest(
       if (!current) return null;
       target = await projectHomePrTarget(current, prMonitorStorage);
     }
+    if (!target.ready) return null;
     const branch = target.worktreePath ? await readCheckoutBranch(target.worktreePath) : "";
     if (!branch || !target.defaultBranch || branch === target.defaultBranch) return null;
     target = {
@@ -497,8 +498,10 @@ export async function projectHomePrTarget(
 ): Promise<PrMonitorTarget> {
   if (!environment.projectHome) return environmentToPrMonitorTarget(environment);
   const current = await reconcileProjectHomeEnvironment(environment, storage);
-  const { defaultBranch } = await storage.getRepositoryConfig(current.projectId);
-  const eligible = current.branch !== "HEAD" && current.branch !== defaultBranch;
+  const { defaultBranch, prBaseBranch } = await storage.getRepositoryConfig(current.projectId);
+  const baseBranch = prBaseBranch?.trim() || defaultBranch;
+  const eligible =
+    current.branch !== "HEAD" && current.branch !== defaultBranch && current.branch !== baseBranch;
   if (!eligible && current.prUrl) {
     await storage.updateEnvironment(current.id, {
       prUrl: null,
@@ -508,7 +511,7 @@ export async function projectHomePrTarget(
   }
   return {
     ...environmentToPrMonitorTarget(current),
-    defaultBranch,
+    defaultBranch: baseBranch,
     ready: eligible,
     ...(!eligible ? { prUrl: null, prState: null } : {}),
   };

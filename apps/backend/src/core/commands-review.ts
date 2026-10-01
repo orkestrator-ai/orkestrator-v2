@@ -1141,6 +1141,29 @@ export async function mergePullRequestInContainer(
   return { outcome: "unknown" };
 }
 
+export async function runStoredEnvironmentMerge<T>(
+  environment: Environment,
+  method: "squash" | "merge" | "rebase",
+  deleteBranch: boolean,
+  context: CommandContext,
+  onResult: (result: MergePrResult) => Promise<T>,
+): Promise<T> {
+  const release = environment.projectHome
+    ? context.projectGit?.beginCoordinatorTurn(environment.projectId)
+    : undefined;
+  try {
+    return await runStoredEnvironmentMergeOnce(
+      environment,
+      method,
+      deleteBranch,
+      context,
+      onResult,
+    );
+  } finally {
+    release?.();
+  }
+}
+
 async function runStoredEnvironmentMergeOnce<T>(
   environment: Environment,
   method: "squash" | "merge" | "rebase",
@@ -1151,12 +1174,16 @@ async function runStoredEnvironmentMergeOnce<T>(
   if (isProjectHomeEnvironment(environment)) {
     const previousPr = environment.prUrl;
     environment = await reconcileProjectHomeEnvironment(environment, context.storage);
-    const { defaultBranch } = await context.storage.getRepositoryConfig(environment.projectId);
+    const { defaultBranch, prBaseBranch } = await context.storage.getRepositoryConfig(
+      environment.projectId,
+    );
+    const baseBranch = prBaseBranch?.trim() || defaultBranch;
     if (
       !previousPr ||
       environment.prUrl !== previousPr ||
       environment.branch === "HEAD" ||
-      environment.branch === defaultBranch
+      environment.branch === defaultBranch ||
+      environment.branch === baseBranch
     ) {
       throw new Error(
         "The project checkout branch changed; refresh its pull request before merging",
@@ -1171,7 +1198,7 @@ async function runStoredEnvironmentMergeOnce<T>(
     );
     if (
       identity.headRefName !== environment.branch ||
-      identity.baseRefName !== defaultBranch ||
+      identity.baseRefName !== baseBranch ||
       identity.isCrossRepository !== false
     ) {
       throw new Error("The pull request does not belong to the project checkout branch");
@@ -1476,26 +1503,3 @@ export function parseDockerByteSize(value: string): number {
   return Number.isFinite(amount) && power >= 0 ? Math.round(amount * base ** power) : 0;
 }
 /** Explicit list projection: renderer hydration never receives backend internals. */
-
-export async function runStoredEnvironmentMerge<T>(
-  environment: Environment,
-  method: "squash" | "merge" | "rebase",
-  deleteBranch: boolean,
-  context: CommandContext,
-  onResult: (result: MergePrResult) => Promise<T>,
-): Promise<T> {
-  const release = environment.projectHome
-    ? context.projectGit?.beginCoordinatorTurn(environment.projectId)
-    : undefined;
-  try {
-    return await runStoredEnvironmentMergeOnce(
-      environment,
-      method,
-      deleteBranch,
-      context,
-      onResult,
-    );
-  } finally {
-    release?.();
-  }
-}

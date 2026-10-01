@@ -86,7 +86,10 @@ import {
   setDockerContainerStateCache,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
-import { isProjectHomeEnvironment, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
+import {
+  isProjectHomeEnvironment,
+  reconcileProjectHomeEnvironment,
+} from "./project-home-environment.js";
 import type {
   Environment,
   EnvironmentStatus,

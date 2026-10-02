@@ -85,7 +85,10 @@ const sendMessageMock = mock(async (pipelineId: string, text: string) => ({
   backendRevision: 12,
 }));
 const steerPipelineMock = mock(
-  async (pipelineId: string, _text: string): Promise<{
+  async (
+    pipelineId: string,
+    _text: string,
+  ): Promise<{
     pipeline: BuildPipeline;
     delivery: "steered" | "queued";
   }> => ({
@@ -4194,10 +4197,10 @@ describe("BuildChatTab agent messaging", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
     await waitFor(() => expect(box.value).toBe(""));
     expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active turn");
-    expect(screen.queryByText(/message queued/)).toBeNull();
+    expect(screen.queryByText(/message queued/) === null).toBe(true);
   });
 
-  test("says so when /steer found no live turn and was queued", async () => {
+  test("reports queued steering without claiming the running agent is idle", async () => {
     steerPipelineMock.mockImplementationOnce(async (pipelineId: string, text: string) => ({
       pipeline: {
         ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
@@ -4212,7 +4215,11 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.change(box, { target: { value: "/steer change course" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    await waitFor(() => expect(mockToastInfo).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(mockToastInfo).toHaveBeenCalledWith(
+        "Could not steer the live turn, so the message was queued.",
+      ),
+    );
     expect(mockToastSuccess).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
     expect(box.value).toBe("");

@@ -24,6 +24,7 @@ import {
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
+import type { ProviderActiveSteerRun } from "./agent-provider-contract.js";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES } from "./build-pipeline-prompts.js";
@@ -153,9 +154,7 @@ class ScriptedProvider implements BuildPipelineProvider {
     return this.steerQualified;
   }
 
-  async activeSteerRun(
-    sessionId: string,
-  ): Promise<{ state: "running"; runId: string } | { state: "idle" }> {
+  async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
     return this.running.has(sessionId)
       ? { state: "running", runId: `run-${sessionId}` }
       : { state: "idle" };
@@ -1218,6 +1217,24 @@ describe("BuildPipelineService steer", () => {
     return { built, sessionId };
   }
 
+  async function updateStored(
+    storage: StorageService,
+    id: string,
+    update: (pipeline: BuildPipeline) => void,
+  ) {
+    const record = (await storage.getBuildPipeline(id))!;
+    const pipeline = record.snapshot as BuildPipeline;
+    update(pipeline);
+    await storage.saveBuildPipeline(
+      record.id,
+      record.projectId,
+      record.environmentId,
+      record.version,
+      pipeline,
+      record.revision,
+    );
+  }
+
   test("injects into the running turn without waiting for the agent to go idle", async () => {
     await withService(async ({ service, storage, provider }) => {
       const { built, sessionId } = await startRunning(service, storage, provider);
@@ -1313,6 +1330,187 @@ describe("BuildPipelineService steer", () => {
 
       expect(result.delivery).toBe("queued");
       expect(result.pipeline.pendingUserMessages?.[0]?.text).toBe("too late for the turn");
+    });
+  });
+
+  test("queues without targeting the previous turn while a dispatch is pending", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built, sessionId } = await startRunning(service, storage, provider);
+      const sentBefore = provider.sent.length;
+      await updateStored(storage, built.id, (pipeline) => {
+        pipeline.pendingPromptAttempt = {
+          id: "pending-attempt",
+          requestId: "pending-request",
+          sessionId,
+          phase: "building",
+          prompt: "next turn",
+          useTaskImages: false,
+          startedAt: new Date().toISOString(),
+        };
+      });
+      // Keep the supervisor's follow-up dispatch parked too.
+      provider.sendErrors.push(new AmbiguousPromptDispatchError("response lost"));
+
+      const result = await service.steerMessage(built.id, "do not steer the old turn");
+
+      expect(result.delivery).toBe("queued");
+      expect(result.pipeline.pendingUserMessages?.[0]?.text).toBe("do not steer the old turn");
+      expect(result.pipeline.pendingPromptAttempt?.requestId).toBe("pending-request");
+      expect(provider.steers).toHaveLength(0);
+      expect(provider.sent).toHaveLength(sentBefore);
+    });
+  });
+
+  test("queues a run mismatch instead of steering a replacement turn", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built, sessionId } = await startRunning(service, storage, provider);
+      provider.steerOutcome = { outcome: "mismatch" };
+
+      const result = await service.steerMessage(built.id, "the old run ended");
+
+      expect(result.delivery).toBe("queued");
+      expect(result.pipeline.pendingUserMessages?.[0]?.text).toBe("the old run ended");
+      expect(provider.steers).toHaveLength(1);
+      expect(provider.steers[0]?.expectedRunId).toBe(`run-${sessionId}`);
+    });
+  });
+
+  for (const probe of ["steerSupported", "activeSteerRun"] as const) {
+    test(`queues without delivering when ${probe} fails`, async () => {
+      await withService(async ({ service, storage, provider }) => {
+        const { built } = await startRunning(service, storage, provider);
+        provider[probe] = async () => {
+          throw new Error("capability probe unavailable");
+        };
+
+        const result = await service.steerMessage(built.id, "wait for a safe turn");
+
+        expect(result.delivery).toBe("queued");
+        expect(result.pipeline.pendingUserMessages?.[0]?.text).toBe("wait for a safe turn");
+        expect(provider.steers).toHaveLength(0);
+      });
+    });
+  }
+
+  for (const state of ["idle", "unknown", "unsupported"] as const) {
+    test(`queues without delivering when the active run is ${state}`, async () => {
+      await withService(async ({ service, storage, provider }) => {
+        const { built } = await startRunning(service, storage, provider);
+        provider.activeSteerRun = async () => ({ state });
+
+        const result = await service.steerMessage(built.id, "wait for a steerable turn");
+
+        expect(result.delivery).toBe("queued");
+        expect(result.pipeline.pendingUserMessages).toHaveLength(1);
+        expect(provider.steers).toHaveLength(0);
+      });
+    });
+  }
+
+  for (const phase of ["building", "fixing"] as const) {
+    for (const failure of ["throw", "unknown", "refused"] as const) {
+      test(`${failure} steer delivery ${failure === "refused" ? "preserves" : "invalidates"} ${phase} preparation without requeueing`, async () => {
+        await withService(async ({ service, storage, provider }) => {
+          const { built } = await startRunning(service, storage, provider);
+          await updateStored(storage, built.id, (pipeline) => {
+            pipeline.phase = phase;
+            const session = pipeline.sessions.at(-1)!;
+            session.phase = phase === "building" ? "build" : "fix";
+            session.structuredRequestId = "old-preparation";
+            session.structuredResultStatus = "accepted";
+            session.structuredWaitStartedAt = new Date().toISOString();
+            session.producedReviewPackagePlan = true;
+          });
+          const perform = provider.performSessionAction.bind(provider);
+          provider.performSessionAction = async (...args) => {
+            if (failure === "refused") throw new PromptRejectedError("not sent");
+            await perform(...args);
+            if (failure === "throw") throw new Error("response lost after delivery");
+            return { outcome: "unknown", requestId: args[1].requestId! };
+          };
+
+          await expect(service.steerMessage(built.id, "change the implementation")).rejects.toThrow(
+            failure === "refused" ? "not sent" : "could not be confirmed",
+          );
+
+          const after = await snapshot(storage, built.id);
+          const session = after.sessions.at(-1)!;
+          expect(after.pendingUserMessages).toBeUndefined();
+          expect(provider.steers).toHaveLength(failure === "refused" ? 0 : 1);
+          if (failure === "refused") {
+            expect(session.structuredRequestId).toBe("old-preparation");
+            expect(session.structuredResultStatus).toBe("accepted");
+            expect(session.structuredWaitStartedAt).toBeDefined();
+          } else {
+            expect(session.structuredRequestId).toBeUndefined();
+            expect(session.structuredResultStatus).toBeUndefined();
+            expect(session.structuredWaitStartedAt).toBeUndefined();
+          }
+          expect(session.producedReviewPackagePlan).toBe(true);
+        });
+      });
+    }
+  }
+
+  for (const transition of ["advance", "cancel"] as const) {
+    test(`fences ${transition} while a live steer is awaiting delivery`, async () => {
+      await withService(async ({ service, storage, provider }) => {
+        const { built, sessionId } = await startRunning(service, storage, provider);
+        const entered = Promise.withResolvers<void>();
+        const released = Promise.withResolvers<void>();
+        const perform = provider.performSessionAction.bind(provider);
+        provider.performSessionAction = async (...args) => {
+          entered.resolve();
+          await released.promise;
+          return perform(...args);
+        };
+        let transitionSettled = false;
+        const steering = service.steerMessage(built.id, "keep this stage open");
+        await entered.promise;
+        // The provider ends its turn while delivery is held. An unfenced
+        // supervisor could now move the pipeline to preparation/review.
+        provider.markIdle(sessionId);
+        const changing = (
+          transition === "advance" ? service.advanceNow(built.id) : service.cancel(built.id)
+        ).then(() => {
+          transitionSettled = true;
+        });
+        try {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(transitionSettled).toBe(false);
+          const during = await snapshot(storage, built.id);
+          expect(during.phase).toBe("building");
+          expect(during.sessions).toHaveLength(built.sessions.length);
+          expect(provider.steers).toHaveLength(0);
+        } finally {
+          released.resolve();
+          await Promise.all([steering, changing]);
+        }
+        expect((await steering).delivery).toBe("steered");
+        expect(provider.steers).toHaveLength(1);
+        const after = await snapshot(storage, built.id);
+        expect(after.phase).toBe(transition === "cancel" ? "failed" : "building");
+        if (transition === "advance") {
+          // A coalesced tick joins the steer; the next tick advances normally.
+          await service.advanceNow(built.id);
+          expect(provider.sent.at(-1)?.schema).toBeDefined();
+        }
+      });
+    });
+  }
+
+  test("a queued follow-up stays queued when a later instruction steers the live turn", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built } = await startRunning(service, storage, provider);
+      await service.sendMessage(built.id, "follow up after this turn");
+
+      const result = await service.steerMessage(built.id, "change this turn now");
+
+      expect(result.delivery).toBe("steered");
+      expect(result.pipeline.pendingUserMessages?.map((entry) => entry.text)).toEqual([
+        "follow up after this turn",
+      ]);
+      expect(provider.steers.map((entry) => entry.text)).toEqual(["change this turn now"]);
     });
   });
 

@@ -739,7 +739,7 @@ export function BuildChatTab({
         if (result.delivery === "steered") {
           toast.success("Sent to the active turn");
         } else {
-          toast.info("No turn is running to steer, so the message was queued.");
+          toast.info("Could not steer the live turn, so the message was queued.");
         }
       } else {
         replacePipeline(await backend.sendBuildPipelineMessage(pipeline.id, text));

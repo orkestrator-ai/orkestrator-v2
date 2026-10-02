@@ -39,6 +39,7 @@ import {
   type ProviderDependencies,
   type ProviderInteractionObservationEvent,
   ProviderUnavailableError,
+  PromptRejectedError,
 } from "./build-pipeline-provider.js";
 import {
   errorMessage,
@@ -1038,12 +1039,26 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     if (active?.state !== "running") return false;
 
     const requestId = randomUUID();
-    const outcome = await provider.performSessionAction(session.sdkSessionId, {
-      kind: "steer",
-      text,
-      requestId,
-      expectedRunId: active.runId,
-    });
+    const uncertainDelivery = (): Error => {
+      if (phase === "building" || phase === "fixing") discardPreparationResult(session);
+      return new Error(
+        "The steering instruction may have reached the agent, but delivery could not be confirmed. Check the transcript before sending it again.",
+      );
+    };
+    const outcome = await provider
+      .performSessionAction(session.sdkSessionId, {
+        kind: "steer",
+        text,
+        requestId,
+        expectedRunId: active.runId,
+      })
+      .catch((error: unknown) => {
+        // A provider's explicit pre-delivery refusal is still definitive.
+        if (error instanceof PromptRejectedError) throw error;
+        // A transport error cannot prove the bridge did not deliver the steer.
+        // Persist invalidation under the lock just as for an unknown response.
+        throw uncertainDelivery();
+      });
     switch (outcome.outcome) {
       case "applied":
         if (phase === "building" || phase === "fixing") discardPreparationResult(session);
@@ -1053,10 +1068,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       case "unknown":
         // The bridge may have delivered it. Resending under a new request id
         // could steer the turn twice.
-        if (phase === "building" || phase === "fixing") discardPreparationResult(session);
-        throw new Error(
-          "The steering instruction may have reached the agent, but delivery could not be confirmed. Check the transcript before sending it again.",
-        );
+        throw uncertainDelivery();
       default:
         // `idle` and `mismatch`: the turn ended or moved on before delivery, so
         // nothing was sent and the queue is the right place for it.

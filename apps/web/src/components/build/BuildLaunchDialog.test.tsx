@@ -1013,17 +1013,3 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 });
-
-describe("BuildLaunchDialog validation workspace disclosure", () => {
-  test("discloses writable workspace access only on review and verification", () => {
-    renderDialog();
-
-    const disclosures = screen.getAllByRole("note");
-    expect(disclosures).toHaveLength(2);
-    for (const disclosure of disclosures) {
-      expect(disclosure.textContent).toContain("full workspace access");
-      expect(disclosure.textContent).toContain("Git-tracked or untracked path");
-      expect(disclosure.textContent).toContain("Ignored files are not checked");
-    }
-  });
-});

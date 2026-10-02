@@ -1780,7 +1780,10 @@ describe("App Docker availability", () => {
     }
   });
 
-  test("describes the startup wait as a connection for a remote-backend window", async () => {
+  test.each([
+    { nickname: "Studio", displayName: "Studio" },
+    { nickname: undefined, displayName: "gateway-host" },
+  ])("describes the remote startup wait using $displayName", async ({ nickname, displayName }) => {
     const originalOrkestrator = window.orkestrator;
     let releaseDocker: (value: { available: boolean; reason: null }) => void = () => undefined;
     mockCheckDocker.mockImplementation(
@@ -1796,7 +1799,7 @@ describe("App Docker availability", () => {
             {
               id: "remote-1",
               name: "gateway-host",
-              nickname: "Studio",
+              nickname,
               address: "https://gateway.example",
               kind: "remote",
               active: true,
@@ -1815,12 +1818,78 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("Connecting to Studio...")).toBeTruthy();
+      expect(await screen.findByText(`Connecting to ${displayName}...`)).toBeTruthy();
       expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
     } finally {
       releaseDocker({ available: true, reason: null });
       cleanup();
       window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("uses the remote fallback until the desktop gateway connection name resolves", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const originalGateway = window.orkestratorGateway;
+    const connectionList = {
+      activeConnectionId: "remote-1",
+      localAvailable: true,
+      connections: [
+        {
+          id: "remote-1",
+          name: "gateway-host",
+          address: "https://gateway.example",
+          kind: "remote" as const,
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    };
+    let releaseConnections: (value: typeof connectionList) => void = () => undefined;
+    let releaseDocker: (value: { available: boolean; reason: null }) => void = () => undefined;
+    mockCheckDocker.mockImplementation(
+      () => new Promise((resolve) => (releaseDocker = resolve as typeof releaseDocker)),
+    );
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://gateway.example",
+    };
+    window.orkestrator = {
+      listen: () => () => undefined,
+      connections: {
+        list: () => new Promise((resolve) => (releaseConnections = resolve)),
+      } as NonNullable<Window["orkestrator"]>["connections"],
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(screen.getByText("Connecting to remote machine...")).toBeTruthy();
+      expect(screen.queryByText("Starting Orkestrator...") === null).toBe(true);
+      expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+
+      await act(async () => releaseConnections(connectionList));
+
+      expect(await screen.findByText("Connecting to gateway-host...")).toBeTruthy();
+      expect(screen.queryByText("Connecting to remote machine...") === null).toBe(true);
+
+      await act(async () => releaseDocker({ available: true, reason: null }));
+
+      await waitFor(() =>
+        expect(screen.queryByText("Connecting to gateway-host...") === null).toBe(true),
+      );
+    } finally {
+      releaseConnections(connectionList);
+      releaseDocker({ available: true, reason: null });
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+      window.orkestratorGateway = originalGateway;
     }
   });
 

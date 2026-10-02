@@ -87,6 +87,67 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
+test("typed project paths detect a remote and preserve newer manual URL edits", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  expect(status.testProject).toBeTruthy();
+  await authenticatedInvoke(page, status);
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const repository = await fs.mkdtemp(path.join(runtime.profileRoot, "remote-detection-"));
+  const detectedUrl = "https://github.com/acme/detected.git";
+  try {
+    for (const args of [
+      ["init", repository],
+      ["-C", repository, "remote", "add", "origin", detectedUrl],
+    ]) {
+      expect(spawnSync("git", args, { encoding: "utf8" }).status).toBe(0);
+    }
+    await page.getByRole("button", { name: "Add project", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Add project", exact: true });
+    const urlInput = dialog.getByLabel(/Git URL/);
+    const pathInput = dialog.getByLabel(/Local path/);
+    await expect(urlInput).toHaveValue("");
+    await expect(dialog.getByRole("button", { name: "Add project", exact: true })).toBeDisabled();
+    await pathInput.fill(repository);
+    await expect(urlInput).toHaveValue(detectedUrl, { timeout: 10_000 });
+    await expect(urlInput).toHaveClass(/border-green-500/);
+
+    // An explicit picker action inspects the same path immediately in a browser.
+    await urlInput.fill("");
+    await dialog.getByRole("button", { name: "Select or detect repository directory" }).click();
+    await expect(urlInput).toHaveValue(detectedUrl);
+
+    // Changing the path arms another debounce; the later URL edit stays authoritative.
+    await pathInput.fill(`${repository}/.`);
+    await urlInput.fill("manual-invalid-url");
+    await page.waitForTimeout(2300);
+    await expect(urlInput).toHaveValue("manual-invalid-url");
+    await expect(urlInput).toHaveClass(/border-destructive/);
+    await dialog.getByRole("button", { name: "Add project", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toHaveText("Invalid Git URL format");
+
+    await pathInput.fill(`${repository}/missing`);
+    await dialog.getByRole("tab", { name: "Create new", exact: true }).click();
+    await page.waitForTimeout(2300);
+    await dialog.getByRole("tab", { name: "Existing repository", exact: true }).click();
+    await expect(urlInput).toHaveValue("manual-invalid-url");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.reload();
+    await page.getByRole("button", { name: "Add project", exact: true }).click();
+    await expect(urlInput).toHaveValue("");
+    await expect(pathInput).toHaveValue("");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  } finally {
+    await fs.rm(repository, { recursive: true, force: true });
+  }
+});
+
 test("real browser gateway exercises an authoritative local environment", async ({ page }) => {
   const status = await profileStatus();
   expect(status.status).toBe("ready");

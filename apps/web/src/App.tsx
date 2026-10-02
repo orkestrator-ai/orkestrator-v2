@@ -71,7 +71,11 @@ import type {
   DockerAvailability,
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
-import { LOCAL_CONNECTION_ID, type ConnectionList } from "@orkestrator/protocol/connections";
+import {
+  LOCAL_CONNECTION_ID,
+  connectionDisplayName,
+  type ConnectionList,
+} from "@orkestrator/protocol/connections";
 import {
   hasBlockingMacOsPermissions,
   type MacOsPermissionsStatus,
@@ -249,6 +253,7 @@ function App() {
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
     () => desktopConnectionScopeSeed().activeConnectionId,
   );
+  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(null);
   const [connectionScopeResolved, setConnectionScopeResolved] = useState(
     () => desktopConnectionScopeSeed().resolved,
   );
@@ -350,6 +355,10 @@ function App() {
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
       setActiveConnectionId(list.activeConnectionId);
+      const activeConnection = list.connections.find(
+        (connection) => connection.id === list.activeConnectionId,
+      );
+      setActiveConnectionName(activeConnection ? connectionDisplayName(activeConnection) : null);
       // Presentation reads are keyed by server identity; a switch resets them.
       setReadCoordinatorConnection(list.activeConnectionId);
       setConnectionScopeResolved(true);
@@ -1349,12 +1358,17 @@ function App() {
           </div>
         )}
 
-        {/* Loading overlay while checking Docker */}
+        {/* Loading overlay while the startup Docker probe runs. A remote window is
+            mostly waiting on the server connection, so say that instead. */}
         {macOsPermissionsReady && dockerCheckStatus === "checking" && dockerAvailable === null && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Checking Docker availability...</p>
+              <p className="text-sm text-muted-foreground">
+                {isRemoteBackendWindow
+                  ? `Connecting to ${activeConnectionName ?? "remote machine"}...`
+                  : "Checking Docker availability..."}
+              </p>
             </div>
           </div>
         )}

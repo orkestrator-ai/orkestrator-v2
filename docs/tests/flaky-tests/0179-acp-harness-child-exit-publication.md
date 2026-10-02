@@ -1,6 +1,6 @@
 # ACP harness child exit publication
 
-- **ID:** 0177
+- **ID:** 0179
 - **Status:** open
 - **Date observed:** 2026-10-02
 - **Original command:** `mise run test:logged -- --name steer-suite -- mise run test`

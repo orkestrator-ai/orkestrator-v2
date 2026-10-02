@@ -691,24 +691,33 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useProjectStore: <T,>(
-    selector?: (state: {
-      projects: Project[];
-      getProjectById: (projectId: string) => Project | undefined;
-    }) => T,
-  ) =>
-    selectState(
-      {
+  useProjectStore: Object.assign(
+    <T,>(
+      selector?: (state: {
+        projects: Project[];
+        getProjectById: (projectId: string) => Project | undefined;
+      }) => T,
+    ) =>
+      selectState(
+        {
+          projects: [...currentOtherProjects, selectedProject].filter(
+            (project) => !currentDeletedProjectIds.has(project.id),
+          ),
+          getProjectById: (projectId: string) =>
+            projectId === selectedProject.id && !currentDeletedProjectIds.has(projectId)
+              ? selectedProject
+              : currentOtherProjects.find((project) => project.id === projectId),
+        },
+        selector,
+      ),
+    {
+      getState: () => ({
         projects: [...currentOtherProjects, selectedProject].filter(
           (project) => !currentDeletedProjectIds.has(project.id),
         ),
-        getProjectById: (projectId: string) =>
-          projectId === selectedProject.id && !currentDeletedProjectIds.has(projectId)
-            ? selectedProject
-            : currentOtherProjects.find((project) => project.id === projectId),
-      },
-      selector,
-    ),
+      }),
+    },
+  ),
   useUIStore: <T,>(
     selector?: (state: {
       selectedEnvironmentId: string | null;

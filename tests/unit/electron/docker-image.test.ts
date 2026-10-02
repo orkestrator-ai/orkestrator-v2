@@ -65,7 +65,10 @@ async function tarOf(fileName: string, content: string, options: { symlink?: boo
   if (options.symlink) await fs.symlink("/etc/passwd", path.join(dir, fileName));
   else await fs.writeFile(path.join(dir, fileName), content);
   const tarPath = path.join(dir, "out.tar");
-  const result = spawnSync("tar", ["-cf", tarPath, "-C", dir, fileName]);
+  // Docker emits a plain archive; macOS tar must not add AppleDouble metadata.
+  const result = spawnSync("tar", ["--format=ustar", "-cf", tarPath, "-C", dir, fileName], {
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+  });
   expect(result.status).toBe(0);
   return tarPath;
 }

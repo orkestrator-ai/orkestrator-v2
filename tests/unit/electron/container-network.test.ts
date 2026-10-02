@@ -212,7 +212,11 @@ async function manifestTar(capabilities: Record<string, number>): Promise<string
     }),
   );
   const tarPath = path.join(dir, "out.tar");
-  expect(spawnSync("tar", ["-cf", tarPath, "-C", dir, "image-manifest.json"]).status).toBe(0);
+  expect(
+    spawnSync("tar", ["--format=ustar", "-cf", tarPath, "-C", dir, "image-manifest.json"], {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    }).status,
+  ).toBe(0);
   return tarPath;
 }
 

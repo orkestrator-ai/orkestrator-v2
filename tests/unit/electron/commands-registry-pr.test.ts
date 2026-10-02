@@ -3066,6 +3066,46 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
   });
 
+  test("clears ownership, token and persisted state after a real missing-executable spawn", async () => {
+    const appRoot = await createTempDir("ork-electron-app-missing-executable-");
+    const worktreePath = await createTempDir("ork-electron-worktree-missing-executable-");
+    await writeBridgeServer(appRoot, "codex-bridge");
+    const environment = createEnvironment({ id: "env-local-missing-executable", worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+    commandTesting.setSpawnLocalServerCommand(() =>
+      spawnCommand(path.join(appRoot, "missing-executable")),
+    );
+    try {
+      await expect(
+        commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
+      ).rejects.toThrow("ENOENT");
+      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+      expect(updates).toContainEqual({ localCodexPort: null, codexBridgePid: null });
+      expect(environment.localCodexPort).toBeNull();
+      expect(environment.codexBridgePid).toBeNull();
+
+      // A healthy retry proves the failed child no longer owns the session key.
+      commandTesting.setSpawnLocalServerCommand(spawnCommand);
+      const restarted = (await commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+      expect(restarted.wasRunning).toBe(false);
+      expect(restarted.pid).toBeGreaterThan(0);
+      expect(restarted.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      await expect(requestOk(restarted.port, "/global/health")).resolves.toBe(true);
+    } finally {
+      commandTesting.setSpawnLocalServerCommand(spawnCommand);
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
   test("clears persisted local bridge state when startup exits before health", async () => {
     const appRoot = await createTempDir("ork-electron-app-failed-bridge-");
     const worktreePath = await createTempDir("ork-electron-worktree-failed-bridge-");

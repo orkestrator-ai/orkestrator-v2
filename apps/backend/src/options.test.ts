@@ -161,7 +161,7 @@ describe("standalone backend options", () => {
   });
 
   test("prefers the installed toolchain set once `toolchain install` has pointed current at one", async () => {
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-options-"));
+    const dataDir = realpathSync(await mkdtemp(path.join(os.tmpdir(), "orkestrator-options-")));
     try {
       const binRoot = path.join(dataDir, "toolchains", "bin");
       await mkdir(path.join(binRoot, "set-a"), { recursive: true });

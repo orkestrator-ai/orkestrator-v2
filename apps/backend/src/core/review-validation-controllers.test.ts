@@ -78,8 +78,7 @@ async function harness() {
   let finish = false;
   const invoke = async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {
     calls.push({ name, args });
-    if (name === "get_environment_uncommitted_paths")
-      return { head, paths: [], fingerprint } as T;
+    if (name === "get_environment_uncommitted_paths") return { head, paths: [], fingerprint } as T;
     if (name.endsWith("_review_validation")) {
       const run = structuredClone(args.run) as ReviewValidationRun;
       if (name === "cancel_review_validation") run.status = "cancelled";

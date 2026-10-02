@@ -54,6 +54,15 @@ export function registerBuildPipelineCommands(
       asString(text, "text"),
     );
   });
+  // Unlike a message, this reaches the turn the agent is running now instead of
+  // waiting for it to go idle — which, in a pipeline, means after the stage ends.
+  register("steer_build_pipeline", ({ pipelineId, text }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.steerMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asString(text, "text"),
+    );
+  });
   // Retained for existing command clients that explicitly re-review a working
   // tree, including from a failed pipeline. The header uses current-step restart.
   register("retry_build_pipeline_review", ({ pipelineId }, context) => {

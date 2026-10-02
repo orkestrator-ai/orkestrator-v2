@@ -23,6 +23,7 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
+import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES } from "./build-pipeline-prompts.js";
@@ -135,8 +136,44 @@ class ScriptedProvider implements BuildPipelineProvider {
   structuredResult: StructuredOutputResult<unknown> | null | "absent" = "absent";
   messagesBySession = new Map<string, unknown[]>();
 
+  /** Steering is on by default; a test turns it off to model a bridge that cannot. */
+  steerQualified = true;
+  steerOutcome: NativeAgentSessionActionOutcome = { outcome: "applied" };
+  readonly steers: Array<{
+    sessionId: string;
+    text: string;
+    requestId: string;
+    expectedRunId: string;
+  }> = [];
+
   private counter = 0;
   private running = new Set<string>();
+
+  async steerSupported(): Promise<boolean> {
+    return this.steerQualified;
+  }
+
+  async activeSteerRun(
+    sessionId: string,
+  ): Promise<{ state: "running"; runId: string } | { state: "idle" }> {
+    return this.running.has(sessionId)
+      ? { state: "running", runId: `run-${sessionId}` }
+      : { state: "idle" };
+  }
+
+  async performSessionAction(
+    sessionId: string,
+    action: { kind: string; text?: string; requestId?: string; expectedRunId?: string },
+  ): Promise<NativeAgentSessionActionOutcome> {
+    if (action.kind !== "steer") throw new Error(`unexpected action ${action.kind}`);
+    this.steers.push({
+      sessionId,
+      text: action.text!,
+      requestId: action.requestId!,
+      expectedRunId: action.expectedRunId!,
+    });
+    return this.steerOutcome;
+  }
 
   registerSession(sessionId: string): void {
     this.registered.push(sessionId);
@@ -1162,6 +1199,168 @@ describe("BuildPipelineService user messages", () => {
       await service.advanceNow(built.id);
       expect(packageGeneration.count).toBe(1);
       expect((await snapshot(storage, built.id)).phase).toBe("reviewing");
+    });
+  });
+});
+
+describe("BuildPipelineService steer", () => {
+  /** A build whose agent is mid-turn, as the supervisor has observed it. */
+  async function startRunning(
+    service: BuildPipelineService,
+    storage: StorageService,
+    provider: ScriptedProvider,
+  ) {
+    const built = await startBuilding(service, storage);
+    const sessionId = built.sessions.at(-1)!.sdkSessionId;
+    provider.markRunning(sessionId);
+    await service.advanceNow(built.id);
+    expect((await snapshot(storage, built.id)).sessions.at(-1)?.status).toBe("running");
+    return { built, sessionId };
+  }
+
+  test("injects into the running turn without waiting for the agent to go idle", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built, sessionId } = await startRunning(service, storage, provider);
+      const sentBefore = provider.sent.length;
+
+      const result = await service.steerMessage(built.id, "  use the existing helper  ");
+
+      expect(result.delivery).toBe("steered");
+      expect(provider.steers).toEqual([
+        {
+          sessionId,
+          text: "use the existing helper",
+          requestId: expect.any(String),
+          expectedRunId: `run-${sessionId}`,
+        },
+      ]);
+      // Not queued, and not a new prompt: the turn that is running received it.
+      expect(result.pipeline.pendingUserMessages).toBeUndefined();
+      expect(provider.sent).toHaveLength(sentBefore);
+
+      // Still mid-turn, so the pipeline has not moved on to review.
+      await service.advanceNow(built.id);
+      const after = await snapshot(storage, built.id);
+      expect(after.phase).toBe("building");
+      expect(after.pendingUserMessages).toBeUndefined();
+      expect(provider.sent).toHaveLength(sentBefore);
+    });
+  });
+
+  test("forgets the earlier preparation result after steering an implementation turn", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const built = await startBuilding(service, storage);
+      const sessionId = built.sessions.at(-1)!.sdkSessionId;
+      // A follow-up forces the build session through preparation again.
+      await service.sendMessage(built.id, "also cover the resumed-session path");
+      await service.advanceNow(built.id);
+      await service.advanceNow(built.id);
+      expect(provider.sent.at(-1)?.schema).toBeDefined();
+      provider.markRunning(sessionId);
+      await service.advanceNow(built.id);
+      await service.advanceNow(built.id);
+      const preparing = (await snapshot(storage, built.id)).sessions.at(-1)!;
+      expect(preparing.status).toBe("running");
+      expect(preparing.structuredRequestId).toBeDefined();
+
+      const result = await service.steerMessage(built.id, "change the plan");
+
+      expect(result.delivery).toBe("steered");
+      const steered = (await snapshot(storage, built.id)).sessions.at(-1)!;
+      expect(steered.structuredRequestId).toBeUndefined();
+      expect(steered.structuredResultStatus).toBeUndefined();
+    });
+  });
+
+  test("queues the instruction when no turn is running", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const built = await startBuilding(service, storage);
+      provider.statusOverride = "blocked";
+      // Paused: no running turn, and the drain pass a queued message kicks off
+      // cannot deliver it.
+      await service.pause(built.id);
+      provider.statusOverride = null;
+
+      const result = await service.steerMessage(built.id, "rethink the approach");
+
+      expect(result.delivery).toBe("queued");
+      expect(provider.steers).toHaveLength(0);
+      expect(result.pipeline.pendingUserMessages?.map((entry) => entry.text)).toEqual([
+        "rethink the approach",
+      ]);
+    });
+  });
+
+  test("queues the instruction when the bridge cannot steer", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built } = await startRunning(service, storage, provider);
+      provider.steerQualified = false;
+
+      const result = await service.steerMessage(built.id, "use the existing helper");
+
+      expect(result.delivery).toBe("queued");
+      expect(provider.steers).toHaveLength(0);
+      expect(result.pipeline.pendingUserMessages).toHaveLength(1);
+    });
+  });
+
+  test("queues the instruction when the turn ended before delivery", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built } = await startRunning(service, storage, provider);
+      provider.steerOutcome = { outcome: "idle" };
+
+      const result = await service.steerMessage(built.id, "too late for the turn");
+
+      expect(result.delivery).toBe("queued");
+      expect(result.pipeline.pendingUserMessages?.[0]?.text).toBe("too late for the turn");
+    });
+  });
+
+  test("does not queue a steer the bridge refused", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built } = await startRunning(service, storage, provider);
+      provider.steerOutcome = {
+        outcome: "rejected",
+        requestId: "r",
+        reason: "steer-history-saturated",
+      } as unknown as NativeAgentSessionActionOutcome;
+
+      await expect(service.steerMessage(built.id, "no room")).rejects.toThrow();
+
+      // Not sent, so it must not be delivered later by the queue either: the
+      // caller still holds the text and decides.
+      expect((await snapshot(storage, built.id)).pendingUserMessages).toBeUndefined();
+    });
+  });
+
+  test("does not requeue a steer whose delivery cannot be confirmed", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built } = await startRunning(service, storage, provider);
+      provider.steerOutcome = { outcome: "unknown", requestId: "r" };
+
+      await expect(service.steerMessage(built.id, "maybe delivered")).rejects.toThrow(
+        "could not be confirmed",
+      );
+
+      // A second delivery through the queue could steer the turn twice.
+      expect((await snapshot(storage, built.id)).pendingUserMessages).toBeUndefined();
+      expect(provider.steers).toHaveLength(1);
+    });
+  });
+
+  test("rejects blank, oversized and finished-build steers", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built } = await startRunning(service, storage, provider);
+
+      await expect(service.steerMessage(built.id, "   ")).rejects.toThrow("must not be blank");
+      await expect(service.steerMessage(built.id, "x".repeat(16_001))).rejects.toThrow(
+        "character limit",
+      );
+      expect(provider.steers).toHaveLength(0);
+
+      await service.cancel(built.id);
+      await expect(service.steerMessage(built.id, "too late")).rejects.toThrow("has finished");
+      expect(provider.steers).toHaveLength(0);
     });
   });
 });

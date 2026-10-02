@@ -897,6 +897,21 @@ export async function sendBuildPipelineMessage(
   });
 }
 
+/**
+ * Injects an instruction into the turn the pipeline agent is running now.
+ * `delivery` is `queued` when there was no live turn to steer, in which case the
+ * instruction waits for the agent like an ordinary message.
+ */
+export async function steerBuildPipeline(
+  pipelineId: string,
+  text: string,
+): Promise<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }> {
+  return invoke<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }>(
+    "steer_build_pipeline",
+    { pipelineId, text },
+  );
+}
+
 export async function restartBuildPipelineCurrentStep(
   pipelineId: string,
 ): Promise<BackendBuildPipeline> {

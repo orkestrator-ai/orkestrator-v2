@@ -149,6 +149,21 @@ export function discardSessionReviewReports(pipeline: BuildPipeline): void {
   }
 }
 
+/**
+ * Forgets the structured preparation result of an implementation session.
+ *
+ * Any implementation follow-up — a queued message or a steer into the live
+ * turn — can change HEAD, validation artifacts, or the uncommitted set, so the
+ * earlier result no longer describes the state that will be packaged. Keeps
+ * `producedReviewPackagePlan`: the transcript still contains that plan, and the
+ * renderer keys redaction on the sticky fact.
+ */
+export function discardPreparationResult(session: PipelineSession): void {
+  delete session.structuredRequestId;
+  delete session.structuredResultStatus;
+  delete session.structuredWaitStartedAt;
+}
+
 export function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
   return isActiveBuildPhase(phase) ? (phase as ResumableBuildPhase) : null;
 }

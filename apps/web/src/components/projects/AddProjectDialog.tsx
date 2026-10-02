@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,8 @@ import { getGitRemoteUrl } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 type ProjectSource = "existing" | "scratch";
+
+const PATH_DETECTION_DEBOUNCE_MS = 2000;
 
 /** Matches the bordered option cards used on settings pages. */
 const SOURCE_SELECTOR_TRIGGER_CLASSES =
@@ -53,9 +55,13 @@ export function AddProjectDialog({
   const [isValidUrl, setIsValidUrl] = useState<boolean | null>(null);
   const validationRequestRef = useRef(0);
   const submissionInFlightRef = useRef(false);
+  const lastInspectedPathRef = useRef<string | null>(null);
+  const validateGitUrlRef = useRef(validateGitUrl);
+  validateGitUrlRef.current = validateGitUrl;
 
   const resetForm = useCallback(() => {
     validationRequestRef.current += 1;
+    lastInspectedPathRef.current = null;
     setSource("existing");
     setGitUrl("");
     setLocalPath("");
@@ -122,6 +128,7 @@ export function AddProjectDialog({
       if (!repositoryPath) return;
 
       setLocalPath(repositoryPath);
+      lastInspectedPathRef.current = repositoryPath;
       try {
         const remoteUrl = await getGitRemoteUrl(repositoryPath);
         if (remoteUrl) await setAndValidateGitUrl(remoteUrl);
@@ -132,6 +139,44 @@ export function AddProjectDialog({
       console.error("Failed to open directory picker:", browseError);
     }
   }, [localPath, setAndValidateGitUrl]);
+
+  // Typing a path (rather than picking one) never reaches the browse handler, so
+  // look for an origin remote once the user pauses. Only a valid remote is
+  // applied, so half-typed or non-repository paths leave the form untouched.
+  useEffect(() => {
+    const repositoryPath = localPath.trim();
+    if (
+      !isOpen ||
+      isLoading ||
+      source !== "existing" ||
+      !repositoryPath ||
+      repositoryPath === lastInspectedPathRef.current
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      lastInspectedPathRef.current = repositoryPath;
+      try {
+        const remoteUrl = await getGitRemoteUrl(repositoryPath);
+        if (cancelled || !remoteUrl) return;
+        if (!(await validateGitUrlRef.current(remoteUrl)) || cancelled) return;
+
+        validationRequestRef.current += 1;
+        setGitUrl(remoteUrl);
+        setIsValidUrl(true);
+        setError(null);
+      } catch (remoteError) {
+        console.debug("Could not get git remote URL:", remoteError);
+      }
+    }, PATH_DETECTION_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isLoading, isOpen, localPath, source]);
 
   const handleNewProjectBrowse = useCallback(async () => {
     try {

@@ -118,6 +118,70 @@ describe("AddProjectDialog", () => {
     );
   });
 
+  test("detects the Git remote 2 seconds after a typed path stops changing", async () => {
+    const validateGitUrl = mock(async () => true);
+    getGitRemoteUrlMock.mockResolvedValue("git@github.com:acme/typed.git");
+    renderDialog({ validateGitUrl });
+    const pathInput = screen.getByLabelText(/Local path/i);
+
+    fireEvent.change(pathInput, { target: { value: "/Users/alice/typ" } });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    fireEvent.change(pathInput, { target: { value: "/Users/alice/typed" } });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    // The first edit's timer was reset, so nothing has been inspected yet.
+    expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/typed"), {
+      timeout: 3000,
+    });
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+        "git@github.com:acme/typed.git",
+      ),
+    );
+    expect(screen.getByLabelText(/Git URL/).className).toContain("border-green-500");
+  });
+
+  test("leaves the Git URL alone when a typed path has no valid remote", async () => {
+    const validateGitUrl = mock(async () => false);
+    getGitRemoteUrlMock.mockResolvedValue("invalid-remote");
+    renderDialog({ validateGitUrl });
+    fireEvent.change(screen.getByLabelText(/Git URL/), {
+      target: { value: "https://github.com/acme/mine.git" },
+    });
+    await waitFor(() => expect(validateGitUrl).toHaveBeenCalledTimes(1));
+    validateGitUrl.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
+      target: { value: "/Users/alice/not-a-repo" },
+    });
+
+    await waitFor(() => expect(validateGitUrl).toHaveBeenCalledWith("invalid-remote"), {
+      timeout: 3000,
+    });
+    expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+      "https://github.com/acme/mine.git",
+    );
+  });
+
+  test("does not inspect a typed path that the native picker already inspected", async () => {
+    openDialogMock.mockResolvedValue("/Users/alice/project");
+    getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/project.git");
+    renderDialog();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
+    await waitFor(() => expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 2300));
+
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+  });
+
   test("does not inspect the typed path when the native picker is cancelled", async () => {
     renderDialog();
     fireEvent.change(screen.getByLabelText(/Local path/i), {

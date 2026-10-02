@@ -73,11 +73,12 @@ async function harness() {
     }),
   };
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  let head = "1".repeat(40);
+  let fingerprint = "a".repeat(64);
   let finish = false;
   const invoke = async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {
     calls.push({ name, args });
-    if (name === "get_environment_uncommitted_paths")
-      return { head: "1".repeat(40), paths: [], fingerprint: "a".repeat(64) } as T;
+    if (name === "get_environment_uncommitted_paths") return { head, paths: [], fingerprint } as T;
     if (name.endsWith("_review_validation")) {
       const run = structuredClone(args.run) as ReviewValidationRun;
       if (name === "cancel_review_validation") run.status = "cancelled";
@@ -113,6 +114,10 @@ async function harness() {
     },
     keepRunning: () => {
       finish = false;
+    },
+    changeWorktree: () => {
+      head = "2".repeat(40);
+      fingerprint = "b".repeat(64);
     },
     cleanup: () => rm(directory, { recursive: true, force: true }),
   };
@@ -252,6 +257,11 @@ test("pipeline separates implementation from fresh discovery and waits for backe
     expect((await read()).phase).toBe("fixing");
     expect((await read()).validationRun).toBeUndefined();
     expect((await read()).reviewPackage).toBeUndefined();
+    // A failed verification starts an implementation turn first. Only after
+    // that turn changes the worktree may fresh discovery certify another run.
+    expect(h.sends.at(-1)!.options.schema).toBeUndefined();
+    expect((await read()).sessions.at(-1)?.phase).toBe("fix");
+    h.changeWorktree();
     await service.advanceNow(started.id);
     expect(h.sends.at(-1)!.options.schema).toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
     expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(

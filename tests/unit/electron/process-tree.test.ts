@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   parseProcessTable,
   terminateProcessTree,
@@ -123,6 +127,23 @@ describe("process-tree termination", () => {
     ).resolves.toBe(false);
   });
 
+  test("treats a child that never spawned as drained without waiting", async () => {
+    const child = createChild();
+    (child as { pid?: number }).pid = undefined;
+    const { runtime, signals } = createRuntime();
+
+    await expect(
+      terminateProcessTree(child, {
+        graceMs: 1_000,
+        killWaitMs: 1_000,
+        pollIntervalMs: 1,
+        runtime,
+      }),
+    ).resolves.toBe(true);
+    expect(signals).toEqual([]);
+    expect(runtime.listDescendants).not.toHaveBeenCalled();
+  });
+
   test("treats an already-exited child with no descendants as drained", async () => {
     const child = createChild();
     child.exitCode = 0;
@@ -136,5 +157,25 @@ describe("process-tree termination", () => {
       }),
     ).resolves.toBe(true);
     expect(signals).toEqual([]);
+  });
+
+  test("drains a real missing-executable spawn without polling or signalling", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ork-process-tree-spawn-"));
+    try {
+      const child = spawn(join(directory, "missing-executable"), [], { stdio: "pipe" });
+      const error = await new Promise<NodeJS.ErrnoException>((resolve) =>
+        child.once("error", resolve),
+      );
+      expect(error.code).toBe("ENOENT");
+      expect(child.pid).toBeUndefined();
+      const { runtime, signals } = createRuntime();
+      await expect(
+        terminateProcessTree(child, { graceMs: 1000, killWaitMs: 1000, runtime }),
+      ).resolves.toBe(true);
+      expect(runtime.listDescendants).not.toHaveBeenCalled();
+      expect(signals).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

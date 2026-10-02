@@ -1488,9 +1488,13 @@ export async function startLocalServerUnlocked(
         .catch(() => undefined);
     }
     if (terminationError) {
+      // Clients show only `message`, so the causes have to be in it: without
+      // them a missing executable is indistinguishable from a stuck process.
+      const reason = (value: unknown) => (value instanceof Error ? value.message : String(value));
       throw new AggregateError(
         [error, terminationError],
-        `Failed to start and clean up local server: ${key}`,
+        `Failed to start and clean up local server: ${key} ` +
+          `(startup: ${reason(error)}; cleanup: ${reason(terminationError)})`,
       );
     }
     throw error;

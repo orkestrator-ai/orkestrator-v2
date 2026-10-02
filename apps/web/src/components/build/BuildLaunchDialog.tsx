@@ -566,6 +566,14 @@ function BuildStepCard({
           This model uses its default reasoning setting.
         </p>
       )}
+
+      {(stepKey === "review" || stepKey === "verify") && (
+        <p className="mt-2 text-[11px] leading-snug text-zinc-500" role="note">
+          Full workspace write access. The backend rejects results with source edits or commits
+          detected by its Git check. Ignored files, .git contents and paths outside the worktree are
+          not checked.
+        </p>
+      )}
     </li>
   );
 }

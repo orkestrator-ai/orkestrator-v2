@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { environmentCleanupLedger } from "../../apps/backend/src/core/environment-cleanup-ledger";
 import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
 import type {
@@ -22,6 +23,7 @@ type Status = {
   flavor?: string;
   browserUrl?: string;
   authFile?: string;
+  dataDir?: string;
   testProject?: string;
 };
 type Project = { id: string; name: string; localPath: string | null };
@@ -343,6 +345,206 @@ test("signed-out Codex recovery and account reads survive reload and environment
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
+  }
+});
+
+test("build pipeline live steering persists while inactive and rehydrates after reload", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1",
+    "opt-in live pipeline turn against the isolated fixture with Codex credentials",
+  );
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(15_000);
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  expect(status.flavor).toBe("agent-test");
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  expect(status.dataDir).toBe(runtime.dataDir);
+  const onboardingFile = path.join(runtime.dataDir, "agent-credentials", "home", ".claude.json");
+  let seededOnboarding = false;
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  );
+  expect(fixture).toBeTruthy();
+  const environments: Environment[] = [];
+  let pipelineId: string | undefined;
+  try {
+    // The host-tool UI checks only this file's existence. The isolated HOME
+    // deliberately lacks host onboarding metadata, even with Claude allowed.
+    // Seed a content-free marker for this Codex-only scenario; no auth is faked.
+    await fs.writeFile(onboardingFile, "{}", { flag: "wx", mode: 0o600 }).then(
+      () => {
+        seededOnboarding = true;
+      },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      },
+    );
+    for (const name of ["steer-live", "steer-inactive"]) {
+      environments.push(
+        await invoke<Environment>("create_environment", {
+          projectId: fixture!.id,
+          name: `${name}-${Date.now()}`,
+          environmentType: "local",
+          networkAccessMode: "restricted",
+        }),
+      );
+    }
+    const [target, other] = environments;
+    await invoke("start_environment", { environmentId: target!.id });
+    const hydrated = await invoke<Environment>("get_environment", {
+      environmentId: target!.id,
+    });
+    expect(hydrated.worktreePath).toBeTruthy();
+    const worktree = hydrated.worktreePath!;
+    const marker = `steer-received-${Date.now()}`;
+    const readyFile = path.join(worktree, ".qa-steer-ready");
+    const receivedFile = path.join(worktree, ".qa-steer-received");
+    const pipeline = await invoke<BuildPipeline>("start_build_pipeline", {
+      taskId: `qa-steer-${target!.id}`,
+      projectId: fixture!.id,
+      existingEnvironmentId: target!.id,
+      environmentType: "local",
+      agentType: "codex",
+      steps: {
+        build: {
+          agent: "codex",
+          model: process.env.ORKESTRATOR_AGENT_TEST_MODEL ?? "gpt-6.1-sol",
+          reasoningEffort: "low",
+        },
+      },
+      taskTitle: "Live steering fixture",
+      taskSnapshot: {
+        title: "Live steering fixture",
+        description:
+          "This is a bounded steering QA task. First create .qa-steer-ready containing ready. " +
+          "Then run sleep 45 in the shell to keep this turn open for a steering instruction. " +
+          "Do not change any other files, commit, open a PR or finish the build. " +
+          "After sleeping, run sleep 45 again until cancelled or steered.",
+        acceptanceCriteria: "The user will steer and cancel this QA turn.",
+        comments: [],
+        images: [],
+      },
+    });
+    pipelineId = pipeline.id;
+    const read = () =>
+      invoke<{ snapshot: BuildPipeline; revision: number }>("get_build_pipeline", {
+        pipelineId,
+      });
+    const fileValue = (file: string) => fs.readFile(file, "utf8").catch(() => "");
+    await expect
+      .poll(
+        async () => {
+          if ((await read()).snapshot.phase === "failed") {
+            throw new Error("Live build failed before readiness; inspect the profile logs");
+          }
+          return fileValue(readyFile);
+        },
+        { timeout: 120_000 },
+      )
+      .toContain("ready");
+    await expect
+      .poll(async () => (await read()).snapshot.sessions.at(-1)?.status, { timeout: 30_000 })
+      .toBe("running");
+    const before = (await read()).snapshot;
+    const sessionId = before.sessions.at(-1)!.sdkSessionId;
+    expect(before.phase).toBe("building");
+
+    await page.goto(status.browserUrl!);
+    const openEnvironment = async (name: string) => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+      const entry = page.getByText(name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText("Checking Docker availability...", { exact: true })).toBeHidden({
+        timeout: 30_000,
+      });
+      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+        const continueButton = page.getByRole("button", { name: label, exact: true });
+        if (await continueButton.isVisible()) await continueButton.click();
+      }
+      await expect(
+        page.getByText("Checking CLI tools installation...", { exact: true }),
+      ).toBeHidden({
+        timeout: 30_000,
+      });
+      if (await expand.isVisible()) await expand.click();
+      await page.keyboard.press("Escape");
+      await entry.click();
+    };
+    const openBuild = async () => {
+      await openEnvironment(target!.name);
+      const tab = page.getByRole("button", { name: /^Build: Live steering fixture/ });
+      await expect(tab).toBeVisible({ timeout: 30_000 });
+      await tab.click();
+    };
+    await openBuild();
+    const composer = page.getByLabel("Send a message to the agent", { exact: true });
+    await expect(composer).toBeVisible({ timeout: 30_000 });
+    const instruction =
+      `Create .qa-steer-received containing exactly ${marker}. ` +
+      `Then say ${marker} in your response and run sleep 120. ` +
+      "Do not finish, commit, or change other files; wait for cancellation.";
+    await composer.fill(`/steer ${instruction}`);
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.getByText("Sent to the active turn", { exact: true })).toBeVisible();
+    await expect(composer).toHaveValue("");
+    const steered = (await read()).snapshot;
+    expect(steered.sessions.at(-1)!.sdkSessionId).toBe(sessionId);
+    expect(steered.pendingUserMessages ?? []).toHaveLength(0);
+
+    await openEnvironment(other!.name);
+    await expect(composer).toBeHidden();
+    // Work and transcript checkpoints must progress with the build tab inactive.
+    await expect.poll(() => fileValue(receivedFile), { timeout: 120_000 }).toBe(marker);
+    await expect
+      .poll(
+        async () => {
+          const result = await invoke<{ messagePatches: Array<{ messages: unknown[] }> }>(
+            "get_build_pipeline",
+            { pipelineId, knownSessions: {} },
+          );
+          return result.messagePatches.some((patch) =>
+            JSON.stringify(patch.messages).includes(marker),
+          );
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+    const inactive = (await read()).snapshot;
+    expect(inactive.phase).toBe("building");
+    expect(inactive.sessions.at(-1)!.status).toBe("running");
+    expect(inactive.sessions.at(-1)!.sdkSessionId).toBe(sessionId);
+    expect(inactive.pendingUserMessages ?? []).toHaveLength(0);
+
+    await openBuild();
+    await expect(page.getByText(marker, { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+    await page.reload();
+    await openBuild();
+    await expect(page.getByText(marker, { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+    await expect(composer).toHaveValue("");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.poll(async () => (await read()).snapshot.phase).toBe("failed");
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toHaveCount(0);
+    await expect(page.getByText(marker, { exact: false }).first()).toBeVisible();
+  } finally {
+    if (pipelineId) {
+      await invoke("cancel_build_pipeline", { pipelineId }).catch(() => undefined);
+      await invoke("delete_build_pipeline", { pipelineId }).catch(() => undefined);
+    }
+    for (const environment of environments) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+    if (seededOnboarding) await fs.rm(onboardingFile, { force: true });
   }
 });
 

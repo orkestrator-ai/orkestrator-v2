@@ -5259,6 +5259,10 @@ describe("build pipeline commands", () => {
       id,
       text,
     }));
+    const steerMessage = mock(async (id: string, text: string) => ({
+      pipeline: { operation: "steer", id, text },
+      delivery: "steered" as const,
+    }));
     const retryReview = mock(async (id: string) => ({
       operation: "retry-review",
       id,
@@ -5288,6 +5292,7 @@ describe("build pipeline commands", () => {
       retryCompletionComment,
       remove,
       sendMessage,
+      steerMessage,
       retryReview,
       retryStage,
       restartStep,
@@ -5324,6 +5329,16 @@ describe("build pipeline commands", () => {
           id: "pipeline-1",
           text: "also update the README",
         });
+        await expect(
+          invoke("steer_build_pipeline", {
+            pipelineId: "pipeline-1",
+            text: "use the existing helper",
+          }),
+        ).resolves.toEqual({
+          pipeline: { operation: "steer", id: "pipeline-1", text: "use the existing helper" },
+          delivery: "steered",
+        });
+        expect(steerMessage).toHaveBeenCalledWith("pipeline-1", "use the existing helper");
         await expect(
           invoke("retry_build_pipeline_review", {
             pipelineId: "pipeline-1",
@@ -5494,6 +5509,7 @@ describe("build pipeline commands", () => {
             text: "hello",
           },
         ],
+        ["steer_build_pipeline", { pipelineId: "pipeline-1", text: "hello" }],
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],

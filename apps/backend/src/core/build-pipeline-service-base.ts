@@ -39,12 +39,14 @@ import {
   type ProviderDependencies,
   type ProviderInteractionObservationEvent,
   ProviderUnavailableError,
+  PromptRejectedError,
 } from "./build-pipeline-provider.js";
 import {
   errorMessage,
   buildAdmissionKey,
   sessionForCurrentPhase,
   resumablePhase,
+  discardPreparationResult,
   sessionAgent,
   pipelineAgents,
   normalizeReviewers,
@@ -80,7 +82,52 @@ import {
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentSteerRejectionMessage,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
+
+function validatedUserMessage(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("Message must not be blank");
+  if (trimmed.length > MAX_PIPELINE_USER_MESSAGE_LENGTH) {
+    throw new Error(`Message exceeds the ${MAX_PIPELINE_USER_MESSAGE_LENGTH} character limit`);
+  }
+  return trimmed;
+}
+
+/** Why a pipeline in this state cannot take a user message or steer, if it cannot. */
+function userMessageRejection(pipeline: BuildPipeline): Error | undefined {
+  if (pipeline.phase === "complete" || pipeline.phase === "failed") {
+    return new Error("This build has finished");
+  }
+  if (
+    usesReviewFanout(pipeline) &&
+    (pipeline.phase === "reviewing" ||
+      (pipeline.phase === "paused" && pipeline.pausedFromPhase === "reviewing"))
+  ) {
+    return new Error("Messages cannot be sent during a multi-model review");
+  }
+  if (pipeline.validationRun && !pipeline.reviewPackage) {
+    return new Error(
+      "Validation is running against a fixed snapshot. Pause or cancel preparation before changing the work.",
+    );
+  }
+  return undefined;
+}
+
+/** Appends to the durable queue; an error means the queue is full and nothing was added. */
+function enqueueUserMessage(pipeline: BuildPipeline, text: string): Error | undefined {
+  const queue = pipeline.pendingUserMessages ?? [];
+  if (queue.length >= MAX_PIPELINE_USER_MESSAGES) {
+    return new Error(`Only ${MAX_PIPELINE_USER_MESSAGES} queued messages are allowed`);
+  }
+  pipeline.pendingUserMessages = [
+    ...queue,
+    { id: randomUUID(), text, createdAt: new Date().toISOString() },
+  ];
+  return undefined;
+}
 
 export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
   protected timer: ReturnType<typeof setInterval> | null = null;
@@ -913,48 +960,120 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
    * at-most-once attempt record every other prompt uses.
    */
   async sendMessage(pipelineId: string, text: string): Promise<BuildPipeline> {
-    const trimmed = text.trim();
-    if (!trimmed) throw new Error("Message must not be blank");
-    if (trimmed.length > MAX_PIPELINE_USER_MESSAGE_LENGTH) {
-      throw new Error(`Message exceeds the ${MAX_PIPELINE_USER_MESSAGE_LENGTH} character limit`);
-    }
+    const trimmed = validatedUserMessage(text);
     let rejection: Error | undefined;
     const pipeline = await this.mutate(pipelineId, (candidate) => {
-      if (candidate.phase === "complete" || candidate.phase === "failed") {
-        rejection = new Error("This build has finished");
-        return;
-      }
-      if (
-        usesReviewFanout(candidate) &&
-        (candidate.phase === "reviewing" ||
-          (candidate.phase === "paused" && candidate.pausedFromPhase === "reviewing"))
-      ) {
-        rejection = new Error("Messages cannot be sent during a multi-model review");
-        return;
-      }
-      if (candidate.validationRun && !candidate.reviewPackage) {
-        rejection = new Error(
-          "Validation is running against a fixed snapshot. Pause or cancel preparation before changing the work.",
-        );
-        return;
-      }
-      const queue = candidate.pendingUserMessages ?? [];
-      if (queue.length >= MAX_PIPELINE_USER_MESSAGES) {
-        rejection = new Error(`Only ${MAX_PIPELINE_USER_MESSAGES} queued messages are allowed`);
-        return;
-      }
-      candidate.pendingUserMessages = [
-        ...queue,
-        {
-          id: randomUUID(),
-          text: trimmed,
-          createdAt: new Date().toISOString(),
-        },
-      ];
+      rejection = userMessageRejection(candidate);
+      if (rejection) return;
+      rejection = enqueueUserMessage(candidate, trimmed);
     });
     if (rejection) throw rejection;
     void this.runLocked(pipelineId);
     return pipeline;
+  }
+
+  /**
+   * Injects an instruction into the turn the pipeline's agent is running now.
+   *
+   * A queued message waits for the agent to go idle, but a pipeline agent
+   * going idle is what advances the pipeline to its next stage — so a queued
+   * redirect would only ever run after the work it was meant to change had been
+   * handed to review. This takes the same path as `/steer` in an ordinary
+   * session instead: delivery into the live turn, never a new one.
+   *
+   * Runs inside the pipeline lock, so no supervisor pass can advance the stage
+   * between reading the turn and steering it. When there is no live turn to
+   * steer — the stage is between turns, the pipeline is paused, or the provider
+   * cannot steer — the instruction is queued exactly as a message would be, and
+   * `delivery` says so. A steer the bridge refuses, or whose delivery cannot be
+   * confirmed, is an error rather than a queue entry: the first was not sent and
+   * the second may have been, so neither is safe to deliver a second time.
+   */
+  async steerMessage(
+    pipelineId: string,
+    text: string,
+  ): Promise<{ pipeline: BuildPipeline; delivery: "steered" | "queued" }> {
+    const trimmed = validatedUserMessage(text);
+    let rejection: Error | undefined;
+    let delivery: "steered" | "queued" = "queued";
+    const pipeline = await this.mutate(pipelineId, async (candidate) => {
+      rejection = userMessageRejection(candidate);
+      if (rejection) return;
+      try {
+        if (await this.steerLiveTurn(candidate, trimmed)) {
+          delivery = "steered";
+          return;
+        }
+      } catch (error) {
+        rejection = error instanceof Error ? error : new Error(String(error));
+        return;
+      }
+      rejection = enqueueUserMessage(candidate, trimmed);
+    });
+    if (rejection) throw rejection;
+    // A queued fallback needs the supervisor to notice it; a steer is already
+    // in the turn and the next pass observes the turn as it always does.
+    if (delivery === "queued") void this.runLocked(pipelineId);
+    return { pipeline, delivery };
+  }
+
+  /**
+   * Steers the current session's running turn. Resolves `false` — nothing was
+   * sent — when there is no turn that can be steered right now.
+   */
+  private async steerLiveTurn(pipeline: BuildPipeline, text: string): Promise<boolean> {
+    const phase = resumablePhase(pipeline.phase);
+    const session = sessionForCurrentPhase(pipeline);
+    if (!phase || !session || session.status !== "running" || !pipeline.environmentId) {
+      return false;
+    }
+    // A prompt whose dispatch is unconfirmed has not started its turn; steering
+    // now would target the previous one.
+    if (pipeline.pendingPromptAttempt) return false;
+    const provider = await this.provider(pipeline, sessionAgent(pipeline, session));
+    if (!provider.steerSupported || !provider.activeSteerRun || !provider.performSessionAction) {
+      return false;
+    }
+    if (!(await provider.steerSupported(session.sdkSessionId).catch(() => false))) return false;
+    const active = await provider.activeSteerRun(session.sdkSessionId).catch(() => undefined);
+    if (active?.state !== "running") return false;
+
+    const requestId = randomUUID();
+    const uncertainDelivery = (): Error => {
+      if (phase === "building" || phase === "fixing") discardPreparationResult(session);
+      return new Error(
+        "The steering instruction may have reached the agent, but delivery could not be confirmed. Check the transcript before sending it again.",
+      );
+    };
+    const outcome = await provider
+      .performSessionAction(session.sdkSessionId, {
+        kind: "steer",
+        text,
+        requestId,
+        expectedRunId: active.runId,
+      })
+      .catch((error: unknown) => {
+        // A provider's explicit pre-delivery refusal is still definitive.
+        if (error instanceof PromptRejectedError) throw error;
+        // A transport error cannot prove the bridge did not deliver the steer.
+        // Persist invalidation under the lock just as for an unknown response.
+        throw uncertainDelivery();
+      });
+    switch (outcome.outcome) {
+      case "applied":
+        if (phase === "building" || phase === "fixing") discardPreparationResult(session);
+        return true;
+      case "rejected":
+        throw new Error(nativeAgentSteerRejectionMessage(outcome));
+      case "unknown":
+        // The bridge may have delivered it. Resending under a new request id
+        // could steer the turn twice.
+        throw uncertainDelivery();
+      default:
+        // `idle` and `mismatch`: the turn ended or moved on before delivery, so
+        // nothing was sent and the queue is the right place for it.
+        return false;
+    }
   }
 
   /**

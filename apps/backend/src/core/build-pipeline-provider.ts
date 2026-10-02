@@ -12,6 +12,7 @@ import {
   type ProviderCreateSessionOptions,
   type ProviderDependencies,
 } from "./native-agent-provider.js";
+import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import type { PipelineSessionPhase } from "@orkestrator/protocol/build-pipeline";
 
 export {
@@ -36,13 +37,21 @@ export type {
   ProviderStatus,
 } from "./native-agent-provider.js";
 
-export type BuildPipelineProvider = Omit<AgentSessionProvider, "createSession"> & {
-  createSession(
-    phase: PipelineSessionPhase,
-    label: string,
-    options?: ProviderCreateSessionOptions,
-  ): Promise<string>;
-};
+export type BuildPipelineProvider = Omit<AgentSessionProvider, "createSession"> &
+  /**
+   * The live-turn steer surface of the runtime provider. Optional so a provider
+   * without it (and narrow test providers) simply cannot steer; the pipeline
+   * then queues the instruction instead.
+   */
+  Partial<
+    Pick<NativeAgentRuntimeProvider, "activeSteerRun" | "steerSupported" | "performSessionAction">
+  > & {
+    createSession(
+      phase: PipelineSessionPhase,
+      label: string,
+      options?: ProviderCreateSessionOptions,
+    ): Promise<string>;
+  };
 
 export function createBuildPipelineProvider(
   connection: BridgeConnection,

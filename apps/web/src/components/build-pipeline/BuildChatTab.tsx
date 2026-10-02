@@ -27,6 +27,10 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  SESSION_ACTION_SLASH_COMMANDS,
+  parseLeadingSlashCommand,
+} from "@orkestrator/protocol/agent-slash-commands";
 import type { BuildTabData } from "@/types/paneLayout";
 import {
   useBuildPipelineStore,
@@ -718,9 +722,28 @@ export function BuildChatTab({
   const sendMessage = async (): Promise<void> => {
     const text = draft.trim();
     if (!pipeline || !text || sendPending) return;
+    // `/steer` reaches the turn the agent is running now. Queueing it like a
+    // message would hold it until the agent goes idle, which in a pipeline is
+    // when the stage ends and the work moves on to review.
+    const command = parseLeadingSlashCommand(text);
+    const steer = command?.name === "/steer";
+    if (steer && !command.arguments?.trim()) {
+      toast.error(SESSION_ACTION_SLASH_COMMANDS["/steer"]!.requiresArguments);
+      return;
+    }
     setSendPending(true);
     try {
-      replacePipeline(await backend.sendBuildPipelineMessage(pipeline.id, text));
+      if (steer) {
+        const result = await backend.steerBuildPipeline(pipeline.id, command.arguments!.trim());
+        replacePipeline(result.pipeline);
+        if (result.delivery === "steered") {
+          toast.success("Sent to the active turn");
+        } else {
+          toast.info("Could not steer the live turn, so the message was queued.");
+        }
+      } else {
+        replacePipeline(await backend.sendBuildPipelineMessage(pipeline.id, text));
+      }
       // Cleared only after the backend has durably queued it, so a failed send
       // leaves the user's text in the box to retry rather than losing it.
       setDraft("");

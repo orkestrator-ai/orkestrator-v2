@@ -14,7 +14,7 @@ import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { nativeAgentAdapters } from "@/components/native-agent/adapter";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
-import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastInfo, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
@@ -84,6 +84,21 @@ const sendMessageMock = mock(async (pipelineId: string, text: string) => ({
   pendingUserMessages: [{ id: "queued-1", text, createdAt: "2026-07-29T00:02:00.000Z" }],
   backendRevision: 12,
 }));
+const steerPipelineMock = mock(
+  async (
+    pipelineId: string,
+    _text: string,
+  ): Promise<{
+    pipeline: BuildPipeline;
+    delivery: "steered" | "queued";
+  }> => ({
+    pipeline: {
+      ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+      backendRevision: 13,
+    },
+    delivery: "steered",
+  }),
+);
 const restartCurrentStepMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   backendRevision: 13,
@@ -120,6 +135,7 @@ mock.module("@/lib/backend", () => ({
   resumeBuildPipeline: resumeBuildPipelineMock,
   cancelBuildPipeline: cancelBuildPipelineMock,
   sendBuildPipelineMessage: sendMessageMock,
+  steerBuildPipeline: steerPipelineMock,
   restartBuildPipelineCurrentStep: restartCurrentStepMock,
   retryBuildPipelineStage: retryStageMock,
   restartBuildPipelineStep: restartStepMock,
@@ -4126,6 +4142,9 @@ describe("BuildChatTab agent messaging", () => {
   beforeEach(() => {
     cleanup();
     sendMessageMock.mockClear();
+    steerPipelineMock.mockClear();
+    mockToastInfo.mockClear();
+    mockToastSuccess.mockClear();
     restartCurrentStepMock.mockClear();
     retryStageMock.mockClear();
     mockToastError.mockClear();
@@ -4162,6 +4181,77 @@ describe("BuildChatTab agent messaging", () => {
     await waitFor(() => expect(box.value).toBe(""));
     // The authoritative reply is installed, so the queue depth is visible.
     await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
+  });
+
+  test("sends /steer to the live turn instead of the idle queue", async () => {
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "/steer  use the existing helper  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(steerPipelineMock).toHaveBeenCalledWith(running.id, "use the existing helper"),
+    );
+    // Queueing it would hold it until the stage ended and review began.
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(box.value).toBe(""));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active turn");
+    expect(screen.queryByText(/message queued/) === null).toBe(true);
+  });
+
+  test("reports queued steering without claiming the running agent is idle", async () => {
+    steerPipelineMock.mockImplementationOnce(async (pipelineId: string, text: string) => ({
+      pipeline: {
+        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        pendingUserMessages: [{ id: "queued-2", text, createdAt: "2026-07-29T00:02:00.000Z" }],
+        backendRevision: 14,
+      },
+      delivery: "queued" as const,
+    }));
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "/steer change course" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(mockToastInfo).toHaveBeenCalledWith(
+        "Could not steer the live turn, so the message was queued.",
+      ),
+    );
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
+    expect(box.value).toBe("");
+  });
+
+  test("keeps the draft when a steer is refused", async () => {
+    steerPipelineMock.mockRejectedValueOnce(new Error("The turn is not accepting steering"));
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "/steer try again" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send the message", {
+        description: "The turn is not accepting steering",
+      }),
+    );
+    expect(box.value).toBe("/steer try again");
+  });
+
+  test("asks for instructions when /steer has none", () => {
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "/steer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(mockToastError).toHaveBeenCalledWith("Add instructions after /steer.");
+    expect(steerPipelineMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(box.value).toBe("/steer");
   });
 
   test("renders a compact ArrowUp send control", () => {

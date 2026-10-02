@@ -250,6 +250,33 @@ test`. They require the matching profile and fixture preparation described in
 this document. `mise run test:all` adds the serial iOS suite, not the agent
 browser suites.
 
+The build-pipeline steering scenario uses the live-review opt-in and Codex
+credentials. Start a disposable fixture profile in a separate terminal, then
+run this focused check:
+
+```bash
+mise run dev:test --profile qa-build-steer --fixture --credential-source codex --credential-source claude --agent-platforms codex
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-build-steer ORKESTRATOR_AGENT_TEST_REVIEW=1 \
+  mise run test:logged -- --name build-steer-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/browser-gateway.spec.ts --grep 'build pipeline live steering'
+mise run dev:stop --profile qa-build-steer
+mise run dev:reset --profile qa-build-steer
+```
+
+It sends `/steer` through the composer into a held-open build turn, switches to
+another environment, checks the instruction's file effect and authoritative
+transcript while inactive, then returns and reloads to verify transcript and
+controls. It cancels the turn and removes its pipeline and fixture environments
+in cleanup. Credential-free one-shot browser validation skips this scenario.
+Set `ORKESTRATOR_AGENT_TEST_MODEL` to override its `gpt-6.1-sol` build model when
+the test account needs a different supported model.
+The Claude credential source serves host-tool onboarding when Claude is
+installed; the scenario runs only a Codex model turn. The scenario temporarily
+seeds an empty `.claude.json` onboarding marker in the profile's isolated HOME
+if it is absent, and removes only the marker it created during cleanup. This
+does not authenticate Claude or modify the host's configuration.
+
 Do not add another `tee`; the terminal harness may already retain output, and a
 second verbatim copy recreates the disk-amplification problem. On failure the
 runner prints a unique `orkestrator-test-run.*` directory below the platform

@@ -89,6 +89,7 @@ import {
   PreSessionStageStartError,
   sessionForCurrentPhase,
   resumablePhase,
+  discardPreparationResult,
   sessionAgent,
   sessionPhaseFor,
   executionModeOverrideForPhase,
@@ -1015,16 +1016,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     if (!next) return;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
-    if (phase === "building" || phase === "fixing") {
-      // Any implementation follow-up can change HEAD, validation artifacts, or
-      // the uncommitted set. The earlier structured preparation result no
-      // longer describes the state that will be packaged after this turn.
-      // Keep producedReviewPackagePlan: the transcript still contains that
-      // plan, and the renderer keys redaction on the sticky fact.
-      delete session.structuredRequestId;
-      delete session.structuredResultStatus;
-      delete session.structuredWaitStartedAt;
-    }
+    if (phase === "building" || phase === "fixing") discardPreparationResult(session);
     if (rest.length) {
       pipeline.pendingUserMessages = rest;
     } else {

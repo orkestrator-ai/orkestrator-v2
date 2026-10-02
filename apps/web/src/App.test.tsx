@@ -1780,6 +1780,50 @@ describe("App Docker availability", () => {
     }
   });
 
+  test("describes the startup wait as a connection for a remote-backend window", async () => {
+    const originalOrkestrator = window.orkestrator;
+    let releaseDocker: (value: { available: boolean; reason: null }) => void = () => undefined;
+    mockCheckDocker.mockImplementation(
+      () => new Promise((resolve) => (releaseDocker = resolve as typeof releaseDocker)),
+    );
+    window.orkestrator = {
+      listen: () => () => undefined,
+      connections: {
+        list: async () => ({
+          activeConnectionId: "remote-1",
+          localAvailable: true,
+          connections: [
+            {
+              id: "remote-1",
+              name: "gateway-host",
+              nickname: "Studio",
+              address: "https://gateway.example",
+              kind: "remote",
+              active: true,
+              requiresToken: false,
+            },
+          ],
+        }),
+      } as NonNullable<Window["orkestrator"]>["connections"],
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("Connecting to Studio...")).toBeTruthy();
+      expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
+    } finally {
+      releaseDocker({ available: true, reason: null });
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
   test("keeps a blocking overlay while desktop connections are unresolved", async () => {
     const originalOrkestrator = window.orkestrator;
     const getMacOsStatus = mock(async () => ({

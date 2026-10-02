@@ -182,7 +182,7 @@ describe("AddProjectDialog", () => {
     expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
   });
 
-  test("does not inspect the typed path when the native picker is cancelled", async () => {
+  test("still inspects the typed path after the native picker is cancelled", async () => {
     renderDialog();
     fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/Users/alice/project" },
@@ -195,8 +195,180 @@ describe("AddProjectDialog", () => {
 
     await waitFor(() => expect(openDialogMock).toHaveBeenCalledTimes(1));
     expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+    expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/project");
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("");
   });
+
+  test.each(["debounce", "lookup", "validation"] as const)(
+    "preserves a manual URL edit during typed-path %s",
+    async (stage) => {
+      const remote = deferred<string | null>();
+      const detectedValidation = deferred<boolean>();
+      const manualValidation = deferred<boolean>();
+      const detectedUrl = "https://github.com/acme/detected.git";
+      const validateGitUrl = mock((url: string) =>
+        url === detectedUrl ? detectedValidation.promise : manualValidation.promise,
+      );
+      getGitRemoteUrlMock.mockReturnValue(remote.promise);
+      renderDialog({ validateGitUrl });
+      fireEvent.change(screen.getByLabelText(/Local path/i), {
+        target: { value: "/Users/alice/project" },
+      });
+      if (stage !== "debounce") await waitForDetection();
+      if (stage === "validation") {
+        await act(async () => remote.resolve(detectedUrl));
+        expect(validateGitUrl).toHaveBeenCalledWith(detectedUrl);
+      }
+
+      const urlInput = screen.getByLabelText(/Git URL/) as HTMLInputElement;
+      fireEvent.change(urlInput, { target: { value: "manual-invalid-url" } });
+      if (stage === "debounce") await waitForDetection();
+      await act(async () => {
+        remote.resolve(detectedUrl);
+        detectedValidation.resolve(true);
+      });
+      expect(urlInput.value).toBe("manual-invalid-url");
+      await act(async () => manualValidation.resolve(false));
+      expect(urlInput.className).toContain("border-destructive");
+      expect(urlInput.className).not.toContain("border-green-500");
+      expect(screen.getByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeTruthy();
+    },
+  );
+
+  test.each(["source", "whitespace", "A-B-A"] as const)(
+    "retries an unfinished inspection after a %s change",
+    async (change) => {
+      const firstRemote = deferred<string | null>();
+      getGitRemoteUrlMock.mockReturnValueOnce(firstRemote.promise);
+      getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/retried.git");
+      renderDialog();
+      const pathInput = screen.getByLabelText(/Local path/i);
+      fireEvent.change(pathInput, { target: { value: "/Users/alice/project" } });
+      await waitForDetection();
+      expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+
+      if (change === "source") {
+        selectScratchTab();
+        await act(async () => firstRemote.resolve("https://github.com/acme/stale.git"));
+        selectExistingTab();
+      } else {
+        fireEvent.change(pathInput, {
+          target: { value: change === "whitespace" ? "  /Users/alice/project  " : "/other" },
+        });
+        if (change === "A-B-A") {
+          fireEvent.change(pathInput, { target: { value: "/Users/alice/project" } });
+        }
+        await act(async () => firstRemote.resolve("https://github.com/acme/stale.git"));
+      }
+      expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("");
+      await waitForDetection();
+      expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(2);
+      expect(getGitRemoteUrlMock).toHaveBeenLastCalledWith("/Users/alice/project");
+      expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+        "https://github.com/acme/retried.git",
+      );
+    },
+    10000,
+  );
+
+  test("retries when the source changes during detected URL validation", async () => {
+    const firstValidation = deferred<boolean>();
+    const validateGitUrl = mock(() => firstValidation.promise);
+    validateGitUrl.mockReturnValueOnce(firstValidation.promise);
+    validateGitUrl.mockResolvedValue(true);
+    getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/project.git");
+    renderDialog({ validateGitUrl });
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
+      target: { value: "/Users/alice/project" },
+    });
+    await waitForDetection();
+    expect(validateGitUrl).toHaveBeenCalledTimes(1);
+    selectScratchTab();
+    await act(async () => firstValidation.resolve(true));
+    selectExistingTab();
+    expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("");
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(2);
+    expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+      "https://github.com/acme/project.git",
+    );
+  }, 10000);
+
+  test("handles a rejected typed-path lookup without changing the manual URL", async () => {
+    getGitRemoteUrlMock.mockRejectedValue(new Error("not a repository"));
+    renderDialog();
+    const urlInput = screen.getByLabelText(/Git URL/) as HTMLInputElement;
+    fireEvent.change(urlInput, { target: { value: "https://github.com/acme/manual.git" } });
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
+      target: { value: "/Users/alice/not-git" },
+    });
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+    expect(urlInput.value).toBe("https://github.com/acme/manual.git");
+    expect(urlInput.className).toContain("border-green-500");
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
+  test("does not inspect typed paths while the scratch source is active", async () => {
+    renderDialog();
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
+      target: { value: "/Users/alice/project" },
+    });
+    selectScratchTab();
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
+  });
+
+  test.each(["debounce", "lookup"] as const)(
+    "suppresses typed-path %s during submission and retries after failure",
+    async (stage) => {
+      const submission = deferred<void>();
+      const remote = deferred<string | null>();
+      getGitRemoteUrlMock.mockReturnValueOnce(remote.promise);
+      getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/detected.git");
+      renderDialog({ onAdd: () => submission.promise });
+      fireEvent.change(screen.getByLabelText(/Git URL/), {
+        target: { value: "https://github.com/acme/manual.git" },
+      });
+      fireEvent.change(screen.getByLabelText(/Local path/i), {
+        target: { value: "/Users/alice/project" },
+      });
+      if (stage === "lookup") await waitForDetection();
+      fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+      await act(async () => remote.resolve("https://github.com/acme/stale.git"));
+      await waitForDetection();
+      expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(stage === "lookup" ? 1 : 0);
+      expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+        "https://github.com/acme/manual.git",
+      );
+      await act(async () => submission.reject(new Error("add failed")));
+      await waitForDetection();
+      expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(stage === "lookup" ? 2 : 1);
+    },
+    10000,
+  );
+
+  test("selecting the typed path cancels the debounce even while picker lookup is pending", async () => {
+    const remote = deferred<string | null>();
+    getGitRemoteUrlMock.mockReturnValue(remote.promise);
+    openDialogMock.mockResolvedValue("/Users/alice/project");
+    renderDialog();
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
+      target: { value: "/Users/alice/project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Select or detect repository directory" }));
+    await waitFor(() => expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1));
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+    await act(async () => remote.resolve("https://github.com/acme/project.git"));
+    expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+      "https://github.com/acme/project.git",
+    );
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
+  }, 10000);
 
   test("does nothing when browser detection has no entered path", async () => {
     window.orkestratorGateway = { enabled: true };
@@ -793,4 +965,24 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectD
       {...overrides}
     />,
   );
+}
+
+function selectExistingTab() {
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Existing repository" }), { button: 0 });
+}
+
+async function waitForDetection() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 2150));
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

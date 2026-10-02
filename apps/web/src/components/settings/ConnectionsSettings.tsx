@@ -452,7 +452,7 @@ export function ConnectionsSettings() {
 
       <Dialog open={addOpen} onOpenChange={(open) => busyId !== "add" && setAddOpen(open)}>
         <DialogContent
-          className={cn("max-w-md sm:max-w-md", Z_FULLSCREEN_DIALOG)}
+          className={cn("sm:max-w-md", Z_FULLSCREEN_DIALOG)}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <form onSubmit={handleAdd}>
@@ -497,7 +497,7 @@ export function ConnectionsSettings() {
         onOpenChange={(open) => busyId === null && !open && setTokenTarget(null)}
       >
         <DialogContent
-          className={cn("max-w-md sm:max-w-md", Z_FULLSCREEN_DIALOG)}
+          className={cn("sm:max-w-md", Z_FULLSCREEN_DIALOG)}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <form onSubmit={handleUpdateToken}>
@@ -554,7 +554,7 @@ export function ConnectionsSettings() {
         onOpenChange={(open) => busyId === null && !open && setRenameTarget(null)}
       >
         <DialogContent
-          className={cn("max-w-md sm:max-w-md", Z_FULLSCREEN_DIALOG)}
+          className={cn("sm:max-w-md", Z_FULLSCREEN_DIALOG)}
           overlayClassName={Z_FULLSCREEN_DIALOG}
         >
           <form onSubmit={handleRename}>

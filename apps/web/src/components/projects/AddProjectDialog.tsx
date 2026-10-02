@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 
 type ProjectSource = "existing" | "scratch";
 
+const PATH_DETECTION_DEBOUNCE_MS = 2000;
+
 /** Matches the bordered option cards used on settings pages. */
 const SOURCE_SELECTOR_TRIGGER_CLASSES =
   "h-auto justify-start gap-2 rounded-lg border-2 p-3 text-left text-sm font-medium !text-foreground shadow-none data-[state=active]:!border-primary data-[state=active]:!bg-primary/5 data-[state=active]:!text-foreground data-[state=active]:shadow-none data-[state=inactive]:border-transparent data-[state=inactive]:!bg-zinc-900 hover:data-[state=inactive]:border-zinc-600";
@@ -48,14 +50,20 @@ export function AddProjectDialog({
   const [gitUrl, setGitUrl] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
+  const [pickedPath, setPickedPath] = useState<{ path: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isValidUrl, setIsValidUrl] = useState<boolean | null>(null);
   const validationRequestRef = useRef(0);
   const submissionInFlightRef = useRef(false);
+  const lastInspectedPathRef = useRef<string | null>(null);
+  const validateGitUrlRef = useRef(validateGitUrl);
+  validateGitUrlRef.current = validateGitUrl;
 
   const resetForm = useCallback(() => {
     validationRequestRef.current += 1;
+    lastInspectedPathRef.current = null;
+    setPickedPath(null);
     setSource("existing");
     setGitUrl("");
     setLocalPath("");
@@ -122,16 +130,85 @@ export function AddProjectDialog({
       if (!repositoryPath) return;
 
       setLocalPath(repositoryPath);
-      try {
-        const remoteUrl = await getGitRemoteUrl(repositoryPath);
-        if (remoteUrl) await setAndValidateGitUrl(remoteUrl);
-      } catch (remoteError) {
-        console.debug("Could not get git remote URL:", remoteError);
-      }
+      // A fresh request also restarts detection when the selected path is unchanged.
+      setPickedPath({ path: repositoryPath.trim() });
     } catch (browseError) {
       console.error("Failed to open directory picker:", browseError);
     }
-  }, [localPath, setAndValidateGitUrl]);
+  }, [localPath]);
+
+  // Picker requests inspect immediately; typed paths wait until the user pauses.
+  // Both share cancellation so an old lookup cannot replace a newer form value.
+  useEffect(() => {
+    const repositoryPath = localPath.trim();
+    const fromPicker = pickedPath?.path === repositoryPath;
+    if (
+      !isOpen ||
+      isLoading ||
+      source !== "existing" ||
+      !repositoryPath ||
+      (!fromPicker && repositoryPath === lastInspectedPathRef.current)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const validationRequest = validationRequestRef.current;
+    const isCurrent = () => !cancelled && validationRequest === validationRequestRef.current;
+    const timer = setTimeout(
+      async () => {
+        try {
+          const remoteUrl = await getGitRemoteUrl(repositoryPath);
+          if (cancelled) return;
+          if (!remoteUrl || !isCurrent()) {
+            lastInspectedPathRef.current = repositoryPath;
+            if (fromPicker) setPickedPath(null);
+            return;
+          }
+          let valid: boolean;
+          try {
+            valid = await validateGitUrlRef.current(remoteUrl);
+          } catch (validationError) {
+            if (fromPicker && isCurrent()) {
+              validationRequestRef.current += 1;
+              setGitUrl(remoteUrl);
+              setIsValidUrl(false);
+              setError(
+                validationError instanceof Error
+                  ? validationError.message
+                  : "Failed to validate Git URL",
+              );
+            }
+            throw validationError;
+          }
+          if (cancelled) return;
+
+          // Only completed inspections are deduplicated. Cleanup during either
+          // await leaves this path eligible for a fresh inspection on return.
+          lastInspectedPathRef.current = repositoryPath;
+          if (fromPicker) setPickedPath(null);
+          if (!isCurrent() || (!fromPicker && !valid)) return;
+
+          validationRequestRef.current += 1;
+          setGitUrl(remoteUrl);
+          setIsValidUrl(valid);
+          setError(null);
+        } catch (remoteError) {
+          if (!cancelled) {
+            lastInspectedPathRef.current = repositoryPath;
+            if (fromPicker) setPickedPath(null);
+          }
+          console.debug("Could not get git remote URL:", remoteError);
+        }
+      },
+      fromPicker ? 0 : PATH_DETECTION_DEBOUNCE_MS,
+    );
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isLoading, isOpen, localPath, pickedPath, source]);
 
   const handleNewProjectBrowse = useCallback(async () => {
     try {
@@ -262,7 +339,10 @@ export function AddProjectDialog({
                     type="text"
                     placeholder="/path/to/repository"
                     value={localPath}
-                    onChange={(event) => setLocalPath(event.target.value)}
+                    onChange={(event) => {
+                      setPickedPath(null);
+                      setLocalPath(event.target.value);
+                    }}
                     disabled={isLoading}
                     className="flex-1"
                   />

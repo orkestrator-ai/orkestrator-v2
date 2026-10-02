@@ -1866,8 +1866,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * crowded it out. Re-reading the legacy full transcript would bring back
      * exactly the payloads the summary exists to avoid. Only a part-trimmed
      * head — one row larger than the whole window — still needs exact recovery.
+     *
+     * A *cached* summary is the exception. It is the bridge's no-touch preview
+     * of a session whose rollout body it has not loaded (a detached or restarted
+     * Codex thread), so its short or empty window says nothing about what the
+     * conversation holds. Display reads never attach the thread, which makes
+     * this exact read the only thing that ever will: skipping it left a
+     * finished session rendering as empty until something else touched it.
      */
-    if (snapshot.representation === "summary" && (snapshot.omittedParts ?? 0) <= 0) return;
+    if (
+      snapshot.representation === "summary" &&
+      snapshot.freshness !== "cached" &&
+      (snapshot.omittedParts ?? 0) <= 0
+    )
+      return;
     if (
       (snapshot.omittedParts ?? 0) <= 0 &&
       this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
@@ -1923,6 +1935,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                 initialPromptPresentation,
               ),
             );
+            // An idle view reads on a slow cadence. Say the recovered transcript
+            // is there rather than leaving it to wait for the next poll.
+            this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+              agent: input.agent,
+              logicalSessionKey: input.logicalSessionKey,
+            });
           })
           .finally(() => {
             if (entry.promise === promise) entry.promise = undefined;

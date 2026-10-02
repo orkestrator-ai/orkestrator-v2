@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
@@ -1554,6 +1554,106 @@ describe("native agent progressive remainder", () => {
         if (update.status !== "snapshot") throw new Error("expected snapshot");
         expect(update.value.messages).toEqual([]);
         expect(update.value.freshness).not.toBe("current");
+      },
+    );
+  });
+
+  test("hydrates a cold summary preview instead of leaving a finished session empty", async () => {
+    const prompt = {
+      id: "prompt",
+      role: "user" as const,
+      content: "Original request",
+      parts: [],
+      createdAt: "2026-09-09T00:00:00.000Z",
+    };
+    const response = progressiveMessage("response", "Finished the work");
+    // What a v2 bridge answers for a detached or restarted Codex thread: no
+    // rollout body loaded, so an empty, cached, explicitly incomplete summary.
+    const transcriptSnapshot = mock(async () => ({
+      messages: [],
+      complete: false,
+      sourceToken: "source-cold-summary",
+      freshness: "cached" as const,
+      representation: "summary" as const,
+      historyStartIndex: 0,
+      historyEpoch: "process:1:0",
+    }));
+    const messages = mock(async () => [prompt, response]);
+    const stub = createProviderStub("codex", { transcriptSnapshot, messages });
+    await withService(
+      { prefix: "orkestrator-progressive-cold-summary-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:progressive-cold-summary",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toEqual([]);
+
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        let recovered: unknown[] = [];
+        await waitForCondition(async () => {
+          const next = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          if (next.status !== "snapshot") return false;
+          recovered = next.value.messages;
+          return recovered.length === 2;
+        });
+        expect(recovered).toMatchObject([{ id: "prompt" }, { id: "response" }]);
+        expect(messages).toHaveBeenCalledTimes(1);
+        // An idle tab must be told, not left to its next slow poll.
+        expect(announced).toHaveBeenCalledWith("env-1", {
+          agent: "codex",
+          logicalSessionKey: identity.logicalSessionKey,
+        });
+      },
+    );
+  });
+
+  test("does not re-read a current summary window that is merely short", async () => {
+    const messages = mock(async () => progressiveMessages(5));
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: [progressiveMessage("response", "Latest update")],
+        complete: false,
+        sourceToken: "source-short-summary",
+        freshness: "current" as const,
+        representation: "summary" as const,
+        historyStartIndex: 4,
+        historyEpoch: "process:1:0",
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-short-summary-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:progressive-short-summary",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(messages).toHaveBeenCalledTimes(0);
       },
     );
   });

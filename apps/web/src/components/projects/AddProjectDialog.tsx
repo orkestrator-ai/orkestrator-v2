@@ -19,7 +19,7 @@ import {
   LockKeyhole,
   Plus,
 } from "lucide-react";
-import { open as openDialog } from "@/lib/native/dialog";
+import { pickHostPath } from "@/lib/host-path-picker";
 import { getGitRemoteUrl } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
@@ -115,18 +115,11 @@ export function AddProjectDialog({
 
   const handleExistingBrowse = useCallback(async () => {
     try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
+      const repositoryPath = await pickHostPath({
+        mode: "directory",
         title: "Select repository directory",
         defaultPath: localPath.trim() || undefined,
       });
-      const repositoryPath =
-        typeof selected === "string"
-          ? selected
-          : window.orkestratorGateway?.enabled
-            ? localPath.trim()
-            : "";
       if (!repositoryPath) return;
 
       setLocalPath(repositoryPath);
@@ -212,18 +205,11 @@ export function AddProjectDialog({
 
   const handleNewProjectBrowse = useCallback(async () => {
     try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
+      const projectPath = await pickHostPath({
+        mode: "directory",
         title: "Choose an empty project folder",
         defaultPath: newProjectPath.trim() || undefined,
       });
-      const projectPath =
-        typeof selected === "string"
-          ? selected
-          : window.orkestratorGateway?.enabled
-            ? newProjectPath.trim()
-            : "";
       if (projectPath) {
         setNewProjectPath(projectPath);
         setError(null);

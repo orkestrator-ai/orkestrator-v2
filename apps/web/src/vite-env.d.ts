@@ -33,14 +33,6 @@ interface Window {
       } | null>;
       writeImage(dataUrl: string): Promise<void>;
     };
-    dialog: {
-      open(options?: {
-        directory?: boolean;
-        multiple?: boolean;
-        title?: string;
-        defaultPath?: string;
-      }): Promise<string | string[] | null>;
-    };
     /** Electron only: opens web URLs with the client operating system. */
     shell?: {
       openExternal(url: string): Promise<void>;

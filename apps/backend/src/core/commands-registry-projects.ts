@@ -190,10 +190,6 @@ export function registerProjectCommands(
     ({ name }) =>
       `Hello, ${asString(name, "name")}! You've been greeted from the Orkestrator backend!`,
   );
-  // File pickers belong to the connected client. Browser clients cannot expose
-  // a server-side filesystem picker, while Electron handles this via preload.
-  register("browse_for_directory", async () => null);
-
   register("get_resource_revision_manifest", ({ knownGeneration, knownRevisions }, { storage }) => {
     const parsed: Partial<ResourceRevisionMap> = {};
     if (knownRevisions !== undefined) {

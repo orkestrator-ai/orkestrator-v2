@@ -2,10 +2,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import * as realBackend from "@/lib/backend";
-import * as realNativeDialog from "@/lib/native/dialog";
+import * as realHostPathPicker from "@/lib/host-path-picker";
 
 const realBackendSnapshot = { ...realBackend };
-const realNativeDialogSnapshot = { ...realNativeDialog };
+const realHostPathPickerSnapshot = { ...realHostPathPicker };
 const openDialogMock = mock(async (): Promise<string | null> => null);
 const getGitRemoteUrlMock = mock(async (): Promise<string | null> => null);
 const originalGateway = window.orkestratorGateway;
@@ -15,9 +15,9 @@ mock.module("@/lib/backend", () => ({
   getGitRemoteUrl: getGitRemoteUrlMock,
 }));
 
-mock.module("@/lib/native/dialog", () => ({
-  ...realNativeDialogSnapshot,
-  open: openDialogMock,
+mock.module("@/lib/host-path-picker", () => ({
+  ...realHostPathPickerSnapshot,
+  pickHostPath: openDialogMock,
 }));
 
 const { AddProjectDialog } =
@@ -25,7 +25,7 @@ const { AddProjectDialog } =
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module("@/lib/native/dialog", () => realNativeDialogSnapshot);
+  mock.module("@/lib/host-path-picker", () => realHostPathPickerSnapshot);
 });
 
 describe("AddProjectDialog", () => {
@@ -74,28 +74,17 @@ describe("AddProjectDialog", () => {
     fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/srv/repos/project" },
     });
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Select or detect repository directory",
-      }),
-    );
 
-    await waitFor(() => {
-      expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/srv/repos/project");
-    });
-    expect(openDialogMock).toHaveBeenCalledWith({
-      directory: true,
-      multiple: false,
-      title: "Select repository directory",
-      defaultPath: "/srv/repos/project",
-    });
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/srv/repos/project");
+    expect(openDialogMock).not.toHaveBeenCalled();
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
       "git@github.com:acme/project.git",
     );
     expect(validateGitUrl).toHaveBeenCalledWith("git@github.com:acme/project.git");
   });
 
-  test("detects the Git remote for a directory selected by the native picker", async () => {
+  test("detects the Git remote for a directory selected by the host picker", async () => {
     const validateGitUrl = mock(async () => true);
     openDialogMock.mockResolvedValue("/Users/alice/project");
     getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/project.git");
@@ -166,7 +155,7 @@ describe("AddProjectDialog", () => {
     );
   });
 
-  test("does not inspect a typed path that the native picker already inspected", async () => {
+  test("does not inspect a typed path that the host picker already inspected", async () => {
     openDialogMock.mockResolvedValue("/Users/alice/project");
     getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/project.git");
     renderDialog();
@@ -182,7 +171,7 @@ describe("AddProjectDialog", () => {
     expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
   });
 
-  test("still inspects the typed path after the native picker is cancelled", async () => {
+  test("still inspects the typed path after the host picker is cancelled", async () => {
     renderDialog();
     fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/Users/alice/project" },
@@ -650,7 +639,7 @@ describe("AddProjectDialog", () => {
     expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe("");
   });
 
-  test("selects a scratch project path with the native picker", async () => {
+  test("selects a scratch project path with the host picker", async () => {
     openDialogMock.mockResolvedValue("/Users/alice/new-project");
     renderDialog();
     selectScratchTab();
@@ -659,8 +648,7 @@ describe("AddProjectDialog", () => {
 
     await waitFor(() =>
       expect(openDialogMock).toHaveBeenCalledWith({
-        directory: true,
-        multiple: false,
+        mode: "directory",
         title: "Choose an empty project folder",
         defaultPath: undefined,
       }),
@@ -670,8 +658,8 @@ describe("AddProjectDialog", () => {
     );
   });
 
-  test("uses the typed scratch path when the gateway picker has no native result", async () => {
-    window.orkestratorGateway = { enabled: true };
+  test("starts the host picker at the trimmed typed scratch path", async () => {
+    openDialogMock.mockResolvedValue("/srv/projects/chosen");
     renderDialog();
     selectScratchTab();
     fireEvent.change(screen.getByLabelText(/Project path/i), {
@@ -682,18 +670,17 @@ describe("AddProjectDialog", () => {
 
     await waitFor(() =>
       expect(openDialogMock).toHaveBeenCalledWith({
-        directory: true,
-        multiple: false,
+        mode: "directory",
         title: "Choose an empty project folder",
         defaultPath: "/srv/projects/new-project",
       }),
     );
     expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
-      "/srv/projects/new-project",
+      "/srv/projects/chosen",
     );
   });
 
-  test("preserves the typed scratch path when the native picker is cancelled", async () => {
+  test("preserves the typed scratch path when the host picker is cancelled", async () => {
     renderDialog();
     selectScratchTab();
     fireEvent.change(screen.getByLabelText(/Project path/i), {

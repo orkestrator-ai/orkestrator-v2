@@ -1,4 +1,4 @@
-import type { BrowserWindow, OpenDialogOptions } from "electron";
+import type { BrowserWindow } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type {
@@ -76,13 +76,6 @@ type ClipboardNativeImageLike = {
   toDataURL(): string;
 };
 
-type DialogLike = {
-  showOpenDialog(
-    windowOrOptions: BrowserWindow | OpenDialogOptions,
-    maybeOptions?: OpenDialogOptions,
-  ): Promise<{ canceled: boolean; filePaths: string[] }>;
-};
-
 type ShellLike = {
   openExternal(url: string): Promise<void>;
 };
@@ -144,7 +137,6 @@ export type MainIpcDependencies = {
   getMainWindow: (event?: IpcEventLike) => BrowserWindow | null;
   ipc: IpcMainLike;
   clipboardApi: ClipboardLike;
-  dialogApi: DialogLike;
   shellApi: ShellLike;
   appApi: AppLike;
   nativeImageApi: NativeImageLike;
@@ -241,7 +233,6 @@ export function registerMainIpc({
   getMainWindow,
   ipc,
   clipboardApi,
-  dialogApi,
   shellApi,
   appApi,
   nativeImageApi,
@@ -336,33 +327,6 @@ export function registerMainIpc({
       throw new Error("Expected a macOS privacy settings pane");
     }
     return shellApi.openExternal(macOsPrivacySettingsUrl(pane));
-  });
-
-  handle("orkestrator:dialog:open", async (event, options?: unknown) => {
-    const typedOptions =
-      options && typeof options === "object" && !Array.isArray(options)
-        ? (options as {
-            directory?: boolean;
-            multiple?: boolean;
-            title?: string;
-            defaultPath?: string;
-          })
-        : {};
-    const properties: NonNullable<OpenDialogOptions["properties"]> = [
-      typedOptions.directory ? "openDirectory" : "openFile",
-      ...(typedOptions.multiple ? ["multiSelections" as const] : []),
-    ];
-    const dialogOptions: OpenDialogOptions = {
-      title: typedOptions.title,
-      defaultPath: typedOptions.defaultPath,
-      properties,
-    };
-    const window = getMainWindow(event);
-    const result = window
-      ? await dialogApi.showOpenDialog(window, dialogOptions)
-      : await dialogApi.showOpenDialog(dialogOptions);
-    if (result.canceled) return null;
-    return typedOptions.multiple ? result.filePaths : (result.filePaths[0] ?? null);
   });
 
   handle("orkestrator:web-client:get-status", (event) => getWebClientStatus(event));

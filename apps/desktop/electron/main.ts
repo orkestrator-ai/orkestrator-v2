@@ -550,7 +550,6 @@ function registerIpc(): void {
     getMainWindow: (event) => contextForEvent(event).window,
     ipc: ipcMain,
     clipboardApi: clipboard,
-    dialogApi: dialog,
     shellApi: shell,
     appApi: {
       exit: (code) => app.exit(code),

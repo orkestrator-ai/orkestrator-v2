@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-async function loadNativeDialog() {
-  return import("../../../apps/web/src/lib/native/dialog.ts?real") as Promise<
-    typeof import("../../../apps/web/src/lib/native/dialog")
-  >;
-}
-
 async function loadNativeWindow() {
   return import("../../../apps/web/src/lib/native/window.ts?real") as Promise<
     typeof import("../../../apps/web/src/lib/native/window")
@@ -22,18 +16,7 @@ afterEach(() => {
   delete window.orkestrator;
 });
 
-describe("native dialog/window/process wrappers", () => {
-  test("opens dialogs through the preload bridge and returns null without it", async () => {
-    const { open } = await loadNativeDialog();
-    await expect(open({ directory: true })).resolves.toBeNull();
-
-    const openMock = mock(async () => "/tmp/project");
-    window.orkestrator = { dialog: { open: openMock } } as never;
-
-    await expect(open({ directory: true, title: "Choose" })).resolves.toBe("/tmp/project");
-    expect(openMock).toHaveBeenCalledWith({ directory: true, title: "Choose" });
-  });
-
+describe("native window/process wrappers", () => {
   test("starts native window dragging when the bridge is present", async () => {
     const { getCurrentWindow } = await loadNativeWindow();
     const startDragging = mock(async () => undefined);

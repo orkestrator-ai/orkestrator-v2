@@ -145,10 +145,6 @@ describe("preload API factory", () => {
       channel: "orkestrator:clipboard:write-image",
       args: ["data:image/png;base64,abc"],
     });
-    await expect(api.dialog.open({ directory: true })).resolves.toEqual({
-      channel: "orkestrator:dialog:open",
-      args: [{ directory: true }],
-    });
     await expect(api.shell.openExternal("https://example.com/docs")).resolves.toEqual({
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],

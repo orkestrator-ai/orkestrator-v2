@@ -170,12 +170,4 @@ exit 1
       ),
     ).toThrow("connections");
   });
-
-  test("leaves directory picking to the connected client", async () => {
-    const commands = createCommandRegistry();
-    await expect(
-      commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context),
-    ).resolves.toBeNull();
-    expect(showOpenDialog).not.toHaveBeenCalled();
-  });
 });

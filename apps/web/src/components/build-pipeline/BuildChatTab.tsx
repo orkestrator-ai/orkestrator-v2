@@ -906,8 +906,9 @@ export function BuildChatTab({
    * What each stage tab shows.
    *
    * Inside a phase group a row can be shorter than the stage's own label — a
-   * reviewer reads as its letter and model — so the full label is kept as the
-   * tab's accessible name, followed by what the row's badges say.
+   * reviewer shows its model or review label — so the full review label,
+   * including slot identity, is kept in the tab's accessible name, followed by
+   * what the row's badges say.
    */
   const stageRowView = (item: PipelineStageItem): PipelineStageRowView => {
     if (item.kind === "validation") {

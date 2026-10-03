@@ -14,6 +14,22 @@ const {
   ...baseMac
 } = packageJson.build.mac ?? {};
 
+/**
+ * Only release builds publish: the `publish` target is what makes
+ * electron-builder embed `app-update.yml` and emit `latest-*.yml`, and the app
+ * only enables its updater when that file exists. Local `package:*` installs
+ * therefore never try to update themselves. Releases upload as drafts; the
+ * release workflow publishes the draft once every platform has succeeded.
+ */
+export const releasePublish: Configuration["publish"] = [
+  {
+    provider: "github",
+    owner: "orkestrator-ai",
+    repo: "orkestrator-v2",
+    releaseType: "draft",
+  },
+];
+
 const notarizationCredentialSets = [
   ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"],
   ["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"],
@@ -43,11 +59,13 @@ export function createReleaseConfig(environment: NodeJS.ProcessEnv): Configurati
   return {
     ...packageJson.build,
     forceCodeSigning: true,
+    publish: releasePublish,
     mac: {
       ...baseMac,
       hardenedRuntime: true,
       notarize: true,
-      target: ["dmg"],
+      // The dmg is the website download; electron-updater applies the zip.
+      target: ["dmg", "zip"],
     },
   };
 }

@@ -13,6 +13,8 @@ export type ApplicationMenuActions = {
   closeTab(): void;
   selectWindow(id: number): void;
   zoom(direction: "in" | "out" | "reset"): void;
+  /** Present only when this install can update itself. */
+  checkForUpdates?(): void;
 };
 
 /**
@@ -72,6 +74,9 @@ export function createApplicationMenuTemplate(
       label: actions.productName,
       submenu: [
         { role: "about" },
+        ...(actions.checkForUpdates
+          ? [{ label: "Check for Updates…", click: actions.checkForUpdates }]
+          : []),
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },

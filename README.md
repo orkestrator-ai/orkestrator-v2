@@ -63,6 +63,9 @@ mise run dev
 
 ### Packaging the desktop app
 
+Published releases, including the self-updating builds, are described in
+[Releasing the desktop app](docs/development/releasing.md).
+
 #### macOS
 
 For a fast local build, package and install the unpacked app with local ad-hoc

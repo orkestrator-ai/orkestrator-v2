@@ -74,6 +74,11 @@ import {
 } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import {
+  createAutoUpdateController,
+  isAutoUpdateSupported,
+  type AutoUpdateController,
+} from "./auto-update.js";
+import {
   applyWindowTitle,
   focusWindowById,
   projectMenuWindows,
@@ -158,6 +163,7 @@ const quitReopen = registerQuitReopenRelaunch({
   allowRelaunch: runtimeFlavor !== "agent-test",
 });
 let startupComplete = false;
+let autoUpdate: AutoUpdateController | null = null;
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
@@ -339,6 +345,39 @@ function createWindowBrowserPreviews(
   return { ...runtime, previewTransport };
 }
 
+/**
+ * Updates are checked after the first window exists, so a slow or failing
+ * update server can never delay or break startup.
+ */
+async function startAutoUpdate(): Promise<void> {
+  if (
+    !isAutoUpdateSupported({
+      isPackaged: app.isPackaged,
+      runtimeFlavor,
+      platform: process.platform,
+      env: process.env,
+      resourcesPath: process.resourcesPath,
+    })
+  ) {
+    return;
+  }
+  try {
+    const { default: electronUpdater } = await import("electron-updater");
+    autoUpdate = createAutoUpdateController({
+      updater: electronUpdater.autoUpdater,
+      productName,
+      currentVersion: app.getVersion(),
+      getWindow: () => focusedContext()?.window ?? null,
+      showMessageBox: (window, options) =>
+        window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options),
+    });
+    autoUpdate.start();
+    createMenu();
+  } catch (error) {
+    console.error("[Updater] Auto-update is unavailable:", error);
+  }
+}
+
 function createMenu(): void {
   const template = createApplicationMenuTemplate({
     productName,
@@ -351,6 +390,7 @@ function createMenu(): void {
     closeTab: () => emitToFocusedWindow("menu-close-tab", undefined),
     selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
+    checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -706,6 +746,7 @@ async function startApplication(): Promise<void> {
   }
   await toolchainProgress.close();
   startupComplete = true;
+  await startAutoUpdate();
 
   if (runtimeProfile) {
     const info = backendProcess.getInfo();

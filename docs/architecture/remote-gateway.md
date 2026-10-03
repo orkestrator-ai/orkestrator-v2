@@ -140,6 +140,27 @@ The hosted origins that must be allowed are `https://orkestrator.dev` and
 - The token lasts for the current browser tab unless **Remember token** is
   enabled.
 
+## File and folder pickers
+
+Every place the app asks for a path on the host (project folder, repository
+directory, files to copy, SSH agent socket) opens Orkestrator's own picker,
+`HostPathPickerDialog`, through `pickHostPath()` in
+`apps/web/src/lib/host-path-picker.ts`. The operating system's dialog is never
+used: it would browse the client's disk, which is the wrong machine when the
+client is connected to a remote backend.
+
+The picker is rendered by the client but lists directories with the
+`list_host_directory` backend command (`commands-host-files.ts`), so it browses
+the machine the connected backend runs on, whether that is local, a remote
+desktop connection, or a browser over the gateway. Listings are capped at
+`MAX_HOST_DIRECTORY_ENTRIES`; hidden entries are omitted unless requested; a
+stale path falls back to its nearest existing ancestor. New path fields should
+call `pickHostPath()`, not add a native dialog.
+
+Out of scope: pickers whose target is not a host path (for example, MCP server
+working directories, which can resolve inside a container) and file uploads from
+the client's own disk.
+
 ## Service previews
 
 Browser tabs can preview registered services through a scoped desktop tunnel

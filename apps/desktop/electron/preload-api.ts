@@ -127,17 +127,6 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
-    dialog: {
-      open(options?: {
-        directory?: boolean;
-        multiple?: boolean;
-        title?: string;
-        defaultPath?: string;
-      }): Promise<string | string[] | null> {
-        return ipcRenderer.invoke("orkestrator:dialog:open", options ?? {});
-      },
-    },
-
     shell: {
       openExternal(url: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:shell:open-external", url);

@@ -1392,12 +1392,6 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       },
     },
 
-    dialog: {
-      open(): Promise<string | string[] | null> {
-        return Promise.resolve(null);
-      },
-    },
-
     ...(connections ? { connections } : {}),
 
     webClient: {

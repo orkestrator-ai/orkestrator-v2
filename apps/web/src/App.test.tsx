@@ -3158,7 +3158,6 @@ describe("App startup checks and global events", () => {
         readImage: async () => null,
         writeImage: async () => undefined,
       },
-      dialog: { open: async () => null },
       connections: {
         list: async () => ({
           activeConnectionId: "local",

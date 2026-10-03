@@ -6,6 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { createServer } from "node:net";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { environmentCleanupLedger } from "../../apps/backend/src/core/environment-cleanup-ledger";
@@ -87,65 +88,239 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
-test("typed project paths detect a remote and preserve newer manual URL edits", async ({
-  page,
-}) => {
-  const status = await profileStatus();
-  expect(status.status).toBe("ready");
-  expect(status.testProject).toBeTruthy();
-  await authenticatedInvoke(page, status);
-  const runtime = resolveRuntimeProfile({
-    repositoryRoot,
-    requestedId: profile,
-    flavor: "agent-test",
+test.describe("host path browsing", () => {
+  let onboardingFile: string;
+  let seededOnboarding = false;
+  test.beforeAll(async () => {
+    const status = await profileStatus();
+    expect(status.status).toBe("ready");
+    const runtime = resolveRuntimeProfile({
+      repositoryRoot,
+      requestedId: profile,
+      flavor: "agent-test",
+    });
+    onboardingFile = path.join(runtime.dataDir, "agent-credentials", "home", ".claude.json");
+    // Start the profile with --credential-source claude so its host-tool onboarding read is
+    // enabled. These tests run no agent turns. Seed only an empty isolated-home marker,
+    // as the Codex scenario below does, without writing any authentication data.
+    await fs.writeFile(onboardingFile, "{}", { flag: "wx", mode: 0o600 }).then(
+      () => {
+        seededOnboarding = true;
+      },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      },
+    );
   });
-  const repository = await fs.mkdtemp(path.join(runtime.profileRoot, "remote-detection-"));
-  const detectedUrl = "https://github.com/acme/detected.git";
-  try {
-    for (const args of [
-      ["init", repository],
-      ["-C", repository, "remote", "add", "origin", detectedUrl],
-    ]) {
-      expect(spawnSync("git", args, { encoding: "utf8" }).status).toBe(0);
-    }
-    await page.getByRole("button", { name: "Add project", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Add project", exact: true });
-    const urlInput = dialog.getByLabel(/Git URL/);
-    const pathInput = dialog.getByLabel(/Local path/);
-    await expect(urlInput).toHaveValue("");
-    await expect(dialog.getByRole("button", { name: "Add project", exact: true })).toBeDisabled();
-    await pathInput.fill(repository);
-    await expect(urlInput).toHaveValue(detectedUrl, { timeout: 10_000 });
-    await expect(urlInput).toHaveClass(/border-green-500/);
+  test.afterAll(async () => {
+    if (seededOnboarding) await fs.rm(onboardingFile, { force: true });
+  });
 
-    // An explicit picker action inspects the same path immediately in a browser.
-    await urlInput.fill("");
-    await dialog.getByRole("button", { name: "Select or detect repository directory" }).click();
-    await expect(urlInput).toHaveValue(detectedUrl);
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 860 },
+    { name: "narrow", width: 390, height: 844 },
+  ]) {
+    test(`host picker browses through the authenticated gateway above fullscreen settings (${viewport.name})`, async ({
+      page,
+    }) => {
+      page.setDefaultTimeout(15_000);
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const status = await profileStatus();
+      expect(status.status).toBe("ready");
+      const invoke = await authenticatedInvoke(page, status);
+      const projects = await invoke<Project[]>("get_projects");
+      const fixture = projects.find((project) => project.localPath === status.testProject)!;
+      expect(fixture).toBeTruthy();
+      // Keep the disposable fixture socket below the POSIX socket path length limit.
+      const directory = await fs.mkdtemp("/tmp/orkestrator-picker-");
+      // Use a real socket: SSH agents expose sockets rather than regular files.
+      const socketPath = path.join(directory, "agent.sock");
+      const socket = createServer();
+      await new Promise<void>((resolve, reject) => {
+        socket.once("error", reject);
+        socket.listen(socketPath, resolve);
+      });
+      try {
+        const listing = await invoke<{
+          path: string;
+          requestedFile: string;
+          entries: { path: string }[];
+        }>("list_host_directory", {
+          path: directory + "/../" + path.basename(directory) + "/agent.sock",
+          includeFiles: true,
+        });
+        expect(listing.path).toBe(directory);
+        expect(listing.requestedFile).toBe(socketPath);
+        expect(listing.entries.some((entry) => entry.path === socketPath)).toBe(true);
 
-    // Changing the path arms another debounce; the later URL edit stays authoritative.
-    await pathInput.fill(`${repository}/.`);
-    await urlInput.fill("manual-invalid-url");
-    await page.waitForTimeout(2300);
-    await expect(urlInput).toHaveValue("manual-invalid-url");
-    await expect(urlInput).toHaveClass(/border-destructive/);
-    await dialog.getByRole("button", { name: "Add project", exact: true }).click();
-    await expect(dialog.getByRole("alert")).toHaveText("Invalid Git URL format");
+        // A computed layer assertion catches an invisible overlay as well as hidden content.
+        const assertPickerLayers = async (name: string, surface: string) => {
+          const picker = page.getByRole("dialog", { name, exact: true });
+          await expect(picker).toBeVisible();
+          const layers = await page.evaluate(
+            ({ name, surface }) => {
+              const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
+              const settings = dialogs.find((node) => node.getAttribute("aria-label") === surface)!;
+              const picker = dialogs.find(
+                (node) => node.textContent?.includes(name) && node !== settings,
+              )!;
+              const overlay = document.querySelector<HTMLElement>(
+                '[data-slot="dialog-overlay"][data-state="open"]',
+              )!;
+              return [settings, picker, overlay].map((node) =>
+                Number(getComputedStyle(node).zIndex),
+              );
+            },
+            { name, surface },
+          );
+          expect(layers[1]).toBeGreaterThan(layers[0]!);
+          expect(layers[2]).toBeGreaterThan(layers[0]!);
+          const box = await picker.boundingBox();
+          expect(box!.x).toBeGreaterThanOrEqual(0);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+          return picker;
+        };
 
-    await pathInput.fill(`${repository}/missing`);
-    await dialog.getByRole("tab", { name: "Create new", exact: true }).click();
-    await page.waitForTimeout(2300);
-    await dialog.getByRole("tab", { name: "Existing repository", exact: true }).click();
-    await expect(urlInput).toHaveValue("manual-invalid-url");
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page.reload();
-    await page.getByRole("button", { name: "Add project", exact: true }).click();
-    await expect(urlInput).toHaveValue("");
-    await expect(pathInput).toHaveValue("");
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  } finally {
-    await fs.rm(repository, { recursive: true, force: true });
+        for (const pass of ["initial", "after reload"]) {
+          // Open settings in the same layout where the picker will be used. Resizing
+          // across the mobile breakpoint remounts the sidebar that owns this surface.
+          if (viewport.name === "narrow") {
+            const drawer = page.getByRole("dialog", {
+              name: "Projects and environments",
+              exact: true,
+            });
+            const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
+            const closeDrawer = page
+              .getByRole("button", { name: "Close projects and environments" })
+              .first();
+            await expect(openDrawer.or(closeDrawer).first()).toBeVisible();
+            if (await openDrawer.isVisible()) await openDrawer.click();
+            await expect(drawer).toBeVisible();
+          }
+          if (viewport.name === "narrow") {
+            const drawer = page.getByRole("dialog", {
+              name: "Projects and environments",
+              exact: true,
+            });
+            await drawer.getByText(fixture.name, { exact: true }).first().click();
+            if (await drawer.isVisible()) {
+              await drawer
+                .getByRole("button", { name: "Close projects and environments" })
+                .first()
+                .click();
+            }
+            await page.getByRole("button", { name: "Open tools" }).click();
+            await page.getByRole("button", { name: "Repository settings", exact: true }).click();
+          } else {
+            await page.getByText(fixture.name, { exact: true }).first().click({ button: "right" });
+            await page.getByRole("menuitem", { name: "Repository Settings", exact: true }).click();
+          }
+          const repository = page.getByRole("dialog", { name: "Repository Settings", exact: true });
+          await repository.getByRole("button", { name: "Browse for local path" }).click();
+          const picker = await assertPickerLayers(
+            "Select Repository Directory",
+            "Repository Settings",
+          );
+          await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
+          await picker.getByLabel("Path", { exact: true }).fill(directory);
+          await picker.getByLabel("Path", { exact: true }).press("Enter");
+          await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
+          await picker.getByRole("button", { name: "Select this folder" }).click();
+          await expect(repository.getByLabel("Local Path", { exact: true })).toHaveValue(directory);
+          // Cancel repository edits so the fixture's authoritative local path stays intact.
+          await repository.getByRole("button", { name: "Close settings" }).click();
+
+          if (viewport.name === "narrow") {
+            await page.getByRole("button", { name: "Open tools" }).click();
+          }
+          await page.getByRole("button", { name: "Global settings", exact: true }).click();
+          const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+          await settings.getByRole("button", { name: "Browse for SSH agent socket" }).click();
+          const filePicker = await assertPickerLayers("Select SSH agent socket", "Settings");
+          await filePicker.getByLabel("Path", { exact: true }).fill(socketPath);
+          await filePicker.getByLabel("Path", { exact: true }).press("Enter");
+          await expect(filePicker.getByRole("button", { name: "Select file" })).toBeEnabled();
+          await filePicker.getByRole("button", { name: "Select file" }).click();
+          await expect(
+            settings.getByRole("textbox", { name: "SSH agent socket", exact: true }),
+          ).toHaveValue(socketPath);
+          await settings.getByRole("textbox", { name: "SSH agent socket", exact: true }).fill("");
+          await settings.getByRole("button", { name: "Close settings" }).click();
+          if (pass === "initial") await page.reload({ waitUntil: "domcontentloaded" });
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) =>
+          socket.close((error) => (error ? reject(error) : resolve())),
+        );
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    });
   }
+
+  test("typed project paths detect a remote and preserve newer manual URL edits", async ({
+    page,
+  }) => {
+    const status = await profileStatus();
+    expect(status.status).toBe("ready");
+    expect(status.testProject).toBeTruthy();
+    await authenticatedInvoke(page, status);
+    const runtime = resolveRuntimeProfile({
+      repositoryRoot,
+      requestedId: profile,
+      flavor: "agent-test",
+    });
+    const repository = await fs.mkdtemp(path.join(runtime.profileRoot, "remote-detection-"));
+    const detectedUrl = "https://github.com/acme/detected.git";
+    try {
+      for (const args of [
+        ["init", repository],
+        ["-C", repository, "remote", "add", "origin", detectedUrl],
+      ]) {
+        expect(spawnSync("git", args, { encoding: "utf8" }).status).toBe(0);
+      }
+      await page.getByRole("button", { name: "Add project", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Add project", exact: true });
+      const urlInput = dialog.getByLabel(/Git URL/);
+      const pathInput = dialog.getByLabel(/Local path/);
+      await expect(urlInput).toHaveValue("");
+      await expect(dialog.getByRole("button", { name: "Add project", exact: true })).toBeDisabled();
+      await pathInput.fill(repository);
+      await expect(urlInput).toHaveValue(detectedUrl, { timeout: 10_000 });
+      await expect(urlInput).toHaveClass(/border-green-500/);
+
+      // An explicit picker action inspects the same path immediately in a browser.
+      await urlInput.fill("");
+      await dialog.getByRole("button", { name: "Select or detect repository directory" }).click();
+      await page
+        .getByRole("dialog", { name: "Select repository directory", exact: true })
+        .getByRole("button", { name: "Select this folder" })
+        .click();
+      await expect(urlInput).toHaveValue(detectedUrl);
+
+      // Changing the path arms another debounce; the later URL edit stays authoritative.
+      await pathInput.fill(`${repository}/.`);
+      await urlInput.fill("manual-invalid-url");
+      await page.waitForTimeout(2300);
+      await expect(urlInput).toHaveValue("manual-invalid-url");
+      await expect(urlInput).toHaveClass(/border-destructive/);
+      await dialog.getByRole("button", { name: "Add project", exact: true }).click();
+      await expect(dialog.getByRole("alert")).toHaveText("Invalid Git URL format");
+
+      await pathInput.fill(`${repository}/missing`);
+      await dialog.getByRole("tab", { name: "Create new", exact: true }).click();
+      await page.waitForTimeout(2300);
+      await dialog.getByRole("tab", { name: "Existing repository", exact: true }).click();
+      await expect(urlInput).toHaveValue("manual-invalid-url");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await page.reload();
+      await page.getByRole("button", { name: "Add project", exact: true }).click();
+      await expect(urlInput).toHaveValue("");
+      await expect(pathInput).toHaveValue("");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    } finally {
+      await fs.rm(repository, { recursive: true, force: true });
+    }
+  });
 });
 
 test("real browser gateway exercises an authoritative local environment", async ({ page }) => {

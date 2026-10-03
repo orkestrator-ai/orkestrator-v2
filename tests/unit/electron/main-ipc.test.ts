@@ -58,9 +58,6 @@ function createHarness(
     readImage: mock(() => clipboardImage),
     writeImage: mock(() => undefined),
   };
-  const dialogApi = {
-    showOpenDialog: mock(async () => ({ canceled: false, filePaths: ["/tmp/a", "/tmp/b"] })),
-  };
   const shellApi = {
     openExternal: mock(async () => undefined),
   };
@@ -148,7 +145,6 @@ function createHarness(
       on: (channel, listener) => syncHandlers.set(channel, listener),
     },
     clipboardApi,
-    dialogApi: dialogApi as never,
     shellApi,
     appApi,
     nativeImageApi: nativeImage,
@@ -206,7 +202,6 @@ function createHarness(
     resizedClipboardImage,
     nativeImage,
     appApi,
-    dialogApi,
     shellApi,
     getMacOsPermissions,
     getWebClientStatus,
@@ -890,29 +885,6 @@ describe("main IPC registration", () => {
     expect(harness.listConnections).not.toHaveBeenCalled();
   });
 
-  test("maps dialog options through the main window and supports canceled dialogs", async () => {
-    const harness = createHarness();
-
-    await expect(
-      harness.invoke("orkestrator:dialog:open", {
-        directory: true,
-        multiple: true,
-        title: "Pick",
-        defaultPath: "/tmp",
-      }),
-    ).resolves.toEqual(["/tmp/a", "/tmp/b"]);
-    expect(harness.dialogApi.showOpenDialog).toHaveBeenCalledWith(harness.window, {
-      title: "Pick",
-      defaultPath: "/tmp",
-      properties: ["openDirectory", "multiSelections"],
-    });
-
-    harness.dialogApi.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
-    await expect(
-      harness.invoke("orkestrator:dialog:open", { directory: false }),
-    ).resolves.toBeNull();
-  });
-
   test("returns null when the clipboard image is empty", async () => {
     const harness = createHarness();
     harness.clipboardImage.isEmpty.mockReturnValueOnce(true);
@@ -1004,15 +976,8 @@ describe("main IPC registration", () => {
     expect(harness.resizedClipboardImage.toDataURL).toHaveBeenCalledTimes(1);
   });
 
-  test("uses windowless dialog overloads and safe defaults for malformed utility input", async () => {
+  test("uses safe defaults for malformed utility input", async () => {
     const harness = createHarness({ window: null });
-
-    await expect(harness.invoke("orkestrator:dialog:open", "invalid")).resolves.toBe("/tmp/a");
-    expect(harness.dialogApi.showOpenDialog).toHaveBeenCalledWith({
-      title: undefined,
-      defaultPath: undefined,
-      properties: ["openFile"],
-    });
 
     await harness.invoke("orkestrator:clipboard:write-text", 42);
     expect(harness.clipboardApi.writeText).toHaveBeenCalledWith("");

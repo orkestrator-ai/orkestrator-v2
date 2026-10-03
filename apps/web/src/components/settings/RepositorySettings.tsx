@@ -38,7 +38,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
-import { open as openDialog } from "@/lib/native/dialog";
+import { pickHostPath } from "@/lib/host-path-picker";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
@@ -185,14 +185,13 @@ export function RepositorySettings({
   // Browse for local directory
   const handleBrowse = async () => {
     try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
+      const selected = await pickHostPath({
+        mode: "directory",
         title: "Select Repository Directory",
         defaultPath: localPath || undefined,
       });
 
-      if (selected && typeof selected === "string") {
+      if (selected) {
         setLocalPath(selected);
       }
     } catch (err) {
@@ -238,14 +237,13 @@ export function RepositorySettings({
     }
 
     try {
-      const selected = await openDialog({
-        directory: false,
-        multiple: false,
+      const selected = await pickHostPath({
+        mode: "file",
         title: "Select File to Copy",
         defaultPath: localPath,
       });
 
-      if (selected && typeof selected === "string") {
+      if (selected) {
         // Convert absolute path to relative path
         if (selected.startsWith(localPath)) {
           let relativePath = selected.slice(localPath.length);

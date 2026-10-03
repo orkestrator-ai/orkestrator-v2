@@ -2468,22 +2468,6 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
-  test("uses the local Electron directory dialog and normalizes non-string results", async () => {
-    const open = mock(async () => "/tmp/project" as string | string[] | null);
-    window.orkestrator = {
-      ...originalOrkestrator!,
-      dialog: { open },
-    };
-    window.orkestratorGateway = undefined;
-
-    await expect(backendWrappers.browseForDirectory()).resolves.toBe("/tmp/project");
-    expect(open).toHaveBeenCalledWith({ directory: true });
-    expect(invokeMock).not.toHaveBeenCalled();
-
-    open.mockResolvedValue(["/tmp/one", "/tmp/two"]);
-    await expect(backendWrappers.browseForDirectory()).resolves.toBeNull();
-  });
-
   test("getEnvironmentExtensions forwards an explicit refresh", async () => {
     await backendWrappers.getEnvironmentExtensions("env-1", { refresh: true });
 

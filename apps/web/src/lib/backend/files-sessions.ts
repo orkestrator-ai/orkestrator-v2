@@ -775,3 +775,39 @@ export async function deletePaneLayout(
 }
 
 // --- Looped Code Review Workflow Commands ---
+
+/** One entry of a directory on the machine running the Orkestrator backend. */
+export interface HostDirectoryEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+export interface HostDirectoryListing {
+  /** Directory actually listed: the nearest existing ancestor of the requested path. */
+  path: string;
+  /** Explicit non-directory path, normalized by the backend independently of entries. */
+  requestedFile?: string | null;
+  parent: string | null;
+  home: string;
+  roots: string[];
+  entries: HostDirectoryEntry[];
+  /** True when the directory held more entries than the backend returns. */
+  truncated: boolean;
+}
+
+/**
+ * Lists a directory on the backend host, not on this client. This is what lets
+ * the in-app file and folder picker browse the remote machine over a gateway.
+ * Omit `path` to start at the host's home directory.
+ */
+export async function listHostDirectory(
+  path?: string,
+  options: { includeFiles?: boolean; showHidden?: boolean } = {},
+): Promise<HostDirectoryListing> {
+  return invoke<HostDirectoryListing>("list_host_directory", {
+    ...(path ? { path } : {}),
+    includeFiles: options.includeFiles ?? false,
+    showHidden: options.showHidden ?? false,
+  });
+}

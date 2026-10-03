@@ -982,7 +982,6 @@ export function BuildChatTab({
       return {
         accessibleName,
         title: reviewerModelLabel ?? reviewLabel,
-        letter: reviewLetter(reviewerIndex),
         tag: previous ? "previous" : undefined,
         detail: reviewerRuntime
           ? { text: reviewerRuntime, label: `${reviewLabel} runtime and token usage`, mono: true }

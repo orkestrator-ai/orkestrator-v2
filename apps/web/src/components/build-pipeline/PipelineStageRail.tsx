@@ -36,8 +36,6 @@ export interface PipelineStageRowView {
    */
   accessibleName: string;
   title: string;
-  /** Reviewer slot letter, shown in a fixed-width column before the title. */
-  letter?: string;
   /** Short qualifier after the title, e.g. "previous" for a superseded reviewer. */
   tag?: string;
   /** Right-aligned mono text: "running", or how long the stage took. */
@@ -270,11 +268,6 @@ export function PipelineStageRail({
           >
             <span className="flex w-full min-w-0 items-center gap-2">
               <StageStatusIcon status={row.status} />
-              {row.letter && (
-                <span className="w-3.5 shrink-0 font-mono text-[10.5px] text-muted-foreground">
-                  {row.letter}
-                </span>
-              )}
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-xs",

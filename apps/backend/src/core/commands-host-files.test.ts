@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
-import { listHostDirectory, registerHostFileCommands } from "./commands-host-files.js";
+import {
+  listHostDirectory,
+  listHostDirectoryRoots,
+  MAX_HOST_DIRECTORY_ENTRIES,
+  registerHostFileCommands,
+} from "./commands-host-files.js";
 import type { CommandHandler } from "./commands-context.js";
 
 describe("list_host_directory", () => {
@@ -104,5 +109,100 @@ describe("list_host_directory", () => {
     await expect(Promise.resolve().then(() => run({ extra: true }, {} as never))).rejects.toThrow(
       "Unexpected arguments field: extra",
     );
+  });
+  test("rejects over-length paths before filesystem access", async () => {
+    await expect(
+      listHostDirectory("/" + "x".repeat(4096), {
+        includeFiles: true,
+        showHidden: false,
+      }),
+    ).rejects.toThrow("path is too long");
+  });
+
+  test("reports permission-denied directory reads", async () => {
+    const read = spyOn(fs, "readdir").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    try {
+      await expect(
+        listHostDirectory(root, { includeFiles: true, showHidden: false }),
+      ).rejects.toThrow(`Permission denied reading ${root}`);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test("resolves explicit files independently of a folder-first capped listing", async () => {
+    const large = path.join(root, "large");
+    await fs.mkdir(large);
+    // All returned entries are directories; even the first file lies beyond the cap.
+    for (let offset = 0; offset < MAX_HOST_DIRECTORY_ENTRIES; offset += 50) {
+      await Promise.all(
+        Array.from({ length: 50 }, (_, index) =>
+          fs.mkdir(path.join(large, `dir-${offset + index}`)),
+        ),
+      );
+    }
+    const file = path.join(large, "target.txt");
+    await fs.writeFile(file, "x");
+    const listing = await listHostDirectory(file, { includeFiles: true, showHidden: false });
+    expect(listing.entries).toHaveLength(MAX_HOST_DIRECTORY_ENTRIES);
+    expect(listing.entries.every((entry) => entry.isDirectory)).toBe(true);
+    expect(listing.truncated).toBe(true);
+    expect(listing.requestedFile).toBe(file);
+  });
+
+  test("normalizes ~ and .. in explicit file paths", async () => {
+    const home = spyOn(os, "homedir").mockReturnValue(root);
+    try {
+      for (const requested of ["~/notes.txt", path.join(root, "beta") + "/../notes.txt"]) {
+        const listing = await listHostDirectory(requested, {
+          includeFiles: true,
+          showHidden: false,
+        });
+        expect(listing.path).toBe(root);
+        expect(listing.requestedFile).toBe(path.join(root, "notes.txt"));
+      }
+      expect(
+        (await listHostDirectory("~/missing", { includeFiles: true, showHidden: false }))
+          .requestedFile,
+      ).toBeNull();
+      expect(
+        (await listHostDirectory("~/notes.txt", { includeFiles: false, showHidden: false }))
+          .requestedFile,
+      ).toBeNull();
+    } finally {
+      home.mockRestore();
+    }
+  });
+
+  test("Windows roots include only accessible drive letters in order", async () => {
+    const access = spyOn(fs, "access").mockImplementation(async (drive) => {
+      if (drive !== "C:\\" && drive !== "Z:\\") throw new Error("missing drive");
+    });
+    try {
+      expect(await listHostDirectoryRoots("win32")).toEqual(["C:\\", "Z:\\"]);
+      expect(access).toHaveBeenCalledTimes(26);
+    } finally {
+      access.mockRestore();
+    }
+  });
+
+  test("rejects supplied arguments with invalid types instead of changing their intent", async () => {
+    const commands = new Map<string, CommandHandler>();
+    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    const run = commands.get("list_host_directory")!;
+    for (const [field, value, type] of [
+      ["path", 42, "string"],
+      ["path", null, "string"],
+      ["includeFiles", "yes", "boolean"],
+      ["includeFiles", 1, "boolean"],
+      ["showHidden", "false", "boolean"],
+      ["showHidden", null, "boolean"],
+    ] as const) {
+      await expect(
+        Promise.resolve().then(() => run({ [field]: value }, {} as never)),
+      ).rejects.toThrow(`Expected ${field} to be a ${type}`);
+    }
   });
 });

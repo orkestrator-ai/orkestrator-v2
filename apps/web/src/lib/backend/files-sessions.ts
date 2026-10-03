@@ -786,6 +786,8 @@ export interface HostDirectoryEntry {
 export interface HostDirectoryListing {
   /** Directory actually listed: the nearest existing ancestor of the requested path. */
   path: string;
+  /** Explicit non-directory path, normalized by the backend independently of entries. */
+  requestedFile?: string | null;
   parent: string | null;
   home: string;
   roots: string[];

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { asBoolean, asOptionalString, assertOnlyKeys } from "./commands-validation.js";
+import { asString, assertOnlyKeys } from "./commands-validation.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
 /** Upper bound on entries returned for one directory; the rest are reported as truncated. */
@@ -19,6 +19,8 @@ export type HostDirectoryEntry = {
 export type HostDirectoryListing = {
   /** Absolute directory that was actually listed (the nearest existing ancestor of the request). */
   path: string;
+  /** Normalized explicitly requested non-directory, independent of the listing cap. */
+  requestedFile: string | null;
   /** Parent directory, or null at a filesystem root. */
   parent: string | null;
   home: string;
@@ -37,8 +39,8 @@ function expandHome(requested: string): string {
   return requested;
 }
 
-async function listRoots(): Promise<string[]> {
-  if (process.platform !== "win32") return [path.parse(os.homedir()).root || "/"];
+export async function listHostDirectoryRoots(platform = process.platform): Promise<string[]> {
+  if (platform !== "win32") return [path.parse(os.homedir()).root || "/"];
   const drives = Array.from({ length: 26 }, (_, index) => `${String.fromCharCode(65 + index)}:\\`);
   const present = await Promise.all(
     drives.map((drive) =>
@@ -56,7 +58,9 @@ async function listRoots(): Promise<string[]> {
  * longer exists (or is a file) falls back to the nearest ancestor directory so
  * the picker always opens somewhere useful instead of failing on a stale default.
  */
-async function resolveListableDirectory(requested: string | undefined): Promise<string> {
+async function resolveListableDirectory(
+  requested: string | undefined,
+): Promise<{ directory: string; requestedFile: string | null }> {
   const trimmed = requested?.trim();
   if (trimmed && trimmed.length > MAX_HOST_PATH_LENGTH) {
     throw new Error("path is too long");
@@ -66,14 +70,18 @@ async function resolveListableDirectory(requested: string | undefined): Promise<
     throw new Error("path must be absolute or start with ~");
   }
   let candidate = path.resolve(expanded);
+  let requestedFile: string | null = null;
+  const normalizedRequest = candidate;
   for (;;) {
     try {
-      if ((await fs.stat(candidate)).isDirectory()) return candidate;
+      const stat = await fs.stat(candidate);
+      if (stat.isDirectory()) return { directory: candidate, requestedFile };
+      if (candidate === normalizedRequest) requestedFile = candidate;
     } catch {
       // Missing or unreadable: try the parent.
     }
     const parent = path.dirname(candidate);
-    if (parent === candidate) return candidate;
+    if (parent === candidate) return { directory: candidate, requestedFile };
     candidate = parent;
   }
 }
@@ -104,7 +112,7 @@ export async function listHostDirectory(
   requestedPath: string | undefined,
   options: { includeFiles: boolean; showHidden: boolean },
 ): Promise<HostDirectoryListing> {
-  const directory = await resolveListableDirectory(requestedPath);
+  const { directory, requestedFile } = await resolveListableDirectory(requestedPath);
   let dirents;
   try {
     dirents = await fs.readdir(directory, { withFileTypes: true });
@@ -143,9 +151,10 @@ export async function listHostDirectory(
   const parent = path.dirname(directory);
   return {
     path: directory,
+    requestedFile: options.includeFiles ? requestedFile : null,
     parent: parent === directory ? null : parent,
     home: os.homedir(),
-    roots: await listRoots(),
+    roots: await listHostDirectoryRoots(),
     entries: entries.slice(0, MAX_HOST_DIRECTORY_ENTRIES),
     truncated: entries.length > MAX_HOST_DIRECTORY_ENTRIES,
   };
@@ -154,9 +163,15 @@ export async function listHostDirectory(
 export function registerHostFileCommands(register: CommandRegistrar): void {
   register("list_host_directory", async (args) => {
     assertOnlyKeys(args, ["path", "includeFiles", "showHidden"], "arguments");
-    return listHostDirectory(asOptionalString(args.path), {
-      includeFiles: asBoolean(args.includeFiles),
-      showHidden: asBoolean(args.showHidden),
+    const requestedPath = args.path === undefined ? undefined : asString(args.path, "path");
+    for (const flag of ["includeFiles", "showHidden"] as const) {
+      if (args[flag] !== undefined && typeof args[flag] !== "boolean") {
+        throw new Error(`Expected ${flag} to be a boolean`);
+      }
+    }
+    return listHostDirectory(requestedPath, {
+      includeFiles: args.includeFiles === true,
+      showHidden: args.showHidden === true,
     });
   });
 }

@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { listHostDirectory, type HostDirectoryListing } from "@/lib/backend/files-sessions";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,12 +32,15 @@ export function HostPathPickerDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const navigationPending = useRef(false);
   const addressId = useId();
 
   const load = useCallback(
     async (path: string | undefined, hidden: boolean) => {
       const generation = ++loadGeneration.current;
+      navigationPending.current = true;
       setIsLoading(true);
+      setSelectedFile(null);
       setError(null);
       try {
         const next = await listHostDirectory(path, {
@@ -47,14 +51,22 @@ export function HostPathPickerDialog() {
         setListing(next);
         setAddressInput(next.path);
         // A typed path that names a file selects it instead of just opening its folder.
-        const typedFile =
-          isFileMode && path ? next.entries.find((entry) => entry.path === path) : undefined;
-        setSelectedFile(typedFile && !typedFile.isDirectory ? typedFile.path : null);
+        // Older remote backends omit requestedFile; preserve their exact-path selection.
+        const requestedFile =
+          next.requestedFile === undefined
+            ? next.entries.find((entry) => !entry.isDirectory && entry.path === path)?.path
+            : next.requestedFile;
+        setSelectedFile(isFileMode ? (requestedFile ?? null) : null);
       } catch (loadError) {
         if (generation !== loadGeneration.current) return;
+        setListing(null);
+        setSelectedFile(null);
         setError(loadError instanceof Error ? loadError.message : "Could not read that folder.");
       } finally {
-        if (generation === loadGeneration.current) setIsLoading(false);
+        if (generation === loadGeneration.current) {
+          navigationPending.current = false;
+          setIsLoading(false);
+        }
       }
     },
     [isFileMode],
@@ -64,6 +76,7 @@ export function HostPathPickerDialog() {
   useEffect(() => {
     if (!request) {
       loadGeneration.current += 1;
+      navigationPending.current = false;
       setListing(null);
       setSelectedFile(null);
       setError(null);
@@ -82,9 +95,10 @@ export function HostPathPickerDialog() {
     void load(listing?.path, next);
   };
 
-  const chosenPath = isFileMode ? selectedFile : (listing?.path ?? null);
+  const canChoose = !!listing && !isLoading && !error;
+  const chosenPath = canChoose ? (isFileMode ? selectedFile : listing.path) : null;
   const confirm = () => {
-    if (chosenPath) settle(chosenPath);
+    if (chosenPath && !navigationPending.current) settle(chosenPath);
   };
 
   const noun = isFileMode ? "file" : "folder";
@@ -92,7 +106,10 @@ export function HostPathPickerDialog() {
 
   return (
     <Dialog open={request !== null} onOpenChange={(open) => !open && settle(null)}>
-      <DialogContent className="flex max-h-[80dvh] flex-col sm:max-w-xl">
+      <DialogContent
+        className={cn("flex max-h-[80dvh] flex-col sm:max-w-xl", Z_FULLSCREEN_DIALOG)}
+        overlayClassName={Z_FULLSCREEN_DIALOG}
+      >
         <DialogHeader>
           <DialogTitle>{request?.title ?? `Choose a ${noun}`}</DialogTitle>
           <DialogDescription>
@@ -151,6 +168,7 @@ export function HostPathPickerDialog() {
                 type="button"
                 variant="ghost"
                 size="sm"
+                disabled={isLoading}
                 onClick={() => navigate(root)}
               >
                 {root}
@@ -190,15 +208,22 @@ export function HostPathPickerDialog() {
                 <li key={entry.path}>
                   <button
                     type="button"
+                    disabled={!canChoose}
                     aria-pressed={entry.isDirectory ? undefined : selectedFile === entry.path}
                     className={cn(
                       "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-elevated-hover",
                       selectedFile === entry.path && "bg-elevated",
                     )}
-                    onClick={() =>
-                      entry.isDirectory ? navigate(entry.path) : setSelectedFile(entry.path)
-                    }
-                    onDoubleClick={() => !entry.isDirectory && settle(entry.path)}
+                    onClick={() => {
+                      if (!canChoose || navigationPending.current) return;
+                      if (entry.isDirectory) navigate(entry.path);
+                      else setSelectedFile(entry.path);
+                    }}
+                    onDoubleClick={() => {
+                      if (canChoose && !navigationPending.current && !entry.isDirectory) {
+                        settle(entry.path);
+                      }
+                    }}
                   >
                     {entry.isDirectory ? (
                       <Folder className="size-4 shrink-0 text-muted-foreground" />
@@ -217,6 +242,12 @@ export function HostPathPickerDialog() {
             </ul>
           )}
         </div>
+
+        {selectedFile && (
+          <p className="break-all text-xs text-muted-foreground" aria-live="polite">
+            Selected file: {selectedFile}
+          </p>
+        )}
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => settle(null)}>

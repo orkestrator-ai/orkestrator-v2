@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { pickHostPath, useHostPathPickerStore } from "@/lib/host-path-picker";
 
 type Listing = {
   path: string;
@@ -10,6 +10,7 @@ type Listing = {
   roots: string[];
   entries: { name: string; path: string; isDirectory: boolean }[];
   truncated: boolean;
+  requestedFile?: string | null;
 };
 
 const listings: Record<string, Listing> = {
@@ -34,7 +35,7 @@ const listings: Record<string, Listing> = {
   },
 };
 
-const invoke = mock(async (command: string, args?: Record<string, unknown>) => {
+const defaultInvoke = async (command: string, args?: Record<string, unknown>): Promise<Listing> => {
   if (command !== "list_host_directory") throw new Error(`unexpected command ${command}`);
   const listing = listings[(args?.path as string | undefined) ?? "/home/me"];
   if (!listing) throw new Error("not found");
@@ -42,15 +43,38 @@ const invoke = mock(async (command: string, args?: Record<string, unknown>) => {
     ? listing.entries
     : listing.entries.filter((entry) => entry.isDirectory);
   return { ...listing, entries };
-});
+};
+const invoke = mock(defaultInvoke);
 
 mock.module("@/lib/native/backend", () => ({ invoke }));
 
 const { HostPathPickerDialog } = await import("./HostPathPickerDialog");
 
-beforeEach(() => invoke.mockClear());
+beforeEach(() => {
+  invoke.mockReset();
+  invoke.mockImplementation(defaultInvoke);
+});
 
-afterEach(cleanup);
+afterEach(() => {
+  act(() => useHostPathPickerStore.getState().settle(null));
+  cleanup();
+});
+
+function submitPath(path: string) {
+  const input = screen.getByLabelText("Path");
+  fireEvent.change(input, { target: { value: path } });
+  fireEvent.submit(input.closest("form")!);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
 
 afterAll(() => {
   mock.module("@/lib/native/backend", () => ({
@@ -140,5 +164,180 @@ describe("HostPathPickerDialog", () => {
     });
 
     expect((await screen.findByRole("alert")).textContent).toContain("not found");
+  });
+  for (const mode of ["directory", "file"] as const) {
+    test(`${mode} mode cannot confirm a previous path after failed navigation`, async () => {
+      render(<HostPathPickerDialog />);
+      let result!: Promise<string | null>;
+      act(() => {
+        result = pickHostPath({ mode });
+      });
+      await screen.findByRole("button", { name: "repo" });
+      if (mode === "file") fireEvent.click(screen.getByRole("button", { name: "notes.txt" }));
+      submitPath("/nope");
+      await screen.findByRole("alert");
+      const confirm = screen.getByRole("button", {
+        name: mode === "file" ? "Select file" : "Select this folder",
+      });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(confirm);
+      expect(useHostPathPickerStore.getState().request !== null).toBe(true);
+      expectDomAbsent(screen.queryByRole("button", { name: "repo" }), "stale folder row");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await expect(result).resolves.toBeNull();
+    });
+  }
+
+  test("blocks stale file row clicks and double-clicks while navigation is pending", async () => {
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "file" });
+    });
+    const row = await screen.findByRole("button", { name: "notes.txt" });
+    fireEvent.click(row);
+    const pending = deferred<Listing>();
+    invoke.mockImplementationOnce(() => pending.promise);
+    submitPath("/home/me/repo");
+    expect(row.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(row);
+    fireEvent.doubleClick(row);
+    expect(useHostPathPickerStore.getState().request !== null).toBe(true);
+    expect(screen.getByRole("button", { name: "Select file" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => pending.resolve(listings["/home/me/repo"]!));
+    expect(useHostPathPickerStore.getState().request !== null).toBe(true);
+  });
+
+  test("double-clicking a current file settles the request", async () => {
+    render(<HostPathPickerDialog />);
+    let result!: Promise<string | null>;
+    act(() => {
+      result = pickHostPath({ mode: "file" });
+    });
+    fireEvent.doubleClick(await screen.findByRole("button", { name: "notes.txt" }));
+    await expect(result).resolves.toBe("/home/me/notes.txt");
+  });
+
+  for (const typed of ["~/notes.txt", "/home/me/repo/../notes.txt"]) {
+    test(`selects the backend-normalized typed file ${typed} outside the capped entries`, async () => {
+      render(<HostPathPickerDialog />);
+      let result!: Promise<string | null>;
+      act(() => {
+        result = pickHostPath({ mode: "file" });
+      });
+      await screen.findByText("notes.txt");
+      invoke.mockImplementationOnce(async () => ({
+        ...listings["/home/me"]!,
+        entries: [],
+        truncated: true,
+        requestedFile: "/home/me/notes.txt",
+      }));
+      submitPath(typed);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Select file" }).hasAttribute("disabled")).toBe(
+          false,
+        ),
+      );
+      expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me");
+      expect(screen.getByText("Selected file: /home/me/notes.txt")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Select file" }));
+      await expect(result).resolves.toBe("/home/me/notes.txt");
+    });
+  }
+
+  test("hidden toggle refreshes the current folder and shows the truncation notice", async () => {
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "file" });
+    });
+    await screen.findByText("notes.txt");
+    invoke.mockImplementationOnce(async () => ({
+      ...listings["/home/me"]!,
+      truncated: true,
+      entries: [{ name: ".env", path: "/home/me/.env", isDirectory: false }],
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Hidden items" }));
+    await screen.findByRole("button", { name: ".env" });
+    expect(invoke).toHaveBeenLastCalledWith("list_host_directory", {
+      path: "/home/me",
+      includeFiles: true,
+      showHidden: true,
+    });
+    expect(screen.getByRole("button", { name: "Hidden items" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByText(/Only the first entries/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Hidden items" }));
+    await screen.findByText("notes.txt");
+  });
+
+  test("parent, home and drive-root buttons navigate the host", async () => {
+    invoke.mockImplementation(async (_command, args) => ({
+      ...listings["/home/me"]!,
+      path: (args?.path as string) || "/home/me/repo",
+      roots: ["C:\\", "D:\\"],
+    }));
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "directory" });
+    });
+    await screen.findByText("repo");
+    for (const [button, destination] of [
+      ["Parent folder", "/home"],
+      ["Home folder", "/home/me"],
+      ["D:\\", "D:\\"],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: button! }));
+      await waitFor(() =>
+        expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe(destination!),
+      );
+    }
+  });
+
+  test("late successful and failed responses cannot replace a newer navigation", async () => {
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "directory" });
+    });
+    await screen.findByText("repo");
+    const older = deferred<Listing>();
+    const newer = deferred<Listing>();
+    invoke.mockImplementationOnce(() => older.promise);
+    invoke.mockImplementationOnce(() => newer.promise);
+    submitPath("/older");
+    submitPath("/newer");
+    await act(async () => newer.resolve({ ...listings["/home/me/repo"]!, path: "/newer" }));
+    await act(async () => older.resolve({ ...listings["/home/me"]!, path: "/older" }));
+    expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/newer");
+    const failing = deferred<Listing>();
+    invoke.mockImplementationOnce(() => failing.promise);
+    submitPath("/failing");
+    submitPath("/home/me");
+    await screen.findByText("repo");
+    await act(async () => failing.reject(new Error("late failure")));
+    expectDomAbsent(screen.queryByRole("alert"), "obsolete failure");
+    expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me");
+  });
+  test("a cancelled request's late response cannot affect its replacement", async () => {
+    const old = deferred<Listing>();
+    invoke.mockImplementationOnce(() => old.promise);
+    render(<HostPathPickerDialog />);
+    let first!: Promise<string | null>;
+    let replacement!: Promise<string | null>;
+    act(() => {
+      first = pickHostPath({ mode: "file" });
+    });
+    act(() => {
+      replacement = pickHostPath({ mode: "directory", defaultPath: "/home/me/repo" });
+    });
+    await expect(first).resolves.toBeNull();
+    await waitFor(() =>
+      expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),
+    );
+    await act(async () =>
+      old.resolve({ ...listings["/home/me"]!, requestedFile: "/home/me/notes.txt" }),
+    );
+    expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
+    await expect(replacement).resolves.toBe("/home/me/repo");
   });
 });

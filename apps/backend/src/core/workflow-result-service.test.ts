@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -207,6 +207,160 @@ describe("WorkflowResultService", () => {
       });
     });
 
+    test("replays the original digest receipt after acceptance, consumption and restart", async () => {
+      const { resultKey, digest } = await validated();
+      const accepted = await service.submitValidated(scope, resultKey, digest);
+      if (!accepted.ok) throw new Error("acceptance failed");
+      for (const lifecycle of ["accepted", "consumed"] as const) {
+        if (lifecycle === "consumed") await service.consume(resultKey);
+        for (const reader of [service, new WorkflowResultService(dataDir)]) {
+          expect(await reader.submitValidated(scope, resultKey, digest)).toEqual({
+            ...accepted,
+            lifecycle,
+            duplicate: true,
+          });
+          expect(await reader.submitValidated(scope, resultKey, "0".repeat(64))).toMatchObject({
+            ok: false,
+            error: { code: "submission_conflict", nextAction: "stop" },
+          });
+          for (const deniedScope of [
+            { ...scope, projectId: "other" },
+            { ...scope, environmentId: "other" },
+          ]) {
+            expect(await reader.submitValidated(deniedScope, resultKey, digest)).toMatchObject({
+              ok: false,
+              error: { code: "capability_denied" },
+            });
+          }
+        }
+      }
+      expect(await service.structured(resultKey)).toBeNull();
+    });
+
+    test("concurrent digest commits accept once and wake once", async () => {
+      const { resultKey, digest } = await validated();
+      const events: unknown[] = [];
+      service.onAccepted((event) => events.push(event));
+      const outcomes = await Promise.all([
+        service.submitValidated(scope, resultKey, digest),
+        service.submitValidated(scope, resultKey, digest),
+      ]);
+      expect(outcomes.every((outcome) => outcome.ok)).toBe(true);
+      expect(outcomes.filter((outcome) => outcome.ok && !outcome.duplicate)).toHaveLength(1);
+      expect(
+        new Set(outcomes.flatMap((outcome) => (outcome.ok ? [outcome.receipt.receiptId] : [])))
+          .size,
+      ).toBe(1);
+      expect(events).toHaveLength(1);
+    });
+
+    test("retains the validated candidate when the acceptance rename fails", async () => {
+      const { resultKey, digest } = await validated();
+      const events: unknown[] = [];
+      service.onAccepted((event) => events.push(event));
+      const filePath = join(dataDir, "workflow-results.json");
+      const backupPath = `${filePath}.backup`;
+      const writer = service as unknown as { save(store: unknown): Promise<void> };
+      const realSave = writer.save.bind(service);
+      const save = spyOn(writer, "save").mockImplementationOnce(async (store) => {
+        // The callback has staged acceptance. Fail the real atomic rename,
+        // then restore the original durable open slot for a digest-only retry.
+        await rename(filePath, backupPath);
+        await mkdir(filePath);
+        try {
+          await realSave(store);
+        } finally {
+          await rm(filePath, { recursive: true, force: true });
+          await rename(backupPath, filePath);
+        }
+      });
+      try {
+        await expect(service.submitValidated(scope, resultKey, digest)).rejects.toThrow();
+      } finally {
+        save.mockRestore();
+      }
+      expect(events).toHaveLength(0);
+      expect(service.heldValidation(resultKey)).toMatchObject({ digest });
+      expect(await service.status(scope, resultKey)).toMatchObject({ lifecycle: "open" });
+      const accepted = await service.submitValidated(scope, resultKey, digest);
+      expect(accepted).toMatchObject({ ok: true, duplicate: false });
+      if (!accepted.ok) throw new Error("acceptance failed");
+      expect(await service.submitValidated(scope, resultKey, digest)).toEqual({
+        ...accepted,
+        duplicate: true,
+      });
+      expect(events).toHaveLength(1);
+      expect(service.heldValidation(resultKey)).toBeUndefined();
+      expect(await new WorkflowResultService(dataDir).structured(resultKey)).toMatchObject({
+        value: valid,
+      });
+    });
+
+    test.each(["cancelled", "superseded"] as const)(
+      "digest replay preserves %s denial",
+      async (lifecycle) => {
+        const { resultKey, digest } = await validated();
+        await service.submitValidated(scope, resultKey, digest);
+        await service.close(resultKey, lifecycle);
+        expect(await service.submitValidated(scope, resultKey, digest)).toMatchObject({
+          ok: false,
+          error: { code: "attempt_closed", nextAction: "stop" },
+        });
+      },
+    );
+
+    test("an unknown or unauthorized slot is denied without a cached candidate", async () => {
+      const resultKey = await prepare();
+      for (const key of [resultKey, crypto.randomUUID()]) {
+        expect(
+          await service.submitValidated({ ...scope, projectId: "other" }, key, "0".repeat(64)),
+        ).toMatchObject({
+          ok: false,
+          error: { code: "capability_denied" },
+        });
+      }
+    });
+
+    test("an exhausted slot keeps its closed-state response for digest commits", async () => {
+      const { resultKey, digest } = await validated();
+      for (let title = 0; title < 4; title += 1)
+        await service.submit(scope, resultKey, { ...valid, title });
+      expect(service.heldValidation(resultKey)).toBeUndefined();
+      expect(await service.submitValidated(scope, resultKey, digest)).toMatchObject({
+        ok: false,
+        error: { code: "correction_budget_exhausted" },
+      });
+    });
+
+    test.each([true, false])(
+      "validation and close cannot orphan a candidate (close first: %s)",
+      async (closeFirst) => {
+        const resultKey = await prepare();
+        const operations = closeFirst
+          ? [service.close(resultKey, "cancelled"), service.validate(scope, resultKey, valid)]
+          : [service.validate(scope, resultKey, valid), service.close(resultKey, "cancelled")];
+        await Promise.all(operations);
+        expect(service.heldValidation(resultKey)).toBeUndefined();
+        expect(await service.validate(scope, resultKey, valid)).toMatchObject({
+          ok: false,
+          error: { code: "attempt_closed" },
+        });
+        expect(service.heldValidation(resultKey)).toBeUndefined();
+        expect(await service.status(scope, resultKey)).toMatchObject({ lifecycle: "cancelled" });
+      },
+    );
+
+    test("the one-shot nudge claim survives candidate replacement and clears on settlement", async () => {
+      const { resultKey } = await validated();
+      expect(service.claimCommitNudge(resultKey)).toBe(true);
+      await service.validate(scope, resultKey, { ...valid, title: "Updated" });
+      expect(service.claimCommitNudge(resultKey)).toBe(false);
+      await service.close(resultKey, "cancelled");
+      expect(service.claimCommitNudge(resultKey)).toBe(false);
+      const next = await validated();
+      expect(service.claimCommitNudge(next.resultKey)).toBe(true);
+    });
+
     test("an unknown digest is correctable feedback that spends no budget", async () => {
       const { resultKey } = await validated();
       for (let index = 0; index < 6; index += 1) {
@@ -273,13 +427,58 @@ describe("WorkflowResultService", () => {
   describe("delivery evidence in status", () => {
     const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
 
-    test("says nothing reached the service when no call arrived", async () => {
+    test("does not infer client parsing faults from zero completed calls", async () => {
       const resultKey = await prepare();
       const status = await service.status(scope, resultKey);
       expect(status?.delivery).toMatchObject({ validationCalls: 0, submissionCalls: 0 });
-      expect(status?.delivery?.hint).toContain("No validation or submission call has reached");
-      expect(status?.delivery?.hint).toContain("your own tool client");
+      expect(status?.delivery?.hint).toContain("No validation or submission has been processed");
+      expect(status?.delivery?.hint).toContain("service size or capacity limits");
+      expect(status?.delivery?.hint).not.toContain("malformed");
     });
+
+    test.each(["validate", "submit"] as const)(
+      "%s size rejection does not imply malformed client JSON",
+      async (method) => {
+        const resultKey = await prepare();
+        expect(
+          await service[method](scope, resultKey, { ...valid, summary: "x".repeat(800_000) }),
+        ).toMatchObject({
+          ok: false,
+          error: { code: "result_too_large" },
+        });
+        const delivery = (await service.status(scope, resultKey))?.delivery;
+        expect(delivery).toMatchObject({ validationCalls: 0, submissionCalls: 0 });
+        expect(delivery?.hint).toContain("service size or capacity limits");
+        expect(delivery?.hint).not.toContain("malformed");
+      },
+    );
+
+    test.each(["validate", "submit"] as const)(
+      "%s backpressure rejection does not imply malformed client JSON",
+      async (method) => {
+        const resultKey = await prepare();
+        // Occupy admission without completing validation or submission work.
+        const admission = service as unknown as {
+          beginPending(key: string, bytes: number): boolean;
+          endPending(key: string, bytes: number): void;
+        };
+        for (let i = 0; i < WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY; i += 1)
+          expect(admission.beginPending(resultKey, 0)).toBe(true);
+        try {
+          expect(await service[method](scope, resultKey, valid)).toMatchObject({
+            ok: false,
+            error: { code: "backpressure" },
+          });
+          const delivery = (await service.status(scope, resultKey))?.delivery;
+          expect(delivery).toMatchObject({ validationCalls: 0, submissionCalls: 0 });
+          expect(delivery?.hint).toContain("service size or capacity limits");
+          expect(delivery?.hint).not.toContain("malformed");
+        } finally {
+          for (let i = 0; i < WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY; i += 1)
+            admission.endPending(resultKey, 0);
+        }
+      },
+    );
 
     test("points at the held digest after a successful validation", async () => {
       const resultKey = await prepare();

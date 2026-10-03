@@ -234,6 +234,7 @@ export class WorkflowResultService {
   private pendingBytes = 0;
   private readonly pendingCallsByKey = new Map<string, number>();
   private readonly held = new Map<string, HeldValidation>();
+  private readonly nudgedResults = new Set<string>();
   private heldBytes = 0;
   private readonly deliveryCounters = new Map<string, DeliveryCounters>();
   private readonly acceptanceListeners = new Set<(event: WorkflowResultAcceptance) => void>();
@@ -271,6 +272,7 @@ export class WorkflowResultService {
   private forgetDelivery(resultKey: string): void {
     this.releaseHeld(resultKey);
     this.deliveryCounters.delete(resultKey);
+    this.nudgedResults.delete(resultKey);
   }
 
   private hold(resultKey: string, digest: string, result: unknown, bytes: number): void {
@@ -305,6 +307,15 @@ export class WorkflowResultService {
       return undefined;
     }
     return { digest: held.digest, ageMs };
+  }
+
+  /** Claims a best-effort nudge once per slot across supervisor passes. */
+  claimCommitNudge(resultKey: string): boolean {
+    if (!this.heldValidation(resultKey)) return false;
+    if (this.nudgedResults.has(resultKey) || this.nudgedResults.size >= WORKFLOW_RESULT_MAX_ENTRIES)
+      return false;
+    this.nudgedResults.add(resultKey);
+    return true;
   }
 
   private beginPending(resultKey: string, bytes: number): boolean {
@@ -537,62 +548,68 @@ export class WorkflowResultService {
     }
     let outcome: WorkflowResultPreflightOutcome = "invalid_result";
     try {
-      const entry = (await this.load()).entries[resultKey];
-      if (
-        !entry ||
-        entry.environmentId !== scope.environmentId ||
-        entry.projectId !== scope.projectId
-      ) {
-        outcome = "capability_denied";
-        return {
-          ok: false,
-          error: {
-            code: "capability_denied",
-            nextAction: "stop",
-            message: "This tool connection cannot validate that workflow result.",
-          },
-        };
-      }
-      if (entry.lifecycle !== "open") {
-        outcome =
-          entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed";
-        return {
-          ok: false,
-          error: {
-            code: outcome,
-            nextAction: "stop",
-            message:
-              entry.lifecycle === "exhausted"
-                ? "The correction budget for this workflow result is exhausted."
-                : "This workflow result attempt is closed.",
-          },
-        };
-      }
-      const validationStartedAt = Date.now();
-      let issues: WorkflowResultValidationIssue[];
-      try {
-        issues = validateEntryResult(entry, result);
-      } finally {
-        this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
-      }
-      const delivery = this.counters(resultKey);
-      delivery.validationCalls += 1;
-      delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
-      if (issues.length > 0) {
-        return {
-          ok: false,
-          error: {
-            code: "invalid_result",
-            nextAction: "correct",
-            message: "The result is not valid. Correct the reported fields before submitting it.",
-            issues,
-          },
-        };
-      }
-      outcome = "valid";
-      const validatedDigest = createHash("sha256").update(serialized).digest("hex");
-      this.hold(resultKey, validatedDigest, result, validationBytes);
-      return { ok: true, valid: true, validatedDigest };
+      return await this.mutate<WorkflowResultValidation>(
+        (store) => {
+          const entry = store.entries[resultKey];
+          if (
+            !entry ||
+            entry.environmentId !== scope.environmentId ||
+            entry.projectId !== scope.projectId
+          ) {
+            outcome = "capability_denied";
+            return {
+              ok: false,
+              error: {
+                code: "capability_denied",
+                nextAction: "stop",
+                message: "This tool connection cannot validate that workflow result.",
+              },
+            };
+          }
+          if (entry.lifecycle !== "open") {
+            outcome =
+              entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed";
+            return {
+              ok: false,
+              error: {
+                code: outcome,
+                nextAction: "stop",
+                message:
+                  entry.lifecycle === "exhausted"
+                    ? "The correction budget for this workflow result is exhausted."
+                    : "This workflow result attempt is closed.",
+              },
+            };
+          }
+          const validationStartedAt = Date.now();
+          let issues: WorkflowResultValidationIssue[];
+          try {
+            issues = validateEntryResult(entry, result);
+          } finally {
+            this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
+          }
+          const delivery = this.counters(resultKey);
+          delivery.validationCalls += 1;
+          delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
+          if (issues.length > 0) {
+            return {
+              ok: false,
+              error: {
+                code: "invalid_result",
+                nextAction: "correct",
+                message:
+                  "The result is not valid. Correct the reported fields before submitting it.",
+                issues,
+              },
+            };
+          }
+          outcome = "valid";
+          const validatedDigest = createHash("sha256").update(serialized).digest("hex");
+          this.hold(resultKey, validatedDigest, result, validationBytes);
+          return { ok: true, valid: true, validatedDigest };
+        },
+        { readOnly: true },
+      );
     } catch (error) {
       outcome = "storage_unavailable";
       throw error;
@@ -617,7 +634,16 @@ export class WorkflowResultService {
     resultKey: string,
     result: unknown,
   ): Promise<WorkflowResultSubmission> {
-    const submission = await this.submitOnce(scope, resultKey, result);
+    return this.deliver(scope, resultKey, result);
+  }
+
+  private async deliver(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+    result: unknown,
+    validatedDigest?: string,
+  ): Promise<WorkflowResultSubmission> {
+    const submission = await this.submitOnce(scope, resultKey, result, validatedDigest);
     if (submission.ok && !submission.duplicate) {
       for (const listener of Array.from(this.acceptanceListeners)) {
         try {
@@ -643,46 +669,20 @@ export class WorkflowResultService {
     resultKey: string,
     validatedDigest: string,
   ): Promise<WorkflowResultSubmission> {
-    const held = this.held.get(resultKey);
-    if (!held || held.digest !== validatedDigest || !this.heldValidation(resultKey)) {
-      const entry = (await this.load()).entries[resultKey];
-      if (
-        entry &&
-        entry.environmentId === scope.environmentId &&
-        entry.projectId === scope.projectId
-      ) {
-        this.counters(resultKey).submissionCalls += 1;
-      }
-      return {
-        ok: false,
-        error: {
-          code: "invalid_result",
-          nextAction: "correct",
-          message:
-            "No validated result with that digest is held. Validate the complete result again, or submit it in full.",
-          issues: [
-            {
-              path: "$.validatedDigest",
-              code: "unknown_validation",
-              message: "The digest does not match a held validated result.",
-            },
-          ],
-        },
-      };
-    }
-    return this.submit(scope, resultKey, held.result);
+    return this.deliver(scope, resultKey, undefined, validatedDigest);
   }
 
   private async submitOnce(
     scope: WorkflowResultCallerScope,
     resultKey: string,
     result: unknown,
+    validatedDigest?: string,
   ): Promise<WorkflowResultSubmission> {
     let serialized: string;
     let resultDigest: string;
     try {
-      serialized = serialize(result);
-      resultDigest = createHash("sha256").update(serialized).digest("hex");
+      serialized = validatedDigest === undefined ? serialize(result) : "";
+      resultDigest = validatedDigest ?? createHash("sha256").update(serialized).digest("hex");
     } catch {
       return {
         ok: false,
@@ -715,167 +715,200 @@ export class WorkflowResultService {
       };
     }
     try {
-      return await this.mutate(async (store) => {
-        const entry = store.entries[resultKey];
-        if (
-          !entry ||
-          entry.environmentId !== scope.environmentId ||
-          entry.projectId !== scope.projectId
-        ) {
-          return {
-            ok: false,
-            error: {
-              code: "capability_denied",
-              nextAction: "stop",
-              message: "This tool connection cannot submit that workflow result.",
-            },
-          } satisfies WorkflowResultSubmission;
-        }
-        this.counters(resultKey).submissionCalls += 1;
-        if (
-          entry.lifecycle === "cancelled" ||
-          entry.lifecycle === "superseded" ||
-          entry.lifecycle === "exhausted"
-        ) {
-          const exhausted = entry.lifecycle === "exhausted";
-          this.forgetDelivery(resultKey);
-          this.metrics.recordSubmission({
-            provider: entry.provider,
-            kind: entry.kind,
-            outcome: "rejected",
-            code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
-          });
-          return {
-            ok: false,
-            error: {
-              code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
-              nextAction: "stop",
-              message: exhausted
-                ? "The correction budget for this workflow result is exhausted."
-                : "This workflow result attempt is closed.",
-            },
-          } satisfies WorkflowResultSubmission;
-        }
-        if (entry.receipt) {
-          if (entry.digest !== resultDigest) {
-            this.metrics.recordSubmission({
-              provider: entry.provider,
-              kind: entry.kind,
-              outcome: "conflict",
-              code: "submission_conflict",
-            });
+      return await this.mutate<WorkflowResultSubmission>(
+        async (store) => {
+          const entry = store.entries[resultKey];
+          if (
+            !entry ||
+            entry.environmentId !== scope.environmentId ||
+            entry.projectId !== scope.projectId
+          ) {
             return {
               ok: false,
               error: {
-                code: "submission_conflict",
+                code: "capability_denied",
                 nextAction: "stop",
-                message: "A different result was already accepted for this key.",
+                message: "This tool connection cannot submit that workflow result.",
               },
             } satisfies WorkflowResultSubmission;
           }
-          this.metrics.recordSubmission({
-            provider: entry.provider,
-            kind: entry.kind,
-            outcome: "duplicate",
-          });
-          return {
-            ok: true,
-            receipt: entry.receipt,
-            lifecycle: entry.lifecycle,
-            duplicate: true,
-          } satisfies WorkflowResultSubmission;
-        }
-        if (entry.lifecycle !== "open") {
-          this.metrics.recordSubmission({
-            provider: entry.provider,
-            kind: entry.kind,
-            outcome: "rejected",
-            code: "attempt_closed",
-          });
-          return {
-            ok: false,
-            error: {
-              code: "attempt_closed",
-              nextAction: "stop",
-              message: "This workflow result attempt is closed.",
-            },
-          } satisfies WorkflowResultSubmission;
-        }
-        if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
-        const validationStartedAt = Date.now();
-        const issues = validateEntryResult(entry, result);
-        this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
-        if (issues.length > 0) {
-          // A repeated delivery of the same invalid payload is one correction,
-          // not two, so the budget and the metric both key on the digest.
-          const distinctCorrection = !entry.rejectedDigests.includes(resultDigest);
-          if (distinctCorrection) {
-            entry.rejectedDigests.push(resultDigest);
-            this.metrics.recordCorrection({ provider: entry.provider, kind: entry.kind });
-          }
-          entry.rejectedDigests = entry.rejectedDigests.slice(-WORKFLOW_RESULT_MAX_REJECTIONS);
-          entry.updatedAt = new Date().toISOString();
-          if (entry.rejectedDigests.length >= WORKFLOW_RESULT_MAX_REJECTIONS) {
-            entry.lifecycle = "exhausted";
-            this.forgetDelivery(resultKey);
+          this.counters(resultKey).submissionCalls += 1;
+          if (
+            entry.lifecycle === "cancelled" ||
+            entry.lifecycle === "superseded" ||
+            entry.lifecycle === "exhausted"
+          ) {
+            const exhausted = entry.lifecycle === "exhausted";
             this.metrics.recordSubmission({
               provider: entry.provider,
               kind: entry.kind,
               outcome: "rejected",
-              code: "correction_budget_exhausted",
+              code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
             });
             return {
               ok: false,
               error: {
-                code: "correction_budget_exhausted",
+                code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
                 nextAction: "stop",
-                message: "The result is still invalid after the allowed correction attempts.",
+                message: exhausted
+                  ? "The correction budget for this workflow result is exhausted."
+                  : "This workflow result attempt is closed.",
+              },
+            } satisfies WorkflowResultSubmission;
+          }
+          if (entry.receipt) {
+            if (entry.digest !== resultDigest) {
+              this.metrics.recordSubmission({
+                provider: entry.provider,
+                kind: entry.kind,
+                outcome: "conflict",
+                code: "submission_conflict",
+              });
+              return {
+                ok: false,
+                error: {
+                  code: "submission_conflict",
+                  nextAction: "stop",
+                  message: "A different result was already accepted for this key.",
+                },
+              } satisfies WorkflowResultSubmission;
+            }
+            this.metrics.recordSubmission({
+              provider: entry.provider,
+              kind: entry.kind,
+              outcome: "duplicate",
+            });
+            return {
+              ok: true,
+              receipt: entry.receipt,
+              lifecycle: entry.lifecycle,
+              duplicate: true,
+            } satisfies WorkflowResultSubmission;
+          }
+          if (entry.lifecycle !== "open") {
+            this.metrics.recordSubmission({
+              provider: entry.provider,
+              kind: entry.kind,
+              outcome: "rejected",
+              code: "attempt_closed",
+            });
+            return {
+              ok: false,
+              error: {
+                code: "attempt_closed",
+                nextAction: "stop",
+                message: "This workflow result attempt is closed.",
+              },
+            } satisfies WorkflowResultSubmission;
+          }
+          if (validatedDigest !== undefined) {
+            const held = this.held.get(resultKey);
+            if (!held || held.digest !== validatedDigest || !this.heldValidation(resultKey)) {
+              return {
+                ok: false,
+                error: {
+                  code: "invalid_result",
+                  nextAction: "correct",
+                  message:
+                    "No validated result with that digest is held. Validate the complete result again, or submit it in full.",
+                  issues: [
+                    {
+                      path: "$.validatedDigest",
+                      code: "unknown_validation",
+                      message: "The digest does not match a held validated result.",
+                    },
+                  ],
+                },
+              } satisfies WorkflowResultSubmission;
+            }
+            result = held.result;
+          }
+          if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
+          const validationStartedAt = Date.now();
+          const issues = validateEntryResult(entry, result);
+          this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
+          if (issues.length > 0) {
+            // A repeated delivery of the same invalid payload is one correction,
+            // not two, so the budget and the metric both key on the digest.
+            const distinctCorrection = !entry.rejectedDigests.includes(resultDigest);
+            if (distinctCorrection) {
+              entry.rejectedDigests.push(resultDigest);
+              this.metrics.recordCorrection({ provider: entry.provider, kind: entry.kind });
+            }
+            entry.rejectedDigests = entry.rejectedDigests.slice(-WORKFLOW_RESULT_MAX_REJECTIONS);
+            entry.updatedAt = new Date().toISOString();
+            if (entry.rejectedDigests.length >= WORKFLOW_RESULT_MAX_REJECTIONS) {
+              entry.lifecycle = "exhausted";
+              this.metrics.recordSubmission({
+                provider: entry.provider,
+                kind: entry.kind,
+                outcome: "rejected",
+                code: "correction_budget_exhausted",
+              });
+              return {
+                ok: false,
+                error: {
+                  code: "correction_budget_exhausted",
+                  nextAction: "stop",
+                  message: "The result is still invalid after the allowed correction attempts.",
+                  issues,
+                },
+              } satisfies WorkflowResultSubmission;
+            }
+            this.metrics.recordSubmission({
+              provider: entry.provider,
+              kind: entry.kind,
+              outcome: "rejected",
+              code: "invalid_result",
+            });
+            return {
+              ok: false,
+              error: {
+                code: "invalid_result",
+                nextAction: "correct",
+                message:
+                  "The result was not accepted. Correct the reported fields and submit again.",
                 issues,
               },
             } satisfies WorkflowResultSubmission;
           }
+          const acceptedAt = new Date().toISOString();
+          const receipt: WorkflowResultReceipt = {
+            version: 1,
+            resultKey,
+            receiptId: randomUUID(),
+            kind: entry.kind,
+            schemaVersion: entry.schemaVersion,
+            acceptedAt,
+          };
+          entry.lifecycle = "accepted";
+          entry.result = result;
+          entry.digest = resultDigest;
+          entry.receipt = receipt;
+          entry.updatedAt = acceptedAt;
           this.metrics.recordSubmission({
             provider: entry.provider,
             kind: entry.kind,
-            outcome: "rejected",
-            code: "invalid_result",
+            outcome: "accepted",
           });
-          return {
-            ok: false,
-            error: {
-              code: "invalid_result",
-              nextAction: "correct",
-              message: "The result was not accepted. Correct the reported fields and submit again.",
-              issues,
-            },
-          } satisfies WorkflowResultSubmission;
-        }
-        const acceptedAt = new Date().toISOString();
-        const receipt: WorkflowResultReceipt = {
-          version: 1,
-          resultKey,
-          receiptId: randomUUID(),
-          kind: entry.kind,
-          schemaVersion: entry.schemaVersion,
-          acceptedAt,
-        };
-        entry.lifecycle = "accepted";
-        this.forgetDelivery(resultKey);
-        entry.result = result;
-        entry.digest = resultDigest;
-        entry.receipt = receipt;
-        entry.updatedAt = acceptedAt;
-        this.metrics.recordSubmission({
-          provider: entry.provider,
-          kind: entry.kind,
-          outcome: "accepted",
-        });
-        this.metrics.recordAcceptanceLatency(
-          entry.kind,
-          Date.parse(acceptedAt) - Date.parse(entry.firstSubmissionAt ?? acceptedAt),
-        );
-        return { ok: true, receipt, lifecycle: entry.lifecycle, duplicate: false };
-      });
+          this.metrics.recordAcceptanceLatency(
+            entry.kind,
+            Date.parse(acceptedAt) - Date.parse(entry.firstSubmissionAt ?? acceptedAt),
+          );
+          return { ok: true, receipt, lifecycle: entry.lifecycle, duplicate: false };
+        },
+        {
+          afterCommit: (submission) => {
+            if (
+              submission.ok ||
+              submission.error.code === "attempt_closed" ||
+              submission.error.code === "correction_budget_exhausted"
+            ) {
+              this.forgetDelivery(resultKey);
+            }
+          },
+        },
+      );
     } finally {
       this.endPending(resultKey, submissionBytes);
     }
@@ -912,8 +945,7 @@ export class WorkflowResultService {
   }
 
   /**
-   * What reached the backend for an open slot, with a hint that points a model
-   * at its own call rather than at the tool when nothing has arrived.
+   * Completed validation/submission work for an open slot, with delivery guidance.
    */
   private deliveryOf(resultKey: string, kind: WorkflowResultKind): WorkflowResultDelivery {
     const counters = this.deliveryCounters.get(resultKey);
@@ -925,7 +957,7 @@ export class WorkflowResultService {
       hint = `A validated result is held. Commit it by calling ${workflowResultToolName(kind)} with this resultKey and validatedDigest; do not re-send the result.`;
     } else if (validationCalls === 0 && submissionCalls === 0) {
       hint =
-        "No validation or submission call has reached the result service for this resultKey. Rejections you saw came from your own tool client, so the calls were malformed (a brace count off by one is the usual cause); the service is not rejecting anything.";
+        "No validation or submission has been processed for this resultKey. Calls may have been rejected by the client or by service size or capacity limits before processing. Check the actual call error before retrying.";
     } else if (counters?.lastValidation === "invalid") {
       hint = "The last validation reported problems. Correct them and validate again.";
     }
@@ -992,25 +1024,27 @@ export class WorkflowResultService {
   }
 
   async consume(resultKey: string): Promise<void> {
-    await this.mutate(async (store) => {
-      const entry = store.entries[resultKey];
-      if (!entry || entry.lifecycle === "consumed") return;
-      if (entry.lifecycle !== "accepted") throw new Error("Workflow result is not accepted");
-      this.forgetDelivery(resultKey);
-      const consumedAt = new Date().toISOString();
-      entry.lifecycle = "consumed";
-      entry.result = undefined;
-      entry.context = undefined;
-      entry.schema = undefined;
-      entry.expectedStoryId = undefined;
-      entry.rejectedDigests = [];
-      entry.firstSubmissionAt = undefined;
-      entry.updatedAt = consumedAt;
-      this.metrics.recordConsumptionLatency(
-        entry.kind,
-        Date.parse(consumedAt) - Date.parse(entry.receipt?.acceptedAt ?? consumedAt),
-      );
-    });
+    await this.mutate(
+      async (store) => {
+        const entry = store.entries[resultKey];
+        if (!entry || entry.lifecycle === "consumed") return;
+        if (entry.lifecycle !== "accepted") throw new Error("Workflow result is not accepted");
+        const consumedAt = new Date().toISOString();
+        entry.lifecycle = "consumed";
+        entry.result = undefined;
+        entry.context = undefined;
+        entry.schema = undefined;
+        entry.expectedStoryId = undefined;
+        entry.rejectedDigests = [];
+        entry.firstSubmissionAt = undefined;
+        entry.updatedAt = consumedAt;
+        this.metrics.recordConsumptionLatency(
+          entry.kind,
+          Date.parse(consumedAt) - Date.parse(entry.receipt?.acceptedAt ?? consumedAt),
+        );
+      },
+      { afterCommit: () => this.forgetDelivery(resultKey) },
+    );
   }
 
   /**
@@ -1019,42 +1053,52 @@ export class WorkflowResultService {
    * limit forever. Returns the number of slots removed.
    */
   async deleteByEnvironment(environmentId: string): Promise<number> {
-    return this.mutate((store) => {
-      let removed = 0;
-      for (const [resultKey, entry] of Object.entries(store.entries)) {
-        if (entry.environmentId !== environmentId) continue;
-        this.forgetDelivery(resultKey);
-        delete store.entries[resultKey];
-        removed += 1;
-      }
-      return removed;
-    });
+    const removedKeys: string[] = [];
+    return this.mutate(
+      (store) => {
+        let removed = 0;
+        for (const [resultKey, entry] of Object.entries(store.entries)) {
+          if (entry.environmentId !== environmentId) continue;
+          removedKeys.push(resultKey);
+          delete store.entries[resultKey];
+          removed += 1;
+        }
+        return removed;
+      },
+      {
+        afterCommit: () => {
+          for (const resultKey of removedKeys) this.forgetDelivery(resultKey);
+        },
+      },
+    );
   }
 
   async close(resultKey: string, lifecycle: "cancelled" | "superseded"): Promise<void> {
-    await this.mutate(async (store) => {
-      const entry = store.entries[resultKey];
-      if (!entry || entry.lifecycle === "consumed") return;
-      this.forgetDelivery(resultKey);
-      // A slot closed while still open was never submitted to. That is the
-      // signal for a worker that finished without calling its tool, which is
-      // what the missing-submission counter exists to surface.
-      if (entry.lifecycle === "open" && !entry.firstSubmissionAt) {
-        this.metrics.recordMissingSubmission({
-          provider: entry.provider,
-          kind: entry.kind,
-          reason: lifecycle,
-        });
-      }
-      entry.lifecycle = lifecycle;
-      entry.result = undefined;
-      entry.context = undefined;
-      entry.schema = undefined;
-      entry.expectedStoryId = undefined;
-      entry.rejectedDigests = [];
-      entry.firstSubmissionAt = undefined;
-      entry.updatedAt = new Date().toISOString();
-    });
+    await this.mutate(
+      async (store) => {
+        const entry = store.entries[resultKey];
+        if (!entry || entry.lifecycle === "consumed") return;
+        // A slot closed while still open was never submitted to. That is the
+        // signal for a worker that finished without calling its tool, which is
+        // what the missing-submission counter exists to surface.
+        if (entry.lifecycle === "open" && !entry.firstSubmissionAt) {
+          this.metrics.recordMissingSubmission({
+            provider: entry.provider,
+            kind: entry.kind,
+            reason: lifecycle,
+          });
+        }
+        entry.lifecycle = lifecycle;
+        entry.result = undefined;
+        entry.context = undefined;
+        entry.schema = undefined;
+        entry.expectedStoryId = undefined;
+        entry.rejectedDigests = [];
+        entry.firstSubmissionAt = undefined;
+        entry.updatedAt = new Date().toISOString();
+      },
+      { afterCommit: () => this.forgetDelivery(resultKey) },
+    );
   }
 
   /**
@@ -1169,14 +1213,18 @@ export class WorkflowResultService {
       throw new Error("Workflow result store has too many active entries");
   }
 
-  private async mutate<T>(operation: (store: WorkflowResultStore) => Promise<T> | T): Promise<T> {
+  private async mutate<T>(
+    operation: (store: WorkflowResultStore) => Promise<T> | T,
+    options: { readOnly?: boolean; afterCommit?: (result: T) => void } = {},
+  ): Promise<T> {
     const run = this.mutation.then(async () => {
       const release = await this.acquireMutationLock();
       try {
         const store = await this.load();
-        this.cachedStore = null;
+        if (!options.readOnly) this.cachedStore = null;
         const result = await operation(store);
-        await this.save(store);
+        if (!options.readOnly) await this.save(store);
+        options.afterCommit?.(result);
         return result;
       } finally {
         await release();

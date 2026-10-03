@@ -58,6 +58,7 @@ function harness(
           },
         }),
   } as unknown as BuildPipelineProvider;
+  const nudged = new Set<string>();
   const host: ReviewFanoutHost = {
     workflowId: "workflow-1",
     targetBranch: "main",
@@ -76,8 +77,13 @@ function harness(
     projectResult: async () => "preparing",
     readResult: () => Promise.resolve(null),
     heldResult: () => options.held,
+    claimResultNudge: (requestId) => {
+      if (nudged.has(requestId)) return false;
+      nudged.add(requestId);
+      return true;
+    },
   };
-  return { reviewer, runner: new ReviewFanoutRunner(host), steers };
+  return { reviewer, host, runner: new ReviewFanoutRunner(host), steers };
 }
 
 describe("committing a validated report that was never submitted", () => {
@@ -96,13 +102,13 @@ describe("committing a validated report that was never submitted", () => {
     expect(reviewer.status).toBe("running");
   });
 
-  test("nudges a slot at most once", async () => {
-    const { reviewer, runner, steers } = harness({
+  test("nudges a slot at most once across separately constructed supervisor passes", async () => {
+    const { reviewer, host, runner, steers } = harness({
       held: { digest: DIGEST, ageMs: REVIEW_RESULT_COMMIT_NUDGE_MS * 3 },
     });
     await runner.advanceReviewers([reviewer]);
-    await runner.advanceReviewers([reviewer]);
-    await runner.advanceReviewers([reviewer]);
+    await new ReviewFanoutRunner({ ...host }).advanceReviewers([reviewer]);
+    await new ReviewFanoutRunner({ ...host }).advanceReviewers([reviewer]);
     expect(steers).toHaveLength(1);
   });
 

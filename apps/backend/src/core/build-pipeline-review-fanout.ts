@@ -323,6 +323,8 @@ export class BuildPipelineReviewFanout {
               }),
             projectResult: (requestId: string) => this.deps.workflowResults!.projection(requestId),
             heldResult: (requestId: string) => this.deps.workflowResults!.heldValidation(requestId),
+            claimResultNudge: (requestId: string) =>
+              this.deps.workflowResults!.claimCommitNudge(requestId),
             readResult: <T>(requestId: string) =>
               this.deps.workflowResults!.structured<T>(requestId),
             consumeResult: (requestId: string) => this.deps.workflowResults!.consume(requestId),

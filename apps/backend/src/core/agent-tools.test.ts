@@ -256,11 +256,19 @@ describe("agent Kanban tools", () => {
       structuredContent: { ok: false, error: { code: "invalid_result" } },
     });
 
+    const validation = await rpc(connection.url, connection.token, "tools/call", {
+      name: "validate_workflow_result",
+      arguments: { resultKey, result: { phase: "collecting", title: "Tools", summary: "" } },
+    });
+    expect(validation.body.result?.structuredContent).toMatchObject({ ok: true, valid: true });
+    const validatedDigest = validation.body.result?.structuredContent?.validatedDigest;
+    expect(validatedDigest).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+
     const accepted = await rpc(connection.url, connection.token, "tools/call", {
       name: "submit_feature_plan_state",
       arguments: {
         resultKey,
-        result: { phase: "collecting", title: "Tools", summary: "" },
+        validatedDigest,
       },
     });
     expect(accepted.body.result).toMatchObject({
@@ -290,6 +298,15 @@ describe("agent Kanban tools", () => {
     expect(recoveredStatus.body.result?.structuredContent).toMatchObject({
       resultKey,
       lifecycle: "accepted",
+    });
+
+    const replay = await rpc(connection.url, connection.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: { resultKey, validatedDigest },
+    });
+    expect(replay.body.result?.structuredContent).toEqual({
+      ...accepted.body.result?.structuredContent,
+      duplicate: true,
     });
 
     const denied = await rpc(connection.url, connection.token, "tools/call", {
@@ -342,7 +359,8 @@ describe("agent Kanban tools", () => {
       "get_workflow_result_status",
     ]);
     expect(listed.body.result?.tools?.[0]?.inputSchema).toMatchObject({
-      required: ["resultKey", "capability", "result"],
+      required: ["resultKey", "capability"],
+      properties: { result: expect.any(Object), validatedDigest: { type: "string" } },
     });
 
     const crossed = await rpc(first.url, first.token, "tools/call", {
@@ -358,17 +376,54 @@ describe("agent Kanban tools", () => {
       structuredContent: { ok: false, error: { code: "capability_denied" } },
     });
 
-    const accepted = await rpc(first.url, first.token, "tools/call", {
-      name: "submit_feature_plan_state",
+    const validation = await rpc(first.url, first.token, "tools/call", {
+      name: "validate_workflow_result",
       arguments: {
         resultKey: firstKey,
         capability: first.workflowResultCapability,
         result: { phase: "collecting", title: "Tools", summary: "" },
       },
     });
+    expect(validation.body.result?.structuredContent).toMatchObject({ ok: true, valid: true });
+    const validatedDigest = validation.body.result?.structuredContent?.validatedDigest;
+    expect(validatedDigest).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    const digestDenied = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: second.workflowResultCapability,
+        validatedDigest,
+      },
+    });
+    expect(digestDenied.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+
+    const accepted = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: first.workflowResultCapability,
+        validatedDigest,
+      },
+    });
     expect(accepted.body.result?.structuredContent).toMatchObject({
       ok: true,
       lifecycle: "accepted",
+    });
+
+    const replay = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: first.workflowResultCapability,
+        validatedDigest,
+      },
+    });
+    expect(replay.body.result?.structuredContent).toEqual({
+      ...accepted.body.result?.structuredContent,
+      duplicate: true,
     });
 
     const statusDenied = await rpc(first.url, first.token, "tools/call", {
@@ -503,8 +558,8 @@ describe("agent Kanban tools", () => {
       const submission = listed.body.result?.tools?.[1];
       expect(submission?.inputSchema).toMatchObject({
         type: "object",
-        required: ["resultKey", "result"],
-        properties: { result: expect.any(Object) },
+        required: ["resultKey"],
+        properties: { result: expect.any(Object), validatedDigest: { type: "string" } },
       });
     }
   });

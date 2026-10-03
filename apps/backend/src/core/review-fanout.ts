@@ -690,6 +690,8 @@ export interface ReviewFanoutHost {
    * report and then stalled on delivery.
    */
   heldResult?(requestId: string): { digest: string; ageMs: number } | undefined;
+  /** Owner-held, bounded one-shot marker that survives runner construction. */
+  claimResultNudge?(requestId: string): boolean;
   consumeResult?(requestId: string): Promise<void>;
   /** Adds/removes a durable owner-side outbox marker around consumption. */
   stageResultConsumption?(requestId: string): void;
@@ -824,9 +826,6 @@ function reviewerNeedsEvidence(reviewer: ReviewerRecord): boolean {
 export const REVIEW_RESULT_COMMIT_NUDGE_MS = 90_000;
 
 export class ReviewFanoutRunner {
-  /** One nudge per result slot: a second steer would add noise, not information. */
-  private readonly nudgedResults = new Set<string>();
-
   /** Tail of the serialized commit queue; never rejects. */
   private commitTail: Promise<void> = Promise.resolve();
   /** An observation changed the in-memory record since the last write. */
@@ -1642,13 +1641,12 @@ export class ReviewFanoutRunner {
     const sessionId = reviewer.providerSessionId;
     const requestId = reviewer.requestId;
     if (reviewer.resultTransport !== "tool-v1" || !sessionId || !requestId) return;
-    if (this.nudgedResults.has(requestId)) return;
     const held = this.host.heldResult?.(requestId);
     if (!held || held.ageMs < REVIEW_RESULT_COMMIT_NUDGE_MS) return;
     if (!provider.steerSupported || !provider.activeSteerRun || !provider.performSessionAction) {
       return;
     }
-    this.nudgedResults.add(requestId);
+    if (!this.host.claimResultNudge?.(requestId)) return;
     try {
       if (!(await provider.steerSupported(sessionId))) return;
       const active = await provider.activeSteerRun(sessionId);

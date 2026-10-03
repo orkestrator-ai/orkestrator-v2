@@ -5,6 +5,7 @@ import { DesignError, toDesignFailure } from "./design-errors.js";
 import {
   exportPreview,
   exportSave,
+  openDesignFile,
   reconcileExport,
   resolveDesignDestination,
 } from "./design-exports.js";
@@ -85,7 +86,7 @@ export function registerDesignCommandHandlers(register: DesignCommandRegistrar) 
     const { design, environmentId } = await authorized(args, context);
     const canvasId = designId.parse(args.canvasId);
     const destination = await resolveDesignDestination(context.storage, environmentId);
-    const filePath = z.string().max(120).parse(args.filePath);
+    const filePath = z.string().max(240).parse(args.filePath);
     // Legacy save never overwrites: a collision is reported, not resolved.
     const receipt = await exportSave(
       design,
@@ -250,7 +251,7 @@ export function registerDesignCommandHandlers(register: DesignCommandRegistrar) 
         environmentId,
         designId.parse(args.canvasId),
         { destination },
-        z.string().max(120).optional().parse(args.relativePath),
+        z.string().max(240).optional().parse(args.relativePath),
       );
     }),
   );
@@ -265,10 +266,22 @@ export function registerDesignCommandHandlers(register: DesignCommandRegistrar) 
         designId.parse(args.canvasId),
         { destination },
         {
-          relativePath: z.string().max(120).parse(args.relativePath),
+          relativePath: z.string().max(240).parse(args.relativePath),
           revision: revision.parse(args.revision),
           expected: replace ? { state: "present", digest: replace } : { state: "absent" },
         },
+      );
+    }),
+  );
+  register("design_open_file", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      const destination = await resolveDesignDestination(context.storage, environmentId);
+      return openDesignFile(
+        design,
+        environmentId,
+        { destination },
+        z.string().max(240).parse(args.relativePath),
       );
     }),
   );

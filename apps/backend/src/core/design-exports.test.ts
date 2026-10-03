@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
@@ -8,6 +9,7 @@ import { designExportDigest, planDefaultDesignExportPath } from "./design-export
 import {
   exportPreview,
   exportSave,
+  openDesignFile,
   reconcileExport,
   type DesignExportContext,
 } from "./design-exports.js";
@@ -83,7 +85,7 @@ describe("design exports to a repository worktree", () => {
     expect(previewA.suggestedPath).toBe(
       planDefaultDesignExportPath("Untitled design", first.canvasId),
     );
-    expect(previewA.suggestedPath).toMatch(/^Untitled-design-[0-9a-f]{8}\.orkdes$/);
+    expect(previewA.suggestedPath).toMatch(/^designs\/Untitled-design-[0-9a-f]{8}\.orkdes$/);
     expect(previewA.suggestedPath).not.toBe(previewB.suggestedPath);
     expect(previewA).toMatchObject({
       revision: 2,
@@ -319,11 +321,188 @@ describe("design exports to a repository worktree", () => {
     expect(leftovers).toEqual([]);
   });
 
+  test("saves into the designs folder and nested folders, creating them", async () => {
+    const { canvasId } = await setup();
+    const preview = await exportPreview(service(), "env-1", canvasId, context);
+    expect(preview.suggestedPath.startsWith("designs/")).toBe(true);
+    await save(canvasId, preview.suggestedPath, 2);
+    expect((await readExport(preview.suggestedPath)).id).toBe(canvasId);
+    expect(await readdir(join(worktree, "designs"))).toHaveLength(1);
+
+    const other = await setup("Elsewhere");
+    await save(other.canvasId, "mocks/v2/elsewhere.orkdes", 2);
+    expect((await readExport("mocks/v2/elsewhere.orkdes")).id).toBe(other.canvasId);
+    // The remembered location wins over the default on the next preview.
+    const again = await exportPreview(service(), "env-1", other.canvasId, context);
+    expect(again.suggestedPath).toBe("mocks/v2/elsewhere.orkdes");
+  });
+
+  test("opening a design file reuses its canvas and imports foreign files once", async () => {
+    const { canvasId } = await setup("Mine");
+    await save(canvasId, "designs/mine.orkdes", 2);
+    const reopened = await openDesignFile(service(), "env-1", context, "designs/mine.orkdes");
+    expect(reopened).toEqual({ canvasId, imported: false });
+
+    // A file this environment never exported becomes a new canvas bound to that path.
+    const foreign = {
+      ...(await readExport("designs/mine.orkdes")),
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Teammate design",
+    };
+    await mkdir(join(worktree, "shared"), { recursive: true });
+    await writeFile(join(worktree, "shared/theirs.orkdes"), JSON.stringify(foreign));
+    const first = await openDesignFile(service(), "env-1", context, "shared/theirs.orkdes");
+    expect(first.imported).toBe(true);
+    expect(first.canvasId).not.toBe(foreign.id);
+    expect((await service().get(first.canvasId, "env-1")).name).toBe("Teammate design");
+    const second = await openDesignFile(service(), "env-1", context, "shared/theirs.orkdes");
+    expect(second).toEqual({ canvasId: first.canvasId, imported: false });
+    // Saving writes back to the file it was opened from.
+    const preview = await exportPreview(service(), "env-1", first.canvasId, context);
+    expect(preview.suggestedPath).toBe("shared/theirs.orkdes");
+    expect(preview.target.needsReplaceConfirmation).toBe(false);
+
+    expect(
+      isDesignError(
+        await failureOf(openDesignFile(service(), "env-1", context, "designs/missing.orkdes")),
+        "not-found",
+      ),
+    ).toBe(true);
+    await writeFile(join(worktree, "bad.orkdes"), "not json");
+    expect(
+      isDesignError(
+        await failureOf(openDesignFile(service(), "env-1", context, "bad.orkdes")),
+        "invalid-input",
+      ),
+    ).toBe(true);
+  });
+
   test("export paths stay confined to the repository root", async () => {
     const { canvasId } = await setup();
-    for (const path of ["../escape.orkdes", "nested/dir.orkdes", "/abs.orkdes", "no-extension"])
+    for (const path of [
+      "../escape.orkdes",
+      "nested/../escape.orkdes",
+      "nested/.git/dir.orkdes",
+      "/abs.orkdes",
+      "no-extension",
+    ])
       expect(isDesignError(await failureOf(save(canvasId, path, 2)), "invalid-input")).toBe(true);
     expect(await readdir(worktree)).toEqual([]);
     await expect(exportPreview(service(), "env-2", canvasId, context)).rejects.toThrow("not found");
+  });
+
+  test("overlapping opens share one canvas and release the destination after failure", async () => {
+    const original = await service().create("env-2", "Shared", undefined, "user");
+    await writeFile(join(worktree, "shared.orkdes"), JSON.stringify(original));
+    const entered = deferred(),
+      release = deferred();
+    let inspections = 0;
+    const openingContext: DesignExportContext = {
+      ...context,
+      writerOptions: {
+        faults: {
+          afterParentsOpened: async () => {
+            if (++inspections === 1) {
+              entered.resolve();
+              await release.promise;
+            }
+          },
+        },
+      },
+    };
+    const first = openDesignFile(service(), "env-1", openingContext, "shared.orkdes");
+    await entered.promise;
+    const rest = Array.from({ length: 5 }, () =>
+      openDesignFile(service(), "env-1", openingContext, "shared.orkdes"),
+    );
+    expect(inspections).toBe(1);
+    release.resolve();
+    const results = await Promise.all([first, ...rest]);
+    expect(new Set(results.map((result) => result.canvasId)).size).toBe(1);
+    expect(results.filter((result) => result.imported)).toHaveLength(1);
+    expect(await service().list("env-1")).toHaveLength(1);
+
+    await writeFile(join(worktree, "bad.orkdes"), "not json");
+    const failed = await Promise.allSettled(
+      Array.from({ length: 2 }, () => openDesignFile(service(), "env-1", context, "bad.orkdes")),
+    );
+    expect(failed.every((result) => result.status === "rejected")).toBe(true);
+    await writeFile(join(worktree, "bad.orkdes"), JSON.stringify(original));
+    expect((await openDesignFile(service(), "env-1", context, "bad.orkdes")).imported).toBe(true);
+  });
+
+  test("an association failure retires the created canvas before queued opens retry", async () => {
+    const original = await service().create("env-2", "Shared", undefined, "user");
+    await writeFile(join(worktree, "shared.orkdes"), JSON.stringify(original));
+    let recordWrites = 0;
+    recordFaults.beforeRename = (file) => {
+      if (!file.endsWith(".orkrec")) return;
+      if (++recordWrites === 2) {
+        delete recordFaults.beforeRename;
+        throw new Error("association failed");
+      }
+    };
+    const results = await Promise.allSettled([
+      openDesignFile(service(), "env-1", context, "shared.orkdes"),
+      openDesignFile(service(), "env-1", context, "shared.orkdes"),
+    ]);
+    expect(results[0]!.status).toBe("rejected");
+    expect(results[1]!.status).toBe("fulfilled");
+    expect(await service().list("env-1")).toHaveLength(1);
+  });
+
+  test("changed file content creates one new canvas while retaining private edits", async () => {
+    const { canvasId } = await setup("Original");
+    await save(canvasId, "changed.orkdes", 2);
+    const document = await readExport("changed.orkdes");
+    await service().createFrame(
+      canvasId,
+      "env-1",
+      2,
+      { ...frameInput, name: "Private edit" },
+      "user",
+    );
+    await writeFile(
+      join(worktree, "changed.orkdes"),
+      JSON.stringify({ ...document, name: "External edit" }),
+    );
+    const [first, second] = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        openDesignFile(service(), "env-1", context, "changed.orkdes"),
+      ),
+    );
+    expect(first!.canvasId).not.toBe(canvasId);
+    expect(second!.canvasId).toBe(first!.canvasId);
+    expect((await service().get(canvasId, "env-1")).frames).toHaveLength(2);
+    expect((await service().get(first!.canvasId, "env-1")).name).toBe("External edit");
+  });
+
+  test("container opens inspect, import and associate through the Docker helper", async () => {
+    const original = await service().create("env-2", "Container design", undefined, "user");
+    await mkdir(join(worktree, "designs"));
+    await writeFile(join(worktree, "designs/shared.orkdes"), JSON.stringify(original));
+    const containerContext: DesignExportContext = {
+      destination: { kind: "container", containerId: "test-container" },
+      writerOptions: {
+        spawn: (command, args) => {
+          expect(command).toBe("docker");
+          expect(args.slice(0, 5)).toEqual(["exec", "-i", "test-container", "node", "-e"]);
+          expect(args[7]).toBe("/workspace");
+          return spawn(process.execPath, ["-e", args[5]!, "--", worktree, ...args.slice(8)], {
+            stdio: "pipe",
+          });
+        },
+      },
+    };
+    const [first, second] = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        openDesignFile(service(), "env-1", containerContext, "designs/shared.orkdes"),
+      ),
+    );
+    expect(second!.canvasId).toBe(first!.canvasId);
+    expect(await service().list("env-1")).toHaveLength(1);
+    const preview = await exportPreview(service(), "env-1", first!.canvasId, containerContext);
+    expect(preview.suggestedPath).toBe("designs/shared.orkdes");
+    expect(preview.target.needsReplaceConfirmation).toBe(false);
   });
 });

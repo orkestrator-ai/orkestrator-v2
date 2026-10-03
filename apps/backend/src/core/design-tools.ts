@@ -400,11 +400,11 @@ export function designActions(
       schema: z.object({
         ...canvasInput,
         expectedRevision: revision,
-        filePath: z.string().max(120),
+        filePath: z.string().max(240),
         replaceFingerprint: z.string().max(80).optional(),
       }),
       description:
-        "Save the canvas revision you reviewed to a repository-root .orkdes file. Never overwrites an existing file unless you pass its replaceFingerprint (from a previous collision error); otherwise choose a new filePath. Returns a path/revision receipt, not the document.",
+        "Save the canvas revision you reviewed to a repository-relative .orkdes file (folders are created as needed; `designs/` is the convention). Never overwrites an existing file unless you pass its replaceFingerprint (from a previous collision error); otherwise choose a new filePath. Returns a path/revision receipt, not the document.",
       run: async (a: {
         canvasId: string;
         expectedRevision: number;

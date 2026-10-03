@@ -78,7 +78,7 @@ describe("DesignLaunchButton", () => {
       "design_capabilities",
       "design_status",
     ]);
-    expect(screen.getByText(/Renderer unavailable: Chromium is not installed/)).toBeTruthy();
+    expect(screen.getByText(/Creating a design needs the renderer/)).toBeTruthy();
   });
 
   test("is disabled only without an environment", () => {

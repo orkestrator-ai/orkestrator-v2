@@ -14,8 +14,8 @@ import { invoke } from "@/lib/native/backend";
 import {
   classifyTransportError,
   DesignClientError,
-  designAction,
   designApi,
+  designAction,
   failureOf,
   getCapabilities,
 } from "./design-client";
@@ -30,6 +30,10 @@ export const DESIGN_BRIEF_MAX = 20_000;
 
 export type DesignAgent = "claude" | "codex";
 export const DESIGN_AGENTS: readonly DesignAgent[] = ["claude", "codex"];
+export const DESIGN_AGENT_LABELS: Record<DesignAgent, string> = {
+  claude: "Claude",
+  codex: "Codex",
+};
 
 /** Returns a user-facing problem with the name, or null when it is usable. */
 export function validateDesignName(name: string): string | null {
@@ -215,7 +219,7 @@ export async function launchDesignWorkspace(
     throw new DesignLaunchError(
       deleted
         ? message(error)
-        : `${message(error)} The new design could not be removed and remains in Open.`,
+        : `${message(error)} The new design could not be removed and remains in Saved designs.`,
       stage,
       deleted ? null : canvas,
       false,
@@ -279,7 +283,7 @@ export interface DesignImportResult {
 /**
  * Imports a document (the backend assigns fresh identities and never copies
  * session/export links) and opens it. An open failure keeps the import: the
- * design is listed in Open and can be reopened once there is room.
+ * design is listed in Saved designs and can be reopened once there is room.
  */
 export async function importAndOpenDesign(options: {
   document: string;

@@ -17,6 +17,13 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], { encoding: "utf8" })
       .stdout,
   );
+  // This credential-free fixture exercises design I/O, not host Claude login.
+  // Keep unrelated host-tool onboarding independent of the machine's PATH.
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    const request = route.request().postDataJSON();
+    if (request?.command === "check_claude_cli") await route.fulfill({ json: { result: false } });
+    else await route.continue();
+  });
   await page.goto(login.loginUrl);
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     const response = await page.request.post(
@@ -51,27 +58,31 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       height: 320,
       html: "<h1 id='title'>Shared design</h1>",
     });
+    // Designs are .orkdes files in the repository: save one, then open it from the file tree.
+    const exportPath = `designs/gateway-design-${canvas.id.replaceAll("-", "").slice(0, 8)}.orkdes`;
+    await invoke("design_export_save", {
+      environmentId: env.id,
+      canvasId: canvas.id,
+      relativePath: exportPath,
+      revision: 2,
+    });
     await page.reload();
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: "New design workspace" }).click();
-    await page.getByRole("tab", { name: "Open", exact: true }).click();
-    await page
-      .getByRole("list", { name: "Designs" })
-      .getByRole("button", { name: /Gateway design/ })
-      .click();
-    await page.getByRole("button", { name: /^Open (beside|\(current pane\))$/ }).click();
+    await page.getByRole("button", { name: "Show file panel", exact: true }).click();
+    // The panel starts on Changes; explicitly select the tree before routing.
+    await page.getByRole("tab", { name: "All files", exact: true }).click();
+    await page.getByRole("button", { name: "designs", exact: true }).click();
+    await page.getByRole("button", { name: exportPath.split("/")[1]!, exact: true }).click();
 
     const embedded = page.frameLocator('iframe[title="Screen"]');
     await expect(embedded.getByRole("heading")).toHaveText("Shared design");
-    // Export (Save As) proposes a collision-safe name: sanitized name + canvas id prefix.
-    const exportPath = `Gateway-design-${canvas.id.replaceAll("-", "").slice(0, 8)}.orkdes`;
+    // Save As remembers the file the design was opened from.
     await page.getByRole("button", { name: "Export design to repository" }).click();
     const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
-    await expect(exportDialog.getByText(`New file: ${exportPath} will be created.`)).toBeVisible();
-    await exportDialog.getByRole("button", { name: "Export revision 2" }).click();
-    await expect(exportDialog.getByText(`Exported revision 2 to ${exportPath}`)).toBeVisible();
-    await exportDialog.getByRole("button", { name: "Done" }).click();
+    await expect(exportDialog.getByLabel("Folder")).toHaveValue("designs");
+    await expect(exportDialog.getByText(`${exportPath} is your previous export`)).toBeVisible();
+    await exportDialog.getByRole("button", { name: "Cancel" }).click();
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,
     });
@@ -84,6 +95,45 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       format: "orkdes",
       revision: 2,
     });
+    // Path shapes rejected by design validation remain available in the editor.
+    const textPaths = [
+      "UPPER.ORKDES",
+      "has space.orkdes",
+      "a".repeat(102) + ".orkdes",
+      ".private/hidden.orkdes",
+      "b".repeat(65) + "/overlong.orkdes",
+      "d1/d2/d3/d4/d5/d6/d7/d8/deep.orkdes",
+    ];
+    for (const filePath of textPaths) {
+      await invoke("write_local_file", {
+        worktreePath: environment.worktreePath,
+        filePath,
+        base64Data: Buffer.from("plain text fallback").toString("base64"),
+      });
+    }
+    await page.reload();
+    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await page.getByText(env.name, { exact: true }).first().click();
+    await page.getByRole("button", { name: "Show file panel", exact: true }).click();
+    await page.getByRole("tab", { name: "All files", exact: true }).click();
+    for (const filePath of textPaths) {
+      const segments = filePath.split("/");
+      const name = segments.pop()!;
+      for (const folder of segments)
+        await page.getByRole("button", { name: folder, exact: true }).click();
+      await page.getByRole("button", { name, exact: true }).click();
+      await expect
+        .poll(async () =>
+          JSON.stringify(await invoke("get_pane_layout", { environmentId: env.id })),
+        )
+        .toContain(`"filePath":"${filePath}"`);
+      await page.getByRole("button", { name: `Close ${name}`, exact: true }).click();
+    }
+    // Return to the design after editing other tabs and reconcile missed updates.
+    await page
+      .getByText(/^Design \d+$/, { exact: true })
+      .first()
+      .click();
     await action("replace_frame_html", {
       canvasId: canvas.id,
       frameId: frame.id,
@@ -125,6 +175,153 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       page.getByText("Use the orkestrator-design MCP server", { exact: false }),
     ).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("design-workspace.png") });
+  } finally {
+    await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);
+  }
+});
+
+test("private canvases survive reload and can be retired to recover quota", async ({ page }) => {
+  const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
+  const status = JSON.parse(
+    spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], { encoding: "utf8" })
+      .stdout,
+  );
+  const login = JSON.parse(
+    spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], { encoding: "utf8" })
+      .stdout,
+  );
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    if (route.request().postDataJSON()?.command === "check_claude_cli")
+      await route.fulfill({ json: { result: false } });
+    else await route.continue();
+  });
+  await page.goto(login.loginUrl);
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl).href,
+      { data: { command, args } },
+    );
+    expect(response.ok(), command).toBe(true);
+    return (await response.json()).result;
+  };
+  const projects =
+    await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
+  const project = projects.find((project) => project.localPath === status.testProject)!;
+  const env = await invoke<{ id: string; name: string }>("create_environment", {
+    projectId: project.id,
+    name: "design-private-smoke",
+    environmentType: "local",
+    networkAccessMode: "restricted",
+  });
+  const action = <T>(action: string, input: Record<string, unknown>) =>
+    invoke<T>("design_action", { environmentId: env.id, action, input });
+  const selectEnvironment = async () => {
+    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await page.getByText(env.name, { exact: true }).first().click();
+  };
+  const openLibrary = async () => {
+    const tools = page.getByRole("button", { name: "Open tools", exact: true });
+    if ((page.viewportSize()?.width ?? 1440) < 768) {
+      await page
+        .getByRole("button", { name: "Close projects and environments", exact: true })
+        .first()
+        .click();
+      await expect(tools).toBeVisible();
+      await tools.click();
+    }
+    await page.getByRole("button", { name: "New design workspace" }).click();
+    await page.getByRole("tab", { name: "Saved designs" }).click();
+  };
+  try {
+    await invoke("start_environment", { environmentId: env.id });
+    // An existing private record models an upgrade before repository exports.
+    const existing = await action<DesignCanvas>("create_canvas", {
+      name: "Existing private canvas",
+    });
+    await page.reload();
+    await selectEnvironment();
+    await page.getByRole("button", { name: "New design workspace" }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("Private canvas");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Blank canvas (no agent)", exact: true }).click();
+    await page.getByRole("button", { name: "Create blank canvas" }).click();
+    await expect(page.getByText("Private canvas", { exact: true })).toBeVisible();
+    const privatePage = await invoke<{ value: { entries: Array<{ id: string }> } }>(
+      "design_library",
+      {
+        environmentId: env.id,
+        query: { search: "Private canvas" },
+      },
+    );
+    const privateId = privatePage.value.entries.find((entry) => entry.id !== existing.id)!.id;
+    await action("create_frame", {
+      canvasId: privateId,
+      expectedRevision: 1,
+      name: "Private screen",
+      x: 0,
+      y: 0,
+      width: 480,
+      height: 320,
+      html: "<h1>Private changes</h1>",
+    });
+    await expect(
+      page.frameLocator('iframe[title="Private screen"]').getByRole("heading"),
+    ).toHaveText("Private changes");
+    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.reload();
+    await selectEnvironment();
+    await openLibrary();
+    await page.getByRole("button", { name: /^Private canvas/ }).click();
+    await page.getByRole("button", { name: "Open beside", exact: true }).click();
+    await expect(page.getByText("Private canvas", { exact: true })).toBeVisible();
+    await expect(
+      page.frameLocator('iframe[title="Private screen"]').getByRole("heading"),
+    ).toHaveText("Private changes");
+    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await openLibrary();
+    await page.getByRole("button", { name: /^Existing private canvas/ }).click();
+    await page.getByRole("button", { name: "Open beside", exact: true }).click();
+    await expect(page.getByText("Existing private canvas", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.getByRole("button", { name: "New design workspace" }).click();
+    await page.getByRole("tab", { name: "Import", exact: true }).click();
+    await page.getByLabel("Import .orkdes").setInputFiles({
+      name: "import.orkdes",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify({ ...existing, name: "Imported private canvas" })),
+    });
+    await expect(page.getByText("Imported private canvas", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.reload();
+    await selectEnvironment();
+    await page.setViewportSize({ width: 720, height: 900 });
+    await openLibrary();
+    await page.getByRole("button", { name: /^Imported private canvas/ }).click();
+    await page.getByRole("button", { name: "Open beside", exact: true }).click();
+    await expect(page.getByText("Imported private canvas", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /^Close Design/ }).click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const result = await invoke<{ value: { quota: { live: number; liveLimit: number } } }>(
+      "design_library",
+      { environmentId: env.id, query: {} },
+    );
+    for (let i = result.value.quota.live; i < result.value.quota.liveLimit; i++)
+      await action("create_canvas", { name: `Quota canvas ${i}` });
+    await openLibrary();
+    await expect(page.getByText(/Design limit reached/)).toBeVisible();
+    await page.getByRole("searchbox", { name: "Search designs" }).fill("Private canvas");
+    await page.getByRole("button", { name: /^Private canvas/ }).click();
+    await page.getByRole("button", { name: "Move to trash", exact: true }).click();
+    await page.getByRole("button", { name: "Move to trash", exact: true }).click();
+    await expect(page.getByText(/Design limit reached/)).toHaveCount(0);
+    await page.getByRole("tab", { name: "New design", exact: true }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("After quota recovery");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Blank canvas (no agent)", exact: true }).click();
+    await page.getByRole("button", { name: "Create blank canvas" }).click();
+    await expect(page.getByText("After quota recovery", { exact: true })).toBeVisible();
   } finally {
     await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);

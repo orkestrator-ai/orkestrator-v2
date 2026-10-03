@@ -232,6 +232,39 @@ describe("DesignLibrary", () => {
     expect(api.list).toHaveBeenCalledTimes(2);
   });
 
+  test("trashing at the live quota restores capacity in the refreshed library", async () => {
+    let live = 256;
+    const api = client(
+      async () =>
+        page(live === 256 ? [entry("a")] : [], {
+          quota: {
+            live,
+            liveLimit: 256,
+            deleted: 256 - live,
+            deletedLimit: 32,
+            deletedBytes: 0,
+            deletedBytesLimit: 1,
+          },
+        }),
+      {
+        lifecycle: async () => {
+          live--;
+          return {} as never;
+        },
+      },
+    );
+    mount(api);
+    await flush();
+    expect(screen.getByText(/Design limit reached/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Design a/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+    await flush();
+    expect(live).toBe(255);
+    expect(screen.queryByText(/Design limit reached/) === null).toBe(true);
+    expect(api.list).toHaveBeenCalledTimes(2);
+  });
+
   test("deleted designs can be restored with the tombstone revision or purged explicitly", async () => {
     const api = client(async () =>
       page([

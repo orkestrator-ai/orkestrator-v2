@@ -13,7 +13,6 @@ import {
   DesignLaunchError,
   importAndOpenDesign,
   launchDesignWorkspace,
-  legacyLibraryPage,
   loadDesignReadiness,
   readDesignImport,
   runDesignLifecycle,
@@ -154,7 +153,7 @@ describe("design workspace launch transaction", () => {
       },
     });
     const error = await launchDesignWorkspace(options).catch((reason) => reason);
-    expect(error.message).toContain("remains in Open");
+    expect(error.message).toContain("remains in Saved designs");
     expect(error.canvas).toBe(canvas);
     expect(error.recoverable).toBe(false);
   });
@@ -341,22 +340,7 @@ describe("loadDesignReadiness", () => {
   });
 });
 
-describe("library helpers", () => {
-  test("legacy pages search and paginate a name-only list", async () => {
-    const list = async () =>
-      Array.from({ length: 60 }, (_, index) => ({ id: `c${index}`, name: `Design ${index}` }));
-    const first = await legacyLibraryPage("env", { limit: 50 }, list);
-    expect(first.entries).toHaveLength(50);
-    expect(first.nextOffset).toBe(50);
-    expect(first.entries[0]?.legacy).toBe(true);
-    const search = await legacyLibraryPage("env", { search: "design 5", limit: 50 }, list);
-    expect(search.entries.map((entry) => entry.id)).toEqual([
-      "c5",
-      ...Array.from({ length: 10 }, (_, index) => `c${50 + index}`),
-    ]);
-    expect((await legacyLibraryPage("env", { filter: "deleted" }, list)).entries).toEqual([]);
-  });
-
+describe("lifecycle helpers", () => {
   test("lifecycle operations resolve only when committed", async () => {
     const status = (state: DesignOperationStatus["state"], extra = {}) =>
       ({

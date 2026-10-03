@@ -30,6 +30,7 @@ import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpe
 import { designAction, designApi, designBackendKey, failureOf } from "./design-client";
 import {
   DESIGN_AGENTS,
+  DESIGN_AGENT_LABELS,
   DESIGN_BRIEF_EXAMPLES,
   DESIGN_BRIEF_MAX,
   DESIGN_CONTENT_EXPLANATION,
@@ -54,8 +55,7 @@ import {
   type DesignLayoutFacts,
   type DesignPlacement,
 } from "./design-open";
-import { DESIGN_AGENT_LABELS, DesignReadinessPanel } from "./DesignReadinessPanel";
-import { DesignLibrary, type DesignLibraryClient } from "./DesignLibrary";
+import { DesignLibrary } from "./DesignLibrary";
 import {
   addDesignImagesToDraft,
   DESIGN_PROMPT_IMAGE_HINT,
@@ -64,7 +64,7 @@ import {
   type DesignPromptImage,
 } from "./design-prompt-images";
 
-export type DesignWorkspaceMode = "new" | "open" | "import";
+export type DesignWorkspaceMode = "new" | "saved" | "import";
 type AgentChoice = DesignAgent | "none";
 type CreateTab = (type: CreatableTabType, options?: CreateTabOptions) => boolean;
 
@@ -106,16 +106,14 @@ export function DesignWorkspaceDialog({
   environmentId,
   createTab,
   loadReadiness = loadDesignReadiness,
-  libraryClient,
   initialMode = "new",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   environmentId: string;
-  /** null while the environment is not running; the library stays browsable. */
+  /** null while the environment is not running. */
   createTab: CreateTab | null;
   loadReadiness?: (probe: boolean) => Promise<DesignReadinessView>;
-  libraryClient?: DesignLibraryClient;
   initialMode?: DesignWorkspaceMode;
 }) {
   const backendKey = designBackendKey();
@@ -139,7 +137,6 @@ export function DesignWorkspaceDialog({
   const [error, setError] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<{ canvasId: string; name: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [libraryRefresh, setLibraryRefresh] = useState(0);
 
   const enabledPlatforms: readonly string[] = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? DEFAULT_ENABLED_AGENTS,
@@ -209,14 +206,20 @@ export function DesignWorkspaceDialog({
   const withAgent = agent !== "none";
   const plan = planDesignLaunch({ environmentReady, withAgent, facts });
   const nameProblem = validateDesignName(name);
+  const readinessBlocked = Boolean(
+    view &&
+    (view.backend.state !== "connected" ||
+      view.storage.state === "unavailable" ||
+      rendererUnavailable(view)),
+  );
   const createBlocker = !environmentReady
-    ? "Start this environment to create or open designs. You can still browse saved designs."
+    ? "Start this environment to create or open designs."
     : view && view.backend.state !== "connected"
       ? "Reconnect to the backend before creating a design."
       : view?.storage.state === "unavailable"
         ? "Design storage is unavailable."
         : rendererUnavailable(view)
-          ? "Creating a design needs the renderer. You can still open, rename, export and import designs."
+          ? "Creating a design needs the renderer."
           : withAgent && !agents[agent]
             ? `${DESIGN_AGENT_LABELS[agent]} is disabled in Settings. Choose another agent or a blank canvas.`
             : !plan.ok
@@ -363,6 +366,7 @@ export function DesignWorkspaceDialog({
     setBusy(true);
     setError(null);
     setNotice(null);
+    setRecovery(null);
     try {
       const document = await readDesignImport(file);
       const result = await importAndOpenDesign({
@@ -378,9 +382,9 @@ export function DesignWorkspaceDialog({
       }.`;
       if (result.opened) toast.success(stored);
       else {
-        setNotice(`${stored} It could not be opened yet: ${result.openError}`);
-        setLibraryRefresh((value) => value + 1);
-        setMode("open");
+        setNotice(stored);
+        setError(`It could not be opened yet: ${result.openError}`);
+        setRecovery({ canvasId: result.canvas.id, name: result.canvas.name });
       }
     } catch (reason) {
       if (importScope === scopeRef.current) setError(errorText(reason));
@@ -396,21 +400,14 @@ export function DesignWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>Design workspace</DialogTitle>
           <DialogDescription>
-            Design with Claude or Codex beside a shared HTML canvas, reopen a saved design, or
-            import an .orkdes file.
+            Design with Claude or Codex beside a shared HTML canvas, or import an .orkdes file. Open
+            a repository design from the file tree, or reopen any private canvas in Saved designs.
           </DialogDescription>
         </DialogHeader>
-        <DesignReadinessPanel
-          view={view}
-          loading={readinessLoading}
-          onRetry={refreshReadiness}
-          agents={agents}
-          selectedAgent={withAgent ? agent : null}
-        />
         <Tabs value={mode} onValueChange={(value) => setMode(value as DesignWorkspaceMode)}>
           <TabsList className="w-full">
             <TabsTrigger value="new">New design</TabsTrigger>
-            <TabsTrigger value="open">Open</TabsTrigger>
+            <TabsTrigger value="saved">Saved designs</TabsTrigger>
             <TabsTrigger value="import">Import</TabsTrigger>
           </TabsList>
           <TabsContent value="new">
@@ -523,7 +520,18 @@ export function DesignWorkspaceDialog({
               <p className="text-xs text-muted-foreground">{DESIGN_CONTENT_EXPLANATION}</p>
               {(createBlocker || (plan.ok && plan.notice)) && (
                 <p id="design-create-blocker" className="text-sm text-muted-foreground">
-                  {createBlocker ?? (plan.ok ? plan.notice : null)}
+                  {createBlocker ?? (plan.ok ? plan.notice : null)}{" "}
+                  {view && !readinessLoading && readinessBlocked && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 align-baseline"
+                      onClick={refreshReadiness}
+                    >
+                      Check again
+                    </Button>
+                  )}
                 </p>
               )}
               <Button
@@ -535,26 +543,15 @@ export function DesignWorkspaceDialog({
               </Button>
             </form>
           </TabsContent>
-          <TabsContent value="open">
-            {view && view.protocol !== "unknown" ? (
-              <DesignLibrary
-                key={legacy ? "legacy" : "v2"}
-                environmentId={environmentId}
-                backendKey={backendKey}
-                legacy={legacy}
-                canManage={Boolean(view.capabilities?.lifecycle)}
-                client={libraryClient}
-                openChoices={(canvasId) => designOpenChoices(canvasId, facts)}
-                onOpen={openDesign}
-                refreshToken={libraryRefresh}
-              />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {readinessLoading
-                  ? "Loading designs…"
-                  : "The design library is unavailable until the backend responds. Press Retry above."}
-              </p>
-            )}
+          <TabsContent value="saved">
+            <DesignLibrary
+              environmentId={environmentId}
+              backendKey={backendKey}
+              legacy={legacy}
+              canManage={Boolean(view?.capabilities?.operations)}
+              openChoices={(canvasId) => designOpenChoices(canvasId, facts)}
+              onOpen={openDesign}
+            />
           </TabsContent>
           <TabsContent value="import">
             <div className="grid gap-2">

@@ -323,6 +323,43 @@ describe("design command registry", () => {
     ).toMatchObject({ ok: false, failure: { code: "not-found" } });
   });
 
+  test("design_open_file authorizes environments, validates paths and returns typed results", async () => {
+    const canvas = await design.create("local", "Open file", undefined, "user");
+    await value("design_export_save", {
+      environmentId: "local",
+      canvasId: canvas.id,
+      relativePath: "designs/open.orkdes",
+      revision: 1,
+    });
+    expect(
+      await typed("design_open_file", {
+        environmentId: "local",
+        relativePath: "designs/open.orkdes",
+      }),
+    ).toEqual({ ok: true, value: { canvasId: canvas.id, imported: false } });
+    expect(
+      await typed("design_open_file", {
+        environmentId: "missing",
+        relativePath: "designs/open.orkdes",
+      }),
+    ).toMatchObject({ ok: false, failure: { code: "not-found" } });
+    for (const relativePath of [
+      "../open.orkdes",
+      "open.ORKDES",
+      "has space.orkdes",
+      ".hidden/open.orkdes",
+      "a/".repeat(8) + "open.orkdes",
+      42,
+    ])
+      expect(
+        await typed("design_open_file", { environmentId: "local", relativePath }),
+      ).toMatchObject({ ok: false, failure: { code: "invalid-input" } });
+    expect(
+      await typed("design_open_file", { environmentId: "local", relativePath: "missing.orkdes" }),
+    ).toMatchObject({ ok: false, failure: { code: "not-found" } });
+    expect(await design.list("container")).toEqual([]);
+  });
+
   test("v2 export, history and lifecycle commands", async () => {
     const canvas = await design.create("local", "Exported", undefined, "user");
     const { frame: created } = await design.createFrame(canvas.id, "local", 1, frame, "user");

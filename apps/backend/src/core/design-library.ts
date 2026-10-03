@@ -46,7 +46,7 @@ const summarySchema = z
     frameCount: z.number().int().nonnegative(),
     state: z.enum(["live", "deleted", "provisional", "problem"]),
     deletedAt: z.string().max(40).optional(),
-    exportPath: z.string().max(200).optional(),
+    exportPath: z.string().max(256).optional(),
     exportRevision: z.number().int().nonnegative().optional(),
     invalid: z.number().int().nonnegative(),
     unvalidated: z.number().int().nonnegative(),

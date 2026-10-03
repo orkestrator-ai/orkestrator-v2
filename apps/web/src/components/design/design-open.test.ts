@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   decideDesignOpen,
-  designOpenChoices,
   planDesignLaunch,
   SPLIT_FALLBACK_MESSAGE,
   type DesignLayoutFacts,
@@ -49,6 +48,8 @@ describe("decideDesignOpen", () => {
       if (decision.kind === "refuse") {
         expect(decision.reason).toBe("tab-limit");
         expect(decision.message).toContain("never deletes the design");
+        expect(decision.message).toContain("Saved designs");
+        expect(decision.message).not.toContain("from Open");
       }
     }
   });
@@ -72,27 +73,6 @@ describe("decideDesignOpen", () => {
   test("refuses when there is no pane to receive the tab", () => {
     const decision = decideDesignOpen("canvas-b", "current", facts({ hasCurrentPane: false }));
     expect(decision.kind === "refuse" && decision.reason).toBe("no-pane");
-  });
-});
-
-describe("designOpenChoices", () => {
-  test("offers only focus for an open canvas", () => {
-    expect(designOpenChoices("canvas-a", facts({ tabs: tabs(MAX - 1, [openCanvas]) }))).toEqual({
-      openTabId: "design-1",
-      canOpen: true,
-      besideFallsBack: false,
-    });
-  });
-
-  test("explains a split fallback and a full environment", () => {
-    expect(designOpenChoices("canvas-b", facts({ canSplit: false }))).toEqual({
-      canOpen: true,
-      besideFallsBack: true,
-      notice: SPLIT_FALLBACK_MESSAGE,
-    });
-    const full = designOpenChoices("canvas-b", facts({ tabs: tabs(MAX) }));
-    expect(full.canOpen).toBe(false);
-    expect(full.notice).toContain(`maximum of ${MAX} tabs`);
   });
 });
 

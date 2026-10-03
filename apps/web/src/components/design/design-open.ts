@@ -31,7 +31,7 @@ export type DesignOpenDecision =
 
 export function tabLimitMessage(maxTabs: number, needed = 1): string {
   const room = needed > 1 ? `${needed} free tabs` : "a free tab";
-  return `This environment already has the maximum of ${maxTabs} tabs, and this needs ${room}. Close a tab you no longer need — closing a design tab never deletes the design, and you can reopen it from Open.`;
+  return `This environment already has the maximum of ${maxTabs} tabs, and this needs ${room}. Close a tab you no longer need — closing a design tab never deletes the design, and you can reopen it from Saved designs.`;
 }
 
 export const SPLIT_FALLBACK_MESSAGE =

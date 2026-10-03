@@ -131,11 +131,19 @@ function emitAndClose(child: FakeChild, stdout: string, stderr = "", code = 0): 
 }
 
 describe("paths and naming", () => {
-  test("validateDesignExportPath accepts root .orkdes names only", () => {
+  test("validateDesignExportPath accepts repository-relative .orkdes paths", () => {
     expect(validateDesignExportPath("canvas-1.orkdes")).toBe("canvas-1.orkdes");
+    expect(validateDesignExportPath("designs/canvas-1.orkdes")).toBe("designs/canvas-1.orkdes");
+    expect(validateDesignExportPath("a/b.c/d_e/f.orkdes")).toBe("a/b.c/d_e/f.orkdes");
     for (const bad of [
       "../x.orkdes",
-      "a/b.orkdes",
+      "a/../x.orkdes",
+      "a/./x.orkdes",
+      "a//x.orkdes",
+      "a/.git/x.orkdes",
+      ".hidden/x.orkdes",
+      "a/b/c/d/e/f/g/h/i.orkdes",
+      `${"a".repeat(64)}/${"b".repeat(64)}/${"c".repeat(64)}/${"d".repeat(64)}/x.orkdes`,
       ".hidden.orkdes",
       "x.json",
       "",
@@ -156,15 +164,19 @@ describe("paths and naming", () => {
       "Untitled design",
       "9876fedc-0000-4000-8000-000000000000",
     );
-    expect(first).toBe("Untitled-design-1234abcd.orkdes");
+    expect(first).toBe("designs/Untitled-design-1234abcd.orkdes");
     expect(second).not.toBe(first);
     const slash = planDefaultDesignExportPath("a/b", "aaaaaaaa-0000-4000-8000-000000000000");
     const question = planDefaultDesignExportPath("a?b", "bbbbbbbb-0000-4000-8000-000000000000");
     expect(slash).not.toBe(question);
-    expect(planDefaultDesignExportPath("  ¿¿  ", "cafebabe")).toBe("design-cafebabe.orkdes");
-    expect(planDefaultDesignExportPath("--__a -- b__--", "CAFEBABE")).toBe("a-b-cafebabe.orkdes");
+    expect(planDefaultDesignExportPath("  ¿¿  ", "cafebabe")).toBe(
+      "designs/design-cafebabe.orkdes",
+    );
+    expect(planDefaultDesignExportPath("--__a -- b__--", "CAFEBABE")).toBe(
+      "designs/a-b-cafebabe.orkdes",
+    );
     const long = planDefaultDesignExportPath("x".repeat(200), "not-hex-id");
-    expect(long).toMatch(/^x{60}-[0-9a-f]{8}\.orkdes$/);
+    expect(long).toMatch(/^designs\/x{60}-[0-9a-f]{8}\.orkdes$/);
     for (const value of [first, second, slash, question, long]) {
       expect(DESIGN_EXPORT_PATH.test(value)).toBe(true);
     }
@@ -318,6 +330,66 @@ describe("local writer", () => {
     });
   });
 
+  test("creates missing folders and publishes inside them", async () => {
+    const root = await createRoot();
+    const dest: DesignExportDestination = { kind: "local", worktreePath: root };
+    expect(await inspectDesignExportTarget(dest, "designs/ui/a.orkdes")).toEqual({
+      exists: false,
+      readable: false,
+    });
+    expect(await fs.readdir(root)).toEqual([]);
+    const bytes = doc("nested");
+    const result = await writeDesignExport(dest, "designs/ui/a.orkdes", bytes, { state: "absent" });
+    expect(result.digest).toBe(designExportDigest(bytes));
+    expect(await fs.readFile(path.join(root, "designs/ui/a.orkdes"))).toEqual(bytes);
+    expect(await fs.readdir(path.join(root, "designs/ui"))).toEqual(["a.orkdes"]);
+    const next = doc("nested-2");
+    await writeDesignExport(dest, "designs/ui/a.orkdes", next, {
+      state: "present",
+      digest: designExportDigest(bytes),
+    });
+    expect(await fs.readFile(path.join(root, "designs/ui/a.orkdes"))).toEqual(next);
+    // A replacement never invents folders.
+    await expectDesignError(
+      writeDesignExport(dest, "other/a.orkdes", next, {
+        state: "present",
+        digest: designExportDigest(bytes),
+      }),
+      "export-collision",
+    );
+    await expect(fs.stat(path.join(root, "other"))).rejects.toThrow();
+  });
+
+  test("a symlinked or file folder is never traversed", async () => {
+    const root = await createRoot();
+    const outside = await createRoot();
+    await fs.symlink(outside, path.join(root, "linked"));
+    await fs.writeFile(path.join(root, "plain"), "file");
+    const dest: DesignExportDestination = { kind: "local", worktreePath: root };
+    await expectDesignError(
+      writeDesignExport(dest, "linked/a.orkdes", doc("x"), { state: "absent" }),
+      "invalid-input",
+    );
+    await expectDesignError(
+      writeDesignExport(dest, "linked/deeper/a.orkdes", doc("x"), { state: "absent" }),
+      "invalid-input",
+    );
+    await expectDesignError(
+      writeDesignExport(dest, "plain/a.orkdes", doc("x"), { state: "absent" }),
+      "export-collision",
+    );
+    expect(await fs.readdir(outside)).toEqual([]);
+    expect(await inspectDesignExportTarget(dest, "linked/a.orkdes")).toEqual({
+      exists: true,
+      readable: false,
+      symlink: true,
+    });
+    expect(await inspectDesignExportTarget(dest, "plain/a.orkdes")).toEqual({
+      exists: true,
+      readable: false,
+    });
+  });
+
   test("a directory at the target is a collision", async () => {
     const root = await createRoot();
     await fs.mkdir(path.join(root, "dir.orkdes"));
@@ -334,7 +406,7 @@ describe("local writer", () => {
 
   test("invalid paths are rejected before touching the filesystem", async () => {
     const root = await createRoot();
-    for (const bad of ["../x.orkdes", "a/b.orkdes", ".hidden.orkdes", "x.json"]) {
+    for (const bad of ["../x.orkdes", "a/../x.orkdes", "/abs.orkdes", ".hidden.orkdes", "x.json"]) {
       await expectDesignError(
         writeDesignExport({ kind: "local", worktreePath: root }, bad, doc("x"), {
           state: "absent",
@@ -422,7 +494,85 @@ describe("local writer", () => {
   });
 });
 
+describe("pinned local parents", () => {
+  for (const stage of ["inspect", "create", "publish", "replace"] as const) {
+    test(`a swapped parent cannot redirect local ${stage}`, async () => {
+      const root = await createRoot(),
+        outside = await createRoot();
+      await fs.mkdir(path.join(root, "designs"));
+      const inside = doc("inside"),
+        external = doc("outside"),
+        next = doc("next");
+      if (stage === "inspect" || stage === "replace")
+        await fs.writeFile(path.join(root, "designs/a.orkdes"), inside);
+      await fs.writeFile(path.join(outside, "a.orkdes"), external);
+      const swap = async () => {
+        await fs.rename(path.join(root, "designs"), path.join(root, "retained"));
+        await fs.symlink(outside, path.join(root, "designs"));
+      };
+      const dest = { kind: "local", worktreePath: root } as const;
+      if (stage === "inspect") {
+        const result = await inspectDesignExportTarget(dest, "designs/a.orkdes", {
+          faults: { afterParentsOpened: swap },
+        });
+        expect(result.bytes).toEqual(inside);
+      } else {
+        const result = await writeDesignExport(
+          dest,
+          "designs/a.orkdes",
+          next,
+          stage === "replace"
+            ? { state: "present", digest: designExportDigest(inside) }
+            : { state: "absent" },
+          { faults: stage === "create" ? { afterParentsOpened: swap } : { beforePublish: swap } },
+        );
+        if (stage === "replace") expect(result.previous).toEqual(inside);
+        expect(await fs.readFile(path.join(root, "retained/a.orkdes"))).toEqual(next);
+      }
+      expect(await fs.readFile(path.join(outside, "a.orkdes"))).toEqual(external);
+      expect(await fs.readdir(outside)).toEqual(["a.orkdes"]);
+      expect(await tempFiles(path.join(root, "retained"))).toEqual([]);
+    });
+  }
+});
+
 describe("container helper scripts (run locally)", () => {
+  for (const stage of ["inspect", "create", "publish"] as const) {
+    test(`a swapped parent cannot redirect container ${stage}`, async () => {
+      const root = await createRoot();
+      const outside = await createRoot();
+      await fs.mkdir(path.join(root, "designs"));
+      const inside = doc("inside"),
+        external = doc("outside");
+      if (stage === "inspect") await fs.writeFile(path.join(root, "designs/a.orkdes"), inside);
+      await fs.writeFile(path.join(outside, "a.orkdes"), external);
+      const swap = `fs.renameSync(${JSON.stringify(path.join(root, "designs"))}, ${JSON.stringify(path.join(root, "retained"))}); fs.symlinkSync(${JSON.stringify(outside)}, ${JSON.stringify(path.join(root, "designs"))});`;
+      const script =
+        stage === "inspect"
+          ? DESIGN_EXPORT_CONTAINER_INSPECTOR.replace(
+              "stats = lstatOrNull(target);",
+              `${swap}\nstats = lstatOrNull(target);`,
+            )
+          : DESIGN_EXPORT_CONTAINER_WRITER.replace(
+              stage === "create" ? "const before = lstatOrNull(target);" : "let previous;",
+              `${swap}\n${stage === "create" ? "const before = lstatOrNull(target);" : "let previous;"}`,
+            );
+      const result = await runHelper(
+        script,
+        stage === "inspect"
+          ? [root, "designs/a.orkdes", "10000"]
+          : [root, "designs/a.orkdes", "absent", "-", "10000", designExportDigest(inside)],
+        inside,
+      );
+      expect(result.json.ok).toBe(true);
+      if (stage === "inspect")
+        expect(Buffer.from(result.json.bytes as string, "base64")).toEqual(inside);
+      else expect(await fs.readFile(path.join(root, "retained/a.orkdes"))).toEqual(inside);
+      expect(await fs.readFile(path.join(outside, "a.orkdes"))).toEqual(external);
+      expect(await fs.readdir(outside)).toEqual(["a.orkdes"]);
+      expect(await tempFiles(path.join(root, "retained"))).toEqual([]);
+    });
+  }
   test("writer creates, collides, replaces, and refuses symlinks", async () => {
     const root = await createRoot();
     const bytes = doc("c1");
@@ -468,6 +618,63 @@ describe("container helper scripts (run locally)", () => {
     );
     expect(symlink.json).toMatchObject({ ok: false, code: "invalid-input", reason: "symlink" });
     expect(await tempFiles(root)).toEqual([]);
+  });
+
+  test("writer creates folders, refuses linked folders, and inspector reads nested files", async () => {
+    const root = await createRoot();
+    const outside = await createRoot();
+    const bytes = doc("n1");
+    const args = (rel: string) => [
+      root,
+      rel,
+      "absent",
+      "-",
+      String(DESIGN_EXPORT_MAX_BYTES),
+      designExportDigest(bytes),
+    ];
+    const created = await runHelper(
+      DESIGN_EXPORT_CONTAINER_WRITER,
+      args("designs/ui/n.orkdes"),
+      bytes,
+    );
+    expect(created.json).toEqual({ ok: true, digest: designExportDigest(bytes), replaced: false });
+    expect(await fs.readFile(path.join(root, "designs/ui/n.orkdes"))).toEqual(bytes);
+    expect(await tempFiles(path.join(root, "designs/ui"))).toEqual([]);
+
+    const inspected = await runHelper(DESIGN_EXPORT_CONTAINER_INSPECTOR, [
+      root,
+      "designs/ui/n.orkdes",
+      "10000",
+    ]);
+    expect(inspected.json).toMatchObject({ ok: true, exists: true, readable: true });
+    const missing = await runHelper(DESIGN_EXPORT_CONTAINER_INSPECTOR, [
+      root,
+      "nope/n.orkdes",
+      "10000",
+    ]);
+    expect(missing.json).toMatchObject({ ok: true, exists: false });
+
+    await fs.symlink(outside, path.join(root, "linked"));
+    const linked = await runHelper(DESIGN_EXPORT_CONTAINER_WRITER, args("linked/n.orkdes"), bytes);
+    expect(linked.json).toMatchObject({ ok: false, code: "invalid-input", reason: "symlink" });
+    expect(await fs.readdir(outside)).toEqual([]);
+    const linkedInspect = await runHelper(DESIGN_EXPORT_CONTAINER_INSPECTOR, [
+      root,
+      "linked/n.orkdes",
+      "10000",
+    ]);
+    expect(linkedInspect.json).toMatchObject({
+      ok: true,
+      exists: true,
+      readable: false,
+      symlink: true,
+    });
+    const traversal = await runHelper(DESIGN_EXPORT_CONTAINER_WRITER, args("a/../n.orkdes"), bytes);
+    expect(traversal.json).toMatchObject({
+      ok: false,
+      code: "invalid-input",
+      reason: "invalid-path",
+    });
   });
 
   test("writer refuses truncated input, oversized input, and bad names", async () => {

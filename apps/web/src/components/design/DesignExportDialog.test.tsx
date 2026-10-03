@@ -8,13 +8,15 @@ import type {
   DesignWorkspaceMeta,
 } from "@orkestrator/protocol/design-operations";
 import { emptyProjection, type DesignIntent, type DesignProjection } from "@/stores/designStore";
+import { useFilesPanelStore } from "@/stores";
+import type { FileNode } from "@/lib/backend";
 import { DesignClientError } from "./design-client";
 import type { DesignCanvasController } from "./design-controller";
 import { DesignExportDialog, type DesignExportApi } from "./DesignExportDialog";
 
 const environmentId = "env-1";
 const canvasId = "canvas-1";
-const suggested = "Landing-canvas01.orkdes";
+const suggested = "designs/Landing-canvas01.orkdes";
 
 function target(relativePath: string, patch: Partial<DesignExportTarget> = {}): DesignExportTarget {
   return {
@@ -106,6 +108,10 @@ function nameField() {
   return screen.getByLabelText("File name") as HTMLInputElement;
 }
 
+function folderField() {
+  return screen.getByLabelText("Folder") as HTMLInputElement;
+}
+
 function button(name: string | RegExp) {
   return screen.getByRole("button", { name }) as HTMLButtonElement;
 }
@@ -116,11 +122,66 @@ beforeEach(() => {
   exportSave.mockReset();
   settleEdits.mockReset();
   refresh.mockClear();
+  useFilesPanelStore.setState({ fileTree: [] });
 });
 
 afterEach(() => cleanup());
 
 describe("DesignExportDialog", () => {
+  test("splits a remembered nested path and joins trimmed folders when saving", async () => {
+    const saved = "mocks/v2/checkout.orkdes";
+    exportPreview.mockImplementation(async (_env, _canvas, path) => preview(path ?? saved));
+    exportSave.mockImplementation(async (path, revision) => receipt(path, revision));
+    renderDialog(projection());
+    await screen.findByText(`New file: ${saved} will be created.`);
+    expect(folderField().value).toBe("mocks/v2");
+    expect(nameField().value).toBe("checkout.orkdes");
+    fireEvent.change(folderField(), { target: { value: " /other/ui/ " } });
+    await screen.findByText("New file: other/ui/checkout.orkdes will be created.");
+    fireEvent.click(button("Export revision 7"));
+    await waitFor(() =>
+      expect(exportSave).toHaveBeenCalledWith("other/ui/checkout.orkdes", 7, undefined),
+    );
+  });
+
+  test("a root-folder suggestion can be saved and repreviewed at repository root", async () => {
+    exportPreview.mockImplementation(async (_env, _canvas, path) => preview(path ?? "root.orkdes"));
+    exportSave.mockImplementation(async (path, revision) => receipt(path, revision));
+    renderDialog(projection());
+    await screen.findByText("New file: root.orkdes will be created.");
+    expect(folderField().value).toBe("");
+    expect(nameField().value).toBe("root.orkdes");
+    fireEvent.change(folderField(), { target: { value: " /// " } });
+    await waitFor(() => expect(button("Export revision 7").disabled).toBe(false));
+    fireEvent.click(button("Export revision 7"));
+    await waitFor(() => expect(exportSave).toHaveBeenCalledWith("root.orkdes", 7, undefined));
+  });
+
+  test("folder suggestions include valid nested directories and omit files and hidden paths", async () => {
+    useFilesPanelStore.setState({
+      fileTree: [
+        {
+          name: "mocks",
+          path: "mocks",
+          isDirectory: true,
+          children: [
+            { name: "ui", path: "mocks/ui", isDirectory: true },
+            { name: "file", path: "mocks/file", isDirectory: false },
+          ],
+        },
+        { name: ".git", path: ".git", isDirectory: true },
+        { name: "designs", path: "designs", isDirectory: true },
+      ] as FileNode[],
+    });
+    exportPreview.mockResolvedValue(preview());
+    renderDialog(projection());
+    await screen.findByText(`New file: ${suggested} will be created.`);
+    expect(
+      Array.from(document.querySelectorAll("#design-export-folders option")).map((option) =>
+        option.getAttribute("value"),
+      ),
+    ).toEqual(["designs", "mocks", "mocks/ui"]);
+  });
   test("previews the suggested path, exports that revision and flags newer workspace changes", async () => {
     exportPreview.mockImplementation(async (_env, _canvas, path) => preview(path ?? suggested));
     exportSave.mockResolvedValue(receipt(suggested, 7));
@@ -128,7 +189,8 @@ describe("DesignExportDialog", () => {
 
     expect(await screen.findByText(`New file: ${suggested} will be created.`)).toBeTruthy();
     expect(exportPreview).toHaveBeenCalledWith(environmentId, canvasId, undefined);
-    expect(nameField().value).toBe(suggested);
+    expect(folderField().value).toBe("designs");
+    expect(nameField().value).toBe("Landing-canvas01.orkdes");
     expect(screen.getByText("Exports committed revision 7.")).toBeTruthy();
 
     fireEvent.click(button("Export revision 7"));
@@ -224,16 +286,20 @@ describe("DesignExportDialog", () => {
     renderDialog(projection());
     await screen.findByText(`New file: ${suggested} will be created.`);
 
-    fireEvent.change(nameField(), { target: { value: "docs/design.orkdes" } });
-    expect(screen.getByText(/is not a valid file name/)).toBeTruthy();
+    fireEvent.change(nameField(), { target: { value: "bad name.orkdes" } });
+    expect(screen.getByText(/is not a valid path/)).toBeTruthy();
     expect(button("Export revision …").disabled).toBe(true);
 
+    fireEvent.change(folderField(), { target: { value: "" } });
     fireEvent.change(nameField(), { target: { value: "first.orkdes" } });
     await waitFor(() =>
       expect(exportPreview).toHaveBeenCalledWith(environmentId, canvasId, "first.orkdes"),
     );
+    fireEvent.change(folderField(), { target: { value: "docs/sub" } });
     fireEvent.change(nameField(), { target: { value: "second.orkdes" } });
-    expect(await screen.findByText("New file: second.orkdes will be created.")).toBeTruthy();
+    expect(
+      await screen.findByText("New file: docs/sub/second.orkdes will be created."),
+    ).toBeTruthy();
 
     await act(async () =>
       slow.resolve(
@@ -246,8 +312,8 @@ describe("DesignExportDialog", () => {
       ),
     );
     expect(screen.queryByText(/is not a design file/) === null).toBe(true);
-    expect(screen.getByText("New file: second.orkdes will be created.")).toBeTruthy();
-    expect(exportPreview).not.toHaveBeenCalledWith(environmentId, canvasId, "docs/design.orkdes");
+    expect(screen.getByText("New file: docs/sub/second.orkdes will be created.")).toBeTruthy();
+    expect(exportPreview).not.toHaveBeenCalledWith(environmentId, canvasId, "bad name.orkdes");
   });
 
   test("offers to wait for pending edits or export the committed revision explicitly", async () => {

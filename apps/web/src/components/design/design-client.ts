@@ -217,6 +217,12 @@ export const designApi = {
       revision,
       replaceFingerprint,
     }),
+  /** Opens a repository `.orkdes` file as a canvas (reusing one already made from it). */
+  openFile: (environmentId: string, relativePath: string) =>
+    designCommand<{ canvasId: string; imported: boolean }>("design_open_file", {
+      environmentId,
+      relativePath,
+    }),
   exportReconcile: (environmentId: string, canvasId: string) =>
     designCommand<{ state: string; receipt?: DesignExportReceipt }>("design_export_reconcile", {
       environmentId,

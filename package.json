@@ -151,8 +151,16 @@
     "linux": {
       "category": "Development",
       "executableName": "orkestrator-v2",
-      "icon": "icons"
-    }
+      "icon": "icons",
+      "target": [
+        "AppImage",
+        "pacman"
+      ]
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
+    "artifactName": "orkestrator-v2-${os}-${arch}.${ext}"
   },
   "patchedDependencies": {
     "@cursor/sdk@1.0.32": "patches/@cursor%2Fsdk@1.0.32.patch",

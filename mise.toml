@@ -346,3 +346,13 @@ run = [
   "bunx electron-builder --mac --config electron-builder.release.config.ts",
   "bun scripts/install-packaged-app-mac.ts",
 ]
+
+[tasks."release:desktop"]
+description = "Build this platform's desktop release and upload it to the draft GitHub release"
+raw_args = true
+run = "bun scripts/release-desktop.ts build"
+
+[tasks."release:publish"]
+description = "Publish the draft GitHub release once macOS and Linux are both uploaded"
+run = "bun scripts/release-desktop.ts publish"
+

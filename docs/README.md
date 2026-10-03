@@ -53,6 +53,7 @@ Refreshed 2026-09-17 against the current tree.
 | [test-logs.md](development/test-logs.md) | Living | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
 | [disk-usage.md](development/disk-usage.md) | Living | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [linting.md](development/linting.md) | Living | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
+| [releasing.md](development/releasing.md) | Living | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
 
 ## Tests
 

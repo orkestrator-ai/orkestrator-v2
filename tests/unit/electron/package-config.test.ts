@@ -197,7 +197,15 @@ describe("Electron packaging configuration", () => {
     expect(releaseConfig.mac?.identity).toBeUndefined();
     expect(releaseConfig.mac?.hardenedRuntime).toBe(true);
     expect(releaseConfig.mac?.notarize).toBe(true);
-    expect(releaseConfig.mac?.target).toEqual(["dmg"]);
+    expect(releaseConfig.mac?.target).toEqual(["dmg", "zip"]);
+    expect(releaseConfig.publish).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        owner: "orkestrator-ai",
+        repo: "orkestrator-v2",
+        releaseType: "draft",
+      }),
+    ]);
     expect(releaseConfig.mac?.extendInfo).toEqual({
       NSAppleMusicUsageDescription:
         "Orkestrator checks Music and media-library access at startup so agent searches are not interrupted later.",

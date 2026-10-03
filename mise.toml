@@ -343,7 +343,7 @@ run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
   "mise run build:all",
-  "bunx electron-builder --mac --config electron-builder.release.config.ts",
+  "bunx electron-builder --mac --config electron-builder.release.config.ts --publish never",
   "bun scripts/install-packaged-app-mac.ts",
 ]
 

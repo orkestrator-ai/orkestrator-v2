@@ -18,9 +18,14 @@ export function createLinuxReleaseConfig(): Configuration {
   return {
     ...packageJson.build,
     publish: releasePublish,
+    extraMetadata: {
+      ...packageJson.build.extraMetadata,
+      homepage: "https://github.com/orkestrator-ai/orkestrator-v2",
+    },
     linux: {
       ...packageJson.build.linux,
       target: ["AppImage", "pacman"],
+      maintainer: "Orkestrator AI contributors",
     },
   };
 }

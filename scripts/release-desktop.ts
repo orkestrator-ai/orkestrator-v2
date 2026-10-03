@@ -18,18 +18,11 @@ const root = path.resolve(import.meta.dir, "..");
 const REPOSITORY = "orkestrator-ai/orkestrator-v2";
 
 /** Artifact extensions a complete release has, and the feed each platform owns. */
-const REQUIRED_ASSET_SUFFIXES = [
-  ".dmg",
-  ".zip",
-  "latest-mac.yml",
-  ".AppImage",
-  ".pacman",
-  "latest-linux.yml",
-] as const;
+const REQUIRED_ASSET_SUFFIXES = [".dmg", ".zip", "latest-mac.yml", ".AppImage", ".pacman"] as const;
+const LINUX_UPDATE_FEEDS = ["latest-linux.yml", "latest-linux-arm64.yml"] as const;
 
 function fail(message: string): never {
-  console.error(`release-desktop: ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function run(command: string[], env: NodeJS.ProcessEnv = process.env): void {
@@ -58,56 +51,95 @@ function releaseTag(): string {
 }
 
 /** The tag is what the release is built from; it must be pushed and match HEAD. */
-function assertTaggedCheckout(tag: string): void {
-  if (capture(["git", "status", "--porcelain"])) {
+export function assertTaggedCheckout(tag: string, captureOutput = capture): void {
+  if (captureOutput(["git", "status", "--porcelain"])) {
     fail("the working tree has uncommitted changes. Commit or stash them first.");
   }
-  const head = capture(["git", "rev-parse", "HEAD"]);
-  const tagged = Bun.spawnSync(["git", "rev-parse", `${tag}^{commit}`], {
-    cwd: root,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (tagged.exitCode !== 0) fail(`tag ${tag} does not exist locally. Create it on this commit.`);
-  if (tagged.stdout.toString().trim() !== head) {
+  const head = captureOutput(["git", "rev-parse", "HEAD"]);
+  let tagged: string;
+  try {
+    tagged = captureOutput(["git", "rev-parse", `${tag}^{commit}`]);
+  } catch {
+    fail(`tag ${tag} does not exist locally. Create it on this commit.`);
+  }
+  if (tagged !== head) {
     fail(`tag ${tag} does not point at HEAD (${head.slice(0, 8)}). Check out the tagged commit.`);
   }
-  const remote = capture(["git", "ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]);
-  if (!remote.split("\n").some((line) => line.startsWith(head) || line.includes(tag))) {
+  const remote = captureOutput([
+    "git",
+    "ls-remote",
+    "origin",
+    `refs/tags/${tag}`,
+    `refs/tags/${tag}^{}`,
+  ]);
+  const refs = new Map(
+    remote
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/))
+      .filter((fields): fields is [string, string] => fields.length === 2)
+      .map(([sha, ref]) => [ref, sha]),
+  );
+  const remoteCommit = refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
+  if (!remoteCommit) {
     fail(`tag ${tag} is not on origin. Run \`git push origin ${tag}\` first.`);
+  }
+  if (remoteCommit !== head) {
+    fail(`tag ${tag} on origin does not point at HEAD (${head.slice(0, 8)}).`);
   }
 }
 
-function githubToken(): string {
+export type ReleaseRuntime = {
+  platform: NodeJS.Platform;
+  arch: string;
+  env: NodeJS.ProcessEnv;
+  which(command: string): string | null;
+  capture(command: string[]): string;
+  run(command: string[], env?: NodeJS.ProcessEnv): void;
+  releaseTag(): string;
+  artifacts(): string[];
+};
+
+const defaultRuntime: ReleaseRuntime = {
+  platform: process.platform,
+  arch: process.arch,
+  env: process.env,
+  which: Bun.which,
+  capture,
+  run,
+  releaseTag,
+  artifacts: () => readdirSync(path.join(root, "release")),
+};
+
+function githubToken(runtime: ReleaseRuntime): string {
   const token =
-    process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? capture(["gh", "auth", "token"]);
+    runtime.env.GH_TOKEN ?? runtime.env.GITHUB_TOKEN ?? runtime.capture(["gh", "auth", "token"]);
   if (!token) fail("no GitHub token. Set GH_TOKEN or run `gh auth login`.");
   return token;
 }
 
-function build(publish: boolean): void {
-  const arch = process.arch;
+function build(publish: boolean, runtime: ReleaseRuntime): void {
+  const { arch, platform, run, releaseTag } = runtime;
   let platformFlags: string[];
   let configFile: string;
-  if (process.platform === "darwin") {
+  if (platform === "darwin") {
     // Intel and Apple Silicon builds would both write latest-mac.yml and
     // overwrite each other, so macOS ships arm64 only.
     if (arch !== "arm64") fail("macOS releases are built on Apple Silicon (arm64) only.");
     platformFlags = ["--mac", "--arm64"];
     configFile = "electron-builder.release.config.ts";
-  } else if (process.platform === "linux") {
+  } else if (platform === "linux") {
     if (arch !== "x64" && arch !== "arm64") fail(`unsupported Linux architecture: ${arch}`);
     // The pacman package is built with bsdtar (Arch's `libarchive` package).
-    if (!Bun.which("bsdtar")) fail("bsdtar is required to build the pacman package.");
+    if (!runtime.which("bsdtar")) fail("bsdtar is required to build the pacman package.");
     platformFlags = ["--linux", `--${arch}`];
     configFile = "electron-builder.release.linux.config.ts";
   } else {
-    fail(`unsupported platform: ${process.platform}`);
+    fail(`unsupported platform: ${platform}`);
   }
 
   const tag = releaseTag();
-  if (publish) assertTaggedCheckout(tag);
-  const env = publish ? { ...process.env, GH_TOKEN: githubToken() } : process.env;
+  if (publish) assertTaggedCheckout(tag, runtime.capture);
+  const env = publish ? { ...runtime.env, GH_TOKEN: githubToken(runtime) } : runtime.env;
 
   run(["bun", "install", "--frozen-lockfile"]);
   run(["mise", "run", "download:bun"]);
@@ -125,9 +157,7 @@ function build(publish: boolean): void {
     env,
   );
 
-  const artifacts = readdirSync(path.join(root, "release")).filter(
-    (name) => !name.includes("unpacked"),
-  );
+  const artifacts = runtime.artifacts().filter((name) => !name.includes("unpacked"));
   console.log(`\nBuilt ${tag}:\n  ${artifacts.join("\n  ")}`);
   console.log(
     publish
@@ -136,7 +166,8 @@ function build(publish: boolean): void {
   );
 }
 
-function publish(): void {
+function publish(runtime: ReleaseRuntime): void {
+  const { releaseTag, capture, run } = runtime;
   const tag = releaseTag();
   const release = JSON.parse(
     capture(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft,assets"]),
@@ -144,9 +175,14 @@ function publish(): void {
   if (!release.isDraft) fail(`release ${tag} is already published.`);
 
   const names = release.assets.map((asset) => asset.name);
-  const missing = REQUIRED_ASSET_SUFFIXES.filter(
+  const missing: string[] = REQUIRED_ASSET_SUFFIXES.filter(
     (suffix) => !names.some((n) => n.endsWith(suffix)),
   );
+  // electron-builder gives arm64 its own channel file; either supported Linux
+  // architecture can supply this platform's release build.
+  if (!LINUX_UPDATE_FEEDS.some((feed) => names.includes(feed))) {
+    missing.push(LINUX_UPDATE_FEEDS.join(" or "));
+  }
   if (missing.length > 0) {
     fail(`release ${tag} is missing ${missing.join(", ")}. Build the other platform first.`);
   }
@@ -166,7 +202,22 @@ function publish(): void {
   console.log(`\nPublished ${tag}: https://github.com/${REPOSITORY}/releases/tag/${tag}`);
 }
 
-const [command, ...flags] = process.argv.slice(2);
-if (command === "build") build(!flags.includes("--no-publish"));
-else if (command === "publish") publish();
-else fail("usage: release-desktop.ts build [--no-publish] | publish");
+export function runDesktopRelease(args: string[], runtime: ReleaseRuntime = defaultRuntime): void {
+  const [command, ...flags] = args;
+  if (command === "build" && flags.every((flag) => flag === "--no-publish")) {
+    build(!flags.includes("--no-publish"), runtime);
+  } else if (command === "publish" && flags.length === 0) {
+    publish(runtime);
+  } else {
+    fail("usage: release-desktop.ts build [--no-publish] | publish");
+  }
+}
+
+if (import.meta.main) {
+  try {
+    runDesktopRelease(process.argv.slice(2));
+  } catch (error) {
+    console.error(`release-desktop: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+}

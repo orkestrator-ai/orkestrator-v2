@@ -75,6 +75,9 @@ describe("Electron packaging configuration", () => {
     expect(taskCommands("package:linux")).toContain("bun scripts/install-packaged-app-linux.ts");
     expect(taskCommands("package:release")).toContain("electron-builder.release.config.ts");
     expect(taskCommands("package:release")).toContain("bunx electron-builder --mac");
+    expect(taskCommands("package:release")).toContain(
+      "electron-builder.release.config.ts --publish never",
+    );
     expect(taskCommands("setup")).not.toContain("download:binaries");
     expect(taskCommands("build:all")).not.toContain("download:binaries");
     expect(taskCommands("docker:build")).not.toContain("--no-cache");
@@ -218,6 +221,37 @@ describe("Electron packaging configuration", () => {
       NSPhotoLibraryUsageDescription:
         "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
     });
+  });
+
+  test("configures complete Linux release targets, package metadata, draft publication, and distinct artifact names", async () => {
+    const { createLinuxReleaseConfig } =
+      await import("../../../electron-builder.release.linux.config");
+    const config = createLinuxReleaseConfig();
+    expect(config.linux?.target).toEqual(["AppImage", "pacman"]);
+    expect(config.linux?.maintainer).toBe("Orkestrator AI contributors");
+    expect(config.extraMetadata?.homepage).toBe("https://github.com/orkestrator-ai/orkestrator-v2");
+    expect(config.linux?.executableName).toBe("orkestrator-v2");
+    expect(config.linux?.icon).toBe("icons");
+    expect(config.toolsets?.appimage).toBe("1.0.3");
+    expect(config.publish).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        owner: "orkestrator-ai",
+        repo: "orkestrator-v2",
+        releaseType: "draft",
+      }),
+    ]);
+    expect(config.artifactName).toBe("orkestrator-v2-${os}-${arch}.${ext}");
+    // Each architecture and target must own a different path in the release.
+    const names = ["arm64", "x64"].flatMap((arch) =>
+      ["AppImage", "pacman"].map((ext) =>
+        config
+          .artifactName!.replace("${os}", "linux")
+          .replace("${arch}", arch)
+          .replace("${ext}", ext),
+      ),
+    );
+    expect(new Set(names).size).toBe(4);
   });
 
   test("uses the Bun-based container image before running the simplified workspace setup", async () => {

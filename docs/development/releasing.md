@@ -32,11 +32,15 @@ links and the in-app updater.
 Each `release:desktop` run refuses to continue unless the working tree is clean
 and `HEAD` is the pushed `v<version>` tag. It installs dependencies, builds, and
 uploads to a **draft** release, so nothing is visible until `release:publish`,
-which also refuses to publish unless macOS and Linux artifacts are both present.
+which also refuses to publish unless macOS and Linux artifacts and their updater
+feeds are present (Linux uses `latest-linux.yml` for x64 or
+`latest-linux-arm64.yml` for arm64).
 Tags with a `-suffix` publish as prereleases, which the updater ignores.
 
 To rehearse a build without uploading or needing the tag, run
 `mise run release:desktop -- --no-publish`. Artifacts land in `release/`.
+The local signed `package:release` task also sets `--publish never`, including
+when a GitHub token is available.
 
 ## Machine prerequisites
 
@@ -55,11 +59,15 @@ the base config's ad-hoc signing (`mise run package:mac`) is local-only.
 | --- | --- | --- | --- |
 | macOS arm64 | `orkestrator-v2-mac-arm64.dmg` (and a `.zip` the updater uses) | `latest-mac.yml` | Yes |
 | Linux x64 | `orkestrator-v2-linux-x86_64.AppImage` | `latest-linux.yml` | Yes |
+| Linux arm64 | `orkestrator-v2-linux-arm64.AppImage` | `latest-linux-arm64.yml` | Yes |
 | Arch / Omarchy | `orkestrator-v2-linux-x64.pacman` | | No: reinstall to update |
 
 Filenames carry no version so the website can link a stable URL, for example
 `https://github.com/orkestrator-ai/orkestrator-v2/releases/latest/download/orkestrator-v2-mac-arm64.dmg`.
 electron-builder names the x64 AppImage `x86_64` and the pacman package `x64`.
+On arm64 it names the AppImage `arm64` and the pacman package `aarch64`.
+The Linux release config provides pacman's maintainer and project homepage
+metadata without changing the local packaging configuration.
 
 ## How the in-app updater decides to run
 
@@ -92,7 +100,9 @@ background, then asks the user to restart. "Later" installs on the next quit.
 
 - macOS Intel (x64): both Mac builds would write `latest-mac.yml` and overwrite
   each other. Add it by building both architectures in one run.
-- Linux arm64 and Windows.
+- Linux arm64 packaging has been validated with a no-publish build producing
+  both targets; launching those packages and applying a real update remain
+  unverified. Windows releases are not yet covered.
 - A real update has not been exercised end to end. Before announcing, ship a
   release, install it from the download, ship the next version, and confirm the
   prompt and restart on both platforms. Prereleases do not count: the updater

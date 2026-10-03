@@ -9,6 +9,17 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Opt-out for managed installs and for debugging the updater itself. */
 export const DISABLE_AUTO_UPDATE_ENV = "ORKESTRATOR_DISABLE_AUTO_UPDATE";
 
+export type UpdateCheckResult = {
+  isUpdateAvailable?: boolean;
+  downloadPromise?: Promise<string[]> | null;
+};
+
+class UpdateDownloadError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
 /** The slice of `electron-updater`'s `AppUpdater` this module drives. */
 export type UpdaterLike = {
   autoDownload: boolean;
@@ -16,7 +27,7 @@ export type UpdaterLike = {
   allowPrerelease: boolean;
   on(event: "update-downloaded", listener: (info: { version: string }) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
-  checkForUpdates(): Promise<{ isUpdateAvailable?: boolean } | null>;
+  checkForUpdates(): Promise<UpdateCheckResult | null>;
   quitAndInstall(): void;
 };
 
@@ -81,6 +92,8 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   let downloadedVersion: string | null = null;
   let promptedVersion: string | null = null;
   let manualCheck = false;
+  let checkInFlight: Promise<UpdateCheckResult | null> | null = null;
+  let readinessRevision = 0;
   let initialTimer: NodeJS.Timeout | null = null;
   let intervalTimer: NodeJS.Timeout | null = null;
 
@@ -91,6 +104,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   async function promptToRestart(version: string): Promise<void> {
     if (promptedVersion === version) return;
     promptedVersion = version;
+    const revision = readinessRevision;
     const result = await showMessageBox(getWindow(), {
       type: "info",
       buttons: ["Restart Now", "Later"],
@@ -101,27 +115,63 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
         "Restart to finish updating. Choose Later to install it the next time you quit — " +
         "running agent sessions are not interrupted until then.",
     });
-    if (result.response === 0) updater.quitAndInstall();
+    if (result.response === 0 && downloadedVersion === version && revision === readinessRevision) {
+      updater.quitAndInstall();
+    }
   }
 
   updater.on("update-downloaded", (info) => {
     downloadedVersion = info.version;
     log.info(`[Updater] Downloaded ${info.version}`);
-    void promptToRestart(info.version).catch((error: unknown) =>
+    if (!checkInFlight) offerRestart(info.version);
+  });
+  function offerRestart(version: string): void {
+    void promptToRestart(version).catch((error: unknown) =>
       log.warn("[Updater] Restart prompt failed:", error),
     );
-  });
+  }
+
+  function invalidateReadiness(): void {
+    downloadedVersion = null;
+    promptedVersion = null;
+    readinessRevision += 1;
+  }
+
   updater.on("error", (error) => {
+    // MacUpdater emits update-downloaded for its ZIP before native staging.
+    // A later native error must also invalidate an already-open restart dialog.
+    invalidateReadiness();
     log.warn("[Updater] Update failed:", error);
   });
 
-  async function check(): Promise<{ isUpdateAvailable?: boolean } | null> {
+  async function performCheck(): Promise<UpdateCheckResult | null> {
+    let result: UpdateCheckResult | null;
     try {
-      return await updater.checkForUpdates();
+      result = await updater.checkForUpdates();
     } catch (error) {
       log.warn("[Updater] Update check failed:", error);
       throw error;
     }
+    // Observe the separate promise immediately, even for background checks.
+    // The error event alone does not consume a rejected download promise.
+    try {
+      await result?.downloadPromise;
+    } catch (error) {
+      invalidateReadiness();
+      log.warn("[Updater] Update download or staging failed:", error);
+      throw new UpdateDownloadError(error);
+    }
+    if (downloadedVersion) offerRestart(downloadedVersion);
+    return result;
+  }
+
+  function check(): Promise<UpdateCheckResult | null> {
+    // Hold the operation through download/staging so a menu click and a timer
+    // cannot start competing downloads or misreport an in-flight update.
+    checkInFlight ??= performCheck().finally(() => {
+      checkInFlight = null;
+    });
+    return checkInFlight;
   }
 
   return {
@@ -146,19 +196,13 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       if (manualCheck) return;
       manualCheck = true;
       try {
-        if (downloadedVersion) {
+        if (downloadedVersion && !checkInFlight) {
           promptedVersion = null;
           await promptToRestart(downloadedVersion);
           return;
         }
         const result = await check();
-        if (result?.isUpdateAvailable) {
-          await showMessageBox(getWindow(), {
-            type: "info",
-            message: "Downloading update…",
-            detail: `${productName} will ask you to restart once the update has downloaded.`,
-          });
-        } else {
+        if (!result?.isUpdateAvailable) {
           await showMessageBox(getWindow(), {
             type: "info",
             message: `${productName} is up to date`,
@@ -168,7 +212,10 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       } catch (error) {
         await showMessageBox(getWindow(), {
           type: "error",
-          message: "Could not check for updates",
+          message:
+            error instanceof UpdateDownloadError
+              ? "Could not download or prepare the update"
+              : "Could not check for updates",
           detail: error instanceof Error ? error.message : String(error),
         });
       } finally {

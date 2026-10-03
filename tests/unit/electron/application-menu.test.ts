@@ -27,6 +27,27 @@ function windowRadioLabels(template: MenuItemConstructorOptions[]): string[] {
 }
 
 describe("desktop application menu", () => {
+  test("includes the update menu action only for supported installs and invokes it", () => {
+    const actions = {
+      productName: "Orkestrator AI",
+      windows: [],
+      newWindow: () => {},
+      closeTab: () => {},
+      selectWindow: () => {},
+      zoom: () => {},
+    };
+    const withoutUpdater = createApplicationMenuTemplate(actions);
+    expect(submenu(withoutUpdater[0]!).some((item) => item.label === "Check for Updates…")).toBe(
+      false,
+    );
+    const checkForUpdates = mock(() => {});
+    const withUpdater = createApplicationMenuTemplate({ ...actions, checkForUpdates });
+    const item = submenu(withUpdater[0]!).find((item) => item.label === "Check for Updates…");
+    expect(item).toBeDefined();
+    (item?.click as (() => void) | undefined)?.();
+    expect(checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
   test("owns Command+W and forwards it as an application tab action", () => {
     const newWindow = mock(() => {});
     const closeTab = mock(() => {});

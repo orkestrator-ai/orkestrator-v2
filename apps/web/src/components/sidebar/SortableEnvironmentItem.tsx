@@ -58,7 +58,15 @@ export function SortableEnvironmentItem({
         )}
       >
         {/* Drag handle - far left */}
-        {!environment.projectHome && (
+        {environment.projectHome ? (
+          // Project home can't be reordered, but it reserves the handle's width
+          // so its icon lines up with the other environments.
+          <span
+            aria-hidden="true"
+            data-testid="project-home-handle-spacer"
+            className="h-6 w-4 shrink-0"
+          />
+        ) : (
           <button
             {...attributes}
             {...listeners}

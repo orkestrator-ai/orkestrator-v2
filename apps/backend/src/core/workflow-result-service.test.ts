@@ -162,7 +162,11 @@ describe("WorkflowResultService", () => {
     expect(await service.projection(resultKey)).toBe("preparing");
 
     const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
-    expect(await service.validate(scope, resultKey, valid)).toEqual({ ok: true, valid: true });
+    expect(await service.validate(scope, resultKey, valid)).toEqual({
+      ok: true,
+      valid: true,
+      validatedDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
     expect(service.metrics.snapshot()).toMatchObject({
       counters: {
         "preflights|outcome=invalid_result": 6,
@@ -176,6 +180,139 @@ describe("WorkflowResultService", () => {
     expect(await service.submit(scope, resultKey, valid)).toMatchObject({
       ok: true,
       duplicate: false,
+    });
+  });
+
+  describe("committing a validated result by digest", () => {
+    const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
+
+    async function validated() {
+      const resultKey = await prepare();
+      const outcome = await service.validate(scope, resultKey, valid);
+      if (!outcome.ok || !outcome.validatedDigest) throw new Error("validation failed");
+      return { resultKey, digest: outcome.validatedDigest };
+    }
+
+    test("accepts exactly the payload that was validated", async () => {
+      const { resultKey, digest } = await validated();
+      expect(service.heldValidation(resultKey)).toMatchObject({ digest });
+      const accepted = await service.submitValidated(scope, resultKey, digest);
+      expect(accepted).toMatchObject({ ok: true, duplicate: false });
+      expect(await service.structured(resultKey)).toMatchObject({ value: valid });
+      expect(service.heldValidation(resultKey)).toBeUndefined();
+      // A retry with the same payload in full is an idempotent duplicate.
+      expect(await service.submit(scope, resultKey, valid)).toMatchObject({
+        ok: true,
+        duplicate: true,
+      });
+    });
+
+    test("an unknown digest is correctable feedback that spends no budget", async () => {
+      const { resultKey } = await validated();
+      for (let index = 0; index < 6; index += 1) {
+        expect(await service.submitValidated(scope, resultKey, "0".repeat(64))).toMatchObject({
+          ok: false,
+          error: {
+            code: "invalid_result",
+            nextAction: "correct",
+            issues: [{ path: "$.validatedDigest", code: "unknown_validation" }],
+          },
+        });
+      }
+      expect(await service.projection(resultKey)).toBe("preparing");
+    });
+
+    test("an invalid later validation does not replace the held payload", async () => {
+      const { resultKey, digest } = await validated();
+      const invalid = { phase: "collecting", title: 7, summary: "" };
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject({ ok: false });
+      expect(service.heldValidation(resultKey)).toMatchObject({ digest });
+    });
+
+    test("a caller outside the slot's scope cannot commit it", async () => {
+      const { resultKey, digest } = await validated();
+      expect(
+        await service.submitValidated({ ...scope, projectId: "other" }, resultKey, digest),
+      ).toMatchObject({ ok: false, error: { code: "capability_denied" } });
+      expect(await service.projection(resultKey)).toBe("preparing");
+    });
+
+    test("closing the slot drops the held payload", async () => {
+      const { resultKey, digest } = await validated();
+      await service.close(resultKey, "cancelled");
+      expect(service.heldValidation(resultKey)).toBeUndefined();
+      expect(await service.submitValidated(scope, resultKey, digest)).toMatchObject({
+        ok: false,
+      });
+    });
+
+    test("holds a bounded number of payloads, dropping the oldest first", async () => {
+      const first = await validated();
+      let last = first;
+      for (let index = 0; index < 64; index += 1) last = await validated();
+      expect(service.heldValidation(first.resultKey)).toBeUndefined();
+      expect(service.heldValidation(last.resultKey)).toMatchObject({ digest: last.digest });
+    });
+
+    test("an expired payload is not committed", async () => {
+      const { resultKey, digest } = await validated();
+      const realNow = Date.now;
+      try {
+        Date.now = () => realNow() + 31 * 60_000;
+        expect(service.heldValidation(resultKey)).toBeUndefined();
+        expect(await service.submitValidated(scope, resultKey, digest)).toMatchObject({
+          ok: false,
+          error: { code: "invalid_result" },
+        });
+      } finally {
+        Date.now = realNow;
+      }
+    });
+  });
+
+  describe("delivery evidence in status", () => {
+    const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
+
+    test("says nothing reached the service when no call arrived", async () => {
+      const resultKey = await prepare();
+      const status = await service.status(scope, resultKey);
+      expect(status?.delivery).toMatchObject({ validationCalls: 0, submissionCalls: 0 });
+      expect(status?.delivery?.hint).toContain("No validation or submission call has reached");
+      expect(status?.delivery?.hint).toContain("your own tool client");
+    });
+
+    test("points at the held digest after a successful validation", async () => {
+      const resultKey = await prepare();
+      const outcome = await service.validate(scope, resultKey, valid);
+      const digest = outcome.ok ? outcome.validatedDigest : undefined;
+      const status = await service.status(scope, resultKey);
+      expect(status?.delivery).toMatchObject({
+        validationCalls: 1,
+        submissionCalls: 0,
+        lastValidation: "valid",
+        validatedDigest: digest,
+      });
+      expect(status?.delivery?.hint).toContain("submit_feature_plan_state");
+      expect(status?.delivery?.hint).toContain("validatedDigest");
+    });
+
+    test("reports invalid validation and counts submissions that arrived", async () => {
+      const resultKey = await prepare();
+      await service.validate(scope, resultKey, { phase: "collecting", title: 7, summary: "" });
+      await service.submit(scope, resultKey, { phase: "collecting", title: 7, summary: "" });
+      const status = await service.status(scope, resultKey);
+      expect(status?.delivery).toMatchObject({
+        validationCalls: 1,
+        submissionCalls: 1,
+        lastValidation: "invalid",
+      });
+      expect(status?.delivery?.hint).toContain("last validation reported problems");
+    });
+
+    test("is omitted once the slot is no longer open", async () => {
+      const resultKey = await prepare();
+      await service.submit(scope, resultKey, valid);
+      expect((await service.status(scope, resultKey))?.delivery).toBeUndefined();
     });
   });
 

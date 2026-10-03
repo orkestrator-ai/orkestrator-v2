@@ -322,6 +322,7 @@ export class BuildPipelineReviewFanout {
                 schema,
               }),
             projectResult: (requestId: string) => this.deps.workflowResults!.projection(requestId),
+            heldResult: (requestId: string) => this.deps.workflowResults!.heldValidation(requestId),
             readResult: <T>(requestId: string) =>
               this.deps.workflowResults!.structured<T>(requestId),
             consumeResult: (requestId: string) => this.deps.workflowResults!.consume(requestId),

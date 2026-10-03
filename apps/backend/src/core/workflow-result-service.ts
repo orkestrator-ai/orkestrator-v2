@@ -17,6 +17,8 @@ import {
   WORKFLOW_RESULT_SCHEMA_VERSION,
   WORKFLOW_RESULT_STORE_VERSION,
   isWorkflowResultKind,
+  workflowResultToolName,
+  type WorkflowResultDelivery,
   type WorkflowResultKind,
   type WorkflowResultReceipt,
   type WorkflowResultSlotInput,
@@ -35,6 +37,24 @@ import {
 const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const MAX_CAPABILITY_IDENTITY_BYTES = 4 * 1024;
 const CAPABILITY_IDENTITY_VERSION = 1;
+/** A validated payload is held only long enough for the model to commit it. */
+const HELD_VALIDATION_TTL_MS = 30 * 60_000;
+const HELD_VALIDATION_MAX_ENTRIES = WORKFLOW_RESULT_MAX_PENDING_CALLS;
+const HELD_VALIDATION_MAX_BYTES = WORKFLOW_RESULT_MAX_PENDING_BYTES;
+
+/** The newest payload that passed validation for one slot. In memory only. */
+interface HeldValidation {
+  digest: string;
+  result: unknown;
+  bytes: number;
+  at: number;
+}
+
+interface DeliveryCounters {
+  validationCalls: number;
+  submissionCalls: number;
+  lastValidation?: "valid" | "invalid";
+}
 
 interface WorkflowResultCapabilityIdentity {
   version: 1;
@@ -213,6 +233,9 @@ export class WorkflowResultService {
   private pendingCalls = 0;
   private pendingBytes = 0;
   private readonly pendingCallsByKey = new Map<string, number>();
+  private readonly held = new Map<string, HeldValidation>();
+  private heldBytes = 0;
+  private readonly deliveryCounters = new Map<string, DeliveryCounters>();
   private readonly acceptanceListeners = new Set<(event: WorkflowResultAcceptance) => void>();
   readonly metrics: WorkflowResultMetrics;
 
@@ -220,6 +243,68 @@ export class WorkflowResultService {
     this.filePath = path.join(dataDir, "workflow-results.json");
     this.capabilityIdentityPath = path.join(dataDir, "workflow-result-tools.json");
     this.metrics = metrics;
+  }
+
+  /** Counters exist only for slots the store knows, so a caller cannot grow them. */
+  private counters(resultKey: string): DeliveryCounters {
+    let counters = this.deliveryCounters.get(resultKey);
+    if (!counters) {
+      counters = { validationCalls: 0, submissionCalls: 0 };
+      this.deliveryCounters.set(resultKey, counters);
+      while (this.deliveryCounters.size > WORKFLOW_RESULT_MAX_ENTRIES) {
+        const oldest = this.deliveryCounters.keys().next().value;
+        if (oldest === undefined) break;
+        this.deliveryCounters.delete(oldest);
+      }
+    }
+    return counters;
+  }
+
+  private releaseHeld(resultKey: string): void {
+    const held = this.held.get(resultKey);
+    if (!held) return;
+    this.held.delete(resultKey);
+    this.heldBytes -= held.bytes;
+  }
+
+  /** Drops everything the service remembers about a slot that has settled. */
+  private forgetDelivery(resultKey: string): void {
+    this.releaseHeld(resultKey);
+    this.deliveryCounters.delete(resultKey);
+  }
+
+  private hold(resultKey: string, digest: string, result: unknown, bytes: number): void {
+    this.releaseHeld(resultKey);
+    const now = Date.now();
+    for (const [key, entry] of Array.from(this.held)) {
+      if (now - entry.at > HELD_VALIDATION_TTL_MS) this.releaseHeld(key);
+    }
+    this.held.set(resultKey, { digest, result, bytes, at: now });
+    this.heldBytes += bytes;
+    while (
+      this.held.size > 0 &&
+      (this.held.size > HELD_VALIDATION_MAX_ENTRIES || this.heldBytes > HELD_VALIDATION_MAX_BYTES)
+    ) {
+      const oldest = this.held.keys().next().value;
+      if (oldest === undefined) break;
+      this.releaseHeld(oldest);
+    }
+  }
+
+  /**
+   * The payload that last passed validation for a slot, if it is still held.
+   * `ageMs` lets a supervisor notice a model that validated a result and then
+   * never committed it.
+   */
+  heldValidation(resultKey: string): { digest: string; ageMs: number } | undefined {
+    const held = this.held.get(resultKey);
+    if (!held) return undefined;
+    const ageMs = Date.now() - held.at;
+    if (ageMs > HELD_VALIDATION_TTL_MS) {
+      this.releaseHeld(resultKey);
+      return undefined;
+    }
+    return { digest: held.digest, ageMs };
   }
 
   private beginPending(resultKey: string, bytes: number): boolean {
@@ -490,6 +575,9 @@ export class WorkflowResultService {
       } finally {
         this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
       }
+      const delivery = this.counters(resultKey);
+      delivery.validationCalls += 1;
+      delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
       if (issues.length > 0) {
         return {
           ok: false,
@@ -502,7 +590,9 @@ export class WorkflowResultService {
         };
       }
       outcome = "valid";
-      return { ok: true, valid: true };
+      const validatedDigest = createHash("sha256").update(serialized).digest("hex");
+      this.hold(resultKey, validatedDigest, result, validationBytes);
+      return { ok: true, valid: true, validatedDigest };
     } catch (error) {
       outcome = "storage_unavailable";
       throw error;
@@ -538,6 +628,49 @@ export class WorkflowResultService {
       }
     }
     return submission;
+  }
+
+  /**
+   * Commits the payload that last passed validation, identified by digest.
+   *
+   * It is an ordinary submission of that exact payload, so every acceptance
+   * rule (lifecycle, budget, duplicate and conflict handling) still applies.
+   * Only the transport differs: the model names the payload instead of
+   * re-emitting it.
+   */
+  async submitValidated(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+    validatedDigest: string,
+  ): Promise<WorkflowResultSubmission> {
+    const held = this.held.get(resultKey);
+    if (!held || held.digest !== validatedDigest || !this.heldValidation(resultKey)) {
+      const entry = (await this.load()).entries[resultKey];
+      if (
+        entry &&
+        entry.environmentId === scope.environmentId &&
+        entry.projectId === scope.projectId
+      ) {
+        this.counters(resultKey).submissionCalls += 1;
+      }
+      return {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message:
+            "No validated result with that digest is held. Validate the complete result again, or submit it in full.",
+          issues: [
+            {
+              path: "$.validatedDigest",
+              code: "unknown_validation",
+              message: "The digest does not match a held validated result.",
+            },
+          ],
+        },
+      };
+    }
+    return this.submit(scope, resultKey, held.result);
   }
 
   private async submitOnce(
@@ -598,12 +731,14 @@ export class WorkflowResultService {
             },
           } satisfies WorkflowResultSubmission;
         }
+        this.counters(resultKey).submissionCalls += 1;
         if (
           entry.lifecycle === "cancelled" ||
           entry.lifecycle === "superseded" ||
           entry.lifecycle === "exhausted"
         ) {
           const exhausted = entry.lifecycle === "exhausted";
+          this.forgetDelivery(resultKey);
           this.metrics.recordSubmission({
             provider: entry.provider,
             kind: entry.kind,
@@ -682,6 +817,7 @@ export class WorkflowResultService {
           entry.updatedAt = new Date().toISOString();
           if (entry.rejectedDigests.length >= WORKFLOW_RESULT_MAX_REJECTIONS) {
             entry.lifecycle = "exhausted";
+            this.forgetDelivery(resultKey);
             this.metrics.recordSubmission({
               provider: entry.provider,
               kind: entry.kind,
@@ -724,6 +860,7 @@ export class WorkflowResultService {
           acceptedAt,
         };
         entry.lifecycle = "accepted";
+        this.forgetDelivery(resultKey);
         entry.result = result;
         entry.digest = resultDigest;
         entry.receipt = receipt;
@@ -756,6 +893,8 @@ export class WorkflowResultService {
       entry.projectId !== scope.projectId
     )
       return null;
+    const delivery =
+      entry.lifecycle === "open" ? this.deliveryOf(resultKey, entry.kind) : undefined;
     return {
       resultKey,
       lifecycle: entry.lifecycle,
@@ -768,6 +907,34 @@ export class WorkflowResultService {
             ? "blocked"
             : "pending",
       ...(entry.receipt ? { receipt: entry.receipt } : {}),
+      ...(delivery ? { delivery } : {}),
+    };
+  }
+
+  /**
+   * What reached the backend for an open slot, with a hint that points a model
+   * at its own call rather than at the tool when nothing has arrived.
+   */
+  private deliveryOf(resultKey: string, kind: WorkflowResultKind): WorkflowResultDelivery {
+    const counters = this.deliveryCounters.get(resultKey);
+    const held = this.heldValidation(resultKey);
+    const validationCalls = counters?.validationCalls ?? 0;
+    const submissionCalls = counters?.submissionCalls ?? 0;
+    let hint: string | undefined;
+    if (held) {
+      hint = `A validated result is held. Commit it by calling ${workflowResultToolName(kind)} with this resultKey and validatedDigest; do not re-send the result.`;
+    } else if (validationCalls === 0 && submissionCalls === 0) {
+      hint =
+        "No validation or submission call has reached the result service for this resultKey. Rejections you saw came from your own tool client, so the calls were malformed (a brace count off by one is the usual cause); the service is not rejecting anything.";
+    } else if (counters?.lastValidation === "invalid") {
+      hint = "The last validation reported problems. Correct them and validate again.";
+    }
+    return {
+      validationCalls,
+      submissionCalls,
+      ...(counters?.lastValidation ? { lastValidation: counters.lastValidation } : {}),
+      ...(held ? { validatedDigest: held.digest } : {}),
+      ...(hint ? { hint } : {}),
     };
   }
 
@@ -829,6 +996,7 @@ export class WorkflowResultService {
       const entry = store.entries[resultKey];
       if (!entry || entry.lifecycle === "consumed") return;
       if (entry.lifecycle !== "accepted") throw new Error("Workflow result is not accepted");
+      this.forgetDelivery(resultKey);
       const consumedAt = new Date().toISOString();
       entry.lifecycle = "consumed";
       entry.result = undefined;
@@ -855,6 +1023,7 @@ export class WorkflowResultService {
       let removed = 0;
       for (const [resultKey, entry] of Object.entries(store.entries)) {
         if (entry.environmentId !== environmentId) continue;
+        this.forgetDelivery(resultKey);
         delete store.entries[resultKey];
         removed += 1;
       }
@@ -866,6 +1035,7 @@ export class WorkflowResultService {
     await this.mutate(async (store) => {
       const entry = store.entries[resultKey];
       if (!entry || entry.lifecycle === "consumed") return;
+      this.forgetDelivery(resultKey);
       // A slot closed while still open was never submitted to. That is the
       // signal for a worker that finished without calling its tool, which is
       // what the missing-submission counter exists to surface.

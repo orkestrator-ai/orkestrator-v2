@@ -53,7 +53,9 @@ describe("workflowResultReminderPrompt", () => {
     expect(prompt).toContain("No call to `submit_review_report` was accepted.");
     expect(prompt).toContain("do not repeat it");
     expect(prompt).toContain("The result tools are working.");
-    expect(prompt).toContain("JSON Parse error: Expected '}'");
+    expect(prompt).toContain("Failed to parse arguments string as JSON object");
+    expect(prompt).toContain("one extra `}`");
+    expect(prompt).toContain("Never shorten the report");
     expect(prompt).toContain("never call a tool named `invalid`");
     expect(prompt).toContain("The earlier resultKey is closed.");
   });

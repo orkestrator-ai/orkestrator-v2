@@ -44,8 +44,16 @@ describe("workflow result contracts", () => {
     expect(instruction).toContain("arguments` as a raw object");
     // A model that emits malformed arguments must retry the call rather than
     // conclude the tool is broken.
-    expect(instruction).toContain("every brace and bracket closed");
+    expect(instruction).toContain("balanced braces and brackets");
     expect(instruction).toContain("not a sign that the tool is broken");
+    // The observed fault is an extra trailing brace, and a rejection must not
+    // read as a size or formatting problem that invites shrinking the report.
+    expect(instruction).toContain("one extra `}`");
+    expect(instruction).toContain("not a size, line-length or formatting problem");
+    expect(instruction).toContain("Never shorten the report");
+    expect(instruction).not.toContain("every brace and bracket closed");
+    // A validated payload is committed by digest rather than re-sent.
+    expect(instruction).toContain("`validatedDigest`");
     expect(instruction).toContain("Only retry an accepted submission with the exact same payload");
     expect(instruction).toContain("Do not print the result as JSON in your final response.");
     // Acceptance must not read as workflow completion.

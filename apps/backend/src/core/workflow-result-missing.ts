@@ -1,4 +1,7 @@
-import type { WorkflowResultSubmissionState } from "@orkestrator/protocol/workflow-results";
+import {
+  WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE,
+  type WorkflowResultSubmissionState,
+} from "@orkestrator/protocol/workflow-results";
 
 /**
  * Explains why a tool-transport step went idle with no accepted result.
@@ -31,8 +34,9 @@ export function missingWorkflowResultMessage(input: {
  * The one follow-up turn sent before a missing result becomes a failure.
  *
  * The common cause is not a model that forgot the tool but one that called it
- * with malformed arguments — typically a long nested object missing its final
- * closing brace — and then concluded the tool itself was broken. OpenCode
+ * with malformed arguments — typically a long nested object whose closing
+ * braces are off by one, missing or extra — and then concluded the tool itself
+ * was broken (or that the payload was too large). OpenCode
  * reroutes such a call to its internal `invalid` tool, which a model can then
  * keep calling directly with errors it invents, so the result tool is never
  * reached again. The reminder names both so the retry targets the real fault.
@@ -56,7 +60,7 @@ export function workflowResultReminderPrompt(input: {
         : `No call to \`${toolName}\` was accepted.`;
   return [
     `Orkestrator has not received your ${resultLabel}. ${cause} Your analysis is already done: do not repeat it, only submit the result.`,
-    `The result tools are working. If a call was rejected because its arguments could not be parsed as JSON (for example "JSON Parse error: Expected '}'"), the arguments you emitted were malformed, most often a closing brace missing at the end of a long nested object. Emit the arguments as one complete JSON object, check that every brace and bracket is closed, and keep prose fields short so the payload stays small. Only call tools that were offered to you: never call a tool named \`invalid\`, and never write a tool error yourself.`,
+    `The result tools are working. ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} Only call tools that were offered to you: never call a tool named \`invalid\`, and never write a tool error yourself.`,
     `The earlier resultKey is closed. Use only the resultKey (and capability, when one is given) from the instructions below.`,
   ].join("\n\n");
 }

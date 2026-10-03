@@ -31,7 +31,9 @@ import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 
 const MAX_ISSUES = 32;
 const PLACEHOLDER_VALUES = new Set([
+  "asdf",
   "dummy",
+  "lorem ipsum",
   "placeholder",
   "probe",
   "sample",
@@ -39,6 +41,10 @@ const PLACEHOLDER_VALUES = new Set([
   "test",
   "testing",
   "todo",
+  // Filler a model uses to shrink a payload until a call goes through.
+  "x",
+  "xx",
+  "xxx",
 ]);
 const PLACEHOLDER_PHRASE =
   /^(?:(?:this|that) is (?:a )?)?(?:dummy|placeholder|probe|sample|tbd|test|testing|todo)(?: (?:content|only|result|value))?[.!]?$/;

@@ -77,14 +77,41 @@ export type WorkflowResultSubmission =
   | { ok: false; error: WorkflowResultError };
 
 export type WorkflowResultValidation =
-  | { ok: true; valid: true }
+  | {
+      ok: true;
+      valid: true;
+      /**
+       * SHA-256 of the validated payload. The backend holds that payload for a
+       * bounded time, so the submission tool can commit it by this digest
+       * instead of the model re-emitting a large nested object.
+       */
+      validatedDigest?: string;
+    }
   | { ok: false; error: WorkflowResultError };
+
+/**
+ * What the backend has actually received for one slot.
+ *
+ * A tool call the client rejects before it leaves the model's process (for
+ * example arguments that do not parse) never reaches the backend, so these
+ * counts are the evidence that separates "the tool is broken" from "my call
+ * was malformed". In-memory only: a backend restart resets them.
+ */
+export interface WorkflowResultDelivery {
+  validationCalls: number;
+  submissionCalls: number;
+  lastValidation?: "valid" | "invalid";
+  /** Present while a valid candidate is held and can be committed by digest. */
+  validatedDigest?: string;
+  hint?: string;
+}
 
 export interface WorkflowResultStatus {
   resultKey: string;
   lifecycle: WorkflowResultLifecycle;
   completion: "pending" | "completed" | "blocked";
   receipt?: WorkflowResultReceipt;
+  delivery?: WorkflowResultDelivery;
 }
 
 export interface WorkflowResultSlotInput {
@@ -128,6 +155,18 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
 
 export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";
 
+/**
+ * Guidance for a rejected tool call that never reached the backend. Shared by
+ * the first-turn instruction and the reminder turn so the two cannot drift.
+ *
+ * Models read a generic "failed to parse arguments" rejection as a size,
+ * formatting or quoting problem and burn minutes shrinking or reformatting a
+ * payload that was fine. The observed fault is a brace count that is off by
+ * one in either direction, so the guidance names both.
+ */
+export const WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE =
+  "A call rejected with a JSON parse error or `Failed to parse arguments string as JSON object` was malformed. It is not a sign that the tool is broken, and it is not a size, line-length or formatting problem. The usual cause is a brace count that is off by one: a missing closing brace, or one extra `}` at the very end, which is easy to add when the call is wrapped in another object. Recount the closing braces, keep the same content, and call the same tool again. Never shorten the report or replace its findings with placeholder text to get a call through.";
+
 export function workflowResultToolName(kind: WorkflowResultKind): string {
   return WORKFLOW_RESULT_TOOL_NAMES[kind];
 }
@@ -141,7 +180,7 @@ export function workflowResultInstruction(
     ? ` and capability ${JSON.stringify(options.capability)}`
     : "";
   return wrapSystemInstructions(
-    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. If you need to check a completed payload before committing it, call \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\` with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`; validation is read-only. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with the same resultKey${capabilityArgument} and complete result. When using a generic \`CallDynamicTool\` wrapper, pass \`arguments\` as a raw object, never as a quoted or JSON-stringified object. Emit the arguments as one complete JSON object with every brace and bracket closed, and keep prose fields concise so the payload stays small. A call rejected because its arguments could not be parsed as JSON was malformed, not a sign that the tool is broken: correct the arguments and call the same tool again. If the submission tool rejects the result, correct only the reported contract problems and call it again. Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
+    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. If you need to check a completed payload before committing it, call \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\` with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`; validation is read-only. When validation accepts the payload it returns a \`validatedDigest\`: submit that exact payload by calling \`${workflowResultToolName(kind)}\` with the same resultKey${capabilityArgument} and \`validatedDigest\` instead of \`result\`, so the large object is sent only once. Otherwise, when your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with the same resultKey${capabilityArgument} and complete result. When using a generic \`CallDynamicTool\` wrapper, pass \`arguments\` as a raw object, never as a quoted or JSON-stringified object. Emit the arguments as exactly one JSON object with balanced braces and brackets, and keep prose fields concise. ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} If the submission tool rejects the result, correct only the reported contract problems and call it again. Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
   );
 }
 

@@ -160,6 +160,33 @@ describe("workflow result contract validation", () => {
     );
   });
 
+  test("filler used to shrink a payload past a failing call is rejected as a placeholder", () => {
+    const shrunk = {
+      ...report,
+      whatChanged: { ...report.whatChanged, overview: "x", before: "x", after: "x" },
+      summaryOfChange: "XX",
+      reviewSummary: "x",
+    };
+    const issues = validateWorkflowResult("review-report", shrunk);
+    expect(issues.map((issue) => issue.path)).toEqual(
+      expect.arrayContaining([
+        "$.whatChanged.overview",
+        "$.whatChanged.before",
+        "$.whatChanged.after",
+        "$.summaryOfChange",
+        "$.reviewSummary",
+      ]),
+    );
+    expect(issues.every((issue) => issue.code === "placeholder_value")).toBe(true);
+    // A longer value that merely starts with the letter is ordinary prose.
+    expect(
+      validateWorkflowResult("review-report", {
+        ...report,
+        reviewSummary: "x-axis labels reviewed",
+      }),
+    ).toEqual([]);
+  });
+
   test("wrong types, unknown properties, and enum confusion are reported by path", () => {
     const issues = validateWorkflowResult("feature-plan-state", {
       phase: "stories ",
@@ -594,6 +621,140 @@ describe("workflow result broker tools", () => {
     ).toMatchObject({
       isError: true,
       structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+  });
+});
+
+describe("committing a submission by validated digest", () => {
+  type Handler = (args: Record<string, unknown>) => Promise<{
+    isError?: true;
+    structuredContent?: Record<string, unknown>;
+  }>;
+  type Registration = {
+    meta: { inputSchema: { safeParse(value: unknown): { success: boolean } } };
+    handler: Handler;
+  };
+
+  async function register() {
+    const registrations = new Map<string, Registration>();
+    const server = {
+      registerTool(name: string, meta: Registration["meta"], handler: Handler) {
+        registrations.set(name, { meta, handler });
+      },
+    };
+    const resultKey = crypto.randomUUID();
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const workflowResults = {
+      async submit(...args: unknown[]) {
+        calls.push({ method: "submit", args });
+        return { ok: true, lifecycle: "accepted" };
+      },
+      async submitValidated(...args: unknown[]) {
+        calls.push({ method: "submitValidated", args });
+        return { ok: true, lifecycle: "accepted" };
+      },
+    };
+    const scope = {
+      environmentId: "env-1",
+      projectId: "project-1",
+      workflowResultKey: resultKey,
+      kind: "review-report" as const,
+    };
+    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultTools(server as never, workflowResults as never, scope);
+    const submit = registrations.get("submit_review_report");
+    if (!submit) throw new Error("missing submission tool");
+    return { submit, resultKey, calls, scope };
+  }
+
+  const digest = "a".repeat(64);
+
+  test("a digest commits the held payload without a result", async () => {
+    const { submit, resultKey, calls, scope } = await register();
+    expect(submit.meta.inputSchema.safeParse({ resultKey, validatedDigest: digest }).success).toBe(
+      true,
+    );
+    expect(await submit.handler({ resultKey, validatedDigest: digest })).toMatchObject({
+      structuredContent: { ok: true },
+    });
+    expect(calls).toEqual([{ method: "submitValidated", args: [scope, resultKey, digest] }]);
+  });
+
+  test("a full result still commits as before", async () => {
+    const { submit, resultKey, calls } = await register();
+    expect(await submit.handler({ resultKey, result: report })).toMatchObject({
+      structuredContent: { ok: true },
+    });
+    expect(calls.map((call) => call.method)).toEqual(["submit"]);
+  });
+
+  test("neither or both is correctable feedback and never reaches the service", async () => {
+    const { submit, resultKey, calls } = await register();
+    for (const args of [{ resultKey }, { resultKey, result: report, validatedDigest: digest }]) {
+      expect(await submit.handler(args)).toMatchObject({
+        isError: true,
+        structuredContent: {
+          ok: false,
+          error: {
+            code: "invalid_result",
+            nextAction: "correct",
+            message: "Provide exactly one of `result` or `validatedDigest`.",
+          },
+        },
+      });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a malformed digest is rejected by the published schema", async () => {
+    const { submit, resultKey } = await register();
+    for (const validatedDigest of ["short", "A".repeat(64), `${"a".repeat(63)}z`]) {
+      expect(submit.meta.inputSchema.safeParse({ resultKey, validatedDigest }).success).toBe(false);
+    }
+  });
+
+  test("the broker surface accepts the same alternatives after authorizing the capability", async () => {
+    const registrations = new Map<string, Registration>();
+    const server = {
+      registerTool(name: string, meta: Registration["meta"], handler: Handler) {
+        registrations.set(name, { meta, handler });
+      },
+    };
+    const resultKey = crypto.randomUUID();
+    const capability = "c".repeat(32);
+    const calls: string[] = [];
+    const workflowResults = {
+      async authorizeCapability() {
+        return true;
+      },
+      async binding() {
+        return { kind: "review-report" };
+      },
+      async submit() {
+        calls.push("submit");
+        return { ok: true, lifecycle: "accepted" };
+      },
+      async submitValidated() {
+        calls.push("submitValidated");
+        return { ok: true, lifecycle: "accepted" };
+      },
+    };
+    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
+      environmentId: "env-1",
+      projectId: "project-1",
+    });
+    const submit = registrations.get("submit_review_report");
+    if (!submit) throw new Error("missing broker submission tool");
+    expect(
+      submit.meta.inputSchema.safeParse({ resultKey, capability, validatedDigest: digest }).success,
+    ).toBe(true);
+    await submit.handler({ resultKey, capability, validatedDigest: digest });
+    await submit.handler({ resultKey, capability, result: report });
+    expect(calls).toEqual(["submitValidated", "submit"]);
+    expect(await submit.handler({ resultKey, capability })).toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: "invalid_result" } },
     });
   });
 });

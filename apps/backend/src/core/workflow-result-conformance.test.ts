@@ -98,9 +98,13 @@ describe("workflow result transport conformance", () => {
       "get_workflow_result_status",
     ]);
     const submission = listed.result?.tools?.[1];
+    // `result` or `validatedDigest` commits the slot; the handler enforces
+    // that exactly one is present, so a top-level anyOf is not published
+    // (some providers reject it).
     expect(submission?.inputSchema).toMatchObject({
       type: "object",
-      required: ["resultKey", "result"],
+      required: ["resultKey"],
+      properties: { result: { type: "object" }, validatedDigest: { type: "string" } },
     });
   });
 

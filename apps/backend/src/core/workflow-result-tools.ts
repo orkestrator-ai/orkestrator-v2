@@ -52,6 +52,46 @@ function capabilityDenied(): WorkflowResultSubmission {
   };
 }
 
+const validatedDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+function submissionDescription(label: string, authorized: boolean): string {
+  return `Submit the complete and final ${label} for ${authorized ? "the authorized" : "this"} workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} instead. Pass exactly one of \`result\` (the complete payload) or \`validatedDigest\` (the digest ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} returned, which commits that exact validated payload without re-sending it). The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`;
+}
+
+/**
+ * Commits either a full payload or a previously validated one. Exactly one must
+ * be given: both would be ambiguous, and neither would be an empty probe.
+ */
+async function commitSubmission(
+  workflowResults: WorkflowResultService,
+  scope: WorkflowResultCallerScope,
+  resultKey: string,
+  result: unknown,
+  validatedDigest: string | undefined,
+): Promise<WorkflowResultSubmission> {
+  if ((result === undefined) === (validatedDigest === undefined)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_result",
+        nextAction: "correct",
+        message: "Provide exactly one of `result` or `validatedDigest`.",
+        issues: [
+          {
+            path: "$",
+            code: "invalid_arguments",
+            message:
+              "Pass the complete `result`, or the `validatedDigest` from validation, not both.",
+          },
+        ],
+      },
+    };
+  }
+  return validatedDigest !== undefined
+    ? workflowResults.submitValidated(scope, resultKey, validatedDigest)
+    : workflowResults.submit(scope, resultKey, result);
+}
+
 /** Registers the tools exposed by one attempt-scoped result capability. */
 export function registerWorkflowResultTools(
   server: McpServer,
@@ -65,7 +105,7 @@ export function registerWorkflowResultTools(
     {
       title: "Validate workflow result",
       description:
-        "Validate one complete workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing the submission tool.",
+        "Validate one complete workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing the submission tool. A valid result returns a validatedDigest that the submission tool can commit without re-sending the result.",
       inputSchema: z
         .object({
           resultKey: z.string().uuid(),
@@ -92,11 +132,12 @@ export function registerWorkflowResultTools(
     submissionToolName,
     {
       title: "Submit workflow result",
-      description: `Submit the complete and final ${scope.kind.replaceAll("-", " ")} for this workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} instead. The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`,
+      description: submissionDescription(scope.kind.replaceAll("-", " "), false),
       inputSchema: z
         .object({
           resultKey: z.string().uuid(),
-          result: resultSchema,
+          result: resultSchema.optional(),
+          validatedDigest: validatedDigestSchema.optional(),
         })
         .strict(),
       annotations: {
@@ -106,10 +147,12 @@ export function registerWorkflowResultTools(
         openWorldHint: false,
       },
     },
-    async ({ resultKey, result }) => {
+    async ({ resultKey, result, validatedDigest }) => {
       if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
       try {
-        return resultResponse(await workflowResults.submit(scope, resultKey, result));
+        return resultResponse(
+          await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
+        );
       } catch {
         return resultResponse(storageFailure());
       }
@@ -119,7 +162,8 @@ export function registerWorkflowResultTools(
     "get_workflow_result_status",
     {
       title: "Get workflow result status",
-      description: "Check whether this workflow result was accepted before retrying.",
+      description:
+        "Check whether this workflow result was accepted before retrying. For an open result it also reports which validation and submission calls actually reached the backend.",
       inputSchema: z.object({ resultKey: z.string().uuid() }).strict(),
       annotations: {
         readOnlyHint: true,
@@ -172,12 +216,13 @@ export function registerWorkflowResultBrokerTools(
       workflowResultToolName(kind),
       {
         title: `Submit ${kind.replaceAll("-", " ")}`,
-        description: `Submit the complete and final ${kind.replaceAll("-", " ")} for the authorized workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} instead. The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`,
+        description: submissionDescription(kind.replaceAll("-", " "), true),
         inputSchema: z
           .object({
             resultKey: z.string().uuid(),
             capability: z.string().min(32).max(2_048),
-            result: z.fromJSONSchema(workflowResultJsonSchema(kind)),
+            result: z.fromJSONSchema(workflowResultJsonSchema(kind)).optional(),
+            validatedDigest: validatedDigestSchema.optional(),
           })
           .strict(),
         annotations: {
@@ -187,7 +232,7 @@ export function registerWorkflowResultBrokerTools(
           openWorldHint: false,
         },
       },
-      async ({ resultKey, capability, result }) => {
+      async ({ resultKey, capability, result, validatedDigest }) => {
         try {
           if (
             !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
@@ -196,7 +241,9 @@ export function registerWorkflowResultBrokerTools(
           }
           const binding = await workflowResults.binding(scope, resultKey);
           if (binding?.kind !== kind) return resultResponse(capabilityDenied());
-          return resultResponse(await workflowResults.submit(scope, resultKey, result));
+          return resultResponse(
+            await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
+          );
         } catch {
           return resultResponse(storageFailure());
         }
@@ -209,7 +256,7 @@ export function registerWorkflowResultBrokerTools(
     {
       title: "Validate workflow result",
       description:
-        "Validate one complete authorized workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing a submission tool.",
+        "Validate one complete authorized workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing a submission tool. A valid result returns a validatedDigest that a submission tool can commit without re-sending the result.",
       inputSchema: z
         .object({
           resultKey: z.string().uuid(),

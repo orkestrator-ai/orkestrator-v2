@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,7 @@ import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results"
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import {
+  REVIEW_RESULT_COMMIT_NUDGE_MS,
   deriveConsolidatedProvenance,
   parseStructuredReportResult,
   ReviewSnapshotChangedError,
@@ -161,6 +162,20 @@ class FanoutProvider implements BuildPipelineProvider {
     fastMode?: boolean;
   }> = [];
   readonly aborted: string[] = [];
+  readonly steers: Array<{ sessionId: string; action: unknown }> = [];
+  async steerSupported() {
+    return true;
+  }
+  async activeSteerRun(sessionId: string) {
+    return { state: "running" as const, runId: `${sessionId}-run` };
+  }
+  async performSessionAction(
+    sessionId: string,
+    action: Parameters<NonNullable<BuildPipelineProvider["performSessionAction"]>>[1],
+  ) {
+    this.steers.push({ sessionId, action });
+    return { outcome: "applied" as const };
+  }
   readonly statusReads: string[] = [];
   readonly messageReads: Array<{ sessionId: string; limit?: number }> = [];
   /**
@@ -1807,6 +1822,62 @@ describe("build pipeline multi-model review", () => {
           throw new Error(unreachable);
         },
       },
+    );
+  });
+
+  test("nudges a real held tool report once across pipeline supervisor passes", async () => {
+    await withPipeline(
+      async ({ service, read, provider, workflowResults }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let pass = 0; pass < 10; pass += 1) {
+          if (
+            (await read(started.id)).reviewFanout?.reviewers.every(
+              (reviewer) => reviewer.dispatchState === "sent",
+            )
+          )
+            break;
+          await service.advanceNow(started.id);
+        }
+        const reviewer = (await read(started.id)).reviewFanout!.reviewers[0]!;
+        expect(reviewer.resultTransport).toBe("tool-v1");
+        expect(reviewer.dispatchState).toBe("sent");
+        const validation = await workflowResults!.validate(
+          { environmentId: "env-1", projectId: "project-1" },
+          reviewer.requestId!,
+          reportFor("Final report"),
+        );
+        if (!validation.ok) throw new Error("report validation failed");
+        await service.advanceNow(started.id);
+        expect(provider.steers).toHaveLength(0);
+        const realNow = Date.now;
+        const now = spyOn(Date, "now").mockImplementation(
+          () => realNow() + REVIEW_RESULT_COMMIT_NUDGE_MS,
+        );
+        try {
+          await service.advanceNow(started.id);
+          await service.advanceNow(started.id);
+          await service.advanceNow(started.id);
+        } finally {
+          now.mockRestore();
+        }
+        expect(provider.steers).toHaveLength(1);
+        expect(provider.steers[0]).toMatchObject({
+          sessionId: reviewer.providerSessionId,
+          action: { kind: "steer", expectedRunId: `${reviewer.providerSessionId}-run` },
+        });
+        expect(JSON.stringify(provider.steers[0])).toContain(validation.validatedDigest!);
+        expect((await read(started.id)).reviewFanout!.reviewers[0]!.status).toBe("running");
+        expect(workflowResults!.heldValidation(reviewer.requestId!)).toBeDefined();
+      },
+      { toolMode: true, toolKinds: ["review-report"] },
     );
   });
 

@@ -3217,6 +3217,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               }),
             projectResult: (requestId: string) =>
               this.options.workflowResults!.projection(requestId),
+            heldResult: (requestId: string) =>
+              this.options.workflowResults!.heldValidation(requestId),
+            claimResultNudge: (requestId: string) =>
+              this.options.workflowResults!.claimCommitNudge(requestId),
             readResult: <T>(requestId: string) =>
               this.options.workflowResults!.structured<T>(requestId),
             consumeResult: (requestId: string) => this.options.workflowResults!.consume(requestId),

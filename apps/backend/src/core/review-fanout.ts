@@ -44,6 +44,7 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
+  WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultInstruction,
   workflowResultToolName,
   type WorkflowResultSubmissionState,
@@ -683,6 +684,14 @@ export interface ReviewFanoutHost {
   readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
   /** Bounded delivery state for one slot, projected into the saved record. */
   projectResult?(requestId: string): Promise<WorkflowResultSubmissionState | undefined>;
+  /**
+   * A result that passed validation but was never committed, with how long it
+   * has been held. Lets the runner nudge a live turn whose model validated its
+   * report and then stalled on delivery.
+   */
+  heldResult?(requestId: string): { digest: string; ageMs: number } | undefined;
+  /** Owner-held, bounded one-shot marker that survives runner construction. */
+  claimResultNudge?(requestId: string): boolean;
   consumeResult?(requestId: string): Promise<void>;
   /** Adds/removes a durable owner-side outbox marker around consumption. */
   stageResultConsumption?(requestId: string): void;
@@ -807,6 +816,14 @@ function reviewerNeedsEvidence(reviewer: ReviewerRecord): boolean {
     reviewer.continuationPrompt === undefined
   );
 }
+
+/**
+ * How long a validated, uncommitted report may sit before the live turn is
+ * nudged to commit it. Long enough that a model finishing its last read is not
+ * interrupted, short enough that a model fighting its own tool calls is not
+ * left to spin for minutes.
+ */
+export const REVIEW_RESULT_COMMIT_NUDGE_MS = 90_000;
 
 export class ReviewFanoutRunner {
   /** Tail of the serialized commit queue; never rejects. */
@@ -1268,6 +1285,7 @@ export class ReviewFanoutRunner {
     );
     if (status === "running") {
       await this.clearStall(reviewer);
+      await this.nudgeUncommittedResult(provider, reviewer);
       return this.observeReviewerProgress(provider, reviewer, transcript, observation.contextUsage);
     }
     // Outside the running path the turn is settling, so this read is bounded
@@ -1608,6 +1626,42 @@ export class ReviewFanoutRunner {
       this.stageObservation();
     }
     return "continue";
+  }
+
+  /**
+   * Steers a running reviewer that holds a validated report it has not
+   * committed. Best-effort and at most once per slot: the nudge only restates
+   * what the model already has, and a steer that cannot be delivered must not
+   * disturb the turn.
+   */
+  private async nudgeUncommittedResult(
+    provider: BuildPipelineProvider,
+    reviewer: ReviewerRecord,
+  ): Promise<void> {
+    const sessionId = reviewer.providerSessionId;
+    const requestId = reviewer.requestId;
+    if (reviewer.resultTransport !== "tool-v1" || !sessionId || !requestId) return;
+    const held = this.host.heldResult?.(requestId);
+    if (!held || held.ageMs < REVIEW_RESULT_COMMIT_NUDGE_MS) return;
+    if (!provider.steerSupported || !provider.activeSteerRun || !provider.performSessionAction) {
+      return;
+    }
+    if (!this.host.claimResultNudge?.(requestId)) return;
+    try {
+      if (!(await provider.steerSupported(sessionId))) return;
+      const active = await provider.activeSteerRun(sessionId);
+      if (active?.state !== "running") return;
+      await provider.performSessionAction(sessionId, {
+        kind: "steer",
+        text: `Your structured report already passed \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\`. If it is final, commit it now by calling \`${workflowResultToolName("review-report")}\` with resultKey ${JSON.stringify(requestId)} (and the capability from your instructions, if one was given) and \`validatedDigest\` ${JSON.stringify(held.digest)}; leave \`result\` out so the large object is not sent again. If a call is rejected as unparseable, the brace count is off by one: recount and call again without shortening the report.`,
+        requestId: randomUUID(),
+        expectedRunId: active.runId,
+      });
+    } catch (error) {
+      console.warn(
+        `[review-fanout] Could not nudge an uncommitted result: ${reviewFanoutErrorMessage(error)}`,
+      );
+    }
   }
 
   private shouldPersistUsageOrProgress(

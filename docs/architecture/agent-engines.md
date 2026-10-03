@@ -611,6 +611,37 @@ completion: the controller still owns turn settlement, worktree and package
 checks, validation execution, pool application, stage changes, and PR
 verification, and consumes an accepted result exactly once.
 
+**Delivery failures that never reach the backend.** A model reaches these tools
+through its client's own wrapper (Cursor's `CallDynamicTool`, for one), and that
+wrapper rejects a call whose arguments do not parse before the backend sees it.
+A rejection like `Failed to parse arguments string as JSON object` is therefore
+invisible to the slot and to the bridge's run events, and its wording points the
+model at quoting or size when the observed fault is a brace count that is off by
+one (an extra trailing `}` from Grok on Cursor). Models that misread it shrink
+the report until a call goes through. Four defenses, none of which depends on
+seeing the rejection:
+
+- `validate_workflow_result` returns a `validatedDigest` and the service holds
+  that payload in memory (bounded by count, bytes and a 30-minute TTL). The
+  submission tool accepts `validatedDigest` *instead of* `result`
+  (`WorkflowResultService.submitValidated`), so the large object crosses the
+  fragile wrapper once. It is an ordinary submission of the held payload, so
+  every acceptance rule still applies, and giving both or neither is correctable
+  feedback that spends no correction budget.
+- `get_workflow_result_status` reports a `delivery` block for an open slot: the
+  validation and submission calls that actually arrived, whether a validated
+  result is held, and a hint. Zero calls received is the evidence that the
+  model's own tool client is rejecting its calls, not the service.
+- `ReviewFanoutRunner` steers a still-running reviewer once, after
+  `REVIEW_RESULT_COMMIT_NUDGE_MS`, when a validated report is held but not
+  committed, telling it to commit by digest. It uses the live-steer surface and
+  is a no-op where that is unavailable.
+- The placeholder check rejects filler such as `"x"`, which is what a payload
+  shrunk to get past a failing call looks like.
+
+The shared instruction and reminder text (`WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE`)
+names both directions of the brace fault and forbids shortening the report.
+
 ### Provider qualification
 
 | Provider | Tool mode | Notes |

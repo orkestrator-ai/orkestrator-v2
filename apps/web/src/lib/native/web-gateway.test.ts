@@ -3898,7 +3898,6 @@ describe("web gateway browser API", () => {
     );
     await expect(api.clipboard.readImage()).resolves.toBeNull();
     await expect(api.clipboard.writeImage("data:image/png;base64,AA==")).resolves.toBeUndefined();
-    await expect(api.dialog.open()).resolves.toBeNull();
     await expect(api.window.startDragging()).resolves.toBeUndefined();
     // Browser clients have no webContents to zoom, and reporting false is what
     // routes the renderer to its CSS `zoom` fallback.

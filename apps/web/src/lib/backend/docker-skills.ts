@@ -511,14 +511,6 @@ export async function greet(name: string): Promise<string> {
   return invoke<string>("greet", { name });
 }
 
-export async function browseForDirectory(): Promise<string | null> {
-  if (window.orkestrator?.dialog && !window.orkestratorGateway?.enabled) {
-    const selected = await window.orkestrator.dialog.open({ directory: true });
-    return typeof selected === "string" ? selected : null;
-  }
-  return invoke<string | null>("browse_for_directory");
-}
-
 export async function validateGitUrl(url: string): Promise<boolean> {
   return invoke<boolean>("validate_git_url", { url });
 }

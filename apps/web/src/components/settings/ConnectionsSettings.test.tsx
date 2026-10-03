@@ -81,7 +81,6 @@ function installConnections(
       readImage: mock(async () => null),
       writeImage: mock(async () => undefined),
     },
-    dialog: { open: mock(async () => null) },
     connections: {
       list,
       probe,

@@ -41,8 +41,8 @@ mock.module("@/lib/backend", () => ({
   getCachedOpenCodeModelCatalog: mockGetCachedOpenCodeModelCatalog,
 }));
 
-mock.module("@/lib/native/dialog", () => ({
-  open: mockOpenDialog,
+mock.module("@/lib/host-path-picker", () => ({
+  pickHostPath: mockOpenDialog,
 }));
 
 mock.module("@/components/settings/FullscreenSettingsLayout", () => ({

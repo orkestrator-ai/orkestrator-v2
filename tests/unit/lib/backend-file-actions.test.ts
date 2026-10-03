@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
-  browseForDirectory,
   createContainerFolder,
   createLocalFolder,
   deleteContainerFile,
@@ -111,19 +110,5 @@ describe("file action backend wrappers", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "refresh_environment_diff_stats", {
       environmentId: "env-local",
     });
-  });
-
-  test("uses the native directory picker and normalizes cancelled or multi-select results", async () => {
-    const open = mock()
-      .mockResolvedValueOnce("/workspaces/project")
-      .mockResolvedValueOnce(["/workspaces/one", "/workspaces/two"]);
-    window.orkestrator = { dialog: { open } } as unknown as Window["orkestrator"];
-    delete window.orkestratorGateway;
-
-    await expect(browseForDirectory()).resolves.toBe("/workspaces/project");
-    await expect(browseForDirectory()).resolves.toBeNull();
-    expect(open).toHaveBeenCalledTimes(2);
-    expect(open).toHaveBeenCalledWith({ directory: true });
-    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

@@ -1859,6 +1859,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     snapshot: ProviderTranscriptSnapshot,
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
   ): void {
+    const sourceToken = progressiveHydrationToken(snapshot);
+    // Even a complete/current snapshot that needs no recovery supersedes an
+    // older exact read. Fence it before any of the no-hydration fast paths.
+    this.invalidateStaleProgressiveHydration(key, sourceToken);
     if (snapshot.complete !== false) return;
     /*
      * A summary window is measured without raw artifacts, so a short one means
@@ -1866,14 +1870,25 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * crowded it out. Re-reading the legacy full transcript would bring back
      * exactly the payloads the summary exists to avoid. Only a part-trimmed
      * head — one row larger than the whole window — still needs exact recovery.
+     *
+     * A *cached* summary is the exception. It is the bridge's no-touch preview
+     * of a session whose rollout body it has not loaded (a detached or restarted
+     * Codex thread), so its short or empty window says nothing about what the
+     * conversation holds. Display reads never attach the thread, which makes
+     * this exact read the only thing that ever will: skipping it left a
+     * finished session rendering as empty until something else touched it.
      */
-    if (snapshot.representation === "summary" && (snapshot.omittedParts ?? 0) <= 0) return;
+    if (
+      snapshot.representation === "summary" &&
+      snapshot.freshness !== "cached" &&
+      (snapshot.omittedParts ?? 0) <= 0
+    )
+      return;
     if (
       (snapshot.omittedParts ?? 0) <= 0 &&
       this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
     )
       return;
-    const sourceToken = progressiveHydrationToken(snapshot);
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
     const previousTimer = this.progressiveHydrationTimers.get(key);
@@ -1899,7 +1914,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         )
           .catch(() => snapshot)
           .then((hydrated) => {
-            if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+            if (
+              this.stopped ||
+              this.progressiveHydrations.get(key) !== entry ||
+              this.progressiveSourceTokens.get(key) !== snapshot.sourceToken
+            )
+              return;
             if (hydrated === snapshot) {
               // The preview is safer than freezing a stale, fuller revision.
               // Keep retrying exact recovery in the background, but only the
@@ -1923,6 +1943,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                 initialPromptPresentation,
               ),
             );
+            // An idle view reads on a slow cadence. Say the recovered transcript
+            // is there rather than leaving it to wait for the next poll.
+            this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+              agent: input.agent,
+              logicalSessionKey: input.logicalSessionKey,
+            });
           })
           .finally(() => {
             if (entry.promise === promise) entry.promise = undefined;
@@ -1932,6 +1958,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.progressiveHydrationTimers.set(key, timer);
     };
     scheduleAttempt(0);
+  }
+
+  private invalidateStaleProgressiveHydration(key: string, sourceToken: string): void {
+    const existing = this.progressiveHydrations.get(key);
+    if (!existing || existing.sourceToken === sourceToken) return;
+    const timer = this.progressiveHydrationTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.progressiveHydrationTimers.delete(key);
+    this.progressiveHydrations.delete(key);
   }
 
   private async fillIncompleteProgressiveSnapshot(
@@ -2318,6 +2353,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (!previous) {
         throw new ProviderUnavailableError("Provider returned unchanged without a transcript base");
       }
+      this.invalidateStaleProgressiveHydration(key, providerResult.sourceToken);
       this.progressiveTranscriptCache.delete(key);
       this.progressiveTranscriptCache.set(key, {
         ...previous,
@@ -2336,6 +2372,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     const snapshot = this.resolveProgressiveSnapshot(key, providerResult);
     if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
+    else this.progressiveSourceTokens.delete(key);
     this.scheduleIncompleteProgressiveHydration(
       input,
       key,

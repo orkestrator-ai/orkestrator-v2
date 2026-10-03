@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
@@ -1340,77 +1340,81 @@ describe("native agent progressive remainder", () => {
     );
   });
 
-  test("replaces a persisted tail once hydration returns a different transcript", async () => {
-    let coldPreview = false;
-    const transcriptSnapshot = mock(async () =>
-      coldPreview
-        ? {
-            messages: [],
-            complete: false,
-            sourceToken: "source-restored-empty",
-            freshness: "cached" as const,
-          }
-        : {
-            messages: [progressiveMessage("m1", "persisted conversation")],
-            complete: true,
-            sourceToken: "source-before-restart",
-            freshness: "current" as const,
-          },
-    );
-    const messages = mock(async () => [
-      progressiveMessage("m1", "persisted conversation"),
-      progressiveMessage("m2", "hydrated later turn"),
-    ]);
-    const stub = createProviderStub("codex", { transcriptSnapshot, messages });
-    await withService(
-      { prefix: "orkestrator-progressive-codex-replace-", provider: async () => stub.provider },
-      async ({ service, storage }) => {
-        const identity = {
-          environmentId: "env-1",
-          agent: "codex" as const,
-          logicalSessionKey: "env-env-1:progressive-codex-replace",
-        };
-        await service.ensureSession(identity);
-        await service.getTranscriptUpdate({
-          ...identity,
-          viewVersion: 1,
-          liveWindow,
-        });
-        const sessionKey = nativeAgentSessionStorageKey(
-          identity.environmentId,
-          identity.agent,
-          identity.logicalSessionKey,
-        );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
-        coldPreview = true;
-
-        const restored = await service.getTranscriptUpdate({
-          ...identity,
-          viewVersion: 1,
-          liveWindow,
-        });
-        expect(restored.status).toBe("snapshot");
-        if (restored.status !== "snapshot") throw new Error("expected snapshot");
-        expect(restored.value.messages).toMatchObject([{ id: "m1" }]);
-
-        await waitForCondition(async () => {
-          const hydrated = await service.getTranscriptUpdate({
+  test.each([false, true])(
+    "replaces a persisted tail once hydration returns a different transcript (summary: %s)",
+    async (summary) => {
+      let coldPreview = false;
+      const transcriptSnapshot = mock(async () =>
+        coldPreview
+          ? {
+              messages: [],
+              complete: false,
+              sourceToken: "source-restored-empty",
+              freshness: "cached" as const,
+              ...(summary ? { representation: "summary" as const } : {}),
+            }
+          : {
+              messages: [progressiveMessage("m1", "persisted conversation")],
+              complete: true,
+              sourceToken: "source-before-restart",
+              freshness: "current" as const,
+            },
+      );
+      const messages = mock(async () => [
+        progressiveMessage("m1", "persisted conversation"),
+        progressiveMessage("m2", "hydrated later turn"),
+      ]);
+      const stub = createProviderStub("codex", { transcriptSnapshot, messages });
+      await withService(
+        { prefix: "orkestrator-progressive-codex-replace-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:progressive-codex-replace",
+          };
+          await service.ensureSession(identity);
+          await service.getTranscriptUpdate({
             ...identity,
             viewVersion: 1,
             liveWindow,
-            forceSnapshot: true,
           });
-          return hydrated.status === "snapshot" && hydrated.value.messages.length === 2;
-        });
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
-          { id: "m1", content: "persisted conversation" },
-          { id: "m2", content: "hydrated later turn" },
-        ]);
-      },
-    );
-  });
+          const sessionKey = nativeAgentSessionStorageKey(
+            identity.environmentId,
+            identity.agent,
+            identity.logicalSessionKey,
+          );
+          await internals(service).flushDisplayTailPersist(sessionKey);
+          internals(service).progressiveTranscriptCache.clear();
+          coldPreview = true;
+
+          const restored = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+          });
+          expect(restored.status).toBe("snapshot");
+          if (restored.status !== "snapshot") throw new Error("expected snapshot");
+          expect(restored.value.messages).toMatchObject([{ id: "m1" }]);
+
+          await waitForCondition(async () => {
+            const hydrated = await service.getTranscriptUpdate({
+              ...identity,
+              viewVersion: 1,
+              liveWindow,
+              forceSnapshot: true,
+            });
+            return hydrated.status === "snapshot" && hydrated.value.messages.length === 2;
+          });
+          await internals(service).flushDisplayTailPersist(sessionKey);
+          expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
+            { id: "m1", content: "persisted conversation" },
+            { id: "m2", content: "hydrated later turn" },
+          ]);
+        },
+      );
+    },
+  );
 
   test("projects an authoritative empty current snapshot over a persisted tail", async () => {
     let emptied = false;
@@ -1554,6 +1558,297 @@ describe("native agent progressive remainder", () => {
         if (update.status !== "snapshot") throw new Error("expected snapshot");
         expect(update.value.messages).toEqual([]);
         expect(update.value.freshness).not.toBe("current");
+      },
+    );
+  });
+
+  test.each([false, true])(
+    "hydrates a cold summary preview and announces recovery (non-empty: %s)",
+    async (nonEmpty) => {
+      const prompt = {
+        id: "prompt",
+        role: "user" as const,
+        content: "Original request",
+        parts: [],
+        createdAt: "2026-09-09T00:00:00.000Z",
+      };
+      const response = progressiveMessage("response", "Finished the work");
+      // What a v2 bridge answers for a detached or restarted Codex thread: no
+      // rollout body loaded, so an empty, cached, explicitly incomplete summary.
+      const transcriptSnapshot = mock(async () => ({
+        messages: nonEmpty ? [response] : [],
+        complete: false,
+        sourceToken: "source-cold-summary",
+        freshness: "cached" as const,
+        representation: "summary" as const,
+        historyStartIndex: nonEmpty ? 1 : 0,
+        historyEpoch: "process:1:0",
+      }));
+      const messages = mock(async () => [prompt, response]);
+      const stub = createProviderStub("codex", { transcriptSnapshot, messages });
+      await withService(
+        { prefix: "orkestrator-progressive-cold-summary-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:progressive-cold-summary",
+          };
+          await service.ensureSession(identity);
+          const preview = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+          });
+          expect(preview.status).toBe("snapshot");
+          if (preview.status !== "snapshot") throw new Error("expected snapshot");
+          expect(preview.value.messages).toEqual(nonEmpty ? [response] : []);
+
+          await waitForCondition(() => messages.mock.calls.length === 1);
+          let recovered: unknown[] = [];
+          await waitForCondition(async () => {
+            const next = await service.getTranscriptUpdate({
+              ...identity,
+              viewVersion: 1,
+              liveWindow,
+              forceSnapshot: true,
+            });
+            if (next.status !== "snapshot") return false;
+            recovered = next.value.messages;
+            return recovered.length === 2;
+          });
+          expect(recovered).toMatchObject([{ id: "prompt" }, { id: "response" }]);
+          expect(messages).toHaveBeenCalledTimes(1);
+          // An idle tab must be told, not left to its next slow poll.
+          expect(announced).toHaveBeenCalledWith("env-1", {
+            agent: "codex",
+            logicalSessionKey: identity.logicalSessionKey,
+          });
+        },
+      );
+    },
+  );
+
+  test.each([false, true])(
+    "discards delayed cold hydration after a newer current summary (complete: %s)",
+    async (complete) => {
+      let state: "cold" | "new" | "unchanged" = "cold";
+      let release: ((rows: ReturnType<typeof progressiveMessages>) => void) | undefined;
+      const newer = [progressiveMessage("newer", "New authoritative content")];
+      const messages = mock(
+        () =>
+          new Promise<ReturnType<typeof progressiveMessages>>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const transcriptSnapshot = mock(async (_sessionId, options) => {
+        if (state === "unchanged") {
+          expect(options?.knownSourceToken).toBe("source-B");
+          return { unchanged: true as const, sourceToken: "source-B" };
+        }
+        return {
+          messages: state === "cold" ? [] : newer,
+          complete: state === "cold" ? false : complete,
+          freshness: state === "cold" ? ("cached" as const) : ("current" as const),
+          sourceToken: state === "cold" ? "source-A" : "source-B",
+          representation: "summary" as const,
+          historyEpoch: "process:1:0",
+        };
+      });
+      const stub = createProviderStub("codex", { transcriptSnapshot, messages });
+      await withService(
+        { prefix: "orkestrator-progressive-cold-race-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:cold-race",
+          };
+          await service.ensureSession(identity);
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          const read = () =>
+            service.getTranscriptUpdate({
+              ...identity,
+              viewVersion: 1,
+              liveWindow,
+              forceSnapshot: true,
+            });
+          await read();
+          await waitForCondition(() => release !== undefined);
+          const pending = Array.from(internals(service).progressiveHydrations.values())[0]?.promise;
+          if (!pending) throw new Error("expected pending hydration");
+          try {
+            state = "new";
+            const current = await read();
+            expect(current.status).toBe("snapshot");
+            if (current.status !== "snapshot") throw new Error("expected snapshot");
+            expect(current.value.messages).toEqual(newer);
+            release!([progressiveMessage("older", "Stale recovery")]);
+            await pending;
+            expect(announced).not.toHaveBeenCalled();
+
+            state = "unchanged";
+            const unchanged = await service.getTranscriptUpdate({
+              ...identity,
+              viewVersion: 1,
+              liveWindow,
+              knownToken: current.token,
+            });
+            expect(unchanged.status).toBe("unchanged");
+            const retained = await read();
+            expect(retained.status).toBe("snapshot");
+            if (retained.status !== "snapshot") throw new Error("expected snapshot");
+            expect(retained.value.messages).toEqual(newer);
+            const sessionKey = nativeAgentSessionStorageKey(
+              identity.environmentId,
+              identity.agent,
+              identity.logicalSessionKey,
+            );
+            await internals(service).flushDisplayTailPersist(sessionKey);
+            expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toEqual(newer);
+            expect(messages).toHaveBeenCalledTimes(1);
+          } finally {
+            release?.([]);
+            await pending;
+          }
+        },
+      );
+    },
+  );
+
+  test.each(["messages", "bytes"] as const)(
+    "does not hydrate a cached summary that fills the %s window",
+    async (bound) => {
+      const window = { messages: 2, targetBytes: 1024 };
+      const preview =
+        bound === "messages"
+          ? progressiveMessages(2)
+          : [progressiveMessage("large", "x".repeat(2048))];
+      const messages = mock(async () => progressiveMessages(3));
+      const stub = createProviderStub("codex", {
+        messages,
+        transcriptSnapshot: async () => ({
+          messages: preview,
+          complete: false,
+          freshness: "cached" as const,
+          representation: "summary" as const,
+          sourceToken: "source-full-window",
+        }),
+      });
+      await withService(
+        {
+          prefix: "orkestrator-progressive-full-cached-summary-",
+          provider: async () => stub.provider,
+        },
+        async ({ service, storage }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:full-cached-summary",
+          };
+          await service.ensureSession(identity);
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          const update = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow: window,
+          });
+          expect(update.status).toBe("snapshot");
+          expect(internals(service).progressiveHydrations.size).toBe(0);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          expect(messages).not.toHaveBeenCalled();
+          expect(announced).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+
+  test.each(["throws", "no-additional-rows"] as const)(
+    "bounds unsuccessful cached-summary retries without announcing success (%s)",
+    async (failure) => {
+      const preview = [progressiveMessage("preview", "Cached content")];
+      const messages = mock(async () => {
+        if (failure === "throws") throw new Error("Provider unavailable");
+        return preview;
+      });
+      const stub = createProviderStub("codex", {
+        messages,
+        transcriptSnapshot: async () => ({
+          messages: preview,
+          complete: false,
+          freshness: "cached" as const,
+          representation: "summary" as const,
+          sourceToken: "source-unrecoverable",
+        }),
+      });
+      await withService(
+        {
+          prefix: "orkestrator-progressive-cached-summary-retry-",
+          provider: async () => stub.provider,
+        },
+        async ({ service, storage }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:cached-summary-retry",
+          };
+          await service.ensureSession(identity);
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          const read = () =>
+            service.getTranscriptUpdate({
+              ...identity,
+              viewVersion: 1,
+              liveWindow,
+              forceSnapshot: true,
+            });
+          await read();
+          await waitForCondition(() => messages.mock.calls.length === 3);
+          await Array.from(internals(service).progressiveHydrations.values())[0]?.promise;
+          const retained = await read();
+          expect(retained.status).toBe("snapshot");
+          if (retained.status !== "snapshot") throw new Error("expected snapshot");
+          expect(retained.value.messages).toEqual(preview);
+          expect(retained.value.freshness).toBe("cached");
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          expect(messages).toHaveBeenCalledTimes(3);
+          expect(announced).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+
+  test("does not re-read a current summary window that is merely short", async () => {
+    const messages = mock(async () => progressiveMessages(5));
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: [progressiveMessage("response", "Latest update")],
+        complete: false,
+        sourceToken: "source-short-summary",
+        freshness: "current" as const,
+        representation: "summary" as const,
+        historyStartIndex: 4,
+        historyEpoch: "process:1:0",
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-short-summary-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:progressive-short-summary",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(messages).toHaveBeenCalledTimes(0);
       },
     );
   });

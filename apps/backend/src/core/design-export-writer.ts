@@ -6,7 +6,7 @@
  * payload has arrived). Export instead follows the destination write protocol
  * in docs/improvements/design-space/plan/05-safe-saving-and-export.md:
  *
- * 1. validate a repository-root file name;
+ * 1. validate a repository-relative `.orkdes` path (folders allowed);
  * 2. serialize Orkestrator writers per destination;
  * 3. write a unique same-directory temporary file (0600, fsync);
  * 4. re-check the expected destination state immediately before publishing;
@@ -35,8 +35,16 @@ export type DesignExportDestination =
   | { kind: "local"; worktreePath: string }
   | { kind: "container"; containerId: string };
 
-/** Repository-root file names only; nested directories are deliberately not supported yet. */
-export const DESIGN_EXPORT_PATH = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
+/**
+ * Repository-relative `.orkdes` path: up to seven plain folder names and a file
+ * name. Segments start with a letter or number, so `.`, `..` and hidden folders
+ * such as `.git` can never be named.
+ */
+export const DESIGN_EXPORT_PATH =
+  /^(?:[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}\/){0,7}[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
+export const DESIGN_EXPORT_PATH_MAX = 240;
+/** Folder new designs are saved into unless the user picks another. */
+export const DESIGN_EXPORT_DEFAULT_FOLDER = "designs";
 /** Largest v1 document (4 MiB) plus envelope headroom. */
 export const DESIGN_EXPORT_MAX_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 export const DESIGN_EXPORT_CONTAINER_TIMEOUT_MS = 30_000;
@@ -87,10 +95,14 @@ export interface DesignExportWriteOptions extends DesignExportInspectOptions {
 // ---------------------------------------------------------------------------
 
 export function validateDesignExportPath(relativePath: string): string {
-  if (typeof relativePath !== "string" || !DESIGN_EXPORT_PATH.test(relativePath)) {
+  if (
+    typeof relativePath !== "string" ||
+    relativePath.length > DESIGN_EXPORT_PATH_MAX ||
+    !DESIGN_EXPORT_PATH.test(relativePath)
+  ) {
     throw new DesignError(
       "invalid-input",
-      "Design export path must be a repository-root file name ending in .orkdes",
+      "Design export path must be a repository-relative path of plain folder names ending in a .orkdes file",
       { details: { reason: "invalid-path" } },
     );
   }
@@ -102,8 +114,8 @@ export function designExportDigest(bytes: Uint8Array): string {
 }
 
 /**
- * Suggests a default export file name: a sanitized human name plus a short
- * canvas-ID suffix, so repeated default names and names that sanitize to the
+ * Suggests a default export path in the `designs` folder: a sanitized human
+ * name plus a short canvas-ID suffix, so repeated default names and names that sanitize to the
  * same string still produce distinct suggestions for distinct canvases.
  */
 export function planDefaultDesignExportPath(name: string, canvasId: string): string {
@@ -125,7 +137,7 @@ export function planDefaultDesignExportPath(name: string, canvasId: string): str
         .update(String(canvasId ?? ""))
         .digest("hex")
         .slice(0, 8);
-  return `${base}-${suffix}.orkdes`;
+  return `${DESIGN_EXPORT_DEFAULT_FOLDER}/${base}-${suffix}.orkdes`;
 }
 
 function resolveMaxBytes(maxBytes: number | undefined): number {
@@ -211,7 +223,7 @@ function reasonMessage(reason: ExportReason, relativePath: string, maxBytes: num
     case "too-large":
       return `Design export exceeds ${maxBytes} bytes`;
     case "invalid-path":
-      return "Design export path must be a repository-root file name ending in .orkdes";
+      return "Design export path must be a repository-relative path of plain folder names ending in a .orkdes file";
     case "invalid-limit":
       return "Invalid design export size limit";
     case "root-unavailable":
@@ -313,6 +325,38 @@ async function lstatOrNull(filePath: string): Promise<Stats | null> {
   }
 }
 
+type ParentState = "ok" | "missing" | "symlink" | "not-directory";
+
+/**
+ * Walks the folders of an export path below the canonical root without
+ * following symbolic links. With `create`, missing folders are made one level
+ * at a time; a folder that is a link or a file is never traversed.
+ */
+async function walkLocalParents(
+  canonicalRoot: string,
+  relativePath: string,
+  create: boolean,
+): Promise<ParentState> {
+  let current = canonicalRoot;
+  for (const segment of relativePath.split("/").slice(0, -1)) {
+    current = path.join(current, segment);
+    let stats = await lstatOrNull(current);
+    if (!stats && create) {
+      try {
+        await fs.mkdir(current, 0o755);
+      } catch (error) {
+        // Another writer may have made it first; it is re-checked below.
+        if (errnoOf(error) !== "EEXIST") throw error;
+      }
+      stats = await lstatOrNull(current);
+    }
+    if (!stats) return "missing";
+    if (stats.isSymbolicLink()) return "symlink";
+    if (!stats.isDirectory()) return "not-directory";
+  }
+  return "ok";
+}
+
 type BoundedRead =
   | { kind: "bytes"; bytes: Buffer }
   | { kind: "missing" }
@@ -374,9 +418,13 @@ async function inspectLocal(
   relativePath: string,
   maxBytes: number,
 ): Promise<DesignExportTargetState> {
-  const { target } = await resolveLocalRoot(worktreePath, relativePath, maxBytes);
+  const { canonicalRoot, target } = await resolveLocalRoot(worktreePath, relativePath, maxBytes);
   let stats: Stats | null;
   try {
+    const parents = await walkLocalParents(canonicalRoot, relativePath, false);
+    if (parents === "missing") return { exists: false, readable: false };
+    if (parents === "symlink") return { exists: true, readable: false, symlink: true };
+    if (parents === "not-directory") return { exists: true, readable: false };
     stats = await lstatOrNull(target);
   } catch {
     return { exists: true, readable: false };
@@ -422,13 +470,24 @@ async function writeLocal(
       exportError(reason, relativePath, maxBytes, errno);
     let tempPath: string | undefined;
     try {
+      const parents = await walkLocalParents(
+        canonicalRoot,
+        relativePath,
+        expected.state === "absent",
+      );
+      if (parents === "symlink") throw fail("symlink");
+      if (parents === "not-directory") throw fail("not-regular");
+      if (parents === "missing") throw fail("missing");
       const before = await lstatOrNull(target);
       if (before?.isSymbolicLink()) throw fail("symlink");
       if (before && !before.isFile()) throw fail("not-regular");
       if (expected.state === "absent" && before) throw fail("exists");
       if (expected.state === "present" && !before) throw fail("missing");
 
-      const candidate = path.join(canonicalRoot, `.${relativePath}.${randomUUID()}.tmp`);
+      const candidate = path.join(
+        path.dirname(target),
+        `.${path.basename(target)}.${randomUUID()}.tmp`,
+      );
       const handle = await fs.open(candidate, "wx", 0o600);
       tempPath = candidate;
       try {
@@ -451,6 +510,9 @@ async function writeLocal(
       ) {
         throw fail("root-changed");
       }
+      // A folder swapped for a link since the walk must not redirect the publish.
+      if ((await walkLocalParents(canonicalRoot, relativePath, false)) !== "ok")
+        throw fail("root-changed");
 
       let previous: Buffer | undefined;
       if (expected.state === "absent") {
@@ -474,7 +536,7 @@ async function writeLocal(
         await fs.rename(tempPath, target);
         tempPath = undefined;
       }
-      await syncDirectoryBestEffort(canonicalRoot);
+      await syncDirectoryBestEffort(path.dirname(target));
       return {
         digest: designExportDigest(bytes),
         replaced: expected.state === "present",
@@ -499,7 +561,7 @@ const CONTAINER_HELPER_PRELUDE = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
+const NAME = /^(?:[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}\/){0,7}[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
 let emitted = false;
 function emit(result) {
   if (emitted) return;
@@ -530,7 +592,9 @@ function digestOf(bytes) {
   return "sha256:" + crypto.createHash("sha256").update(bytes).digest("hex");
 }
 function resolveTarget(rootArg, rel, maxBytes) {
-  if (typeof rel !== "string" || !NAME.test(rel)) fail("invalid-input", "invalid-path");
+  if (typeof rel !== "string" || rel.length > 240 || !NAME.test(rel)) {
+    fail("invalid-input", "invalid-path");
+  }
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) fail("invalid-input", "invalid-limit");
   let root;
   let rootStats;
@@ -542,8 +606,31 @@ function resolveTarget(rootArg, rel, maxBytes) {
   }
   if (!rootStats.isDirectory()) fail("storage", "root-unavailable");
   const target = path.join(root, rel);
-  if (path.dirname(target) !== root) fail("invalid-input", "invalid-path");
+  if (!target.startsWith(root + path.sep)) fail("invalid-input", "invalid-path");
   return { root, rootStats, target };
+}
+// Walks the folders of rel below root without following links. With create,
+// missing folders are made one level at a time. Returns ok, missing, symlink
+// or not-directory.
+function walkParents(root, rel, create) {
+  let current = root;
+  const segments = rel.split("/").slice(0, -1);
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    let stats = lstatOrNull(current);
+    if (!stats && create) {
+      try {
+        fs.mkdirSync(current, 0o755);
+      } catch (error) {
+        if (!error || error.code !== "EEXIST") throw error;
+      }
+      stats = lstatOrNull(current);
+    }
+    if (!stats) return "missing";
+    if (stats.isSymbolicLink()) return "symlink";
+    if (!stats.isDirectory()) return "not-directory";
+  }
+  return "ok";
 }
 function lstatOrNull(filePath) {
   try {
@@ -609,9 +696,13 @@ export const DESIGN_EXPORT_CONTAINER_INSPECTOR = `${CONTAINER_HELPER_PRELUDE}
 const [rootArg, rel, maxArg] = process.argv.slice(1);
 run(() => {
   const maxBytes = Number(maxArg);
-  const { target } = resolveTarget(rootArg, rel, maxBytes);
+  const { root, target } = resolveTarget(rootArg, rel, maxBytes);
   let stats;
   try {
+    const parents = walkParents(root, rel, false);
+    if (parents === "missing") return { exists: false, readable: false };
+    if (parents === "symlink") return { exists: true, readable: false, symlink: true };
+    if (parents === "not-directory") return { exists: true, readable: false };
     stats = lstatOrNull(target);
   } catch {
     return { exists: true, readable: false };
@@ -644,12 +735,16 @@ const [rootArg, rel, mode, expectedDigest, maxArg, contentDigest] = process.argv
 const maxBytes = Number(maxArg);
 function publish(input) {
   const { root, rootStats, target } = resolveTarget(rootArg, rel, maxBytes);
+  const parents = walkParents(root, rel, mode === "absent");
+  if (parents === "symlink") fail("invalid-input", "symlink");
+  if (parents === "not-directory") fail("export-collision", "not-regular");
+  if (parents === "missing") fail("export-collision", "missing");
   const before = lstatOrNull(target);
   if (before && before.isSymbolicLink()) fail("invalid-input", "symlink");
   if (before && !before.isFile()) fail("export-collision", "not-regular");
   if (mode === "absent" && before) fail("export-collision", "exists");
   if (mode === "present" && !before) fail("export-collision", "missing");
-  let temp = path.join(root, "." + rel + "." + crypto.randomUUID() + ".tmp");
+  let temp = path.join(path.dirname(target), "." + path.basename(target) + "." + crypto.randomUUID() + ".tmp");
   const fd = fs.openSync(temp, "wx", 0o600);
   try {
     try {
@@ -664,6 +759,7 @@ function publish(input) {
     if (rootNow.isSymbolicLink() || rootNow.dev !== rootStats.dev || rootNow.ino !== rootStats.ino) {
       fail("storage", "root-changed");
     }
+    if (walkParents(root, rel, false) !== "ok") fail("storage", "root-changed");
     let previous;
     if (mode === "absent") {
       try {
@@ -686,7 +782,7 @@ function publish(input) {
       fs.renameSync(temp, target);
       temp = undefined;
     }
-    syncDirectory(root);
+    syncDirectory(path.dirname(target));
     const result = { digest: digestOf(input), replaced: mode === "present" };
     if (previous) result.previous = previous.toString("base64");
     return result;

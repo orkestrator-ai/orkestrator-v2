@@ -51,26 +51,27 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       height: 320,
       html: "<h1 id='title'>Shared design</h1>",
     });
+    // Designs are .orkdes files in the repository: save one, then open it from the file tree.
+    const exportPath = `designs/gateway-design-${canvas.id.replaceAll("-", "").slice(0, 8)}.orkdes`;
+    await invoke("design_export_save", {
+      environmentId: env.id,
+      canvasId: canvas.id,
+      relativePath: exportPath,
+      revision: 2,
+    });
     await page.reload();
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: "New design workspace" }).click();
-    await page.getByRole("tab", { name: "Open", exact: true }).click();
-    await page
-      .getByRole("list", { name: "Designs" })
-      .getByRole("button", { name: /Gateway design/ })
-      .click();
-    await page.getByRole("button", { name: /^Open (beside|\(current pane\))$/ }).click();
+    await page.getByRole("button", { name: "designs", exact: true }).click();
+    await page.getByRole("button", { name: exportPath.split("/")[1]!, exact: true }).click();
 
     const embedded = page.frameLocator('iframe[title="Screen"]');
     await expect(embedded.getByRole("heading")).toHaveText("Shared design");
-    // Export (Save As) proposes a collision-safe name: sanitized name + canvas id prefix.
-    const exportPath = `Gateway-design-${canvas.id.replaceAll("-", "").slice(0, 8)}.orkdes`;
+    // Save As remembers the file the design was opened from.
     await page.getByRole("button", { name: "Export design to repository" }).click();
     const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
-    await expect(exportDialog.getByText(`New file: ${exportPath} will be created.`)).toBeVisible();
-    await exportDialog.getByRole("button", { name: "Export revision 2" }).click();
-    await expect(exportDialog.getByText(`Exported revision 2 to ${exportPath}`)).toBeVisible();
+    await expect(exportDialog.getByLabel("Folder")).toHaveValue("designs");
+    await expect(exportDialog.getByText(`${exportPath} is your previous export`)).toBeVisible();
     await exportDialog.getByRole("button", { name: "Done" }).click();
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,

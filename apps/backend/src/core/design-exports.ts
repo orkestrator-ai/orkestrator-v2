@@ -8,6 +8,7 @@ import {
   type DesignExportTarget,
   type DesignPendingExport,
 } from "@orkestrator/protocol/design-operations";
+import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
 import { DesignError, designConflict, toDesignFailure } from "./design-errors.js";
 import {
   designExportDigest,
@@ -104,8 +105,9 @@ function targetFrom(
     // Not JSON: a non-design file is a collision, never an empty target.
   }
   const sameCanvas = parsedId === canvasId;
+  // A file this canvas was opened from carries another canvas's id, so the
+  // remembered location and exact content decide, not the embedded id.
   const ours =
-    sameCanvas &&
     association?.relativePath === relativePath &&
     association.repository === repository &&
     association.digest === state.digest;
@@ -355,6 +357,78 @@ export async function reconcileExport(
     });
   });
   return { state: "not-exported" };
+}
+
+/**
+ * Opens a repository `.orkdes` file as a canvas. A canvas this environment
+ * already holds for that exact file content is reused, so clicking the same
+ * file twice never duplicates it; otherwise the file is imported as a new
+ * canvas (a new identity) that remembers the file as its save location, so
+ * saving writes back to the same path.
+ */
+export async function openDesignFile(
+  service: DesignService,
+  environmentId: string,
+  context: DesignExportContext,
+  requestedPath: string,
+): Promise<{ canvasId: string; imported: boolean }> {
+  await service.initialize();
+  const relativePath = validateDesignExportPath(requestedPath);
+  const repository = repositoryIdentity(environmentId, context.destination);
+  const state = await inspectDesignExportTarget(
+    context.destination,
+    relativePath,
+    context.writerOptions,
+  );
+  if (!state.exists) throw new DesignError("not-found", `${relativePath} does not exist`);
+  if (!state.readable || !state.bytes || !state.digest)
+    throw new DesignError("invalid-input", `${relativePath} could not be read as a design file`);
+  if (state.bytes.byteLength > DESIGN_MAX_DOCUMENT_BYTES)
+    throw new DesignError("invalid-input", `${relativePath} is too large to open as a design`);
+
+  for (const entry of service.library.entries.values()) {
+    if (
+      entry.environmentId !== environmentId ||
+      entry.state !== "live" ||
+      entry.exportPath !== relativePath
+    )
+      continue;
+    const loaded = await service.loadFor(entry.id, environmentId).catch(() => undefined);
+    const association = loaded?.record.export;
+    if (
+      association &&
+      association.repository === repository &&
+      association.relativePath === relativePath &&
+      association.digest === state.digest
+    )
+      return { canvasId: entry.id, imported: false };
+  }
+
+  const canvas = await service.create(
+    environmentId,
+    "Imported design",
+    state.bytes.toString("utf8"),
+    "user",
+  );
+  await service.lane(canvas.id, async () => {
+    const { record, legacy } = await service.loadFor(canvas.id, environmentId);
+    const next = cloneRecord(record);
+    next.export = {
+      relativePath,
+      repository,
+      lastExportedRevision: record.document.revision,
+      digest: state.digest!,
+      exportedAt: service.iso(),
+      token: `ex_${randomUUID()}`,
+    };
+    next.statusVersion++;
+    await service.commit(next, legacy, {
+      revision: next.document.revision,
+      kind: "status",
+      statusVersion: next.statusVersion,
+    });
+  });
+  return { canvasId: canvas.id, imported: true };
 }
 
 /** Keeps a bounded private copy of a file an export replaced. */

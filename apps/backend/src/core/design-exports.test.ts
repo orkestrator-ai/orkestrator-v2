@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
@@ -8,6 +8,7 @@ import { designExportDigest, planDefaultDesignExportPath } from "./design-export
 import {
   exportPreview,
   exportSave,
+  openDesignFile,
   reconcileExport,
   type DesignExportContext,
 } from "./design-exports.js";
@@ -83,7 +84,7 @@ describe("design exports to a repository worktree", () => {
     expect(previewA.suggestedPath).toBe(
       planDefaultDesignExportPath("Untitled design", first.canvasId),
     );
-    expect(previewA.suggestedPath).toMatch(/^Untitled-design-[0-9a-f]{8}\.orkdes$/);
+    expect(previewA.suggestedPath).toMatch(/^designs\/Untitled-design-[0-9a-f]{8}\.orkdes$/);
     expect(previewA.suggestedPath).not.toBe(previewB.suggestedPath);
     expect(previewA).toMatchObject({
       revision: 2,
@@ -319,9 +320,71 @@ describe("design exports to a repository worktree", () => {
     expect(leftovers).toEqual([]);
   });
 
+  test("saves into the designs folder and nested folders, creating them", async () => {
+    const { canvasId } = await setup();
+    const preview = await exportPreview(service(), "env-1", canvasId, context);
+    expect(preview.suggestedPath.startsWith("designs/")).toBe(true);
+    await save(canvasId, preview.suggestedPath, 2);
+    expect((await readExport(preview.suggestedPath)).id).toBe(canvasId);
+    expect(await readdir(join(worktree, "designs"))).toHaveLength(1);
+
+    const other = await setup("Elsewhere");
+    await save(other.canvasId, "mocks/v2/elsewhere.orkdes", 2);
+    expect((await readExport("mocks/v2/elsewhere.orkdes")).id).toBe(other.canvasId);
+    // The remembered location wins over the default on the next preview.
+    const again = await exportPreview(service(), "env-1", other.canvasId, context);
+    expect(again.suggestedPath).toBe("mocks/v2/elsewhere.orkdes");
+  });
+
+  test("opening a design file reuses its canvas and imports foreign files once", async () => {
+    const { canvasId } = await setup("Mine");
+    await save(canvasId, "designs/mine.orkdes", 2);
+    const reopened = await openDesignFile(service(), "env-1", context, "designs/mine.orkdes");
+    expect(reopened).toEqual({ canvasId, imported: false });
+
+    // A file this environment never exported becomes a new canvas bound to that path.
+    const foreign = {
+      ...(await readExport("designs/mine.orkdes")),
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Teammate design",
+    };
+    await mkdir(join(worktree, "shared"), { recursive: true });
+    await writeFile(join(worktree, "shared/theirs.orkdes"), JSON.stringify(foreign));
+    const first = await openDesignFile(service(), "env-1", context, "shared/theirs.orkdes");
+    expect(first.imported).toBe(true);
+    expect(first.canvasId).not.toBe(foreign.id);
+    expect((await service().get(first.canvasId, "env-1")).name).toBe("Teammate design");
+    const second = await openDesignFile(service(), "env-1", context, "shared/theirs.orkdes");
+    expect(second).toEqual({ canvasId: first.canvasId, imported: false });
+    // Saving writes back to the file it was opened from.
+    const preview = await exportPreview(service(), "env-1", first.canvasId, context);
+    expect(preview.suggestedPath).toBe("shared/theirs.orkdes");
+    expect(preview.target.needsReplaceConfirmation).toBe(false);
+
+    expect(
+      isDesignError(
+        await failureOf(openDesignFile(service(), "env-1", context, "designs/missing.orkdes")),
+        "not-found",
+      ),
+    ).toBe(true);
+    await writeFile(join(worktree, "bad.orkdes"), "not json");
+    expect(
+      isDesignError(
+        await failureOf(openDesignFile(service(), "env-1", context, "bad.orkdes")),
+        "invalid-input",
+      ),
+    ).toBe(true);
+  });
+
   test("export paths stay confined to the repository root", async () => {
     const { canvasId } = await setup();
-    for (const path of ["../escape.orkdes", "nested/dir.orkdes", "/abs.orkdes", "no-extension"])
+    for (const path of [
+      "../escape.orkdes",
+      "nested/../escape.orkdes",
+      "nested/.git/dir.orkdes",
+      "/abs.orkdes",
+      "no-extension",
+    ])
       expect(isDesignError(await failureOf(save(canvasId, path, 2)), "invalid-input")).toBe(true);
     expect(await readdir(worktree)).toEqual([]);
     await expect(exportPreview(service(), "env-2", canvasId, context)).rejects.toThrow("not found");

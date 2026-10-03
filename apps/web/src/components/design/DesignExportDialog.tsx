@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import type {
   DesignExportPreview,
@@ -17,13 +17,38 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import type { FileNode } from "@/lib/backend";
+import { useFilesPanelStore } from "@/stores";
 import type { DesignProjection } from "@/stores/designStore";
 import { designApi, failureOf } from "./design-client";
 import type { DesignCanvasController } from "./design-controller";
 
-/** Mirrors the backend rule: a repository-root file name ending in `.orkdes`. */
-export const DESIGN_EXPORT_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
+/** Mirrors the backend rule: a repository-relative path of plain folders ending in `.orkdes`. */
+export const DESIGN_EXPORT_NAME =
+  /^(?:[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}\/){0,7}[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
+const DESIGN_EXPORT_PATH_MAX = 240;
+/** Where new designs are saved unless the user picks another folder. */
+export const DESIGN_DEFAULT_FOLDER = "designs";
 const PREVIEW_DEBOUNCE_MS = 300;
+
+const trimSlashes = (value: string) => value.trim().replace(/^\/+|\/+$/g, "");
+const joinPath = (folder: string, file: string) => {
+  const dir = trimSlashes(folder);
+  return dir ? `${dir}/${file}` : file;
+};
+const splitPath = (path: string) => {
+  const slash = path.lastIndexOf("/");
+  return { folder: slash < 0 ? "" : path.slice(0, slash), file: path.slice(slash + 1) };
+};
+
+function collectFolders(nodes: FileNode[], out: string[] = []): string[] {
+  for (const node of nodes) {
+    if (!node.isDirectory) continue;
+    out.push(node.path);
+    collectFolders(node.children ?? [], out);
+  }
+  return out;
+}
 
 export type DesignExportApi = Pick<typeof designApi, "exportPreview" | "exportReconcile">;
 
@@ -58,8 +83,19 @@ export function DesignExportDialog({
   api?: DesignExportApi;
 }) {
   const { environmentId, canvasId } = projection;
-  const [name, setName] = useState("");
+  const [folder, setFolder] = useState(DESIGN_DEFAULT_FOLDER);
+  const [file, setFile] = useState("");
+  const name = file ? joinPath(folder, file) : "";
   const [edited, setEdited] = useState(false);
+  const fileTree = useFilesPanelStore((state) => state.fileTree);
+  // Folders already in the repository, plus the default, as suggestions.
+  const folderSuggestions = useMemo(
+    () =>
+      Array.from(new Set([DESIGN_DEFAULT_FOLDER, ...collectFolders(fileTree)]))
+        .filter((candidate) => DESIGN_EXPORT_NAME.test(`${candidate}/x.orkdes`))
+        .sort(),
+    [fileTree],
+  );
   const [preview, setPreview] = useState<DesignExportPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<DesignFailure | null>(null);
@@ -98,7 +134,11 @@ export function DesignExportDialog({
             setConfirmed(false);
           }
           shown.current = result.target;
-          if (path === undefined) setName(result.target.relativePath);
+          if (path === undefined) {
+            const split = splitPath(result.target.relativePath);
+            setFolder(split.folder);
+            setFile(split.file);
+          }
           setPreview(result);
           setPreviewing(false);
         },
@@ -119,7 +159,8 @@ export function DesignExportDialog({
     if (!open) return;
     epochs.current.session++;
     shown.current = null;
-    setName("");
+    setFolder(DESIGN_DEFAULT_FOLDER);
+    setFile("");
     setEdited(false);
     setPreview(null);
     setReplace(false);
@@ -138,7 +179,7 @@ export function DesignExportDialog({
     };
   }, [open, runPreview]);
 
-  const valid = DESIGN_EXPORT_NAME.test(name);
+  const valid = name.length <= DESIGN_EXPORT_PATH_MAX && DESIGN_EXPORT_NAME.test(name);
 
   // Re-preview an edited name after a pause.
   useEffect(() => {
@@ -160,13 +201,14 @@ export function DesignExportDialog({
   }, [committedRevision]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
-  const rename = (value: string) => {
+  const rename = (nextFolder: string, nextFile: string) => {
     epochs.current.preview++;
     shown.current = null;
-    setName(value);
+    setFolder(nextFolder);
+    setFile(nextFile);
     setEdited(true);
     setPreview(null);
-    setPreviewing(DESIGN_EXPORT_NAME.test(value));
+    setPreviewing(DESIGN_EXPORT_NAME.test(nextFile ? joinPath(nextFolder, nextFile) : ""));
     setPreviewError(null);
     setReplace(false);
     setConfirmed(false);
@@ -249,9 +291,9 @@ export function DesignExportDialog({
         <DialogHeader>
           <DialogTitle>Export design to repository</DialogTitle>
           <DialogDescription>
-            Writes a portable .orkdes copy of one committed revision into the repository root. Your
-            workspace copy is saved automatically; the exported file is separate and can be
-            committed with your code.
+            Writes a portable .orkdes file of one committed revision into the repository, in the{" "}
+            {DESIGN_DEFAULT_FOLDER} folder unless you choose another. Your workspace copy is saved
+            automatically; the file can be committed with your code and opened from the file tree.
           </DialogDescription>
         </DialogHeader>
 
@@ -291,28 +333,50 @@ export function DesignExportDialog({
           {checkNotice && <p role="status">{checkNotice}</p>}
 
           <div className="grid gap-1">
+            <label htmlFor="design-export-folder" className="text-xs font-medium">
+              Folder
+            </label>
+            <Input
+              id="design-export-folder"
+              value={folder}
+              list="design-export-folders"
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="Repository root"
+              aria-describedby="design-export-name-help"
+              disabled={exporting}
+              onChange={(event) => rename(event.target.value, file)}
+            />
+            <datalist id="design-export-folders">
+              {folderSuggestions.map((suggestion) => (
+                <option key={suggestion} value={suggestion} />
+              ))}
+            </datalist>
+          </div>
+          <div className="grid gap-1">
             <label htmlFor="design-export-name" className="text-xs font-medium">
               File name
             </label>
             <Input
               id="design-export-name"
               ref={input}
-              value={name}
+              value={file}
               spellCheck={false}
               autoComplete="off"
               aria-invalid={Boolean(name) && !valid}
               aria-describedby="design-export-name-help"
               disabled={exporting}
-              onChange={(event) => rename(event.target.value)}
+              onChange={(event) => rename(folder, event.target.value)}
             />
             <p id="design-export-name-help" className="text-xs text-muted-foreground">
-              Saved in the repository root. Use letters, numbers, dots, dashes or underscores,
-              ending in .orkdes; folders are not supported.
+              Folders are created if they do not exist; leave the folder empty to save in the
+              repository root. Use letters, numbers, dots, dashes or underscores, and end the file
+              name in .orkdes.
             </p>
             {name && !valid && (
               <p role="alert" className="text-xs text-destructive">
-                “{name}” is not a valid file name. It must start with a letter or number and end in
-                .orkdes.
+                “{name}” is not a valid path. Folder and file names must start with a letter or
+                number, and the file name must end in .orkdes.
               </p>
             )}
           </div>
@@ -359,7 +423,7 @@ export function DesignExportDialog({
                         input.current?.focus();
                         input.current?.setSelectionRange(
                           0,
-                          Math.max(0, name.length - ".orkdes".length),
+                          Math.max(0, file.length - ".orkdes".length),
                         );
                       }}
                     >

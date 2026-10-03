@@ -2,8 +2,6 @@ import { DESIGN_MAX_DOCUMENT_BYTES, type DesignCanvas } from "@orkestrator/proto
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import type {
   DesignCapabilities,
-  DesignLibraryPage,
-  DesignLibraryQuery,
   DesignOperationInput,
   DesignOperationStatus,
   DesignPreconditions,
@@ -14,7 +12,6 @@ import { invoke } from "@/lib/native/backend";
 import {
   classifyTransportError,
   DesignClientError,
-  designAction,
   designApi,
   failureOf,
   getCapabilities,
@@ -30,6 +27,10 @@ export const DESIGN_BRIEF_MAX = 20_000;
 
 export type DesignAgent = "claude" | "codex";
 export const DESIGN_AGENTS: readonly DesignAgent[] = ["claude", "codex"];
+export const DESIGN_AGENT_LABELS: Record<DesignAgent, string> = {
+  claude: "Claude",
+  codex: "Codex",
+};
 
 /** Returns a user-facing problem with the name, or null when it is usable. */
 export function validateDesignName(name: string): string | null {
@@ -447,58 +448,6 @@ export function rendererUnavailable(view: DesignReadinessView | null): boolean {
     view !== null &&
     (view.renderer.state === "missing-executable" || view.renderer.state === "launch-failed")
   );
-}
-
-// ---------------------------------------------------------------------------
-// Library data
-// ---------------------------------------------------------------------------
-
-/** Library entry; `legacy` entries come from an old backend with names only. */
-export type DesignLibraryItem = DesignLibraryPage["entries"][number] & { legacy?: true };
-
-export interface DesignLibraryResult extends Omit<DesignLibraryPage, "entries"> {
-  entries: DesignLibraryItem[];
-}
-
-/** Builds a library page from an old backend's `list_canvases`. */
-export async function legacyLibraryPage(
-  environmentId: string,
-  query: DesignLibraryQuery,
-  list: () => Promise<Array<{ id: string; name: string; revision?: number }>> = () =>
-    designAction(environmentId, "list_canvases"),
-): Promise<DesignLibraryResult> {
-  const all = await list();
-  const search = query.search?.trim().toLowerCase();
-  const matching = (query.filter === "deleted" ? [] : all).filter(
-    (entry) => !search || entry.name.toLowerCase().includes(search),
-  );
-  if (query.sort === "name") matching.sort((a, b) => a.name.localeCompare(b.name));
-  const offset = query.offset ?? 0;
-  const limit = query.limit ?? 50;
-  const page = matching.slice(offset, offset + limit);
-  return {
-    entries: page.map((entry) => ({
-      id: entry.id,
-      name: entry.name,
-      revision: entry.revision ?? 0,
-      modifiedAt: "",
-      createdAt: "",
-      frameCount: 0,
-      state: "live",
-      validation: { invalid: 0, unvalidated: 0 },
-      legacy: true,
-    })),
-    total: matching.length,
-    ...(offset + limit < matching.length ? { nextOffset: offset + limit } : {}),
-    quota: {
-      live: all.length,
-      liveLimit: 256,
-      deleted: 0,
-      deletedLimit: 0,
-      deletedBytes: 0,
-      deletedBytesLimit: 0,
-    },
-  };
 }
 
 /**

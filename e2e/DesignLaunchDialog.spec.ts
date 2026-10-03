@@ -21,7 +21,7 @@ test("keeps sm gutters and caps the launch dialog at 42rem", async ({ page }, te
   expect(wideBox!.x).toBe(176);
 });
 
-test("opens from the keyboard with New, Open and Import modes", async ({ page }, testInfo) => {
+test("opens from the keyboard with New design and Import modes", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
   await page.goto("/design-launch");
 
@@ -32,9 +32,10 @@ test("opens from the keyboard with New, Open and Import modes", async ({ page },
 
   const dialog = page.getByRole("dialog", { name: "Design workspace" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("status").first()).not.toBeEmpty();
-  for (const mode of ["New design", "Open", "Import"])
+  for (const mode of ["New design", "Import"])
     await expect(dialog.getByRole("tab", { name: mode })).toBeVisible();
+  await expect(dialog.getByRole("tab", { name: "Open" })).toHaveCount(0);
+  await expect(dialog.getByRole("region", { name: "Design readiness" })).toHaveCount(0);
 
   // The draft brief survives switching modes.
   await dialog.getByRole("textbox", { name: "Design brief" }).fill("A calmer checkout");

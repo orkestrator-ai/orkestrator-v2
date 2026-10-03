@@ -5,11 +5,15 @@ Status: Living — HTML/CSS design workspace with recoverable operations
 [`docs/improvements/design-space/plan/`](../improvements/design-space/plan/00-index.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
-dialog has three modes: **New design** (optionally with Claude or Codex, or a
-blank canvas with no agent), **Open** (a searchable library of this
-environment's designs, including the recycle bin) and **Import** (`.orkdes`).
-A readiness panel reports backend storage, the headless Chromium renderer and
-agent availability separately; a missing renderer never hides existing work.
+dialog has two modes: **New design** (optionally with Claude or Codex, or a
+blank canvas with no agent) and **Import** (`.orkdes`). There is no library
+or status panel: a saved design is an `.orkdes` file in the repository, and
+clicking one anywhere a file opens (file tree, quick open, chat links) opens it
+in the design canvas instead of a text tab. A canvas this environment already
+made from that exact file content is reused; any other file is imported as a new
+canvas that remembers the file as its save location (`design_open_file`,
+`openDesignFile` in `design-exports.ts`). Create is blocked, with a one-line
+reason and **Check again**, when the backend, storage or renderer is unavailable.
 
 Images pasted into the **New design** brief are written into the environment
 (`.orkestrator/clipboard/`, like a composer paste) and seeded into the new
@@ -207,9 +211,17 @@ inside the frame returns to Inspect.
 
 ## Save, export and download
 
-Export (Save As) writes one exact committed revision to a repository-root
-`.orkdes` path (`design-exports.ts`, `design-export-writer.ts`). The default
-name is the sanitized design name plus a short canvas-id suffix. The write
+Export (Save As) writes one exact committed revision to a repository-relative
+`.orkdes` path (`design-exports.ts`, `design-export-writer.ts`). By default
+designs go to the `designs/` folder; the dialog has separate **Folder** and
+**File name** fields (the folder may be emptied to save in the repository root,
+and offers the repository's existing folders). A path is up to seven plain
+folder names and a file name; each segment starts with a letter or number, so
+`..`, `.git` and other hidden folders cannot be named. Missing folders are
+created when saving a new file, one level at a time, and a folder that is a
+symbolic link or a file is never traversed (inspect reports it, write refuses
+it). The default name is the sanitized design name plus a short canvas-id
+suffix, and a design remembers where it was last saved or opened from. The write
 uses a same-directory temporary file, sync and `link()` for new files (atomic
 no-clobber) or a fingerprint-checked `rename()` for an explicit replacement;
 container exports run the same protocol through an owned helper inside the
@@ -270,7 +282,7 @@ Backend: `design-service`, `design-operations`, `design-history`,
 `design-export-writer`, `design-renderer`, `commands-registry-design` and
 `design-mcp` tests (a happy-dom runtime renderer from `design-test-support.ts`
 plus one real-Chromium renderer test). Web: controller, drafts, viewport,
-canvas tab, inspector, layer tree, history/export, entry/library and agent
+canvas tab, inspector, layer tree, history/export, entry and agent
 context tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
 command registry at desktop and phone widths;
 `e2e/agent-testing/design-canvas.spec.ts` runs against the isolated stack.

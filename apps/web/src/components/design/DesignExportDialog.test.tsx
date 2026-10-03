@@ -14,7 +14,7 @@ import { DesignExportDialog, type DesignExportApi } from "./DesignExportDialog";
 
 const environmentId = "env-1";
 const canvasId = "canvas-1";
-const suggested = "Landing-canvas01.orkdes";
+const suggested = "designs/Landing-canvas01.orkdes";
 
 function target(relativePath: string, patch: Partial<DesignExportTarget> = {}): DesignExportTarget {
   return {
@@ -106,6 +106,10 @@ function nameField() {
   return screen.getByLabelText("File name") as HTMLInputElement;
 }
 
+function folderField() {
+  return screen.getByLabelText("Folder") as HTMLInputElement;
+}
+
 function button(name: string | RegExp) {
   return screen.getByRole("button", { name }) as HTMLButtonElement;
 }
@@ -128,7 +132,8 @@ describe("DesignExportDialog", () => {
 
     expect(await screen.findByText(`New file: ${suggested} will be created.`)).toBeTruthy();
     expect(exportPreview).toHaveBeenCalledWith(environmentId, canvasId, undefined);
-    expect(nameField().value).toBe(suggested);
+    expect(folderField().value).toBe("designs");
+    expect(nameField().value).toBe("Landing-canvas01.orkdes");
     expect(screen.getByText("Exports committed revision 7.")).toBeTruthy();
 
     fireEvent.click(button("Export revision 7"));
@@ -224,16 +229,20 @@ describe("DesignExportDialog", () => {
     renderDialog(projection());
     await screen.findByText(`New file: ${suggested} will be created.`);
 
-    fireEvent.change(nameField(), { target: { value: "docs/design.orkdes" } });
-    expect(screen.getByText(/is not a valid file name/)).toBeTruthy();
+    fireEvent.change(nameField(), { target: { value: "bad name.orkdes" } });
+    expect(screen.getByText(/is not a valid path/)).toBeTruthy();
     expect(button("Export revision …").disabled).toBe(true);
 
+    fireEvent.change(folderField(), { target: { value: "" } });
     fireEvent.change(nameField(), { target: { value: "first.orkdes" } });
     await waitFor(() =>
       expect(exportPreview).toHaveBeenCalledWith(environmentId, canvasId, "first.orkdes"),
     );
+    fireEvent.change(folderField(), { target: { value: "docs/sub" } });
     fireEvent.change(nameField(), { target: { value: "second.orkdes" } });
-    expect(await screen.findByText("New file: second.orkdes will be created.")).toBeTruthy();
+    expect(
+      await screen.findByText("New file: docs/sub/second.orkdes will be created."),
+    ).toBeTruthy();
 
     await act(async () =>
       slow.resolve(
@@ -246,8 +255,8 @@ describe("DesignExportDialog", () => {
       ),
     );
     expect(screen.queryByText(/is not a design file/) === null).toBe(true);
-    expect(screen.getByText("New file: second.orkdes will be created.")).toBeTruthy();
-    expect(exportPreview).not.toHaveBeenCalledWith(environmentId, canvasId, "docs/design.orkdes");
+    expect(screen.getByText("New file: docs/sub/second.orkdes will be created.")).toBeTruthy();
+    expect(exportPreview).not.toHaveBeenCalledWith(environmentId, canvasId, "bad name.orkdes");
   });
 
   test("offers to wait for pending edits or export the committed revision explicitly", async () => {

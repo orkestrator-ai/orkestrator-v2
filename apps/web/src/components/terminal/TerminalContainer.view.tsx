@@ -33,6 +33,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
+import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -1604,6 +1605,12 @@ export function TerminalContainer({
         return;
       }
 
+      // Design files open in the canvas, never as raw JSON.
+      if (!options?.isDiff && isDesignFilePath(relativeFilePath)) {
+        void openDesignFile(environmentId, relativeFilePath, handleCreateTab);
+        return;
+      }
+
       const allTabs = getAllTabs(environmentId);
       // Check if file is already open - need to match both path AND diff mode
       // Note: This intentionally allows the same file to be open twice if one is in
@@ -1691,6 +1698,7 @@ export function TerminalContainer({
       clearFileTabNavigation,
       getAllTabs,
       environmentId,
+      handleCreateTab,
     ],
   );
 

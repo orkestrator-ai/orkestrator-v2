@@ -10,7 +10,6 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
 import type { DesignReadinessView } from "./design-launch";
-import type { DesignLibraryClient } from "./DesignLibrary";
 import { DesignWorkspaceDialog } from "./DesignWorkspaceDialog";
 import {
   deferred,
@@ -39,24 +38,6 @@ const legacyReady: DesignReadinessView = {
   capabilities: null,
   storage: { state: "unknown" },
   renderer: { state: "ready", ready: true, message: "" },
-};
-
-const emptyLibrary: DesignLibraryClient = {
-  list: async () => ({
-    entries: [],
-    total: 0,
-    quota: {
-      live: 0,
-      liveLimit: 256,
-      deleted: 0,
-      deletedLimit: 0,
-      deletedBytes: 0,
-      deletedBytesLimit: 0,
-    },
-  }),
-  lifecycle: async () => ({}) as never,
-  purge: async () => ({}),
-  exportDocument: async () => canvas,
 };
 
 const originalConfig = useConfigStore.getState().config;
@@ -103,7 +84,6 @@ function mount(createTab: (type: CreatableTabType, options?: CreateTabOptions) =
       environmentId="env-1"
       createTab={createTab}
       loadReadiness={loadReadiness}
-      libraryClient={emptyLibrary}
     />,
   );
   return { onOpenChange, loadReadiness };
@@ -269,7 +249,6 @@ describe("DesignWorkspaceDialog", () => {
       onOpenChange: mock(),
       createTab: () => true,
       loadReadiness,
-      libraryClient: emptyLibrary,
     };
     const view = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
     try {
@@ -292,17 +271,16 @@ describe("DesignWorkspaceDialog", () => {
     const { loadReadiness } = mount(() => true);
     await flush();
     expect(loadReadiness.mock.calls).toEqual([[true]]);
-    expect(screen.getByText("Design services ready.")).toBeTruthy();
+    expect(screen.queryByLabelText("Design readiness") === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "Open" }) === null).toBe(true);
   });
 
   test("switching modes preserves the draft brief", async () => {
     mount(() => true);
     await flush();
     fireEvent.change(brief(), { target: { value: "A calmer checkout" } });
-    await switchTo("Open");
-    expect(screen.queryByRole("textbox", { name: "Design brief" }) === null).toBe(true);
-    await flush();
     await switchTo("Import");
+    expect(screen.queryByRole("textbox", { name: "Design brief" }) === null).toBe(true);
     expect(screen.getByLabelText("Import .orkdes")).toBeTruthy();
     await switchTo("New design");
     expect(brief().value).toBe("A calmer checkout");
@@ -475,7 +453,7 @@ describe("DesignWorkspaceDialog", () => {
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  test("an unavailable renderer blocks creation but not the library or import", async () => {
+  test("an unavailable renderer blocks creation but not import", async () => {
     const onOpenChange = mock(() => {});
     render(
       <DesignWorkspaceDialog
@@ -487,7 +465,6 @@ describe("DesignWorkspaceDialog", () => {
           ...legacyReady,
           renderer: { state: "missing-executable", ready: false, message: "install" },
         })}
-        libraryClient={emptyLibrary}
       />,
     );
     await flush();
@@ -498,8 +475,5 @@ describe("DesignWorkspaceDialog", () => {
     expect(screen.getByText(/Creating a design needs the renderer/)).toBeTruthy();
     await switchTo("Import");
     expect(screen.getByText(/an import will be stored unvalidated/)).toBeTruthy();
-    await switchTo("Open");
-    await flush();
-    expect(screen.getByText(/No designs yet/)).toBeTruthy();
   });
 });

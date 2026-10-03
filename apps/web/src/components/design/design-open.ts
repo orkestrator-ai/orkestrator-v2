@@ -71,30 +71,6 @@ export function decideDesignOpen(
   return { kind: "create", placement, fellBack: false };
 }
 
-export interface DesignOpenChoices {
-  /** Tab already showing this canvas; the only action needed is focus. */
-  openTabId?: string;
-  canOpen: boolean;
-  /** "Open beside" will actually land in the current pane. */
-  besideFallsBack: boolean;
-  /** Explanation when opening is blocked or degraded. */
-  notice?: string;
-}
-
-/** What the library should offer for one canvas. */
-export function designOpenChoices(canvasId: string, facts: DesignLayoutFacts): DesignOpenChoices {
-  const decision = decideDesignOpen(canvasId, "split", facts);
-  if (decision.kind === "focus")
-    return { openTabId: decision.tabId, canOpen: true, besideFallsBack: false };
-  if (decision.kind === "refuse")
-    return { canOpen: false, besideFallsBack: false, notice: decision.message };
-  return {
-    canOpen: true,
-    besideFallsBack: decision.fellBack,
-    ...(decision.fellBack ? { notice: SPLIT_FALLBACK_MESSAGE } : {}),
-  };
-}
-
 export type DesignLaunchPlan =
   | { ok: true; placement: DesignPlacement; notice?: string }
   | { ok: false; reason: "environment" | "tab-limit" | "no-pane"; message: string };

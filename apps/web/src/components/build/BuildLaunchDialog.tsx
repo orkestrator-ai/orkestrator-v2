@@ -201,15 +201,6 @@ const ENVIRONMENT_OPTIONS: Array<{
   },
 ];
 
-/**
- * States both halves of the trade: the access these stages get, and the exact
- * reach of the check that constrains it. The backend compares HEAD and the
- * Git-visible uncommitted paths, so ignored files and `.git` internals are not
- * covered — claiming the workspace is protected outright would overstate it.
- */
-const VALIDATION_WORKSPACE_NOTICE =
-  "This step runs with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden: the backend rejects the result if the commit or any Git-tracked or untracked path changed. Ignored files are not checked.";
-
 interface BuildLaunchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -577,8 +568,10 @@ function BuildStepCard({
       )}
 
       {(stepKey === "review" || stepKey === "verify") && (
-        <p className="mt-2 text-[11px] leading-snug text-amber-400/80" role="note">
-          {VALIDATION_WORKSPACE_NOTICE}
+        <p className="mt-2 text-[11px] leading-snug text-zinc-500" role="note">
+          Full workspace write access. The backend rejects results with source edits or commits
+          detected by its Git check. Ignored files, .git contents and paths outside the worktree are
+          not checked.
         </p>
       )}
     </li>

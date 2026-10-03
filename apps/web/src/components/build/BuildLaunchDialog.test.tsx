@@ -195,6 +195,27 @@ describe("BuildLaunchDialog", () => {
     ).toEqual(["build", "review", "address", "verify", "pr", "resolve-conflicts"]);
   });
 
+  test("discloses write access and Git check limits on Review and Verify cards", () => {
+    renderDialog();
+
+    const cards = within(screen.getByRole("list", { name: "Build steps" })).getAllByRole(
+      "listitem",
+    );
+    for (const card of cards) {
+      const note = within(card).queryByRole("note");
+      const step = card.getAttribute("data-build-step");
+      if (step === "review" || step === "verify") {
+        expect(note?.textContent).toContain("Full workspace write access");
+        expect(note?.textContent).toContain("rejects results with source edits or commits");
+        expect(note?.textContent).toContain(
+          "Ignored files, .git contents and paths outside the worktree are not checked",
+        );
+      } else {
+        expect(note).toBeNull();
+      }
+    }
+  });
+
   test("asks for the environment once, outside the step configuration", () => {
     const { onConfirm } = renderDialog();
     const environment = screen.getByRole("radiogroup", {
@@ -1011,19 +1032,5 @@ describe("BuildLaunchDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onConfirm).not.toHaveBeenCalled();
-  });
-});
-
-describe("BuildLaunchDialog validation workspace disclosure", () => {
-  test("discloses writable workspace access only on review and verification", () => {
-    renderDialog();
-
-    const disclosures = screen.getAllByRole("note");
-    expect(disclosures).toHaveLength(2);
-    for (const disclosure of disclosures) {
-      expect(disclosure.textContent).toContain("full workspace access");
-      expect(disclosure.textContent).toContain("Git-tracked or untracked path");
-      expect(disclosure.textContent).toContain("Ignored files are not checked");
-    }
   });
 });

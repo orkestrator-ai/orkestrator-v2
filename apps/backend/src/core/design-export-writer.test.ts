@@ -494,7 +494,85 @@ describe("local writer", () => {
   });
 });
 
+describe("pinned local parents", () => {
+  for (const stage of ["inspect", "create", "publish", "replace"] as const) {
+    test(`a swapped parent cannot redirect local ${stage}`, async () => {
+      const root = await createRoot(),
+        outside = await createRoot();
+      await fs.mkdir(path.join(root, "designs"));
+      const inside = doc("inside"),
+        external = doc("outside"),
+        next = doc("next");
+      if (stage === "inspect" || stage === "replace")
+        await fs.writeFile(path.join(root, "designs/a.orkdes"), inside);
+      await fs.writeFile(path.join(outside, "a.orkdes"), external);
+      const swap = async () => {
+        await fs.rename(path.join(root, "designs"), path.join(root, "retained"));
+        await fs.symlink(outside, path.join(root, "designs"));
+      };
+      const dest = { kind: "local", worktreePath: root } as const;
+      if (stage === "inspect") {
+        const result = await inspectDesignExportTarget(dest, "designs/a.orkdes", {
+          faults: { afterParentsOpened: swap },
+        });
+        expect(result.bytes).toEqual(inside);
+      } else {
+        const result = await writeDesignExport(
+          dest,
+          "designs/a.orkdes",
+          next,
+          stage === "replace"
+            ? { state: "present", digest: designExportDigest(inside) }
+            : { state: "absent" },
+          { faults: stage === "create" ? { afterParentsOpened: swap } : { beforePublish: swap } },
+        );
+        if (stage === "replace") expect(result.previous).toEqual(inside);
+        expect(await fs.readFile(path.join(root, "retained/a.orkdes"))).toEqual(next);
+      }
+      expect(await fs.readFile(path.join(outside, "a.orkdes"))).toEqual(external);
+      expect(await fs.readdir(outside)).toEqual(["a.orkdes"]);
+      expect(await tempFiles(path.join(root, "retained"))).toEqual([]);
+    });
+  }
+});
+
 describe("container helper scripts (run locally)", () => {
+  for (const stage of ["inspect", "create", "publish"] as const) {
+    test(`a swapped parent cannot redirect container ${stage}`, async () => {
+      const root = await createRoot();
+      const outside = await createRoot();
+      await fs.mkdir(path.join(root, "designs"));
+      const inside = doc("inside"),
+        external = doc("outside");
+      if (stage === "inspect") await fs.writeFile(path.join(root, "designs/a.orkdes"), inside);
+      await fs.writeFile(path.join(outside, "a.orkdes"), external);
+      const swap = `fs.renameSync(${JSON.stringify(path.join(root, "designs"))}, ${JSON.stringify(path.join(root, "retained"))}); fs.symlinkSync(${JSON.stringify(outside)}, ${JSON.stringify(path.join(root, "designs"))});`;
+      const script =
+        stage === "inspect"
+          ? DESIGN_EXPORT_CONTAINER_INSPECTOR.replace(
+              "stats = lstatOrNull(target);",
+              `${swap}\nstats = lstatOrNull(target);`,
+            )
+          : DESIGN_EXPORT_CONTAINER_WRITER.replace(
+              stage === "create" ? "const before = lstatOrNull(target);" : "let previous;",
+              `${swap}\n${stage === "create" ? "const before = lstatOrNull(target);" : "let previous;"}`,
+            );
+      const result = await runHelper(
+        script,
+        stage === "inspect"
+          ? [root, "designs/a.orkdes", "10000"]
+          : [root, "designs/a.orkdes", "absent", "-", "10000", designExportDigest(inside)],
+        inside,
+      );
+      expect(result.json.ok).toBe(true);
+      if (stage === "inspect")
+        expect(Buffer.from(result.json.bytes as string, "base64")).toEqual(inside);
+      else expect(await fs.readFile(path.join(root, "retained/a.orkdes"))).toEqual(inside);
+      expect(await fs.readFile(path.join(outside, "a.orkdes"))).toEqual(external);
+      expect(await fs.readdir(outside)).toEqual(["a.orkdes"]);
+      expect(await tempFiles(path.join(root, "retained"))).toEqual([]);
+    });
+  }
   test("writer creates, collides, replaces, and refuses symlinks", async () => {
     const root = await createRoot();
     const bytes = doc("c1");

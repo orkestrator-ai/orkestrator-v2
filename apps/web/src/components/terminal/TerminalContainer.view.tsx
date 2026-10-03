@@ -1605,7 +1605,7 @@ export function TerminalContainer({
         return;
       }
 
-      // Design files open in the canvas, never as raw JSON.
+      // Accepted design paths open in the canvas; other paths use the text editor.
       if (!options?.isDiff && isDesignFilePath(relativeFilePath)) {
         void openDesignFile(environmentId, relativeFilePath, handleCreateTab);
         return;

@@ -3,9 +3,25 @@ import { DesignClientError } from "./design-client";
 import { isDesignFilePath, openDesignFile } from "./design-open-file";
 
 describe("isDesignFilePath", () => {
-  test("matches .orkdes files in any folder, case-insensitively", () => {
+  test("matches exactly the export path shapes accepted by the backend", () => {
     expect(isDesignFilePath("designs/home.orkdes")).toBe(true);
-    expect(isDesignFilePath("home.ORKDES")).toBe(true);
+    for (const invalid of [
+      "home.ORKDES",
+      "has space.orkdes",
+      ".hidden/x.orkdes",
+      "x/".repeat(8) + "home.orkdes",
+      "a".repeat(65) + "/x.orkdes",
+      "a".repeat(102) + ".orkdes",
+      "a".repeat(60) +
+        "/" +
+        "b".repeat(60) +
+        "/" +
+        "c".repeat(60) +
+        "/" +
+        "d".repeat(60) +
+        ".orkdes",
+    ])
+      expect(isDesignFilePath(invalid)).toBe(false);
     expect(isDesignFilePath("home.orkdes.json")).toBe(false);
     expect(isDesignFilePath("notes.md")).toBe(false);
   });

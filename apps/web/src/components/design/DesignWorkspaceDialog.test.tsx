@@ -273,6 +273,7 @@ describe("DesignWorkspaceDialog", () => {
     expect(loadReadiness.mock.calls).toEqual([[true]]);
     expect(screen.queryByLabelText("Design readiness") === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "Open" }) === null).toBe(true);
+    expect(screen.getByRole("tab", { name: "Saved designs" })).toBeTruthy();
   });
 
   test("switching modes preserves the draft brief", async () => {
@@ -284,6 +285,64 @@ describe("DesignWorkspaceDialog", () => {
     expect(screen.getByLabelText("Import .orkdes")).toBeTruthy();
     await switchTo("New design");
     expect(brief().value).toBe("A calmer checkout");
+  });
+
+  test("Saved designs reloads private and pre-upgrade records after tabs close", async () => {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "design_action" && (args as { action: string }).action === "list_canvases")
+        return [canvas, { ...canvas, id: "pre-upgrade", name: "Older private canvas" }];
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    const createTab = mock(() => true);
+    mount(createTab);
+    await flush();
+    await switchTo("Saved designs");
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Checkout/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Open beside" }));
+    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
+      canvasId: canvas.id,
+      designPlacement: "split",
+    });
+    cleanup();
+    createTab.mockClear();
+    mount(createTab);
+    await flush();
+    await switchTo("Saved designs");
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Older private canvas/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Open beside" }));
+    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
+      canvasId: "pre-upgrade",
+      designPlacement: "split",
+    });
+  });
+
+  test("an imported canvas offers direct recovery after its tab cannot open", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "design_import") return canvas;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    let canOpen = false;
+    const createTab = mock(() => canOpen);
+    const { onOpenChange } = mount(createTab);
+    await flush();
+    await switchTo("Import");
+    const file = new File([JSON.stringify(canvas)], "import.orkdes", { type: "application/json" });
+    fireEvent.change(screen.getByLabelText("Import .orkdes"), { target: { files: [file] } });
+    await flush();
+    expect(screen.getByRole("status").textContent).toContain("Imported");
+    expect(screen.getByRole("button", { name: "Open design" })).toBeTruthy();
+    canOpen = true;
+    fireEvent.click(screen.getByRole("button", { name: "Open design" }));
+    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
+      canvasId: canvas.id,
+      designPlacement: "split",
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(invokeMock.mock.calls.filter(([command]) => command === "design_import")).toHaveLength(
+      1,
+    );
   });
 
   test("layout failure before the agent exists rolls back and keeps the brief", async () => {

@@ -31,7 +31,7 @@ export type DesignOpenDecision =
 
 export function tabLimitMessage(maxTabs: number, needed = 1): string {
   const room = needed > 1 ? `${needed} free tabs` : "a free tab";
-  return `This environment already has the maximum of ${maxTabs} tabs, and this needs ${room}. Close a tab you no longer need — closing a design tab never deletes the design, and you can reopen it from Open.`;
+  return `This environment already has the maximum of ${maxTabs} tabs, and this needs ${room}. Close a tab you no longer need — closing a design tab never deletes the design, and you can reopen it from Saved designs.`;
 }
 
 export const SPLIT_FALLBACK_MESSAGE =
@@ -69,6 +69,30 @@ export function decideDesignOpen(
   if (placement === "split" && !facts.canSplit)
     return { kind: "create", placement: "current", fellBack: true };
   return { kind: "create", placement, fellBack: false };
+}
+
+export interface DesignOpenChoices {
+  /** Tab already showing this canvas; the only action needed is focus. */
+  openTabId?: string;
+  canOpen: boolean;
+  /** "Open beside" will actually land in the current pane. */
+  besideFallsBack: boolean;
+  /** Explanation when opening is blocked or degraded. */
+  notice?: string;
+}
+
+/** What the library should offer for one canvas. */
+export function designOpenChoices(canvasId: string, facts: DesignLayoutFacts): DesignOpenChoices {
+  const decision = decideDesignOpen(canvasId, "split", facts);
+  if (decision.kind === "focus")
+    return { openTabId: decision.tabId, canOpen: true, besideFallsBack: false };
+  if (decision.kind === "refuse")
+    return { canOpen: false, besideFallsBack: false, notice: decision.message };
+  return {
+    canOpen: true,
+    besideFallsBack: decision.fellBack,
+    ...(decision.fellBack ? { notice: SPLIT_FALLBACK_MESSAGE } : {}),
+  };
 }
 
 export type DesignLaunchPlan =

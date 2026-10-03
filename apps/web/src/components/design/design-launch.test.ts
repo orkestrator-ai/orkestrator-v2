@@ -153,7 +153,7 @@ describe("design workspace launch transaction", () => {
       },
     });
     const error = await launchDesignWorkspace(options).catch((reason) => reason);
-    expect(error.message).toContain("remains in Open");
+    expect(error.message).toContain("remains in Saved designs");
     expect(error.canvas).toBe(canvas);
     expect(error.recoverable).toBe(false);
   });

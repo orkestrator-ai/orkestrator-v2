@@ -7,7 +7,7 @@
  * in docs/improvements/design-space/plan/05-safe-saving-and-export.md:
  *
  * 1. validate a repository-relative `.orkdes` path (folders allowed);
- * 2. serialize Orkestrator writers per destination;
+ * 2. serialize Orkestrator writers per destination and pin parent directories;
  * 3. write a unique same-directory temporary file (0600, fsync);
  * 4. re-check the expected destination state immediately before publishing;
  * 5. publish atomically — `link()` for "absent" (atomic no-clobber), `rename()`
@@ -28,6 +28,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs, type Stats } from "node:fs";
+import fsSync from "node:fs";
 import path from "node:path";
 import { DesignError } from "./design-errors.js";
 
@@ -49,7 +50,7 @@ export const DESIGN_EXPORT_DEFAULT_FOLDER = "designs";
 export const DESIGN_EXPORT_MAX_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 export const DESIGN_EXPORT_CONTAINER_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_ROOT = "/workspace";
-/** Plain piped spawn. Deliberately not `shell.ts`, whose imports need Bun-only FFI. */
+/** Plain piped spawn, with no shell or inherited command execution context. */
 const spawnCommand: DesignExportSpawn = (command, args) => spawn(command, args, { stdio: "pipe" });
 const MIN_HELPER_STDOUT_BYTES = 6 * 1024 * 1024;
 const MAX_HELPER_STDERR_BYTES = 8 * 1024;
@@ -83,12 +84,14 @@ export interface DesignExportInspectOptions {
   timeoutMs?: number;
   /** Test seam for the container transport; defaults to a piped `spawn`. */
   spawn?: DesignExportSpawn;
+  /** Deterministic local race injection after directories are pinned. */
+  faults?: {
+    afterParentsOpened?: () => void | Promise<void>;
+    beforePublish?: () => void | Promise<void>;
+  };
 }
 
-export interface DesignExportWriteOptions extends DesignExportInspectOptions {
-  /** Test-only fault injection for the local writer. */
-  faults?: { beforePublish?: () => void | Promise<void> };
-}
+export interface DesignExportWriteOptions extends DesignExportInspectOptions {}
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -263,9 +266,13 @@ function errnoOf(error: unknown): string | undefined {
 // Per-destination serialization
 // ---------------------------------------------------------------------------
 
+let destinationOperations = 0;
 const destinationLocks = new Map<string, Promise<void>>();
 
 async function withDestinationLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  if (destinationOperations >= 256)
+    throw new DesignError("capacity", "Too many design file operations", { retryAfterMs: 1000 });
+  destinationOperations++;
   const previous = destinationLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -278,6 +285,7 @@ async function withDestinationLock<T>(key: string, run: () => Promise<T>): Promi
     return await run();
   } finally {
     release();
+    destinationOperations--;
     if (destinationLocks.get(key) === tail) destinationLocks.delete(key);
   }
 }
@@ -291,6 +299,23 @@ function localLockKey(canonicalRoot: string, relativePath: string): string {
   return `local:${path.join(canonicalRoot, name)}`;
 }
 
+/** Shares the writer's bounded destination lane with file-open transactions. */
+export async function withDesignExportDestinationLock<T>(
+  dest: DesignExportDestination,
+  relativePath: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const key =
+    dest.kind === "local"
+      ? localLockKey(
+          (await resolveLocalRoot(dest.worktreePath, relativePath, DESIGN_EXPORT_MAX_BYTES))
+            .canonicalRoot,
+          relativePath,
+        )
+      : `container:${validateContainerId(dest.containerId)}:${relativePath}`;
+  return withDestinationLock(key, run);
+}
+
 // ---------------------------------------------------------------------------
 // Local destination
 // ---------------------------------------------------------------------------
@@ -298,7 +323,6 @@ function localLockKey(canonicalRoot: string, relativePath: string): string {
 interface LocalRoot {
   canonicalRoot: string;
   rootStats: Stats;
-  target: string;
 }
 
 async function resolveLocalRoot(
@@ -310,51 +334,49 @@ async function resolveLocalRoot(
     const canonicalRoot = await fs.realpath(worktreePath);
     const rootStats = await fs.lstat(canonicalRoot);
     if (!rootStats.isDirectory()) throw new Error("not a directory");
-    return { canonicalRoot, rootStats, target: path.join(canonicalRoot, relativePath) };
+    return { canonicalRoot, rootStats };
   } catch (error) {
     throw exportError("root-unavailable", relativePath, maxBytes, errnoOf(error));
   }
 }
 
-async function lstatOrNull(filePath: string): Promise<Stats | null> {
+type PinnedDirectory = ReturnType<
+  typeof import("./design-export-directory.js").designExportDirectory
+>;
+
+/** Node-based browser fixtures use the same pinned-cwd helper as containers. */
+function localHelperSpawn(root: string): DesignExportSpawn {
+  return (_command, args) =>
+    spawn(process.execPath, ["-e", args[5]!, "--", root, ...args.slice(8)], { stdio: "pipe" });
+}
+
+async function localDirectory(relativePath: string, maxBytes: number): Promise<PinnedDirectory> {
   try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    if (errnoOf(error) === "ENOENT") return null;
-    throw error;
+    // Pure path/digest helpers can also be imported by Node-based browser tests.
+    const { designExportDirectory } = await import("./design-export-directory.js");
+    return designExportDirectory();
+  } catch {
+    throw exportError("root-unavailable", relativePath, maxBytes);
   }
 }
 
-type ParentState = "ok" | "missing" | "symlink" | "not-directory";
-
-/**
- * Walks the folders of an export path below the canonical root without
- * following symbolic links. With `create`, missing folders are made one level
- * at a time; a folder that is a link or a file is never traversed.
- */
-async function walkLocalParents(
-  canonicalRoot: string,
+async function pinLocalParents(
+  root: LocalRoot,
   relativePath: string,
   create: boolean,
-): Promise<ParentState> {
-  let current = canonicalRoot;
-  for (const segment of relativePath.split("/").slice(0, -1)) {
-    current = path.join(current, segment);
-    let stats = await lstatOrNull(current);
-    if (!stats && create) {
-      try {
-        await fs.mkdir(current, 0o755);
-      } catch (error) {
-        // Another writer may have made it first; it is re-checked below.
-        if (errnoOf(error) !== "EEXIST") throw error;
-      }
-      stats = await lstatOrNull(current);
-    }
-    if (!stats) return "missing";
-    if (stats.isSymbolicLink()) return "symlink";
-    if (!stats.isDirectory()) return "not-directory";
-  }
-  return "ok";
+  native: PinnedDirectory,
+) {
+  let parent = native.open(
+    process.platform === "darwin" ? -2 : -100,
+    root.canonicalRoot,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  const opened = native.stats(parent);
+  if (opened.dev !== root.rootStats.dev || opened.ino !== root.rootStats.ino)
+    throw exportError("root-changed", relativePath, DESIGN_EXPORT_MAX_BYTES);
+  for (const segment of relativePath.split("/").slice(0, -1))
+    parent = native.directory(parent, segment, create);
+  return parent;
 }
 
 type BoundedRead =
@@ -363,53 +385,41 @@ type BoundedRead =
   | { kind: "symlink" }
   | { kind: "unreadable" };
 
-/** Reads one regular file through a no-follow descriptor, bounded to `maxBytes`. */
-async function readLocalBounded(target: string, maxBytes: number): Promise<BoundedRead> {
-  let handle: Awaited<ReturnType<typeof fs.open>>;
+function readLocalBounded(
+  native: PinnedDirectory,
+  parent: number,
+  name: string,
+  maxBytes: number,
+): BoundedRead {
+  let fd: number;
   try {
-    handle = await fs.open(
-      target,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    fd = native.open(
+      parent,
+      name,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
   } catch (error) {
-    const code = errnoOf(error);
-    if (code === "ENOENT") return { kind: "missing" };
-    if (code === "ELOOP" || code === "EMLINK") return { kind: "symlink" };
+    if (errnoOf(error) === "ENOENT") return { kind: "missing" };
+    if (errnoOf(error) === "ELOOP" || native.isSymlink(parent, name)) return { kind: "symlink" };
     return { kind: "unreadable" };
   }
   try {
-    const stats = await handle.stat();
+    const stats = native.stats(fd);
     if (!stats.isFile() || stats.size > maxBytes) return { kind: "unreadable" };
     const chunks: Buffer[] = [];
     let total = 0;
     while (total <= maxBytes) {
       const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total));
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
-      if (bytesRead === 0) break;
-      chunks.push(chunk.subarray(0, bytesRead));
-      total += bytesRead;
+      const count = fsSync.readSync(fd, chunk, 0, chunk.length, null);
+      if (!count) break;
+      chunks.push(chunk.subarray(0, count));
+      total += count;
     }
-    if (total > maxBytes) return { kind: "unreadable" };
-    return { kind: "bytes", bytes: Buffer.concat(chunks, total) };
+    return total > maxBytes
+      ? { kind: "unreadable" }
+      : { kind: "bytes", bytes: Buffer.concat(chunks, total) };
   } catch {
     return { kind: "unreadable" };
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
-}
-
-async function syncDirectoryBestEffort(directory: string): Promise<void> {
-  // Directory fsync makes the new name durable where supported. The file is
-  // already published at this point, so any failure (EISDIR/EPERM/EINVAL on
-  // platforms without directory fsync, or otherwise) must not report failure.
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(directory, constants.O_RDONLY);
-    await handle.sync();
-  } catch {
-    // best effort
-  } finally {
-    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -417,40 +427,42 @@ async function inspectLocal(
   worktreePath: string,
   relativePath: string,
   maxBytes: number,
+  faults: DesignExportInspectOptions["faults"],
 ): Promise<DesignExportTargetState> {
-  const { canonicalRoot, target } = await resolveLocalRoot(worktreePath, relativePath, maxBytes);
-  let stats: Stats | null;
-  try {
-    const parents = await walkLocalParents(canonicalRoot, relativePath, false);
-    if (parents === "missing") return { exists: false, readable: false };
-    if (parents === "symlink") return { exists: true, readable: false, symlink: true };
-    if (parents === "not-directory") return { exists: true, readable: false };
-    stats = await lstatOrNull(target);
-  } catch {
-    return { exists: true, readable: false };
+  const root = await resolveLocalRoot(worktreePath, relativePath, maxBytes);
+  if (!process.versions.bun) {
+    if (faults?.afterParentsOpened)
+      throw new DesignError("unsupported", "Local race injection requires Bun");
+    return inspectContainer(
+      "local-helper",
+      relativePath,
+      maxBytes,
+      DESIGN_EXPORT_CONTAINER_TIMEOUT_MS,
+      localHelperSpawn(root.canonicalRoot),
+    );
   }
-  if (!stats) return { exists: false, readable: false };
-  if (stats.isSymbolicLink()) return { exists: true, readable: false, symlink: true };
-  if (!stats.isFile()) return { exists: true, readable: false };
-  const current = await readLocalBounded(target, maxBytes);
-  switch (current.kind) {
-    case "missing":
-      return { exists: false, readable: false };
-    case "symlink":
-      return { exists: true, readable: false, symlink: true };
-    case "unreadable":
-      return { exists: true, readable: false };
-    case "bytes":
-      return {
-        exists: true,
-        readable: true,
-        digest: designExportDigest(current.bytes),
-        bytes: current.bytes,
-      };
+  const native = await localDirectory(relativePath, maxBytes);
+  try {
+    const parent = await pinLocalParents(root, relativePath, false, native);
+    await faults?.afterParentsOpened?.();
+    const current = readLocalBounded(native, parent, path.basename(relativePath), maxBytes);
+    if (current.kind === "missing") return { exists: false, readable: false };
+    if (current.kind === "symlink") return { exists: true, readable: false, symlink: true };
+    if (current.kind === "unreadable") return { exists: true, readable: false };
+    return {
+      exists: true,
+      readable: true,
+      bytes: current.bytes,
+      digest: designExportDigest(current.bytes),
+    };
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") return { exists: false, readable: false };
+    if (errnoOf(error) === "ELOOP") return { exists: true, readable: false, symlink: true };
+    return { exists: true, readable: false };
+  } finally {
+    native.close();
   }
 }
-
-const LINK_UNSUPPORTED = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 
 async function writeLocal(
   worktreePath: string,
@@ -460,83 +472,67 @@ async function writeLocal(
   maxBytes: number,
   faults: DesignExportWriteOptions["faults"],
 ): Promise<DesignExportWriteResult> {
-  const { canonicalRoot, rootStats, target } = await resolveLocalRoot(
-    worktreePath,
-    relativePath,
-    maxBytes,
-  );
-  return withDestinationLock(localLockKey(canonicalRoot, relativePath), async () => {
+  const root = await resolveLocalRoot(worktreePath, relativePath, maxBytes);
+  return withDestinationLock(localLockKey(root.canonicalRoot, relativePath), async () => {
+    if (!process.versions.bun) {
+      if (faults?.afterParentsOpened || faults?.beforePublish)
+        throw new DesignError("unsupported", "Local race injection requires Bun");
+      return writeContainer(
+        `local-${designExportDigest(Buffer.from(root.canonicalRoot)).slice(7, 27)}`,
+        relativePath,
+        bytes,
+        expected,
+        maxBytes,
+        DESIGN_EXPORT_CONTAINER_TIMEOUT_MS,
+        localHelperSpawn(root.canonicalRoot),
+      );
+    }
     const fail = (reason: ExportReason, errno?: string) =>
       exportError(reason, relativePath, maxBytes, errno);
-    let tempPath: string | undefined;
+    const native = await localDirectory(relativePath, maxBytes);
+    let parent: number | undefined, temp: string | undefined;
     try {
-      const parents = await walkLocalParents(
-        canonicalRoot,
-        relativePath,
-        expected.state === "absent",
+      parent = await pinLocalParents(root, relativePath, expected.state === "absent", native);
+      await faults?.afterParentsOpened?.();
+      const name = path.basename(relativePath);
+      const before = readLocalBounded(native, parent, name, maxBytes);
+      if (before.kind === "symlink") throw fail("symlink");
+      if (before.kind === "unreadable") throw fail("not-regular");
+      if (expected.state === "absent" && before.kind !== "missing") throw fail("exists");
+      if (expected.state === "present" && before.kind === "missing") throw fail("missing");
+      const candidate = `.${name}.${randomUUID()}.tmp`;
+      const fd = native.open(
+        parent,
+        candidate,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
       );
-      if (parents === "symlink") throw fail("symlink");
-      if (parents === "not-directory") throw fail("not-regular");
-      if (parents === "missing") throw fail("missing");
-      const before = await lstatOrNull(target);
-      if (before?.isSymbolicLink()) throw fail("symlink");
-      if (before && !before.isFile()) throw fail("not-regular");
-      if (expected.state === "absent" && before) throw fail("exists");
-      if (expected.state === "present" && !before) throw fail("missing");
-
-      const candidate = path.join(
-        path.dirname(target),
-        `.${path.basename(target)}.${randomUUID()}.tmp`,
-      );
-      const handle = await fs.open(candidate, "wx", 0o600);
-      tempPath = candidate;
-      try {
-        await handle.writeFile(bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      // Repository files are normally world-readable; mode 0600 was only for
-      // the private, partially written temporary file.
-      await fs.chmod(tempPath, 0o644);
-
+      temp = candidate;
+      fsSync.writeFileSync(fd, bytes);
+      fsSync.fchmodSync(fd, 0o644);
+      fsSync.fsyncSync(fd);
       await faults?.beforePublish?.();
-
-      const rootNow = await fs.lstat(canonicalRoot);
-      if (
-        rootNow.isSymbolicLink() ||
-        rootNow.dev !== rootStats.dev ||
-        rootNow.ino !== rootStats.ino
-      ) {
-        throw fail("root-changed");
-      }
-      // A folder swapped for a link since the walk must not redirect the publish.
-      if ((await walkLocalParents(canonicalRoot, relativePath, false)) !== "ok")
-        throw fail("root-changed");
-
       let previous: Buffer | undefined;
-      if (expected.state === "absent") {
-        // link() never replaces an existing name: atomic no-clobber publish.
-        try {
-          await fs.link(tempPath, target);
-        } catch (error) {
-          const code = errnoOf(error);
-          if (code === "EEXIST") throw fail("exists");
-          if (code && LINK_UNSUPPORTED.has(code)) throw fail("link-unsupported", code);
-          throw error;
-        }
-      } else {
-        // Check-then-rename: see the module comment for the guarantee.
-        const current = await readLocalBounded(target, maxBytes);
-        if (current.kind === "symlink") throw fail("symlink");
+      if (expected.state === "present") {
+        const current = readLocalBounded(native, parent, name, maxBytes);
         if (current.kind === "missing") throw fail("missing");
-        if (current.kind === "unreadable") throw fail("unreadable");
+        if (current.kind === "symlink") throw fail("symlink");
+        if (current.kind !== "bytes") throw fail("unreadable");
         if (designExportDigest(current.bytes) !== expected.digest) throw fail("changed");
         previous = current.bytes;
-        await fs.rename(tempPath, target);
-        tempPath = undefined;
       }
-      await syncDirectoryBestEffort(path.dirname(target));
+      try {
+        native.publish(parent, temp, name, expected.state === "present");
+      } catch (error) {
+        if (errnoOf(error) === "EEXIST") throw fail("exists");
+        throw error;
+      }
+      if (expected.state === "present") temp = undefined;
+      try {
+        fsSync.fsyncSync(parent);
+      } catch {
+        /* best effort after publication */
+      }
       return {
         digest: designExportDigest(bytes),
         replaced: expected.state === "present",
@@ -544,11 +540,19 @@ async function writeLocal(
       };
     } catch (error) {
       if (error instanceof DesignError) throw error;
-      throw fail("io", errnoOf(error));
+      const code = errnoOf(error);
+      if (code === "ELOOP") throw fail("symlink");
+      if (code === "ENOTDIR") throw fail("not-regular");
+      if (code === "ENOENT") throw fail("missing");
+      throw fail("io", code);
     } finally {
-      // For "absent" the published name is a second link to the same inode, so
-      // removing the temporary name is always correct. Only this op's temp.
-      if (tempPath) await fs.unlink(tempPath).catch(() => undefined);
+      if (temp && parent !== undefined)
+        try {
+          native.unlink(parent, temp);
+        } catch {
+          /* only our temporary name */
+        }
+      native.close();
     }
   });
 }
@@ -605,30 +609,44 @@ function resolveTarget(rootArg, rel, maxBytes) {
     fail("storage", "root-unavailable");
   }
   if (!rootStats.isDirectory()) fail("storage", "root-unavailable");
-  const target = path.join(root, rel);
-  if (!target.startsWith(root + path.sep)) fail("invalid-input", "invalid-path");
+  const target = path.basename(rel);
   return { root, rootStats, target };
 }
-// Walks the folders of rel below root without following links. With create,
-// missing folders are made one level at a time. Returns ok, missing, symlink
-// or not-directory.
-function walkParents(root, rel, create) {
-  let current = root;
-  const segments = rel.split("/").slice(0, -1);
-  for (const segment of segments) {
-    current = path.join(current, segment);
-    let stats = lstatOrNull(current);
-    if (!stats && create) {
-      try {
-        fs.mkdirSync(current, 0o755);
-      } catch (error) {
-        if (!error || error.code !== "EEXIST") throw error;
-      }
-      stats = lstatOrNull(current);
+// Pin each directory with a no-follow open before entering it. The child cwd
+// is a kernel-held directory reference; all later file I/O uses single names.
+// If a name is swapped between open and chdir, compare before any file I/O.
+function enterDirectory(name) {
+  const fd = fs.openSync(name, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  try {
+    const expected = fs.fstatSync(fd);
+    process.chdir(name);
+    const pinned = fs.statSync(".");
+    if (expected.dev !== pinned.dev || expected.ino !== pinned.ino) fail("storage", "root-changed");
+  } finally { fs.closeSync(fd); }
+}
+function walkParents(root, rel, create, rootStats) {
+  enterDirectory(root);
+  const pinnedRoot = fs.statSync(".");
+  if (pinnedRoot.dev !== rootStats.dev || pinnedRoot.ino !== rootStats.ino) fail("storage", "root-changed");
+  for (const segment of rel.split("/").slice(0, -1)) {
+    try { enterDirectory(segment); }
+    catch (error) {
+      if (error && error.designReason) throw error;
+      const stats = lstatOrNull(segment);
+      if (stats && stats.isSymbolicLink()) return "symlink";
+      if (stats && !stats.isDirectory()) return "not-directory";
+      if (!stats && !create) return "missing";
+      if (!stats && create) {
+        try { fs.mkdirSync(segment, 0o755); }
+        catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
+        try { enterDirectory(segment); }
+        catch (openError) {
+          const now = lstatOrNull(segment);
+          if (now && now.isSymbolicLink()) return "symlink";
+          throw openError;
+        }
+      } else { throw error; }
     }
-    if (!stats) return "missing";
-    if (stats.isSymbolicLink()) return "symlink";
-    if (!stats.isDirectory()) return "not-directory";
   }
   return "ok";
 }
@@ -696,10 +714,10 @@ export const DESIGN_EXPORT_CONTAINER_INSPECTOR = `${CONTAINER_HELPER_PRELUDE}
 const [rootArg, rel, maxArg] = process.argv.slice(1);
 run(() => {
   const maxBytes = Number(maxArg);
-  const { root, target } = resolveTarget(rootArg, rel, maxBytes);
+  const { root, rootStats, target } = resolveTarget(rootArg, rel, maxBytes);
   let stats;
   try {
-    const parents = walkParents(root, rel, false);
+    const parents = walkParents(root, rel, false, rootStats);
     if (parents === "missing") return { exists: false, readable: false };
     if (parents === "symlink") return { exists: true, readable: false, symlink: true };
     if (parents === "not-directory") return { exists: true, readable: false };
@@ -735,7 +753,7 @@ const [rootArg, rel, mode, expectedDigest, maxArg, contentDigest] = process.argv
 const maxBytes = Number(maxArg);
 function publish(input) {
   const { root, rootStats, target } = resolveTarget(rootArg, rel, maxBytes);
-  const parents = walkParents(root, rel, mode === "absent");
+  const parents = walkParents(root, rel, mode === "absent", rootStats);
   if (parents === "symlink") fail("invalid-input", "symlink");
   if (parents === "not-directory") fail("export-collision", "not-regular");
   if (parents === "missing") fail("export-collision", "missing");
@@ -759,7 +777,7 @@ function publish(input) {
     if (rootNow.isSymbolicLink() || rootNow.dev !== rootStats.dev || rootNow.ino !== rootStats.ino) {
       fail("storage", "root-changed");
     }
-    if (walkParents(root, rel, false) !== "ok") fail("storage", "root-changed");
+    // Publication and cleanup stay relative to the pinned cwd.
     let previous;
     if (mode === "absent") {
       try {
@@ -1100,7 +1118,7 @@ export async function inspectDesignExportTarget(
 ): Promise<DesignExportTargetState> {
   const rel = validateDesignExportPath(relativePath);
   const maxBytes = resolveMaxBytes(options.maxBytes);
-  if (dest.kind === "local") return inspectLocal(dest.worktreePath, rel, maxBytes);
+  if (dest.kind === "local") return inspectLocal(dest.worktreePath, rel, maxBytes, options.faults);
   return inspectContainer(
     validateContainerId(dest.containerId),
     rel,

@@ -48,6 +48,8 @@ describe("decideDesignOpen", () => {
       if (decision.kind === "refuse") {
         expect(decision.reason).toBe("tab-limit");
         expect(decision.message).toContain("never deletes the design");
+        expect(decision.message).toContain("Saved designs");
+        expect(decision.message).not.toContain("from Open");
       }
     }
   });

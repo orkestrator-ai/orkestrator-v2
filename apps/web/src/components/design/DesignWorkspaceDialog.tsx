@@ -50,10 +50,12 @@ import {
 } from "./design-launch";
 import {
   decideDesignOpen,
+  designOpenChoices,
   planDesignLaunch,
   type DesignLayoutFacts,
   type DesignPlacement,
 } from "./design-open";
+import { DesignLibrary } from "./DesignLibrary";
 import {
   addDesignImagesToDraft,
   DESIGN_PROMPT_IMAGE_HINT,
@@ -62,7 +64,7 @@ import {
   type DesignPromptImage,
 } from "./design-prompt-images";
 
-export type DesignWorkspaceMode = "new" | "import";
+export type DesignWorkspaceMode = "new" | "saved" | "import";
 type AgentChoice = DesignAgent | "none";
 type CreateTab = (type: CreatableTabType, options?: CreateTabOptions) => boolean;
 
@@ -364,6 +366,7 @@ export function DesignWorkspaceDialog({
     setBusy(true);
     setError(null);
     setNotice(null);
+    setRecovery(null);
     try {
       const document = await readDesignImport(file);
       const result = await importAndOpenDesign({
@@ -379,7 +382,9 @@ export function DesignWorkspaceDialog({
       }.`;
       if (result.opened) toast.success(stored);
       else {
-        setNotice(`${stored} It could not be opened yet: ${result.openError}`);
+        setNotice(stored);
+        setError(`It could not be opened yet: ${result.openError}`);
+        setRecovery({ canvasId: result.canvas.id, name: result.canvas.name });
       }
     } catch (reason) {
       if (importScope === scopeRef.current) setError(errorText(reason));
@@ -396,12 +401,13 @@ export function DesignWorkspaceDialog({
           <DialogTitle>Design workspace</DialogTitle>
           <DialogDescription>
             Design with Claude or Codex beside a shared HTML canvas, or import an .orkdes file. Open
-            a saved design from the file tree.
+            a repository design from the file tree, or reopen any private canvas in Saved designs.
           </DialogDescription>
         </DialogHeader>
         <Tabs value={mode} onValueChange={(value) => setMode(value as DesignWorkspaceMode)}>
           <TabsList className="w-full">
             <TabsTrigger value="new">New design</TabsTrigger>
+            <TabsTrigger value="saved">Saved designs</TabsTrigger>
             <TabsTrigger value="import">Import</TabsTrigger>
           </TabsList>
           <TabsContent value="new">
@@ -536,6 +542,16 @@ export function DesignWorkspaceDialog({
                 {busy ? "Opening…" : withAgent ? "Create design workspace" : "Create blank canvas"}
               </Button>
             </form>
+          </TabsContent>
+          <TabsContent value="saved">
+            <DesignLibrary
+              environmentId={environmentId}
+              backendKey={backendKey}
+              legacy={legacy}
+              canManage={Boolean(view?.capabilities?.operations)}
+              openChoices={(canvasId) => designOpenChoices(canvasId, facts)}
+              onOpen={openDesign}
+            />
           </TabsContent>
           <TabsContent value="import">
             <div className="grid gap-2">

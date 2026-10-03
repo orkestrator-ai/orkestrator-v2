@@ -23,10 +23,8 @@ import type { DesignProjection } from "@/stores/designStore";
 import { designApi, failureOf } from "./design-client";
 import type { DesignCanvasController } from "./design-controller";
 
-/** Mirrors the backend rule: a repository-relative path of plain folders ending in `.orkdes`. */
-export const DESIGN_EXPORT_NAME =
-  /^(?:[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}\/){0,7}[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}\.orkdes$/;
-const DESIGN_EXPORT_PATH_MAX = 240;
+import { DESIGN_EXPORT_NAME, DESIGN_EXPORT_PATH_MAX } from "./design-export-path";
+export { DESIGN_EXPORT_NAME } from "./design-export-path";
 /** Where new designs are saved unless the user picks another folder. */
 export const DESIGN_DEFAULT_FOLDER = "designs";
 const PREVIEW_DEBOUNCE_MS = 300;

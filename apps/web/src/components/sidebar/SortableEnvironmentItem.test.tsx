@@ -44,12 +44,12 @@ test("project home reserves the drag handle width so it aligns with other enviro
   expect(spacer.className).toContain("w-4");
   expect(spacer.className).toContain("shrink-0");
   expect(spacer.getAttribute("aria-hidden")).toBe("true");
-  expect(screen.queryByRole("button", { name: "" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "" }) === null).toBe(true);
 });
 
 test("regular environments render the drag handle instead of a spacer", () => {
   renderItem(environment("worker"));
-  expect(screen.queryByTestId("project-home-handle-spacer")).toBeNull();
+  expect(screen.queryByTestId("project-home-handle-spacer") === null).toBe(true);
   expect(screen.getByRole("button", { name: "" }).getAttribute("aria-roledescription")).toBe(
     "sortable",
   );

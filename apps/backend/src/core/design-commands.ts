@@ -1,4 +1,3 @@
-import { readFile, stat } from "node:fs/promises";
 import { extname, isAbsolute } from "node:path";
 import { z } from "zod";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
@@ -11,6 +10,7 @@ import {
   reconcileExport,
   resolveDesignDestination,
 } from "./design-exports.js";
+import { readDesignHostFile } from "./design-host-file.js";
 import { designId, revision } from "./design-schemas.js";
 import { purge } from "./design-service-lifecycle.js";
 import type { DesignService } from "./design-service.js";
@@ -21,9 +21,7 @@ const environmentIdSchema = z.string().min(1).max(256);
 const tokenSchema = z.string().min(1).max(100);
 
 /** Typed envelope: new clients branch on `failure.code`, never on message text. */
-async function typed<T>(
-  work: () => Promise<T>,
-): Promise<DesignCommandResult<T>> {
+async function typed<T>(work: () => Promise<T>): Promise<DesignCommandResult<T>> {
   try {
     return { ok: true, value: await work() };
   } catch (error) {
@@ -43,16 +41,10 @@ export interface DesignCommandContext {
 
 export type DesignCommandRegistrar = (
   name: string,
-  handler: (
-    args: Record<string, unknown>,
-    context: DesignCommandContext,
-  ) => Promise<unknown>,
+  handler: (args: Record<string, unknown>, context: DesignCommandContext) => Promise<unknown>,
 ) => void;
 
-async function authorized(
-  args: Record<string, unknown>,
-  context: DesignCommandContext,
-) {
+async function authorized(args: Record<string, unknown>, context: DesignCommandContext) {
   if (!context.design)
     throw new DesignError("unsupported", "Design service unavailable", {
       retry: "after-delay",
@@ -64,27 +56,17 @@ async function authorized(
   return { design: context.design as DesignService, environmentId };
 }
 
-export function registerDesignCommandHandlers(
-  register: DesignCommandRegistrar,
-) {
+export function registerDesignCommandHandlers(register: DesignCommandRegistrar) {
   // Legacy v1 surface: untyped errors, legacy shapes. The UI acts as the user.
   register("design_action", async (args, context) => {
     const { design, environmentId } = await authorized(args, context);
-    return runDesignAction(
-      design,
-      environmentId,
-      z.string().parse(args.action),
-      args.input,
-      {
-        actor: "user",
-        resolveDestination: () =>
-          resolveDesignDestination(context.storage, environmentId),
-      },
-    );
+    return runDesignAction(design, environmentId, z.string().parse(args.action), args.input, {
+      actor: "user",
+      resolveDestination: () => resolveDesignDestination(context.storage, environmentId),
+    });
   });
   register("design_status", async (_args, context) => {
-    if (!context.design)
-      return { ready: false, error: "Design service unavailable" };
+    if (!context.design) return { ready: false, error: "Design service unavailable" };
     return context.design.renderer.status();
   });
   register("design_changes", async (args, context) => {
@@ -112,21 +94,13 @@ export function registerDesignCommandHandlers(
     const filePath = z.string().min(1).max(4096).parse(args.path);
     if (!isAbsolute(filePath) || extname(filePath).toLowerCase() !== ".orkdes")
       throw new DesignError("invalid-input", "Choose an .orkdes design file.");
-    const info = await stat(filePath).catch(() => null);
-    if (!info?.isFile())
-      throw new DesignError("not-found", "That design file does not exist.");
-    if (info.size > DESIGN_MAX_DOCUMENT_BYTES)
-      throw new DesignError("invalid-input", "Design file exceeds 4 MiB.");
-    const document = await readFile(filePath, "utf8");
+    const document = await readDesignHostFile(filePath);
     return design.create(environmentId, "Imported design", document, "user");
   });
   register("design_save", async (args, context) => {
     const { design, environmentId } = await authorized(args, context);
     const canvasId = designId.parse(args.canvasId);
-    const destination = await resolveDesignDestination(
-      context.storage,
-      environmentId,
-    );
+    const destination = await resolveDesignDestination(context.storage, environmentId);
     const filePath = z.string().max(240).parse(args.filePath);
     // Legacy save never overwrites: a collision is reported, not resolved.
     const receipt = await exportSave(
@@ -149,10 +123,7 @@ export function registerDesignCommandHandlers(
         { destination },
         filePath,
       );
-      if (
-        !preview.target.needsReplaceConfirmation &&
-        preview.target.fingerprint
-      )
+      if (!preview.target.needsReplaceConfirmation && preview.target.fingerprint)
         return exportSave(
           design,
           environmentId,
@@ -179,9 +150,7 @@ export function registerDesignCommandHandlers(
   register("design_readiness", async (args, context) =>
     typed(async () => {
       if (!context.design) throw new Error("Design service unavailable");
-      return context.design.readiness(
-        z.boolean().optional().parse(args.probe) ?? false,
-      );
+      return context.design.readiness(z.boolean().optional().parse(args.probe) ?? false);
     }),
   );
   register("design_snapshot", async (args, context) =>
@@ -216,13 +185,7 @@ export function registerDesignCommandHandlers(
         designId.parse(args.canvasId),
         tokenSchema.parse(args.token),
         {
-          waitMs: z
-            .number()
-            .int()
-            .min(0)
-            .max(60_000)
-            .optional()
-            .parse(args.waitMs),
+          waitMs: z.number().int().min(0).max(60_000).optional().parse(args.waitMs),
         },
       );
     }),
@@ -297,10 +260,7 @@ export function registerDesignCommandHandlers(
   register("design_export_preview", async (args, context) =>
     typed(async () => {
       const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(
-        context.storage,
-        environmentId,
-      );
+      const destination = await resolveDesignDestination(context.storage, environmentId);
       return exportPreview(
         design,
         environmentId,
@@ -313,15 +273,8 @@ export function registerDesignCommandHandlers(
   register("design_export_save", async (args, context) =>
     typed(async () => {
       const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(
-        context.storage,
-        environmentId,
-      );
-      const replace = z
-        .string()
-        .max(80)
-        .optional()
-        .parse(args.replaceFingerprint);
+      const destination = await resolveDesignDestination(context.storage, environmentId);
+      const replace = z.string().max(80).optional().parse(args.replaceFingerprint);
       return exportSave(
         design,
         environmentId,
@@ -330,9 +283,7 @@ export function registerDesignCommandHandlers(
         {
           relativePath: z.string().max(240).parse(args.relativePath),
           revision: revision.parse(args.revision),
-          expected: replace
-            ? { state: "present", digest: replace }
-            : { state: "absent" },
+          expected: replace ? { state: "present", digest: replace } : { state: "absent" },
         },
       );
     }),
@@ -340,10 +291,7 @@ export function registerDesignCommandHandlers(
   register("design_open_file", async (args, context) =>
     typed(async () => {
       const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(
-        context.storage,
-        environmentId,
-      );
+      const destination = await resolveDesignDestination(context.storage, environmentId);
       return openDesignFile(
         design,
         environmentId,
@@ -355,16 +303,8 @@ export function registerDesignCommandHandlers(
   register("design_export_reconcile", async (args, context) =>
     typed(async () => {
       const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(
-        context.storage,
-        environmentId,
-      );
-      return reconcileExport(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        { destination },
-      );
+      const destination = await resolveDesignDestination(context.storage, environmentId);
+      return reconcileExport(design, environmentId, designId.parse(args.canvasId), { destination });
     }),
   );
   register("design_validate", async (args, context) =>
@@ -391,15 +331,9 @@ export function registerDesignCommandHandlers(
           ...(args.rootSelector
             ? { rootSelector: z.string().max(2048).parse(args.rootSelector) }
             : {}),
-          ...(args.cursor
-            ? { cursor: z.string().max(200).parse(args.cursor) }
-            : {}),
-          maxNodes:
-            z.number().int().min(1).max(200).optional().parse(args.maxNodes) ??
-            200,
-          maxDepth:
-            z.number().int().min(1).max(32).optional().parse(args.maxDepth) ??
-            1,
+          ...(args.cursor ? { cursor: z.string().max(200).parse(args.cursor) } : {}),
+          maxNodes: z.number().int().min(1).max(200).optional().parse(args.maxNodes) ?? 200,
+          maxDepth: z.number().int().min(1).max(32).optional().parse(args.maxDepth) ?? 1,
         },
       );
     }),
@@ -411,8 +345,7 @@ export function registerDesignCommandHandlers(
         environmentId,
         designId.parse(args.canvasId),
         designId.parse(args.frameId),
-        z.enum(["interactive", "background"]).optional().parse(args.priority) ??
-          "interactive",
+        z.enum(["interactive", "background"]).optional().parse(args.priority) ?? "interactive",
       );
     }),
   );

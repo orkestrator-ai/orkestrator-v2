@@ -23,10 +23,7 @@ import type { DesignProjection } from "@/stores/designStore";
 import { designApi, failureOf } from "./design-client";
 import type { DesignCanvasController } from "./design-controller";
 
-import {
-  DESIGN_EXPORT_NAME,
-  DESIGN_EXPORT_PATH_MAX,
-} from "./design-export-path";
+import { DESIGN_EXPORT_NAME, DESIGN_EXPORT_PATH_MAX } from "./design-export-path";
 export { DESIGN_EXPORT_NAME } from "./design-export-path";
 /** Where new designs are saved unless the user picks another folder. */
 export const DESIGN_DEFAULT_FOLDER = "designs";
@@ -54,18 +51,13 @@ function collectFolders(nodes: FileNode[], out: string[] = []): string[] {
   return out;
 }
 
-export type DesignExportApi = Pick<
-  typeof designApi,
-  "exportPreview" | "exportReconcile"
->;
+export type DesignExportApi = Pick<typeof designApi, "exportPreview" | "exportReconcile">;
 
 const COLLISIONS: Record<NonNullable<DesignExportTarget["reason"]>, string> = {
-  "other-canvas":
-    "already contains a different design. Replacing it would overwrite that design.",
+  "other-canvas": "already contains a different design. Replacing it would overwrite that design.",
   "not-design":
     "already exists and is not a design file. Replacing it would overwrite its contents.",
-  unreadable:
-    "already exists but could not be read, so Orkestrator cannot tell what it contains.",
+  unreadable: "already exists but could not be read, so Orkestrator cannot tell what it contains.",
   "changed-since-export":
     "holds this design, but it was changed after your last export (edited outside Orkestrator or exported elsewhere).",
   "same-canvas": "is your previous export of this design.",
@@ -189,8 +181,7 @@ export function DesignExportDialog({
     };
   }, [open, runPreview]);
 
-  const valid =
-    name.length <= DESIGN_EXPORT_PATH_MAX && DESIGN_EXPORT_NAME.test(name);
+  const valid = name.length <= DESIGN_EXPORT_PATH_MAX && DESIGN_EXPORT_NAME.test(name);
 
   // Re-preview an edited name after a pause.
   useEffect(() => {
@@ -219,9 +210,7 @@ export function DesignExportDialog({
     setFile(nextFile);
     setEdited(true);
     setPreview(null);
-    setPreviewing(
-      DESIGN_EXPORT_NAME.test(nextFile ? joinPath(nextFolder, nextFile) : ""),
-    );
+    setPreviewing(DESIGN_EXPORT_NAME.test(nextFile ? joinPath(nextFolder, nextFile) : ""));
     setPreviewError(null);
     setReplace(false);
     setConfirmed(false);
@@ -229,15 +218,12 @@ export function DesignExportDialog({
   };
 
   const pending = projection.workspace?.pendingExport;
-  const unsettled = projection.intents.filter(
-    (intent) => intent.phase !== "settled",
-  ).length;
+  const unsettled = projection.intents.filter((intent) => intent.phase !== "settled").length;
   const exporting = projection.busy.export;
   const target = preview?.target;
   const collision = Boolean(target?.needsReplaceConfirmation);
   const replaceable = Boolean(target?.fingerprint);
-  const blockedByPending =
-    pending?.state === "unknown" || pending?.state === "writing";
+  const blockedByPending = pending?.state === "unknown" || pending?.state === "writing";
   const canExport =
     Boolean(preview && target && valid && target.relativePath === name) &&
     !previewing &&
@@ -277,9 +263,7 @@ export function DesignExportDialog({
     if (id !== epochs.current.session) return;
     setWaiting(false);
     if (!settled)
-      setWaitNotice(
-        "Some edits are still pending or need review; they are not included.",
-      );
+      setWaitNotice("Some edits are still pending or need review; they are not included.");
     if (valid) runPreview(name);
   };
 
@@ -290,16 +274,10 @@ export function DesignExportDialog({
     try {
       const result = await api.exportReconcile(environmentId, canvasId);
       if (id !== epochs.current.session) return;
-      if (result.state === "exported" && result.receipt)
-        setReceipt(result.receipt);
-      else
-        setCheckNotice(
-          RECONCILE[result.state] ??
-            "The export state could not be determined.",
-        );
+      if (result.state === "exported" && result.receipt) setReceipt(result.receipt);
+      else setCheckNotice(RECONCILE[result.state] ?? "The export state could not be determined.");
     } catch (error) {
-      if (id === epochs.current.session)
-        setCheckNotice(failureOf(error).message);
+      if (id === epochs.current.session) setCheckNotice(failureOf(error).message);
     } finally {
       if (id === epochs.current.session) setChecking(false);
       void controller.refresh();
@@ -318,10 +296,9 @@ export function DesignExportDialog({
         <DialogHeader>
           <DialogTitle>Export design to repository</DialogTitle>
           <DialogDescription>
-            Writes a portable .orkdes file of one committed revision into the
-            repository, in the {DESIGN_DEFAULT_FOLDER} folder unless you choose
-            another. Your workspace copy is saved automatically; the file can be
-            committed with your code and opened from the file tree.
+            Writes a portable .orkdes file of one committed revision into the repository, in the{" "}
+            {DESIGN_DEFAULT_FOLDER} folder unless you choose another. Your workspace copy is saved
+            automatically; the file can be committed with your code and opened from the file tree.
           </DialogDescription>
         </DialogHeader>
 
@@ -332,9 +309,8 @@ export function DesignExportDialog({
               className="grid gap-2 rounded border border-amber-500/40 bg-amber-500/10 p-2"
             >
               <p>
-                The export of revision {pending.revision} to{" "}
-                {pending.relativePath} did not confirm. It may or may not have
-                been written. Check it before exporting again.
+                The export of revision {pending.revision} to {pending.relativePath} did not confirm.
+                It may or may not have been written. Check it before exporting again.
               </p>
               <Button
                 variant="outline"
@@ -349,12 +325,9 @@ export function DesignExportDialog({
             </div>
           )}
           {pending?.state === "writing" && (
-            <p
-              role="status"
-              className="flex items-center gap-1 text-muted-foreground"
-            >
-              <Loader2 className="size-3 animate-spin" /> Exporting revision{" "}
-              {pending.revision} to {pending.relativePath}…
+            <p role="status" className="flex items-center gap-1 text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" /> Exporting revision {pending.revision} to{" "}
+              {pending.relativePath}…
             </p>
           )}
           {pending?.state === "failed" && pending.failure && (
@@ -365,10 +338,7 @@ export function DesignExportDialog({
           {checkNotice && <p role="status">{checkNotice}</p>}
 
           <div className="grid gap-1">
-            <label
-              htmlFor="design-export-folder"
-              className="text-xs font-medium"
-            >
+            <label htmlFor="design-export-folder" className="text-xs font-medium">
               Folder
             </label>
             <Input
@@ -403,18 +373,15 @@ export function DesignExportDialog({
               disabled={exporting}
               onChange={(event) => rename(folder, event.target.value)}
             />
-            <p
-              id="design-export-name-help"
-              className="text-xs text-muted-foreground"
-            >
-              Folders are created if they do not exist; leave the folder empty
-              to save in the repository root. Use letters, numbers, dots, dashes
-              or underscores, and end the file name in .orkdes.
+            <p id="design-export-name-help" className="text-xs text-muted-foreground">
+              Folders are created if they do not exist; leave the folder empty to save in the
+              repository root. Use letters, numbers, dots, dashes or underscores, and end the file
+              name in .orkdes.
             </p>
             {name && !valid && (
               <p role="alert" className="text-xs text-destructive">
-                “{name}” is not a valid path. Folder and file names must start
-                with a letter or number, and the file name must end in .orkdes.
+                “{name}” is not a valid path. Folder and file names must start with a letter or
+                number, and the file name must end in .orkdes.
               </p>
             )}
           </div>
@@ -425,9 +392,7 @@ export function DesignExportDialog({
             {previewing && (
               <p className="flex items-center gap-1 px-2 py-2.5 text-xs text-muted-foreground">
                 <Loader2 className="size-3 shrink-0 animate-spin" />
-                <span className="truncate">
-                  Checking {name || "the repository"}…
-                </span>
+                <span className="truncate">Checking {name || "the repository"}…</span>
               </p>
             )}
             {previewError && !previewing && (
@@ -439,20 +404,14 @@ export function DesignExportDialog({
             {target && !previewing && (
               <div
                 className="grid gap-2 rounded border border-divider p-2 text-xs"
-                data-target-state={
-                  target.reason ?? (target.exists ? "exists" : "new")
-                }
+                data-target-state={target.reason ?? (target.exists ? "exists" : "new")}
               >
-                {!target.exists && (
-                  <p>New file: {target.relativePath} will be created.</p>
-                )}
+                {!target.exists && <p>New file: {target.relativePath} will be created.</p>}
                 {target.exists && !collision && (
                   <p>
                     {target.relativePath} is your previous export of this design
-                    {association
-                      ? ` (revision ${association.lastExportedRevision})`
-                      : ""}
-                    . It is safe to update.
+                    {association ? ` (revision ${association.lastExportedRevision})` : ""}. It is
+                    safe to update.
                   </p>
                 )}
                 {collision && (
@@ -460,8 +419,7 @@ export function DesignExportDialog({
                     <p className="flex gap-1">
                       <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-500" />
                       <span>
-                        {target.relativePath}{" "}
-                        {COLLISIONS[target.reason ?? "not-design"]}
+                        {target.relativePath} {COLLISIONS[target.reason ?? "not-design"]}
                       </span>
                     </p>
                     <div className="flex flex-wrap gap-2">
@@ -491,24 +449,18 @@ export function DesignExportDialog({
                       </Button>
                     </div>
                     {!replaceable && (
-                      <p>
-                        This file cannot be replaced from here; choose a new
-                        name.
-                      </p>
+                      <p>This file cannot be replaced from here; choose a new name.</p>
                     )}
                     {replace && replaceable && (
                       <label className="flex items-start gap-2">
                         <Checkbox
                           checked={confirmed}
-                          onCheckedChange={(value) =>
-                            setConfirmed(value === true)
-                          }
+                          onCheckedChange={(value) => setConfirmed(value === true)}
                           aria-label={`Confirm replacing ${target.relativePath}`}
                         />
                         <span>
-                          I understand {target.relativePath} will be
-                          overwritten. It is replaced only if it has not changed
-                          since this check.
+                          I understand {target.relativePath} will be overwritten. It is replaced
+                          only if it has not changed since this check.
                         </span>
                       </label>
                     )}
@@ -525,9 +477,8 @@ export function DesignExportDialog({
           )}
           {unsettled > 0 && revision !== undefined && (
             <p role="note" className="text-xs text-amber-600">
-              {unsettled === 1 ? "1 edit is" : `${unsettled} edits are`} not
-              committed yet and {unsettled === 1 ? "is" : "are"} not part of
-              revision {revision}.
+              {unsettled === 1 ? "1 edit is" : `${unsettled} edits are`} not committed yet and{" "}
+              {unsettled === 1 ? "is" : "are"} not part of revision {revision}.
             </p>
           )}
           {waitNotice && <p className="text-xs text-amber-600">{waitNotice}</p>}
@@ -544,15 +495,14 @@ export function DesignExportDialog({
           {receipt && (
             <div role="status" className="grid gap-1 text-xs">
               <p className="flex items-center gap-1">
-                <CheckCircle2 className="size-3 text-emerald-500" /> Exported
-                revision {receipt.revision} to {receipt.relativePath}
+                <CheckCircle2 className="size-3 text-emerald-500" /> Exported revision{" "}
+                {receipt.revision} to {receipt.relativePath}
               </p>
-              {Math.max(projection.revision, receipt.currentRevision) >
-                receipt.revision && (
+              {Math.max(projection.revision, receipt.currentRevision) > receipt.revision && (
                 <p className="text-muted-foreground">
                   The workspace has newer changes (revision{" "}
-                  {Math.max(projection.revision, receipt.currentRevision)}) that
-                  are not in this export.
+                  {Math.max(projection.revision, receipt.currentRevision)}) that are not in this
+                  export.
                 </p>
               )}
             </div>
@@ -581,9 +531,7 @@ export function DesignExportDialog({
           ) : (
             <Button disabled={!canExport} onClick={() => void doExport()}>
               {exporting && <Loader2 className="size-3 animate-spin" />}
-              {collision && replace
-                ? "Replace and export"
-                : `Export revision ${revision ?? "…"}`}
+              {collision && replace ? "Replace and export" : `Export revision ${revision ?? "…"}`}
             </Button>
           )}
         </DialogFooter>

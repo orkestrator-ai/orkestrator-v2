@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { DesignCanvas, DesignFrame } from "@orkestrator/protocol/design-canvas";
 
@@ -82,6 +84,50 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
     await expect(exportDialog.getByLabel("Folder")).toHaveValue("designs");
     await expect(exportDialog.getByText(`${exportPath} is your previous export`)).toBeVisible();
+    // Hold the real preview request to check the reserved layout and disabled controls.
+    await exportDialog.getByLabel("File name").fill("preview.orkdes");
+    await expect(
+      exportDialog.getByText("New file: designs/preview.orkdes will be created."),
+    ).toBeVisible();
+    const revisionLabel = exportDialog.getByText("Exports committed revision 2.");
+    const settledY = (await revisionLabel.boundingBox())!.y;
+    let releasePreview!: () => void;
+    const heldPreview = new Promise<void>((resolve) => {
+      releasePreview = resolve;
+    });
+    const holdPreview = async (route: import("@playwright/test").Route) => {
+      if (route.request().postDataJSON()?.command === "design_export_preview") await heldPreview;
+      await route.fallback();
+    };
+    await page.route("**/__orkestrator/invoke", holdPreview);
+    try {
+      await exportDialog.getByLabel("File name").fill("next.orkdes");
+      const loading = exportDialog.getByText("Checking designs/next.orkdes…");
+      await expect(loading).toBeVisible();
+      const previewLayout = await loading.evaluate((node) => ({
+        height: node.parentElement!.getBoundingClientRect().height,
+        lineHeight: parseFloat(getComputedStyle(node).lineHeight),
+      }));
+      expect(previewLayout.height).toBeGreaterThanOrEqual(previewLayout.lineHeight * 2);
+      expect((await revisionLabel.boundingBox())!.y).toBe(settledY);
+      await expect(
+        exportDialog.getByRole("button", { name: "Export revision 2", exact: true }),
+      ).toBeDisabled();
+    } finally {
+      releasePreview();
+      await page.unroute("**/__orkestrator/invoke", holdPreview);
+    }
+    await expect(
+      exportDialog.getByText("New file: designs/next.orkdes will be created."),
+    ).toBeVisible();
+    await expect(
+      exportDialog.getByRole("button", { name: "Export revision 2", exact: true }),
+    ).toBeEnabled();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const exportBounds = (await exportDialog.boundingBox())!;
+    expect(exportBounds.x).toBeGreaterThanOrEqual(0);
+    expect(exportBounds.x + exportBounds.width).toBeLessThanOrEqual(390);
+    await page.setViewportSize({ width: 1440, height: 900 });
     await exportDialog.getByRole("button", { name: "Cancel" }).click();
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,
@@ -285,21 +331,39 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await expect(page.getByText("Existing private canvas", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: /^Close Design/ }).click();
     await page.getByRole("button", { name: "New design workspace" }).click();
-    await page.getByRole("tab", { name: "Import", exact: true }).click();
-    await page.getByLabel("Import .orkdes").setInputFiles({
-      name: "import.orkdes",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify({ ...existing, name: "Imported private canvas" })),
-    });
+    await page.getByRole("tab", { name: "Open design", exact: true }).click();
+    const importPath = join(status.testProject, "private-import.orkdes");
+    await writeFile(importPath, "{");
+    const chooseFile = async () => {
+      await page.getByRole("button", { name: "Choose .orkdes file…" }).click();
+      const picker = page.getByRole("dialog", { name: "Open design (.orkdes)", exact: true });
+      await expect(picker).toBeVisible();
+      await picker.getByLabel("Path", { exact: true }).fill(importPath);
+      await picker.getByLabel("Path", { exact: true }).press("Enter");
+      await expect(picker.getByRole("button", { name: "Select file", exact: true })).toBeEnabled();
+      await picker.getByRole("button", { name: "Select file", exact: true }).click();
+      await expect(picker).toHaveCount(0);
+    };
+    await chooseFile();
+    await expect(
+      page.getByRole("dialog", { name: "Design workspace" }).getByRole("alert"),
+    ).toBeVisible();
+    await writeFile(importPath, JSON.stringify({ ...existing, name: "Imported private canvas" }));
+    await chooseFile();
     await expect(page.getByText("Imported private canvas", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: /^Close Design/ }).click();
     await page.reload();
     await selectEnvironment();
     await page.setViewportSize({ width: 720, height: 900 });
     await openLibrary();
+    await page.getByRole("searchbox", { name: "Search designs" }).fill("Imported private");
     await page.getByRole("button", { name: /^Imported private canvas/ }).click();
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    await page.getByLabel("New name for Imported private canvas").fill("Imported private renamed");
+    await page.getByRole("button", { name: "Save name", exact: true }).click();
+    await page.getByRole("button", { name: /^Imported private renamed/ }).click();
     await page.getByRole("button", { name: "Open beside", exact: true }).click();
-    await expect(page.getByText("Imported private canvas", { exact: true })).toBeVisible();
+    await expect(page.getByText("Imported private renamed", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: /^Close Design/ }).click();
     await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -311,6 +375,13 @@ test("private canvases survive reload and can be retired to recover quota", asyn
       await action("create_canvas", { name: `Quota canvas ${i}` });
     await openLibrary();
     await expect(page.getByText(/Design limit reached/)).toBeVisible();
+    await page.getByRole("tab", { name: "New design", exact: true }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("Blocked by quota");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Blank canvas (no agent)", exact: true }).click();
+    await page.getByRole("button", { name: "Create blank canvas", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Canvas limit reached");
+    await page.getByRole("tab", { name: "Saved designs", exact: true }).click();
     await page.getByRole("searchbox", { name: "Search designs" }).fill("Private canvas");
     await page.getByRole("button", { name: /^Private canvas/ }).click();
     await page.getByRole("button", { name: "Move to trash", exact: true }).click();
@@ -323,6 +394,7 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await page.getByRole("button", { name: "Create blank canvas" }).click();
     await expect(page.getByText("After quota recovery", { exact: true })).toBeVisible();
   } finally {
+    await rm(join(status.testProject, "private-import.orkdes"), { force: true });
     await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);
   }

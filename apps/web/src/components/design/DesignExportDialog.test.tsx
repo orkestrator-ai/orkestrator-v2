@@ -288,7 +288,7 @@ describe("DesignExportDialog", () => {
 
     fireEvent.change(nameField(), { target: { value: "bad name.orkdes" } });
     expect(screen.getByText(/is not a valid path/)).toBeTruthy();
-    expect(button("Export revision …").disabled).toBe(true);
+    expect(button("Export revision 7").disabled).toBe(true);
 
     fireEvent.change(folderField(), { target: { value: "" } });
     fireEvent.change(nameField(), { target: { value: "first.orkdes" } });

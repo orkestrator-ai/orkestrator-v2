@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
-import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
+import type {
+  CreatableTabType,
+  CreateTabOptions,
+} from "@/contexts/TerminalContext";
 import { MAX_TABS } from "@/contexts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,12 +25,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { invoke } from "@/lib/native/backend";
+import { pickHostPath } from "@/lib/host-path-picker";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
-import { designAction, designApi, designBackendKey, failureOf } from "./design-client";
+import {
+  designAction,
+  designApi,
+  designBackendKey,
+  failureOf,
+} from "./design-client";
 import {
   DESIGN_AGENTS,
   DESIGN_AGENT_LABELS,
@@ -37,10 +46,8 @@ import {
   DESIGN_FRAME_PRESETS,
   DESIGN_NAME_MAX,
   DesignLaunchError,
-  importAndOpenDesign,
   launchDesignWorkspace,
   loadDesignReadiness,
-  readDesignImport,
   rendererUnavailable,
   runDesignLifecycle,
   validateDesignName,
@@ -50,12 +57,10 @@ import {
 } from "./design-launch";
 import {
   decideDesignOpen,
-  designOpenChoices,
   planDesignLaunch,
   type DesignLayoutFacts,
   type DesignPlacement,
 } from "./design-open";
-import { DesignLibrary } from "./DesignLibrary";
 import {
   addDesignImagesToDraft,
   DESIGN_PROMPT_IMAGE_HINT,
@@ -64,22 +69,35 @@ import {
   type DesignPromptImage,
 } from "./design-prompt-images";
 
-export type DesignWorkspaceMode = "new" | "saved" | "import";
+export type DesignWorkspaceMode = "new" | "open";
 type AgentChoice = DesignAgent | "none";
-type CreateTab = (type: CreatableTabType, options?: CreateTabOptions) => boolean;
+type CreateTab = (
+  type: CreatableTabType,
+  options?: CreateTabOptions,
+) => boolean;
 
-const DEFAULT_ENABLED_AGENTS: readonly string[] = ["claude", "codex", "opencode"];
+const DEFAULT_ENABLED_AGENTS: readonly string[] = [
+  "claude",
+  "codex",
+  "opencode",
+];
 
 /** Current layout facts for one environment, read at decision time. */
-export function readDesignLayoutFacts(environmentId: string): DesignLayoutFacts {
+export function readDesignLayoutFacts(
+  environmentId: string,
+): DesignLayoutFacts {
   const store = usePaneLayoutStore.getState();
   const state = store.environments.get(environmentId);
   const activePaneId = state?.activePaneId;
   return {
     tabs: state ? store.getAllTabs(environmentId) : [],
     maxTabs: MAX_TABS,
-    canSplit: Boolean(activePaneId && store.canAddTabInSplit(activePaneId, environmentId)),
-    hasCurrentPane: Boolean(state && activePaneId && store.getPane(activePaneId, environmentId)),
+    canSplit: Boolean(
+      activePaneId && store.canAddTabInSplit(activePaneId, environmentId),
+    ),
+    hasCurrentPane: Boolean(
+      state && activePaneId && store.getPane(activePaneId, environmentId),
+    ),
   };
 }
 
@@ -135,11 +153,15 @@ export function DesignWorkspaceDialog({
   const [preset, setPreset] = useState<DesignFramePresetId>("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recovery, setRecovery] = useState<{ canvasId: string; name: string } | null>(null);
+  const [recovery, setRecovery] = useState<{
+    canvasId: string;
+    name: string;
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const enabledPlatforms: readonly string[] = useConfigStore(
-    (state) => state.config.global.enabledAgentPlatforms ?? DEFAULT_ENABLED_AGENTS,
+    (state) =>
+      state.config.global.enabledAgentPlatforms ?? DEFAULT_ENABLED_AGENTS,
   );
   const agents = useMemo<Record<DesignAgent, boolean>>(
     () => ({
@@ -149,7 +171,9 @@ export function DesignWorkspaceDialog({
     [enabledPlatforms],
   );
   const agent: AgentChoice =
-    agentChoice ?? DESIGN_AGENTS.find((candidate) => agents[candidate]) ?? "none";
+    agentChoice ??
+    DESIGN_AGENTS.find((candidate) => agents[candidate]) ??
+    "none";
 
   // Readiness: probed when the dialog opens and on Retry only.
   const [readiness, setReadiness] = useState<{
@@ -180,7 +204,11 @@ export function DesignWorkspaceDialog({
         }),
       )
       .then((next) => {
-        if (epoch !== readinessEpoch.current || requestScope !== scopeRef.current) return;
+        if (
+          epoch !== readinessEpoch.current ||
+          requestScope !== scopeRef.current
+        )
+          return;
         setReadiness({ scope: requestScope, view: next, loading: false });
       });
   }, [loadReadiness]);
@@ -199,7 +227,9 @@ export function DesignWorkspaceDialog({
   // Subscribing to this environment's layout re-renders on tab/pane changes;
   // the facts themselves are cheap to derive (at most MAX_TABS tabs).
   usePaneLayoutStore((state) => state.environments.get(environmentId));
-  const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
+  const hydrated = usePaneLayoutStore(
+    (state) => state.hydration.get(environmentId) === "done",
+  );
   const facts = readDesignLayoutFacts(environmentId);
   const environmentReady = Boolean(createTab) && hydrated;
   const legacy = view?.protocol === "v1";
@@ -237,7 +267,11 @@ export function DesignWorkspaceDialog({
 
   const openDesign = useCallback(
     (canvasId: string, placement: DesignPlacement): string | null => {
-      const decision = decideDesignOpen(canvasId, placement, readDesignLayoutFacts(environmentId));
+      const decision = decideDesignOpen(
+        canvasId,
+        placement,
+        readDesignLayoutFacts(environmentId),
+      );
       if (decision.kind === "focus") {
         if (!focusTab(environmentId, decision.tabId))
           return "The open design tab could not be focused.";
@@ -246,7 +280,12 @@ export function DesignWorkspaceDialog({
       }
       if (decision.kind === "refuse") return decision.message;
       if (!createTab) return "Start this environment to open designs.";
-      if (!createTab("design-canvas", { canvasId, designPlacement: decision.placement }))
+      if (
+        !createTab("design-canvas", {
+          canvasId,
+          designPlacement: decision.placement,
+        })
+      )
         return "The design could not be opened in this layout. Close a tab or pane and try again.";
       onOpenChange(false);
       return null;
@@ -284,21 +323,33 @@ export function DesignWorkspaceDialog({
         canvasTabId: createUniqueTabId("design"),
         agentTabId: createUniqueTabId("design-agent"),
         createCanvas: (canvasName) =>
-          designAction<DesignCanvas>(environmentId, "create_canvas", { name: canvasName }),
-        createFrame: (canvas, frame) =>
-          designAction<{ canvasRevision: number }>(environmentId, "create_frame", {
-            canvasId: canvas.id,
-            expectedRevision: canvas.revision,
-            x: 0,
-            y: 0,
-            ...frame,
+          designAction<DesignCanvas>(environmentId, "create_canvas", {
+            name: canvasName,
           }),
+        createFrame: (canvas, frame) =>
+          designAction<{ canvasRevision: number }>(
+            environmentId,
+            "create_frame",
+            {
+              canvasId: canvas.id,
+              expectedRevision: canvas.revision,
+              x: 0,
+              y: 0,
+              ...frame,
+            },
+          ),
         openCanvas: (canvasId, tabId, placement) =>
-          createTab("design-canvas", { canvasId, tabId, designPlacement: placement }),
+          createTab("design-canvas", {
+            canvasId,
+            tabId,
+            designPlacement: placement,
+          }),
         createAgentTab: (platform, tabId, initialPrompt) => {
           // The agent sits beside the canvas in the pane the user started from.
           if (originPaneId)
-            usePaneLayoutStore.getState().setActivePane(originPaneId, environmentId);
+            usePaneLayoutStore
+              .getState()
+              .setActivePane(originPaneId, environmentId);
           // Seed the images before the tab mounts so the initial prompt,
           // which the tab sends from its draft, carries them.
           const sessionKey = createSessionKey(environmentId, tabId);
@@ -317,12 +368,18 @@ export function DesignWorkspaceDialog({
             return created;
           } finally {
             const store = usePaneLayoutStore.getState();
-            if (!created && images.length > 0 && !store.findPaneWithTab(tabId, environmentId))
+            if (
+              !created &&
+              images.length > 0 &&
+              !store.findPaneWithTab(tabId, environmentId)
+            )
               useNativeComposeStore.getState().clearDraft(sessionKey);
           }
         },
         hasTab: (tabId) =>
-          Boolean(usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId)),
+          Boolean(
+            usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId),
+          ),
         removeTab: (tabId) => removeTab(environmentId, tabId),
         deleteCanvas: (canvasId, revision) =>
           legacy
@@ -337,8 +394,16 @@ export function DesignWorkspaceDialog({
               ),
         ...(sessions
           ? {
-              linkSession: (canvasId: string, tabId: string, platform: DesignAgent) =>
-                designApi.linkSession(environmentId, canvasId, { tabId, platform, role: "design" }),
+              linkSession: (
+                canvasId: string,
+                tabId: string,
+                platform: DesignAgent,
+              ) =>
+                designApi.linkSession(environmentId, canvasId, {
+                  tabId,
+                  platform,
+                  role: "design",
+                }),
             }
           : {}),
       });
@@ -351,7 +416,11 @@ export function DesignWorkspaceDialog({
       onOpenChange(false);
     } catch (reason) {
       if (launchScope !== scopeRef.current) return;
-      if (reason instanceof DesignLaunchError && reason.recoverable && reason.canvas)
+      if (
+        reason instanceof DesignLaunchError &&
+        reason.recoverable &&
+        reason.canvas
+      )
         setRecovery({ canvasId: reason.canvas.id, name: reason.canvas.name });
       setError(errorText(reason));
     } finally {
@@ -360,32 +429,36 @@ export function DesignWorkspaceDialog({
     }
   };
 
-  const importFile = async (file: File) => {
+  const openFromPicker = async () => {
     const importScope = scopeRef.current;
-    const unvalidated = rendererUnavailable(view);
-    setBusy(true);
+    const path = await pickHostPath({
+      mode: "file",
+      title: "Open design (.orkdes)",
+    });
+    if (!path || importScope !== scopeRef.current) return;
     setError(null);
     setNotice(null);
     setRecovery(null);
+    if (!path.toLowerCase().endsWith(".orkdes")) {
+      setError("Choose an .orkdes design file.");
+      return;
+    }
+    const unvalidated = rendererUnavailable(view);
+    setBusy(true);
     try {
-      const document = await readDesignImport(file);
-      const result = await importAndOpenDesign({
-        document,
-        importCanvas: (value) =>
-          invoke<DesignCanvas>("design_import", { environmentId, document: value }),
-        openCanvas: (canvasId) =>
-          importScope === scopeRef.current ? openDesign(canvasId, "split") : "Environment changed.",
+      const imported = await invoke<DesignCanvas>("design_import_host_file", {
+        environmentId,
+        path,
       });
       if (importScope !== scopeRef.current) return;
-      const stored = `Imported “${result.canvas.name}”${
-        unvalidated ? " — stored unvalidated until the renderer is available" : ""
-      }.`;
-      if (result.opened) toast.success(stored);
-      else {
-        setNotice(stored);
-        setError(`It could not be opened yet: ${result.openError}`);
-        setRecovery({ canvasId: result.canvas.id, name: result.canvas.name });
-      }
+      const openError = openDesign(imported.id, "split");
+      if (!openError) return;
+      // The import is kept; the recovery button below opens it once there is room.
+      setNotice(
+        `Opened “${imported.name}”${unvalidated ? " — stored unvalidated until the renderer is available" : ""}.`,
+      );
+      setError(`It could not be opened yet: ${openError}`);
+      setRecovery({ canvasId: imported.id, name: imported.name });
     } catch (reason) {
       if (importScope === scopeRef.current) setError(errorText(reason));
     } finally {
@@ -400,15 +473,17 @@ export function DesignWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>Design workspace</DialogTitle>
           <DialogDescription>
-            Design with Claude or Codex beside a shared HTML canvas, or import an .orkdes file. Open
-            a repository design from the file tree, or reopen any private canvas in Saved designs.
+            Design with Claude or Codex beside a shared HTML canvas, or open an
+            existing .orkdes design file.
           </DialogDescription>
         </DialogHeader>
-        <Tabs value={mode} onValueChange={(value) => setMode(value as DesignWorkspaceMode)}>
+        <Tabs
+          value={mode}
+          onValueChange={(value) => setMode(value as DesignWorkspaceMode)}
+        >
           <TabsList className="w-full">
             <TabsTrigger value="new">New design</TabsTrigger>
-            <TabsTrigger value="saved">Saved designs</TabsTrigger>
-            <TabsTrigger value="import">Import</TabsTrigger>
+            <TabsTrigger value="open">Open design</TabsTrigger>
           </TabsList>
           <TabsContent value="new">
             <form
@@ -426,7 +501,9 @@ export function DesignWorkspaceDialog({
                   maxLength={DESIGN_NAME_MAX}
                   value={name}
                   aria-invalid={showNameError ? true : undefined}
-                  aria-describedby={showNameError ? "design-name-error" : undefined}
+                  aria-describedby={
+                    showNameError ? "design-name-error" : undefined
+                  }
                   onChange={(event) => setName(event.target.value)}
                   onBlur={() => setNameTouched(true)}
                 />
@@ -441,19 +518,27 @@ export function DesignWorkspaceDialog({
                   Start with
                   <Select
                     value={agent}
-                    onValueChange={(value) => setAgentChoice(value as AgentChoice)}
+                    onValueChange={(value) =>
+                      setAgentChoice(value as AgentChoice)
+                    }
                   >
                     <SelectTrigger aria-label="Design agent" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {DESIGN_AGENTS.map((candidate) => (
-                        <SelectItem key={candidate} value={candidate} disabled={!agents[candidate]}>
+                        <SelectItem
+                          key={candidate}
+                          value={candidate}
+                          disabled={!agents[candidate]}
+                        >
                           {DESIGN_AGENT_LABELS[candidate]}
                           {!agents[candidate] ? " (disabled in Settings)" : ""}
                         </SelectItem>
                       ))}
-                      <SelectItem value="none">Blank canvas (no agent)</SelectItem>
+                      <SelectItem value="none">
+                        Blank canvas (no agent)
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 </label>
@@ -461,13 +546,22 @@ export function DesignWorkspaceDialog({
                   Initial frame
                   <Select
                     value={preset}
-                    onValueChange={(value) => setPreset(value as DesignFramePresetId)}
+                    onValueChange={(value) =>
+                      setPreset(value as DesignFramePresetId)
+                    }
                   >
-                    <SelectTrigger aria-label="Initial frame" className="w-full">
+                    <SelectTrigger
+                      aria-label="Initial frame"
+                      className="w-full"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(Object.keys(DESIGN_FRAME_PRESETS) as DesignFramePresetId[]).map((id) => (
+                      {(
+                        Object.keys(
+                          DESIGN_FRAME_PRESETS,
+                        ) as DesignFramePresetId[]
+                      ).map((id) => (
                         <SelectItem key={id} value={id}>
                           {DESIGN_FRAME_PRESETS[id].label}
                         </SelectItem>
@@ -494,14 +588,24 @@ export function DesignWorkspaceDialog({
                       images={briefImages}
                       disabled={busy}
                       onRemove={(id) =>
-                        setBriefImages((current) => current.filter((image) => image.id !== id))
+                        setBriefImages((current) =>
+                          current.filter((image) => image.id !== id),
+                        )
                       }
                     />
-                    <p id="design-brief-images-hint" className="text-xs text-muted-foreground">
-                      {imagePaste.isPasting ? "Attaching image…" : DESIGN_PROMPT_IMAGE_HINT}
+                    <p
+                      id="design-brief-images-hint"
+                      className="text-xs text-muted-foreground"
+                    >
+                      {imagePaste.isPasting
+                        ? "Attaching image…"
+                        : DESIGN_PROMPT_IMAGE_HINT}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-1" aria-label="Brief examples">
+                  <div
+                    className="flex flex-wrap gap-1"
+                    aria-label="Brief examples"
+                  >
                     {DESIGN_BRIEF_EXAMPLES.map((example) => (
                       <Button
                         key={example}
@@ -517,9 +621,14 @@ export function DesignWorkspaceDialog({
                   </div>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">{DESIGN_CONTENT_EXPLANATION}</p>
+              <p className="text-xs text-muted-foreground">
+                {DESIGN_CONTENT_EXPLANATION}
+              </p>
               {(createBlocker || (plan.ok && plan.notice)) && (
-                <p id="design-create-blocker" className="text-sm text-muted-foreground">
+                <p
+                  id="design-create-blocker"
+                  className="text-sm text-muted-foreground"
+                >
                   {createBlocker ?? (plan.ok ? plan.notice : null)}{" "}
                   {view && !readinessLoading && readinessBlocked && (
                     <Button
@@ -536,46 +645,41 @@ export function DesignWorkspaceDialog({
               )}
               <Button
                 type="submit"
-                disabled={busy || imagePaste.isPasting || Boolean(createBlocker)}
-                aria-describedby={createBlocker ? "design-create-blocker" : undefined}
+                disabled={
+                  busy || imagePaste.isPasting || Boolean(createBlocker)
+                }
+                aria-describedby={
+                  createBlocker ? "design-create-blocker" : undefined
+                }
               >
-                {busy ? "Opening…" : withAgent ? "Create design workspace" : "Create blank canvas"}
+                {busy
+                  ? "Opening…"
+                  : withAgent
+                    ? "Create design workspace"
+                    : "Create blank canvas"}
               </Button>
             </form>
           </TabsContent>
-          <TabsContent value="saved">
-            <DesignLibrary
-              environmentId={environmentId}
-              backendKey={backendKey}
-              legacy={legacy}
-              canManage={Boolean(view?.capabilities?.operations)}
-              openChoices={(canvasId) => designOpenChoices(canvasId, facts)}
-              onOpen={openDesign}
-            />
-          </TabsContent>
-          <TabsContent value="import">
+          <TabsContent value="open">
             <div className="grid gap-2">
-              <label className="grid gap-1 text-sm">
-                Import .orkdes
-                <Input
-                  type="file"
-                  accept=".orkdes,application/json"
-                  disabled={busy || !environmentId}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    event.target.value = "";
-                    if (file) void importFile(file);
-                  }}
-                />
-              </label>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy || !environmentId}
+                onClick={() => void openFromPicker()}
+              >
+                {busy ? "Opening…" : "Choose .orkdes file…"}
+              </Button>
               <p className="text-xs text-muted-foreground">
-                Version 1 .orkdes files up to 4 MiB. An import gets a new identity; conversation
-                links and save locations from the original are not copied.
+                Browse the files on the machine running Orkestrator. Version 1
+                .orkdes files up to 4 MiB. Opening a file creates a new design
+                with its own identity; conversation links and save locations
+                from the original are not copied.
               </p>
               {rendererUnavailable(view) && (
                 <p className="text-xs text-amber-700 dark:text-amber-400">
-                  The renderer is unavailable, so an import will be stored unvalidated until it is
-                  available.
+                  The renderer is unavailable, so an opened design will be
+                  stored unvalidated until it is available.
                 </p>
               )}
             </div>
@@ -591,7 +695,10 @@ export function DesignWorkspaceDialog({
             <p>{error}</p>
             {recovery && (
               <div className="flex flex-wrap items-center gap-2 text-foreground">
-                <span>Your design “{recovery.name}” was created — open it to continue.</span>
+                <span>
+                  Your design “{recovery.name}” was created — open it to
+                  continue.
+                </span>
                 <Button
                   type="button"
                   size="sm"

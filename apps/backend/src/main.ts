@@ -140,9 +140,14 @@ if (managedWebClient) {
   }
   tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
   try {
+    // This backend has just bound the target port, so a root handler already
+    // proxying to it can only be a leftover from an earlier run that exited
+    // without tearing Serve down. Adopt it rather than refusing to start;
+    // handlers proxying anywhere else are still treated as conflicts.
     const tailscaleUrl = await tailscaleServe.start(
       getTailscaleServeTargetPort(browserUrl),
       options.tailscaleServePort,
+      { adoptExisting: true },
     );
     console.info(`[TailscaleServe] Available at ${tailscaleUrl}`);
     info = { ...gatewayInfo, browserUrl: tailscaleUrl };

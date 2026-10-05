@@ -111,6 +111,18 @@ function commandFailureOutcome(error: unknown): {
 }
 
 /**
+ * A git command that talks to a remote ran out of time. Still a timeout to
+ * every generic handler, but distinguishable: the usual cause is credentials
+ * (an SSH key waiting on a passphrase) or the network, not a container runtime.
+ */
+export class GitRemoteTimeoutError extends CommandFailedError {
+  constructor(message: string, details: { signal?: NodeJS.Signals | null } = {}) {
+    super(message, { timedOut: true, signal: details.signal });
+    this.name = "GitRemoteTimeoutError";
+  }
+}
+
+/**
  * Subprocesses started through `runCommand`, by program name. Counts only —
  * never arguments — so benchmarks can report how many Docker calls a scenario
  * costs.

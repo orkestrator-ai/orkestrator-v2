@@ -1658,7 +1658,10 @@ export async function startEnvironmentOnce(
         ...clearPendingAgentLaunchUpdates(),
       })
       .catch(() => undefined);
-    if (lifecycleError === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication) {
+    if (
+      lifecycleError === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication ||
+      lifecycleError === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut
+    ) {
       throw new Error(lifecycleError);
     }
     throw error;

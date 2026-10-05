@@ -7,6 +7,8 @@ import {
   inferLanguage,
   runCommand,
   runCommandBuffer,
+  CommandFailedError,
+  GitRemoteTimeoutError,
   assertEditorTextFileSize,
   decodeEditorTextFile,
   MAX_BINARY_FILE_BYTES,
@@ -854,12 +856,48 @@ export async function gitRefExists(worktreePath: string, refName: string): Promi
   );
 }
 
+/**
+ * Environment for a remote git command run by a backend nobody is watching.
+ *
+ * The backend keeps its launching terminal as the controlling tty, so an SSH
+ * key that needs a passphrase (and is not in an agent) makes `ssh` prompt on
+ * that terminal and wait forever. BatchMode turns the prompt into an immediate
+ * "Permission denied (publickey)", which is classified and shown to the user.
+ * A configured ssh program is kept; only the option is added.
+ */
+async function gitNonInteractiveEnv(projectPath: string): Promise<NodeJS.ProcessEnv> {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  // GIT_SSH is an arbitrary program, so there is no option to append to.
+  if (env.GIT_SSH) return env;
+  const configured =
+    env.GIT_SSH_COMMAND?.trim() ||
+    (await runCommand("git", ["-C", projectPath, "config", "--get", "core.sshCommand"], {
+      timeoutMs: 10_000,
+    }).then(
+      ({ stdout }) => stdout.trim(),
+      () => "",
+    )) ||
+    "ssh";
+  env.GIT_SSH_COMMAND = `${configured} -o BatchMode=yes`;
+  return env;
+}
+
 export async function resolveRemoteWorktreeStartPoint(
   projectPath: string,
   baseBranch: string,
 ): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
-  await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], { timeoutMs: 120_000 });
+  try {
+    await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], {
+      timeoutMs: 120_000,
+      env: await gitNonInteractiveEnv(projectPath),
+    });
+  } catch (error) {
+    if (error instanceof CommandFailedError && error.timedOut) {
+      throw new GitRemoteTimeoutError(error.message, { signal: error.signal });
+    }
+    throw error;
+  }
 
   const remoteRef = `origin/${branch}`;
   if (!(await gitRefExists(projectPath, remoteRef))) {

@@ -123,6 +123,7 @@ export {
 } from "./agent-tools.js";
 export {
   CommandFailedError,
+  GitRemoteTimeoutError,
   commandExists,
   assertEditorTextFileSize,
   decodeEditorTextFile,

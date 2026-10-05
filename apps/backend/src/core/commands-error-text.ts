@@ -1,4 +1,4 @@
-import { CommandFailedError } from "./commands-dependencies.js";
+import { CommandFailedError, GitRemoteTimeoutError } from "./commands-dependencies.js";
 
 export const LIFECYCLE_LOG_DETAIL_MAX_CHARS = 500;
 
@@ -42,7 +42,9 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   containerRemovalFailed:
     "Docker did not remove the old container, so it was kept. Retry the reset once Docker is healthy.",
   gitSshAuthentication:
-    "Git SSH authentication failed. Check that your SSH agent has a key authorized for this repository, or configure its socket in Settings > General, then restart Orkestrator and retry.",
+    "Git SSH authentication failed. Check that your SSH agent has a key authorized for this repository (a passphrase-protected key must be loaded with ssh-add), or configure its socket in Settings > General, then restart Orkestrator and retry.",
+  gitRemoteTimedOut:
+    "Timed out fetching from the git remote. Check your network connection and that your SSH agent has your key loaded (a passphrase-protected key must be added with ssh-add), then retry.",
 } as const;
 
 /**
@@ -57,6 +59,10 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
  */
 export function environmentLifecycleErrorMessage(error: unknown): string {
   if (error instanceof CommandFailedError) {
+    // Before the generic timeout: a stuck remote fetch is not a container problem.
+    if (error instanceof GitRemoteTimeoutError) {
+      return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut;
+    }
     if (error.timedOut) return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.timedOut;
     if (error.executableMissing) return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable;
   }

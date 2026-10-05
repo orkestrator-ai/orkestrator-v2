@@ -1700,4 +1700,141 @@ describe("Orkestrator control MCP server", () => {
     });
     expect(launched).toBe(1);
   });
+
+  test("uses the worker's live catalog when the project home is the first snapshot", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("get_environment_snapshots", () => [
+      { id: "env-home", projectId: "project-1", projectHome: true, status: "running" },
+      { id: "env-worker", projectId: "project-1", status: "running", setupStatus: "ready" },
+    ]);
+    const workerModels = [
+      {
+        id: "worker-live-model",
+        label: "Worker live model",
+        platform: "codex",
+        supportsSpeed: true,
+        reasoning: [{ id: "high", label: "High" }],
+      },
+    ];
+    overrides.set("get_native_agent_model_catalog", ({ environmentId }) => {
+      expect(environmentId).toBe("env-worker");
+      return workerModels;
+    });
+    overrides.set("get_agent_model_catalog_cache", () => ({
+      schemaVersion: 1,
+      codex: {
+        updatedAt: new Date(0).toISOString(),
+        models: [{ id: "cached-model", name: "Cached model" }],
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery"],
+    });
+
+    const options = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.isError).not.toBe(true);
+    expect(options.body.result?.structuredContent?.models).toEqual(workerModels);
+    expect(
+      invocations.filter(({ command }) => command === "get_native_agent_model_catalog"),
+    ).toEqual([
+      { command: "get_native_agent_model_catalog", args: { environmentId: "env-worker" } },
+    ]);
+    expect(
+      invocations.filter(
+        ({ command }) =>
+          command === "get_agent_model_catalog_cache" ||
+          command === "get_opencode_model_catalog_cache",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("lets a coordinator launch when the project home is the only environment", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: {
+          branch: "main",
+          headCommit: "a".repeat(40),
+          detached: false,
+          unborn: false,
+        },
+      },
+    }));
+    overrides.set("get_environment_snapshots", () => [
+      { id: "env-home", projectId: "project-1", projectHome: true, status: "running" },
+    ]);
+    overrides.set("get_environment", () => ({
+      id: "env-home",
+      projectId: "project-1",
+      projectHome: true,
+    }));
+    overrides.set("get_project_git_status", () => ({
+      branch: "main",
+      headCommit: "a".repeat(40),
+    }));
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-worker", projectId: "project-1", status: "running" },
+      coordinatorDelegationOpened: true,
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+
+    const options = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.isError).not.toBe(true);
+    expect(options.body.result?.structuredContent).toMatchObject({
+      enabledAgents: ["codex"],
+      coordinatorBase: { baseBranch: "main", baseCommit: "a".repeat(40), available: true },
+    });
+
+    const launched = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "launch-home-only",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Fix the failing test.",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+      },
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    expect(launched.body.result?.structuredContent).toMatchObject({
+      environmentId: "env-worker",
+    });
+    expect(
+      invocations.some(
+        ({ command, args }) =>
+          command === "get_native_agent_model_catalog" && args.environmentId === "env-home",
+      ),
+    ).toBe(false);
+  });
 });

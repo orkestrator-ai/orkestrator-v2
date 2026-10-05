@@ -330,9 +330,12 @@ export async function launchOptions(
   const global = isRecord(config) && isRecord(config.global) ? config.global : {};
   const enabledAgents = normalizeAgentPlatforms(global.enabledAgentPlatforms);
   const environments = await allEnvironments(invoke, projectId);
-  const environmentId =
-    preferredEnvironmentId ??
-    (typeof environments[0]?.id === "string" ? environments[0].id : undefined);
+  // The project home is never a worker, and coordinator credentials may not
+  // touch it, so it cannot stand in as the model catalog source.
+  const fallback = environments.find(
+    (environment) => environment.projectHome !== true && typeof environment.id === "string",
+  );
+  const environmentId = preferredEnvironmentId ?? (fallback?.id as string | undefined);
   let models: AgentModel[] = [];
   if (environmentId) {
     const raw = await invoke<unknown>("get_native_agent_model_catalog", { environmentId });

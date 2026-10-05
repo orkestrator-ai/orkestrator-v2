@@ -1700,4 +1700,78 @@ describe("Orkestrator control MCP server", () => {
     });
     expect(launched).toBe(1);
   });
+
+  test("lets a coordinator launch when the project home is the only environment", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: {
+          branch: "main",
+          headCommit: "a".repeat(40),
+          detached: false,
+          unborn: false,
+        },
+      },
+    }));
+    overrides.set("get_environment_snapshots", () => [
+      { id: "env-home", projectId: "project-1", projectHome: true, status: "running" },
+    ]);
+    overrides.set("get_environment", () => ({
+      id: "env-home",
+      projectId: "project-1",
+      projectHome: true,
+    }));
+    overrides.set("get_project_git_status", () => ({
+      branch: "main",
+      headCommit: "a".repeat(40),
+    }));
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-worker", projectId: "project-1", status: "running" },
+      coordinatorDelegationOpened: true,
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+
+    const options = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.isError).not.toBe(true);
+    expect(options.body.result?.structuredContent).toMatchObject({
+      enabledAgents: ["codex"],
+      coordinatorBase: { baseBranch: "main", baseCommit: "a".repeat(40), available: true },
+    });
+
+    const launched = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "launch-home-only",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Fix the failing test.",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+      },
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    expect(launched.body.result?.structuredContent).toMatchObject({
+      environmentId: "env-worker",
+    });
+    expect(
+      invocations.some(
+        ({ command, args }) =>
+          command === "get_native_agent_model_catalog" && args.environmentId === "env-home",
+      ),
+    ).toBe(false);
+  });
 });

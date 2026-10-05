@@ -36,7 +36,10 @@ const joinPath = (folder: string, file: string) => {
 };
 const splitPath = (path: string) => {
   const slash = path.lastIndexOf("/");
-  return { folder: slash < 0 ? "" : path.slice(0, slash), file: path.slice(slash + 1) };
+  return {
+    folder: slash < 0 ? "" : path.slice(0, slash),
+    file: path.slice(slash + 1),
+  };
 };
 
 function collectFolders(nodes: FileNode[], out: string[] = []): string[] {
@@ -157,6 +160,7 @@ export function DesignExportDialog({
     if (!open) return;
     epochs.current.session++;
     shown.current = null;
+    lastRevision.current = undefined;
     setFolder(DESIGN_DEFAULT_FOLDER);
     setFile("");
     setEdited(false);
@@ -280,12 +284,15 @@ export function DesignExportDialog({
     }
   };
 
-  const revision = preview?.revision;
+  const lastRevision = useRef<number | undefined>(undefined);
+  if (preview) lastRevision.current = preview.revision;
+  const revision = preview?.revision ?? lastRevision.current;
   const association = preview?.association;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      {/* Pinned near the top so a status line changing size below the fields never moves them. */}
+      <DialogContent className="top-[12vh] max-h-[calc(88dvh-1rem)] translate-y-0 sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Export design to repository</DialogTitle>
           <DialogDescription>
@@ -379,84 +386,89 @@ export function DesignExportDialog({
             )}
           </div>
 
-          {previewing && (
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" /> Checking {name || "the repository"}…
-            </p>
-          )}
-          {previewError && (
-            <p role="alert" className="text-xs text-destructive">
-              {previewError.message}
-            </p>
-          )}
+          {/* Reserved height: the checking line and the result are the same size, so typing
+              a folder name does not resize the dialog. */}
+          <div className="min-h-10">
+            {previewing && (
+              <p className="flex items-center gap-1 px-2 py-2.5 text-xs text-muted-foreground">
+                <Loader2 className="size-3 shrink-0 animate-spin" />
+                <span className="truncate">Checking {name || "the repository"}…</span>
+              </p>
+            )}
+            {previewError && !previewing && (
+              <p role="alert" className="text-xs text-destructive">
+                {previewError.message}
+              </p>
+            )}
 
-          {target && !previewing && (
-            <div
-              className="grid gap-2 rounded border border-divider p-2 text-xs"
-              data-target-state={target.reason ?? (target.exists ? "exists" : "new")}
-            >
-              {!target.exists && <p>New file: {target.relativePath} will be created.</p>}
-              {target.exists && !collision && (
-                <p>
-                  {target.relativePath} is your previous export of this design
-                  {association ? ` (revision ${association.lastExportedRevision})` : ""}. It is safe
-                  to update.
-                </p>
-              )}
-              {collision && (
-                <>
-                  <p className="flex gap-1">
-                    <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-500" />
-                    <span>
-                      {target.relativePath} {COLLISIONS[target.reason ?? "not-design"]}
-                    </span>
+            {target && !previewing && (
+              <div
+                className="grid gap-2 rounded border border-divider p-2 text-xs"
+                data-target-state={target.reason ?? (target.exists ? "exists" : "new")}
+              >
+                {!target.exists && <p>New file: {target.relativePath} will be created.</p>}
+                {target.exists && !collision && (
+                  <p>
+                    {target.relativePath} is your previous export of this design
+                    {association ? ` (revision ${association.lastExportedRevision})` : ""}. It is
+                    safe to update.
                   </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setReplace(false);
-                        setConfirmed(false);
-                        input.current?.focus();
-                        input.current?.setSelectionRange(
-                          0,
-                          Math.max(0, file.length - ".orkdes".length),
-                        );
-                      }}
-                    >
-                      Choose a new name
-                    </Button>
-                    <Button
-                      variant={replace ? "secondary" : "outline"}
-                      size="sm"
-                      aria-pressed={replace}
-                      disabled={!replaceable}
-                      onClick={() => setReplace(true)}
-                    >
-                      Replace it
-                    </Button>
-                  </div>
-                  {!replaceable && (
-                    <p>This file cannot be replaced from here; choose a new name.</p>
-                  )}
-                  {replace && replaceable && (
-                    <label className="flex items-start gap-2">
-                      <Checkbox
-                        checked={confirmed}
-                        onCheckedChange={(value) => setConfirmed(value === true)}
-                        aria-label={`Confirm replacing ${target.relativePath}`}
-                      />
+                )}
+                {collision && (
+                  <>
+                    <p className="flex gap-1">
+                      <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-500" />
                       <span>
-                        I understand {target.relativePath} will be overwritten. It is replaced only
-                        if it has not changed since this check.
+                        {target.relativePath} {COLLISIONS[target.reason ?? "not-design"]}
                       </span>
-                    </label>
-                  )}
-                </>
-              )}
-            </div>
-          )}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setReplace(false);
+                          setConfirmed(false);
+                          input.current?.focus();
+                          input.current?.setSelectionRange(
+                            0,
+                            Math.max(0, file.length - ".orkdes".length),
+                          );
+                        }}
+                      >
+                        Choose a new name
+                      </Button>
+                      <Button
+                        variant={replace ? "secondary" : "outline"}
+                        size="sm"
+                        aria-pressed={replace}
+                        disabled={!replaceable}
+                        onClick={() => setReplace(true)}
+                      >
+                        Replace it
+                      </Button>
+                    </div>
+                    {!replaceable && (
+                      <p>This file cannot be replaced from here; choose a new name.</p>
+                    )}
+                    {replace && replaceable && (
+                      <label className="flex items-start gap-2">
+                        <Checkbox
+                          checked={confirmed}
+                          onCheckedChange={(value) => setConfirmed(value === true)}
+                          aria-label={`Confirm replacing ${target.relativePath}`}
+                        />
+                        <span>
+                          I understand {target.relativePath} will be overwritten. It is replaced
+                          only if it has not changed since this check.
+                        </span>
+                      </label>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
 
           {revision !== undefined && (
             <p className="text-xs" data-export-revision={revision}>

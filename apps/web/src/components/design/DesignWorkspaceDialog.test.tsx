@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock }
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import { invoke } from "@/lib/native/backend";
+import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -43,6 +44,7 @@ const legacyReady: DesignReadinessView = {
 const originalConfig = useConfigStore.getState().config;
 
 beforeEach(() => {
+  useHostPathPickerStore.getState().settle(null);
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -272,26 +274,165 @@ describe("DesignWorkspaceDialog", () => {
     await flush();
     expect(loadReadiness.mock.calls).toEqual([[true]]);
     expect(screen.queryByLabelText("Design readiness") === null).toBe(true);
-    expect(screen.queryByRole("tab", { name: "Open" }) === null).toBe(true);
-    expect(screen.getByRole("tab", { name: "Saved designs" })).toBeTruthy();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "New design",
+      "Open design",
+      "Saved designs",
+    ]);
   });
 
   test("switching modes preserves the draft brief", async () => {
     mount(() => true);
     await flush();
     fireEvent.change(brief(), { target: { value: "A calmer checkout" } });
-    await switchTo("Import");
+    await switchTo("Open design");
     expect(screen.queryByRole("textbox", { name: "Design brief" }) === null).toBe(true);
-    expect(screen.getByLabelText("Import .orkdes")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose .orkdes file…" })).toBeTruthy();
     await switchTo("New design");
     expect(brief().value).toBe("A calmer checkout");
   });
 
-  test("Saved designs reloads private and pre-upgrade records after tabs close", async () => {
-    invokeMock.mockImplementation(async (command, args) => {
-      if (command === "design_action" && (args as { action: string }).action === "list_canvases")
-        return [canvas, { ...canvas, id: "pre-upgrade", name: "Older private canvas" }];
+  test("Open design uses the host path picker and offers recovery after its tab cannot open", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "design_import_host_file") return canvas;
       throw new Error(`Unexpected command: ${command}`);
+    });
+    let canOpen = false;
+    const createTab = mock(() => canOpen);
+    const { onOpenChange } = mount(createTab);
+    await flush();
+    await switchTo("Open design");
+    fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
+    const request = useHostPathPickerStore.getState().request;
+    expect(request?.mode).toBe("file");
+    await act(async () =>
+      useHostPathPickerStore.getState().settle("/home/me/designs/import.orkdes"),
+    );
+    await flush();
+    expect(invokeMock).toHaveBeenCalledWith("design_import_host_file", {
+      environmentId: "env-1",
+      path: "/home/me/designs/import.orkdes",
+    });
+    expect(screen.getByRole("status").textContent).toContain("Imported");
+    canOpen = true;
+    fireEvent.click(screen.getByRole("button", { name: "Open design" }));
+    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
+      canvasId: canvas.id,
+      designPlacement: "split",
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "design_import_host_file"),
+    ).toHaveLength(1);
+  });
+
+  test("an explicitly unsupported host import offers the legacy document upload", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "design_import_host_file")
+        throw new Error("Unknown backend command: design_import_host_file");
+      if (command === "design_import") return canvas;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    const createTab = mock(() => true);
+    mount(createTab);
+    await flush();
+    await switchTo("Open design");
+    fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
+    await act(async () => useHostPathPickerStore.getState().settle("/tmp/old.orkdes"));
+    expect(screen.getByRole("alert").textContent).toContain("Upload");
+    const document = JSON.stringify(canvas);
+    fireEvent.change(screen.getByLabelText("Import .orkdes"), {
+      target: {
+        files: [
+          {
+            name: "old.orkdes",
+            type: "application/json",
+            size: document.length,
+            text: async () => document,
+          },
+        ],
+      },
+    });
+    await flush();
+    expect(invokeMock).toHaveBeenCalledWith("design_import", { environmentId: "env-1", document });
+    expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("ambiguous host import failures do not offer a second import path", async () => {
+    invokeMock.mockRejectedValue(new Error("Network disconnected"));
+    mount(() => true);
+    await flush();
+    await switchTo("Open design");
+    fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
+    await act(async () => useHostPathPickerStore.getState().settle("/tmp/uncertain.orkdes"));
+    expect(screen.queryByLabelText("Import .orkdes") === null).toBe(true);
+    expect(screen.getByRole("alert").textContent).toContain("unreachable");
+  });
+
+  test("picker cancellation releases busy state without importing", async () => {
+    const createTab = mock(() => true);
+    mount(createTab);
+    await flush();
+    await switchTo("Open design");
+    fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
+    await act(async () => useHostPathPickerStore.getState().settle(null));
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(createTab).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "Choose .orkdes file…" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  for (const scopeChange of ["environment", "backend"] as const) {
+    for (const phase of ["picker", "import"] as const) {
+      test(`ignores a stale ${phase} after switching ${scopeChange}, and releases busy state`, async () => {
+        const pending = deferred<DesignCanvas>();
+        invokeMock.mockImplementation(async () => pending.promise);
+        const createTab = mock(() => true);
+        const props = {
+          open: true,
+          onOpenChange: mock(() => {}),
+          createTab,
+          loadReadiness: async () => legacyReady,
+        };
+        const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+        await flush();
+        await switchTo("Open design");
+        fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
+        if (phase === "import") {
+          act(() => useHostPathPickerStore.getState().settle("/tmp/stale.orkdes"));
+          await flush();
+        }
+        const gateway = window.orkestratorGateway;
+        if (scopeChange === "backend")
+          window.orkestratorGateway = { enabled: true, baseUrl: "https://other.invalid" };
+        rendered.rerender(
+          <DesignWorkspaceDialog
+            {...props}
+            environmentId={scopeChange === "environment" ? "env-2" : "env-1"}
+          />,
+        );
+        await flush();
+        if (phase === "picker")
+          await act(async () => useHostPathPickerStore.getState().settle("/tmp/stale.orkdes"));
+        else await act(async () => pending.resolve(canvas));
+        expect(createTab).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alert") === null).toBe(true);
+        expect(
+          (screen.getByRole("button", { name: "Choose .orkdes file…" }) as HTMLButtonElement)
+            .disabled,
+        ).toBe(false);
+        expect(invokeMock.mock.calls).toHaveLength(phase === "import" ? 1 : 0);
+        window.orkestratorGateway = gateway;
+      });
+    }
+  }
+
+  test("Saved designs is reachable and reopens a closed private canvas", async () => {
+    invokeMock.mockImplementation(async (_command, args) => {
+      if ((args as { action?: string }).action === "list_canvases")
+        return [{ id: canvas.id, name: canvas.name, revision: canvas.revision }];
+      throw new Error("Unexpected library command");
     });
     const createTab = mock(() => true);
     mount(createTab);
@@ -300,49 +441,21 @@ describe("DesignWorkspaceDialog", () => {
     await flush();
     fireEvent.click(screen.getByRole("button", { name: /Checkout/ }));
     fireEvent.click(screen.getByRole("button", { name: "Open beside" }));
-    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
+    expect(createTab).toHaveBeenCalledWith("design-canvas", {
       canvasId: canvas.id,
-      designPlacement: "split",
-    });
-    cleanup();
-    createTab.mockClear();
-    mount(createTab);
-    await flush();
-    await switchTo("Saved designs");
-    await flush();
-    fireEvent.click(screen.getByRole("button", { name: /Older private canvas/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Open beside" }));
-    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
-      canvasId: "pre-upgrade",
       designPlacement: "split",
     });
   });
 
-  test("an imported canvas offers direct recovery after its tab cannot open", async () => {
-    invokeMock.mockImplementation(async (command) => {
-      if (command === "design_import") return canvas;
-      throw new Error(`Unexpected command: ${command}`);
-    });
-    let canOpen = false;
-    const createTab = mock(() => canOpen);
-    const { onOpenChange } = mount(createTab);
+  test("Open design rejects a picked file that is not .orkdes", async () => {
+    mount(() => true);
     await flush();
-    await switchTo("Import");
-    const file = new File([JSON.stringify(canvas)], "import.orkdes", { type: "application/json" });
-    fireEvent.change(screen.getByLabelText("Import .orkdes"), { target: { files: [file] } });
+    await switchTo("Open design");
+    fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
+    await act(async () => useHostPathPickerStore.getState().settle("/home/me/notes.txt"));
     await flush();
-    expect(screen.getByRole("status").textContent).toContain("Imported");
-    expect(screen.getByRole("button", { name: "Open design" })).toBeTruthy();
-    canOpen = true;
-    fireEvent.click(screen.getByRole("button", { name: "Open design" }));
-    expect(createTab).toHaveBeenLastCalledWith("design-canvas", {
-      canvasId: canvas.id,
-      designPlacement: "split",
-    });
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(invokeMock.mock.calls.filter(([command]) => command === "design_import")).toHaveLength(
-      1,
-    );
+    expect(screen.getByRole("alert").textContent).toContain("Choose an .orkdes design file.");
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   test("layout failure before the agent exists rolls back and keeps the brief", async () => {
@@ -376,7 +489,10 @@ describe("DesignWorkspaceDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
     await flush();
     const agentCall = createTab.mock.calls.find((call) => call[0] === "claude");
-    expect(agentCall?.[1]).toMatchObject({ agentLaunchMode: "native", displayTitle: "Design" });
+    expect(agentCall?.[1]).toMatchObject({
+      agentLaunchMode: "native",
+      displayTitle: "Design",
+    });
     expect(agentCall?.[1]?.initialPrompt).toContain(canvas.id);
     expect(
       invokeMock.mock.calls.some(
@@ -407,7 +523,11 @@ describe("DesignWorkspaceDialog", () => {
     });
     useNativeComposeStore.setState({ drafts: new Map() });
     invokeMock.mockImplementation(async (command: string, args?: unknown) => {
-      const request = args as { action?: string; worktreePath?: string; filePath?: string };
+      const request = args as {
+        action?: string;
+        worktreePath?: string;
+        filePath?: string;
+      };
       if (command === "design_action" && request.action === "create_canvas") return canvas;
       if (command === "write_local_file") return `${request.worktreePath}/${request.filePath}`;
       throw new Error(`Unexpected command: ${command}`);
@@ -471,7 +591,9 @@ describe("DesignWorkspaceDialog", () => {
       mount(() => true);
       await flush();
       await pasteImage(brief());
-      const remove = screen.getByRole("button", { name: /^Remove clipboard-.*\.png$/ });
+      const remove = screen.getByRole("button", {
+        name: /^Remove clipboard-.*\.png$/,
+      });
       fireEvent.click(remove);
       expect(screen.queryByRole("list", { name: "Attached images" }) === null).toBe(true);
     } finally {
@@ -504,7 +626,9 @@ describe("DesignWorkspaceDialog", () => {
     const createTab = mock(() => true);
     mount(createTab);
     await flush();
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "   " } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "   " },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
     await flush();
     expect(screen.getByText("Enter a name for the design.")).toBeTruthy();
@@ -512,7 +636,7 @@ describe("DesignWorkspaceDialog", () => {
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  test("an unavailable renderer blocks creation but not import", async () => {
+  test("an unavailable renderer blocks creation but not opening", async () => {
     const onOpenChange = mock(() => {});
     render(
       <DesignWorkspaceDialog
@@ -522,7 +646,11 @@ describe("DesignWorkspaceDialog", () => {
         createTab={() => true}
         loadReadiness={async () => ({
           ...legacyReady,
-          renderer: { state: "missing-executable", ready: false, message: "install" },
+          renderer: {
+            state: "missing-executable",
+            ready: false,
+            message: "install",
+          },
         })}
       />,
     );
@@ -532,7 +660,7 @@ describe("DesignWorkspaceDialog", () => {
     }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
     expect(screen.getByText(/Creating a design needs the renderer/)).toBeTruthy();
-    await switchTo("Import");
-    expect(screen.getByText(/an import will be stored unvalidated/)).toBeTruthy();
+    await switchTo("Open design");
+    expect(screen.getByText(/an opened design will be stored unvalidated/)).toBeTruthy();
   });
 });

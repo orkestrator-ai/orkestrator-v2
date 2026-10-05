@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,7 +27,7 @@ describe("design exports to a repository worktree", () => {
   let worktree: string;
   let context: DesignExportContext;
   const writerFaults: { beforePublish?: () => void | Promise<void> } = {};
-  const recordFaults: { beforeRename?: (file: string) => void } = {};
+  const recordFaults: { beforeRename?: (file: string) => void | Promise<void> } = {};
   const rejections = trackUnhandledRejections();
   const service = () => harness.service;
   const serviceOptions = () => ({
@@ -434,21 +434,52 @@ describe("design exports to a repository worktree", () => {
   test("an association failure retires the created canvas before queued opens retry", async () => {
     const original = await service().create("env-2", "Shared", undefined, "user");
     await writeFile(join(worktree, "shared.orkdes"), JSON.stringify(original));
-    let recordWrites = 0;
-    recordFaults.beforeRename = (file) => {
-      if (!file.endsWith(".orkrec")) return;
-      if (++recordWrites === 2) {
-        delete recordFaults.beforeRename;
-        throw new Error("association failed");
+    const store = service().store;
+    const write = store.write.bind(store);
+    let failedCanvasId: string | undefined;
+    const associating = deferred(),
+      release = deferred();
+    // Arm the filesystem fault for the association record itself. Counting all
+    // record writes can consume the fault during canvas creation or recovery.
+    const writes = spyOn(store, "write").mockImplementation(async (record) => {
+      if (
+        record.environmentId === "env-1" &&
+        record.export?.relativePath === "shared.orkdes" &&
+        !failedCanvasId
+      ) {
+        failedCanvasId = record.canvasId;
+        recordFaults.beforeRename = async (file) => {
+          if (file !== store.recordFile(record.canvasId)) return;
+          delete recordFaults.beforeRename;
+          associating.resolve();
+          await release.promise;
+          throw new Error("association failed");
+        };
       }
-    };
-    const results = await Promise.allSettled([
-      openDesignFile(service(), "env-1", context, "shared.orkdes"),
-      openDesignFile(service(), "env-1", context, "shared.orkdes"),
-    ]);
-    expect(results[0]!.status).toBe("rejected");
-    expect(results[1]!.status).toBe("fulfilled");
-    expect(await service().list("env-1")).toHaveLength(1);
+      return write(record);
+    });
+    try {
+      const first = openDesignFile(service(), "env-1", context, "shared.orkdes");
+      // Destination resolution is asynchronous: invocation order alone does not
+      // guarantee lock admission order. Hold the first association before retrying.
+      await Promise.race([associating.promise, first]);
+      const second = openDesignFile(service(), "env-1", context, "shared.orkdes");
+      const outcomes = Promise.allSettled([first, second]);
+      release.resolve();
+      const results = await outcomes;
+      expect(results[0]!.status).toBe("rejected");
+      if (results[0]!.status === "rejected")
+        expect(results[0]!.reason.message).toBe("association failed");
+      expect(results[1]!.status).toBe("fulfilled");
+      const live = await service().list("env-1");
+      expect(live).toHaveLength(1);
+      expect(live[0]!.id).not.toBe(failedCanvasId);
+      expect(await store.read(failedCanvasId!)).toEqual({ kind: "missing" });
+    } finally {
+      release.resolve();
+      writes.mockRestore();
+      delete recordFaults.beforeRename;
+    }
   });
 
   test("changed file content creates one new canvas while retaining private edits", async () => {

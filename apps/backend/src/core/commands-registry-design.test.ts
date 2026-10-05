@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DESIGN_CONFLICT, type DesignCanvas } from "@orkestrator/protocol/design-canvas";
+import {
+  DESIGN_CONFLICT,
+  DESIGN_MAX_DOCUMENT_BYTES,
+  type DesignCanvas,
+} from "@orkestrator/protocol/design-canvas";
 import type {
   DesignCommandResult,
   DesignOperationStatus,
@@ -15,7 +19,14 @@ import { DesignService } from "./design-service.js";
 import { createTestRenderer, trackUnhandledRejections } from "./design-test-support.js";
 import { StorageService } from "./storage.js";
 
-const frame = { name: "Home", x: 0, y: 0, width: 400, height: 300, html: "<h1>Hello</h1>" };
+const frame = {
+  name: "Home",
+  x: 0,
+  y: 0,
+  width: 400,
+  height: 300,
+  html: "<h1>Hello</h1>",
+};
 
 describe("design command registry", () => {
   let dir: string;
@@ -118,17 +129,94 @@ describe("design command registry", () => {
       environmentId: "container",
       document: JSON.stringify(await design.get(canvas.id)),
     })) as DesignCanvas;
-    expect(imported).toMatchObject({ environmentId: "container" });
+    expect(imported).toMatchObject({ environmentId: "container", name: canvas.name });
     expect(imported.id).not.toBe(canvas.id);
     await expect(
-      invoke("design_action", { environmentId: "missing", action: "list_canvases", input: {} }),
+      invoke("design_action", {
+        environmentId: "missing",
+        action: "list_canvases",
+        input: {},
+      }),
     ).rejects.toThrow("Environment not found");
     await expect(
       invoke("design_import", { environmentId: "missing", document: "{}" }),
     ).rejects.toThrow("Environment not found");
     await expect(
-      invoke("design_action", { environmentId: "local", action: "no_such_action", input: {} }),
+      invoke("design_action", {
+        environmentId: "local",
+        action: "no_such_action",
+        input: {},
+      }),
     ).rejects.toThrow("Unknown design action");
+  });
+
+  test("imports an .orkdes file picked on the host and rejects other files", async () => {
+    const canvas = (await invoke("design_action", {
+      environmentId: "local",
+      action: "create_canvas",
+      input: { name: "Picked" },
+    })) as DesignCanvas;
+    const file = join(worktree, "picked.orkdes");
+    await writeFile(file, JSON.stringify(await design.get(canvas.id)));
+    const imported = (await invoke("design_import_host_file", {
+      environmentId: "container",
+      path: file,
+    })) as DesignCanvas;
+    expect(imported).toMatchObject({ environmentId: "container", name: canvas.name });
+    expect(imported.id).not.toBe(canvas.id);
+    await writeFile(join(worktree, "notes.txt"), "{}");
+    await expect(
+      invoke("design_import_host_file", {
+        environmentId: "local",
+        path: join(worktree, "notes.txt"),
+      }),
+    ).rejects.toThrow("Choose an .orkdes design file.");
+    await expect(
+      invoke("design_import_host_file", {
+        environmentId: "local",
+        path: join(worktree, "gone.orkdes"),
+      }),
+    ).rejects.toThrow("does not exist");
+    await expect(
+      invoke("design_import_host_file", {
+        environmentId: "local",
+        path: "relative.orkdes",
+      }),
+    ).rejects.toThrow("Choose an .orkdes design file.");
+  });
+
+  test("host import enforces the byte boundary and validates directories and document versions", async () => {
+    const canvas = await design.create("local", "Boundary");
+    const document = JSON.stringify(canvas);
+    const path = join(worktree, "boundary.orkdes");
+    await writeFile(
+      path,
+      document + " ".repeat(DESIGN_MAX_DOCUMENT_BYTES - Buffer.byteLength(document)),
+    );
+    expect(await invoke("design_import_host_file", { environmentId: "local", path })).toMatchObject(
+      { name: "Boundary" },
+    );
+    await writeFile(
+      path,
+      document + " ".repeat(DESIGN_MAX_DOCUMENT_BYTES + 1 - Buffer.byteLength(document)),
+    );
+    await expect(
+      invoke("design_import_host_file", { environmentId: "local", path }),
+    ).rejects.toThrow("exceeds 4 MiB");
+    await writeFile(path, "{");
+    await expect(
+      invoke("design_import_host_file", { environmentId: "local", path }),
+    ).rejects.toThrow("not a valid .orkdes");
+    await writeFile(path, JSON.stringify({ ...canvas, version: 2 }));
+    await expect(
+      invoke("design_import_host_file", { environmentId: "local", path }),
+    ).rejects.toThrow("version is not supported");
+    const directory = join(worktree, "directory.orkdes");
+    await mkdir(directory);
+    await expect(
+      invoke("design_import_host_file", { environmentId: "local", path: directory }),
+    ).rejects.toThrow("does not exist");
+    expect(await design.list("local")).toHaveLength(2);
   });
 
   test("the UI acts as the user through the shared action boundary", async () => {
@@ -235,7 +323,10 @@ describe("design command registry", () => {
     });
     const created = await value<DesignPrepareResult>("design_prepare", {
       environmentId: "local",
-      descriptor: { input: { kind: "create_canvas", name: "Typed" }, correlationId: "create-1" },
+      descriptor: {
+        input: { kind: "create_canvas", name: "Typed" },
+        correlationId: "create-1",
+      },
     });
     const committed = await value<DesignOperationStatus>("design_execute", {
       environmentId: "local",
@@ -277,7 +368,10 @@ describe("design command registry", () => {
       }),
     ).toMatchObject({ state: "canceled" });
     expect(
-      await value("design_snapshot", { environmentId: "local", canvasId: created.canvasId }),
+      await value("design_snapshot", {
+        environmentId: "local",
+        canvasId: created.canvasId,
+      }),
     ).toMatchObject({
       kind: "snapshot",
       canvas: { revision: 1, frames: [] },
@@ -291,19 +385,28 @@ describe("design command registry", () => {
       }),
     ).toMatchObject({ kind: "status" });
     expect(
-      await value("design_library", { environmentId: "local", query: { search: "typ" } }),
+      await value("design_library", {
+        environmentId: "local",
+        query: { search: "typ" },
+      }),
     ).toMatchObject({
       entries: [{ id: created.canvasId, name: "Typed" }],
       total: 1,
     });
     // Other environments see nothing; failures are typed, never thrown.
     expect(
-      await value("design_snapshot", { environmentId: "container", canvasId: created.canvasId }),
+      await value("design_snapshot", {
+        environmentId: "container",
+        canvasId: created.canvasId,
+      }),
     ).toMatchObject({
       kind: "missing",
     });
     expect(
-      await typed("design_snapshot", { environmentId: "missing", canvasId: created.canvasId }),
+      await typed("design_snapshot", {
+        environmentId: "missing",
+        canvasId: created.canvasId,
+      }),
     ).toMatchObject({
       ok: false,
       failure: { code: "not-found" },
@@ -352,10 +455,16 @@ describe("design command registry", () => {
       42,
     ])
       expect(
-        await typed("design_open_file", { environmentId: "local", relativePath }),
+        await typed("design_open_file", {
+          environmentId: "local",
+          relativePath,
+        }),
       ).toMatchObject({ ok: false, failure: { code: "invalid-input" } });
     expect(
-      await typed("design_open_file", { environmentId: "local", relativePath: "missing.orkdes" }),
+      await typed("design_open_file", {
+        environmentId: "local",
+        relativePath: "missing.orkdes",
+      }),
     ).toMatchObject({ ok: false, failure: { code: "not-found" } });
     expect(await design.list("container")).toEqual([]);
   });
@@ -363,24 +472,28 @@ describe("design command registry", () => {
   test("v2 export, history and lifecycle commands", async () => {
     const canvas = await design.create("local", "Exported", undefined, "user");
     const { frame: created } = await design.createFrame(canvas.id, "local", 1, frame, "user");
-    const preview = await value<{ suggestedPath: string; target: { exists: boolean } }>(
-      "design_export_preview",
-      {
-        environmentId: "local",
-        canvasId: canvas.id,
-      },
-    );
+    const preview = await value<{
+      suggestedPath: string;
+      target: { exists: boolean };
+    }>("design_export_preview", {
+      environmentId: "local",
+      canvasId: canvas.id,
+    });
     expect(preview.target.exists).toBe(false);
-    const receipt = await value<{ relativePath: string; revision: number; digest: string }>(
-      "design_export_save",
-      {
-        environmentId: "local",
-        canvasId: canvas.id,
-        relativePath: preview.suggestedPath,
-        revision: 2,
-      },
-    );
-    expect(receipt).toMatchObject({ relativePath: preview.suggestedPath, revision: 2 });
+    const receipt = await value<{
+      relativePath: string;
+      revision: number;
+      digest: string;
+    }>("design_export_save", {
+      environmentId: "local",
+      canvasId: canvas.id,
+      relativePath: preview.suggestedPath,
+      revision: 2,
+    });
+    expect(receipt).toMatchObject({
+      relativePath: preview.suggestedPath,
+      revision: 2,
+    });
     expect(
       await typed("design_export_save", {
         environmentId: "local",
@@ -439,17 +552,26 @@ describe("design command registry", () => {
       unlinked: true,
     });
     expect(
-      await typed("design_purge", { environmentId: "local", canvasId: canvas.id }),
+      await typed("design_purge", {
+        environmentId: "local",
+        canvasId: canvas.id,
+      }),
     ).toMatchObject({
       ok: false,
       failure: { code: "conflict" },
     });
     await design.delete(canvas.id, "local", "user");
     expect(
-      await value<unknown>("design_purge", { environmentId: "local", canvasId: canvas.id }),
+      await value<unknown>("design_purge", {
+        environmentId: "local",
+        canvasId: canvas.id,
+      }),
     ).toEqual({ purged: true });
     expect(
-      await value("design_snapshot", { environmentId: "local", canvasId: canvas.id }),
+      await value("design_snapshot", {
+        environmentId: "local",
+        canvasId: canvas.id,
+      }),
     ).toMatchObject({
       kind: "missing",
     });

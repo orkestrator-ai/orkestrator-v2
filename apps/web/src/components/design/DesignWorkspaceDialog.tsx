@@ -22,12 +22,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { invoke } from "@/lib/native/backend";
+import { pickHostPath } from "@/lib/host-path-picker";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
-import { designAction, designApi, designBackendKey, failureOf } from "./design-client";
+import {
+  classifyTransportError,
+  designAction,
+  designApi,
+  designBackendKey,
+  failureOf,
+} from "./design-client";
 import {
   DESIGN_AGENTS,
   DESIGN_AGENT_LABELS,
@@ -37,11 +44,10 @@ import {
   DESIGN_FRAME_PRESETS,
   DESIGN_NAME_MAX,
   DesignLaunchError,
-  importAndOpenDesign,
   launchDesignWorkspace,
   loadDesignReadiness,
-  readDesignImport,
   rendererUnavailable,
+  readDesignImport,
   runDesignLifecycle,
   validateDesignName,
   type DesignAgent,
@@ -55,7 +61,6 @@ import {
   type DesignLayoutFacts,
   type DesignPlacement,
 } from "./design-open";
-import { DesignLibrary } from "./DesignLibrary";
 import {
   addDesignImagesToDraft,
   DESIGN_PROMPT_IMAGE_HINT,
@@ -63,8 +68,9 @@ import {
   useDesignPromptImagePaste,
   type DesignPromptImage,
 } from "./design-prompt-images";
+import { DesignLibrary } from "./DesignLibrary";
 
-export type DesignWorkspaceMode = "new" | "saved" | "import";
+export type DesignWorkspaceMode = "new" | "open" | "saved";
 type AgentChoice = DesignAgent | "none";
 type CreateTab = (type: CreatableTabType, options?: CreateTabOptions) => boolean;
 
@@ -134,8 +140,19 @@ export function DesignWorkspaceDialog({
   const briefRef = useRef<HTMLDivElement>(null);
   const [preset, setPreset] = useState<DesignFramePresetId>("none");
   const [busy, setBusy] = useState(false);
+  const [uploadFallback, setUploadFallback] = useState(false);
+  const importEpoch = useRef(0);
+  useEffect(
+    () => () => {
+      importEpoch.current++;
+    },
+    [],
+  );
   const [error, setError] = useState<string | null>(null);
-  const [recovery, setRecovery] = useState<{ canvasId: string; name: string } | null>(null);
+  const [recovery, setRecovery] = useState<{
+    canvasId: string;
+    name: string;
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const enabledPlatforms: readonly string[] = useConfigStore(
@@ -188,6 +205,9 @@ export function DesignWorkspaceDialog({
     if (open) refreshReadiness();
   }, [open, scope, refreshReadiness]);
   useEffect(() => {
+    importEpoch.current++;
+    setBusy(false);
+    setUploadFallback(false);
     setError(null);
     setRecovery(null);
     setNotice(null);
@@ -246,7 +266,12 @@ export function DesignWorkspaceDialog({
       }
       if (decision.kind === "refuse") return decision.message;
       if (!createTab) return "Start this environment to open designs.";
-      if (!createTab("design-canvas", { canvasId, designPlacement: decision.placement }))
+      if (
+        !createTab("design-canvas", {
+          canvasId,
+          designPlacement: decision.placement,
+        })
+      )
         return "The design could not be opened in this layout. Close a tab or pane and try again.";
       onOpenChange(false);
       return null;
@@ -284,7 +309,9 @@ export function DesignWorkspaceDialog({
         canvasTabId: createUniqueTabId("design"),
         agentTabId: createUniqueTabId("design-agent"),
         createCanvas: (canvasName) =>
-          designAction<DesignCanvas>(environmentId, "create_canvas", { name: canvasName }),
+          designAction<DesignCanvas>(environmentId, "create_canvas", {
+            name: canvasName,
+          }),
         createFrame: (canvas, frame) =>
           designAction<{ canvasRevision: number }>(environmentId, "create_frame", {
             canvasId: canvas.id,
@@ -294,7 +321,11 @@ export function DesignWorkspaceDialog({
             ...frame,
           }),
         openCanvas: (canvasId, tabId, placement) =>
-          createTab("design-canvas", { canvasId, tabId, designPlacement: placement }),
+          createTab("design-canvas", {
+            canvasId,
+            tabId,
+            designPlacement: placement,
+          }),
         createAgentTab: (platform, tabId, initialPrompt) => {
           // The agent sits beside the canvas in the pane the user started from.
           if (originPaneId)
@@ -338,7 +369,11 @@ export function DesignWorkspaceDialog({
         ...(sessions
           ? {
               linkSession: (canvasId: string, tabId: string, platform: DesignAgent) =>
-                designApi.linkSession(environmentId, canvasId, { tabId, platform, role: "design" }),
+                designApi.linkSession(environmentId, canvasId, {
+                  tabId,
+                  platform,
+                  role: "design",
+                }),
             }
           : {}),
       });
@@ -360,37 +395,82 @@ export function DesignWorkspaceDialog({
     }
   };
 
-  const importFile = async (file: File) => {
-    const importScope = scopeRef.current;
-    const unvalidated = rendererUnavailable(view);
-    setBusy(true);
+  const finishImport = (imported: DesignCanvas) => {
+    const openError = openDesign(imported.id, "split");
+    if (!openError) return;
+    setNotice(
+      `Imported “${imported.name}”${rendererUnavailable(view) ? " — stored unvalidated until the renderer is available" : ""}.`,
+    );
+    setError(`It could not be opened yet: ${openError}`);
+    setRecovery({ canvasId: imported.id, name: imported.name });
+  };
+
+  const importFile = async (
+    work: () => Promise<DesignCanvas>,
+    epoch: number,
+    importScope: string,
+  ) => {
+    const current = () => epoch === importEpoch.current && importScope === scopeRef.current;
     setError(null);
     setNotice(null);
     setRecovery(null);
     try {
-      const document = await readDesignImport(file);
-      const result = await importAndOpenDesign({
-        document,
-        importCanvas: (value) =>
-          invoke<DesignCanvas>("design_import", { environmentId, document: value }),
-        openCanvas: (canvasId) =>
-          importScope === scopeRef.current ? openDesign(canvasId, "split") : "Environment changed.",
-      });
-      if (importScope !== scopeRef.current) return;
-      const stored = `Imported “${result.canvas.name}”${
-        unvalidated ? " — stored unvalidated until the renderer is available" : ""
-      }.`;
-      if (result.opened) toast.success(stored);
-      else {
-        setNotice(stored);
-        setError(`It could not be opened yet: ${result.openError}`);
-        setRecovery({ canvasId: result.canvas.id, name: result.canvas.name });
-      }
+      const imported = await work();
+      if (current()) finishImport(imported);
     } catch (reason) {
-      if (importScope === scopeRef.current) setError(errorText(reason));
+      if (!current()) return;
+      if (classifyTransportError(reason) === "unsupported") {
+        setUploadFallback(true);
+        setError(
+          "This backend cannot open host files. Upload an .orkdes file from this device below.",
+        );
+      } else setError(errorText(reason));
     } finally {
-      if (importScope === scopeRef.current) setBusy(false);
+      if (current()) setBusy(false);
     }
+  };
+
+  const openFromPicker = async () => {
+    if (busy) return;
+    const importScope = scopeRef.current;
+    const epoch = ++importEpoch.current;
+    setBusy(true);
+    const path = await pickHostPath({
+      mode: "file",
+      title: "Open design (.orkdes)",
+    });
+    if (epoch !== importEpoch.current || importScope !== scopeRef.current) return;
+    if (!path) {
+      setBusy(false);
+      return;
+    }
+    if (!path.toLowerCase().endsWith(".orkdes")) {
+      setError("Choose an .orkdes design file.");
+      setBusy(false);
+      return;
+    }
+    await importFile(
+      () => invoke<DesignCanvas>("design_import_host_file", { environmentId, path }),
+      epoch,
+      importScope,
+    );
+  };
+
+  const uploadFile = async (file: File) => {
+    if (busy) return;
+    const importScope = scopeRef.current;
+    const epoch = ++importEpoch.current;
+    setBusy(true);
+    await importFile(
+      async () => {
+        const document = await readDesignImport(file);
+        if (epoch !== importEpoch.current || importScope !== scopeRef.current)
+          throw new Error("Design workspace changed.");
+        return invoke<DesignCanvas>("design_import", { environmentId, document });
+      },
+      epoch,
+      importScope,
+    );
   };
 
   const showNameError = nameTouched && nameProblem;
@@ -400,15 +480,15 @@ export function DesignWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>Design workspace</DialogTitle>
           <DialogDescription>
-            Design with Claude or Codex beside a shared HTML canvas, or import an .orkdes file. Open
-            a repository design from the file tree, or reopen any private canvas in Saved designs.
+            Design with Claude or Codex beside a shared HTML canvas, or open an existing .orkdes
+            design file.
           </DialogDescription>
         </DialogHeader>
         <Tabs value={mode} onValueChange={(value) => setMode(value as DesignWorkspaceMode)}>
           <TabsList className="w-full">
             <TabsTrigger value="new">New design</TabsTrigger>
+            <TabsTrigger value="open">Open design</TabsTrigger>
             <TabsTrigger value="saved">Saved designs</TabsTrigger>
-            <TabsTrigger value="import">Import</TabsTrigger>
           </TabsList>
           <TabsContent value="new">
             <form
@@ -544,38 +624,61 @@ export function DesignWorkspaceDialog({
             </form>
           </TabsContent>
           <TabsContent value="saved">
-            <DesignLibrary
-              environmentId={environmentId}
-              backendKey={backendKey}
-              legacy={legacy}
-              canManage={Boolean(view?.capabilities?.operations)}
-              openChoices={(canvasId) => designOpenChoices(canvasId, facts)}
-              onOpen={openDesign}
-            />
+            {view && (
+              <DesignLibrary
+                environmentId={environmentId}
+                backendKey={backendKey}
+                legacy={legacy}
+                canManage={Boolean(view.capabilities?.lifecycle)}
+                openChoices={(canvasId) =>
+                  environmentReady
+                    ? designOpenChoices(canvasId, facts)
+                    : {
+                        canOpen: false,
+                        besideFallsBack: false,
+                        notice: "Start this environment to open designs.",
+                      }
+                }
+                onOpen={openDesign}
+              />
+            )}
+            {readinessLoading && <p className="text-sm">Loading designs…</p>}
           </TabsContent>
-          <TabsContent value="import">
+          <TabsContent value="open">
             <div className="grid gap-2">
-              <label className="grid gap-1 text-sm">
-                Import .orkdes
-                <Input
-                  type="file"
-                  accept=".orkdes,application/json"
-                  disabled={busy || !environmentId}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    event.target.value = "";
-                    if (file) void importFile(file);
-                  }}
-                />
-              </label>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy || !environmentId}
+                onClick={() => void openFromPicker()}
+              >
+                {busy ? "Opening…" : "Choose .orkdes file…"}
+              </Button>
               <p className="text-xs text-muted-foreground">
-                Version 1 .orkdes files up to 4 MiB. An import gets a new identity; conversation
-                links and save locations from the original are not copied.
+                Browse the files on the machine running Orkestrator. Version 1 .orkdes files up to 4
+                MiB. Opening a file creates a new design with its own identity; conversation links
+                and save locations from the original are not copied.
               </p>
+              {uploadFallback && (
+                <label className="grid gap-1 text-sm">
+                  Upload .orkdes from this device
+                  <Input
+                    type="file"
+                    accept=".orkdes,application/json"
+                    aria-label="Import .orkdes"
+                    disabled={busy}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (file) void uploadFile(file);
+                    }}
+                  />
+                </label>
+              )}
               {rendererUnavailable(view) && (
                 <p className="text-xs text-amber-700 dark:text-amber-400">
-                  The renderer is unavailable, so an import will be stored unvalidated until it is
-                  available.
+                  The renderer is unavailable, so an opened design will be stored unvalidated until
+                  it is available.
                 </p>
               )}
             </div>

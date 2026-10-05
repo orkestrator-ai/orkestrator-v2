@@ -1,3 +1,4 @@
+import { extname, isAbsolute } from "node:path";
 import { z } from "zod";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
 import type { DesignCommandResult } from "@orkestrator/protocol/design-operations";
@@ -9,6 +10,7 @@ import {
   reconcileExport,
   resolveDesignDestination,
 } from "./design-exports.js";
+import { readDesignHostFile } from "./design-host-file.js";
 import { designId, revision } from "./design-schemas.js";
 import { purge } from "./design-service-lifecycle.js";
 import type { DesignService } from "./design-service.js";
@@ -44,7 +46,9 @@ export type DesignCommandRegistrar = (
 
 async function authorized(args: Record<string, unknown>, context: DesignCommandContext) {
   if (!context.design)
-    throw new DesignError("unsupported", "Design service unavailable", { retry: "after-delay" });
+    throw new DesignError("unsupported", "Design service unavailable", {
+      retry: "after-delay",
+    });
   const environmentId = environmentIdSchema.parse(args.environmentId);
   // Typed so v2 envelopes report not-found rather than a generic storage failure.
   if (!(await context.storage.getEnvironment(environmentId)))
@@ -80,6 +84,17 @@ export function registerDesignCommandHandlers(register: DesignCommandRegistrar) 
       .string()
       .refine((value) => Buffer.byteLength(value) <= DESIGN_MAX_DOCUMENT_BYTES)
       .parse(args.document);
+    return design.create(environmentId, "Imported design", document, "user");
+  });
+  // Imports an .orkdes file chosen in the host path picker, which browses the
+  // machine the backend runs on, so the document is read here rather than by
+  // the client.
+  register("design_import_host_file", async (args, context) => {
+    const { design, environmentId } = await authorized(args, context);
+    const filePath = z.string().min(1).max(4096).parse(args.path);
+    if (!isAbsolute(filePath) || extname(filePath).toLowerCase() !== ".orkdes")
+      throw new DesignError("invalid-input", "Choose an .orkdes design file.");
+    const document = await readDesignHostFile(filePath);
     return design.create(environmentId, "Imported design", document, "user");
   });
   register("design_save", async (args, context) => {

@@ -202,6 +202,34 @@ describe("DesignExportDialog", () => {
     expect(await screen.findByText(/The workspace has newer changes \(revision 9\)/)).toBeTruthy();
   });
 
+  test("retains the committed revision while a new preview loads or fails, but resets on reopen", async () => {
+    exportPreview.mockResolvedValue(preview());
+    const props = { onOpenChange: () => {}, controller, api, projection: projection() };
+    const view = render(<DesignExportDialog {...props} open />);
+    await screen.findByText("Exports committed revision 7.");
+    const next = deferred<DesignExportPreview>();
+    exportPreview.mockReturnValue(next.promise);
+    fireEvent.change(nameField(), { target: { value: "next.orkdes" } });
+    await screen.findByText("Checking designs/next.orkdes…");
+    expect(screen.getByText("Exports committed revision 7.")).toBeTruthy();
+    expect(button("Export revision 7").disabled).toBe(true);
+    await act(async () => next.resolve(preview("designs/next.orkdes", {}, 8)));
+    await screen.findByText("Exports committed revision 8.");
+    exportPreview.mockRejectedValue(new Error("Preview failed"));
+    fireEvent.change(nameField(), { target: { value: "failed.orkdes" } });
+    await screen.findByText("Preview failed");
+    expect(screen.getByText("Exports committed revision 8.")).toBeTruthy();
+    expect(button("Export revision 8").disabled).toBe(true);
+    view.rerender(<DesignExportDialog {...props} open={false} />);
+    const reopened = deferred<DesignExportPreview>();
+    exportPreview.mockReturnValue(reopened.promise);
+    view.rerender(<DesignExportDialog {...props} open />);
+    expect(screen.queryByText(/Exports committed revision/) === null).toBe(true);
+    expect(button("Export revision …").disabled).toBe(true);
+    await act(async () => reopened.resolve(preview(suggested, {}, 9)));
+    expect(screen.getByText("Exports committed revision 9.")).toBeTruthy();
+  });
+
   test("updating your previous export passes its fingerprint without extra confirmation", async () => {
     exportPreview.mockResolvedValue({
       ...preview(suggested, {
@@ -288,7 +316,7 @@ describe("DesignExportDialog", () => {
 
     fireEvent.change(nameField(), { target: { value: "bad name.orkdes" } });
     expect(screen.getByText(/is not a valid path/)).toBeTruthy();
-    expect(button("Export revision …").disabled).toBe(true);
+    expect(button("Export revision 7").disabled).toBe(true);
 
     fireEvent.change(folderField(), { target: { value: "" } });
     fireEvent.change(nameField(), { target: { value: "first.orkdes" } });

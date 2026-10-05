@@ -133,9 +133,8 @@ export async function createCommandFixtures() {
     toClientEnvironment,
   } = await import("../../../apps/backend/src/core/commands");
 
-  const { CommandFailedError, GitRemoteTimeoutError } = await import(
-    "../../../apps/backend/src/core/shell"
-  );
+  const { CommandFailedError, GitRemoteTimeoutError } =
+    await import("../../../apps/backend/src/core/shell");
 
   const { setAgentSkillsHomeForTesting } =
     await import("../../../apps/backend/src/core/agent-skills");

@@ -863,22 +863,45 @@ export async function gitRefExists(worktreePath: string, refName: string): Promi
  * key that needs a passphrase (and is not in an agent) makes `ssh` prompt on
  * that terminal and wait forever. BatchMode turns the prompt into an immediate
  * "Permission denied (publickey)", which is classified and shown to the user.
- * A configured ssh program is kept; only the option is added.
+ * Only a known OpenSSH command accepts BatchMode. Arbitrary shell commands and
+ * other transports keep their argument contract and rely on the fetch timeout.
  */
 async function gitNonInteractiveEnv(projectPath: string): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-  // GIT_SSH is an arbitrary program, so there is no option to append to.
-  if (env.GIT_SSH) return env;
-  const configured =
-    env.GIT_SSH_COMMAND?.trim() ||
-    (await runCommand("git", ["-C", projectPath, "config", "--get", "core.sshCommand"], {
+  const readConfig = (key: string) =>
+    runCommand("git", ["-C", projectPath, "config", "--get", key], {
       timeoutMs: 10_000,
     }).then(
       ({ stdout }) => stdout.trim(),
-      () => "",
-    )) ||
-    "ssh";
-  env.GIT_SSH_COMMAND = `${configured} -o BatchMode=yes`;
+      () => undefined,
+    );
+  // Match Git's precedence, including core.sshCommand before GIT_SSH.
+  const configured = env.GIT_SSH_COMMAND ?? (await readConfig("core.sshCommand"));
+  if (configured === undefined && env.GIT_SSH !== undefined) return env;
+  const command = configured ?? "ssh";
+  // Recognize a literal executable, retaining its exact shell spelling. Do not
+  // rewrite expansions, assignments, pipelines or compound shell commands.
+  const executable = command.match(
+    /^\s*((?:[^\s'"\\$`;&|<>()]+|'[^']*'|"[^"\\$`]*"|\\[^\n])+)(?=\s|$)/,
+  );
+  if (!executable) return env;
+  const literal = executable[1]!.replace(/'([^']*)'|"([^"]*)"|\\(.)/g, "$1$2$3");
+  if (literal.includes("=") || /[;&|<>()`]/.test(command.slice(executable[0].length))) {
+    return env;
+  }
+  const variant = (env.GIT_SSH_VARIANT ?? (await readConfig("ssh.variant")))?.toLowerCase();
+  const basename = path
+    .basename(literal)
+    .toLowerCase()
+    .replace(/\.exe$/, "");
+  const isOpenSsh =
+    variant === undefined || variant === "auto"
+      ? basename === "ssh"
+      : !["simple", "plink", "putty", "tortoiseplink"].includes(variant);
+  if (!isOpenSsh) return env;
+  // OpenSSH uses the first value for each option, so this must precede any
+  // configured BatchMode=no. Leave the executable and all other options intact.
+  env.GIT_SSH_COMMAND = `${command.slice(0, executable[0].length)} -o BatchMode=yes${command.slice(executable[0].length)}`;
   return env;
 }
 

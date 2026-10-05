@@ -64,6 +64,7 @@ type ServeStatus = {
       Handlers?: Record<string, { Proxy?: unknown }>;
     }
   >;
+  AllowFunnel?: Record<string, unknown>;
 };
 
 export class TailscaleServeConflictError extends Error {
@@ -153,6 +154,34 @@ function ownedServeUrl(status: ServeStatus, targetPort: number, httpsPort: numbe
   }
 }
 
+/** Funnel is keyed by `host:port`, so any host on `port` exposes it publicly. */
+function hasFunnel(status: ServeStatus, port: number): boolean {
+  return Object.entries(status.AllowFunnel ?? {}).some(([hostPort, enabled]) => {
+    const separator = hostPort.lastIndexOf(":");
+    return (
+      enabled === true &&
+      separator >= 0 &&
+      Number.parseInt(hostPort.slice(separator + 1), 10) === port
+    );
+  });
+}
+
+/**
+ * The URL of an existing listener that is safe to adopt without reconfiguring
+ * it. A matching proxy target alone is not enough: `tailscale funnel <port>`
+ * produces the same root handler, and adopting it would leave the backend
+ * reachable from the public internet. Only the shape this manager itself
+ * creates — a tailnet-only HTTPS listener — qualifies.
+ */
+function adoptableServeUrl(
+  status: ServeStatus,
+  targetPort: number,
+  httpsPort: number,
+): string | null {
+  if (!hasHttpsListener(status, httpsPort) || hasFunnel(status, httpsPort)) return null;
+  return ownedServeUrl(status, targetPort, httpsPort);
+}
+
 function commandError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const stderr = (error as Error & { stderr?: string }).stderr?.trim();
@@ -187,7 +216,7 @@ export class TailscaleServeManager {
     }
     const status = parseServeStatus(existingStatus.stdout);
     if (configuredPort(status, httpsPort)) {
-      const existingUrl = ownedServeUrl(status, targetPort, httpsPort);
+      const existingUrl = adoptableServeUrl(status, targetPort, httpsPort);
       if (options.adoptExisting && existingUrl) {
         this.activeServe = { targetPort, httpsPort };
         return existingUrl;
@@ -358,4 +387,20 @@ export class TailscaleServeManager {
       throw new Error(`Unable to remove owned Tailscale Serve handler: ${commandError(error)}`);
     }
   }
+}
+
+/**
+ * Starts Serve for a standalone backend whose browser listener is already
+ * bound. A tailnet-only root handler proxying to that port — typically left by
+ * an earlier run that exited without teardown — is exactly the listener this
+ * would configure, so it is adopted instead of failing startup. Anything else
+ * on the HTTPS port, including a Funnel or a handler proxying elsewhere, is
+ * still a conflict.
+ */
+export function startStandaloneTailscaleServe(
+  serve: Pick<TailscaleServeManager, "start">,
+  browserUrl: string,
+  httpsPort: number,
+): Promise<string> {
+  return serve.start(getTailscaleServeTargetPort(browserUrl), httpsPort, { adoptExisting: true });
 }

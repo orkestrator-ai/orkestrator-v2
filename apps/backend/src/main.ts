@@ -10,7 +10,7 @@ import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
+import { startStandaloneTailscaleServe, TailscaleServeManager } from "./tailscale-serve.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
@@ -140,14 +140,10 @@ if (managedWebClient) {
   }
   tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
   try {
-    // This backend has just bound the target port, so a root handler already
-    // proxying to it can only be a leftover from an earlier run that exited
-    // without tearing Serve down. Adopt it rather than refusing to start;
-    // handlers proxying anywhere else are still treated as conflicts.
-    const tailscaleUrl = await tailscaleServe.start(
-      getTailscaleServeTargetPort(browserUrl),
+    const tailscaleUrl = await startStandaloneTailscaleServe(
+      tailscaleServe,
+      browserUrl,
       options.tailscaleServePort,
-      { adoptExisting: true },
     );
     console.info(`[TailscaleServe] Available at ${tailscaleUrl}`);
     info = { ...gatewayInfo, browserUrl: tailscaleUrl };

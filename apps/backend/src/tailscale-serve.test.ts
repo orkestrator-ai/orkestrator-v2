@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   extractTailscaleServeUrl,
   getTailscaleServeTargetPort,
+  startStandaloneTailscaleServe,
   TailscaleServeConflictError,
   TailscaleServeManager,
   type TailscaleCommandRunner,
@@ -328,6 +329,77 @@ describe("Tailscale Serve manager", () => {
     );
     await expect(manager.stopOwned(34121, 443)).rejects.toThrow("Refusing to remove a changed");
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  test("refuses to adopt a matching listener that is exposed through Funnel", async () => {
+    const run = mock(async () => ({
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "workstation.example.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:34121" } },
+          },
+        },
+        AllowFunnel: { "workstation.example.ts.net:443": true },
+      }),
+      stderr: "",
+    })) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    const error = await manager.start(34121, 443, { adoptExisting: true }).catch((e) => e);
+    expect(error).toBeInstanceOf(TailscaleServeConflictError);
+    expect((error as TailscaleServeConflictError).resetAvailable).toBe(true);
+    // Only the status probe ran: nothing was adopted or reconfigured.
+    expect(run).toHaveBeenCalledTimes(1);
+    await expect(manager.stop()).resolves.toBeUndefined();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  test("refuses to adopt a matching listener that is not HTTPS", async () => {
+    const run = mock(async () => ({
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: false } },
+        Web: {
+          "workstation.example.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:34121" } },
+          },
+        },
+      }),
+      stderr: "",
+    })) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    const error = await manager.start(34121, 443, { adoptExisting: true }).catch((e) => e);
+    expect(error).toBeInstanceOf(TailscaleServeConflictError);
+    expect((error as TailscaleServeConflictError).resetAvailable).toBe(false);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  test("still adopts when Funnel is enabled only on another port or explicitly off", async () => {
+    const run = mock(async () => ({
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+        Web: {
+          "workstation.example.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:34121" } },
+          },
+          "workstation.example.ts.net:8443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:9000" } },
+          },
+        },
+        AllowFunnel: {
+          "workstation.example.ts.net:443": false,
+          "workstation.example.ts.net:8443": true,
+        },
+      }),
+      stderr: "",
+    })) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.start(34121, 443, { adoptExisting: true })).resolves.toBe(
+      "https://workstation.example.ts.net/",
+    );
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   test("removes a matching persisted listener and no-ops when its root handler is gone", async () => {
@@ -729,5 +801,59 @@ fi
     // `/api` still holds the port open; the repeat teardown must stay a no-op.
     await expect(manager.stop()).resolves.toBeUndefined();
     await expect(manager.stopOwned(34121)).resolves.toBe(false);
+  });
+});
+
+describe("standalone Tailscale Serve start", () => {
+  test("adopts a root handler left by an unclean exit and removes it on shutdown", async () => {
+    const tailscale = createFakeTailscale({
+      443: { "/": "http://127.0.0.1:34121", "/api": "http://127.0.0.1:9000" },
+    });
+    const manager = new TailscaleServeManager("tailscale", tailscale.run);
+
+    await expect(
+      startStandaloneTailscaleServe(manager, "http://127.0.0.1:34121/", 443),
+    ).resolves.toBe("https://workstation.example.ts.net/");
+    // Adoption reuses the listener instead of reconfiguring it.
+    expect(tailscale.calls).toEqual([["serve", "status", "--json"]]);
+
+    await manager.stop();
+    expect(tailscale.handlerPaths(443)).toEqual(["/api"]);
+  });
+
+  test("configures a fresh listener when nothing is served on the port", async () => {
+    const tailscale = createFakeTailscale();
+    const manager = new TailscaleServeManager("tailscale", tailscale.run);
+
+    await expect(
+      startStandaloneTailscaleServe(manager, "http://127.0.0.1:41234/", 8443),
+    ).resolves.toBe("https://workstation.example.ts.net/");
+    expect(tailscale.handlerPaths(8443)).toEqual(["/"]);
+    expect(tailscale.calls).toContainEqual([
+      "serve",
+      "--bg",
+      "--yes",
+      "--https=8443",
+      "http://127.0.0.1:41234",
+    ]);
+  });
+
+  test("still refuses a root handler proxying to another port", async () => {
+    const tailscale = createFakeTailscale({ 443: { "/": "http://127.0.0.1:9999" } });
+    const manager = new TailscaleServeManager("tailscale", tailscale.run);
+
+    await expect(
+      startStandaloneTailscaleServe(manager, "http://127.0.0.1:34121/", 443),
+    ).rejects.toBeInstanceOf(TailscaleServeConflictError);
+    expect(tailscale.handlerPaths(443)).toEqual(["/"]);
+  });
+
+  test("rejects a non-loopback browser listener before touching Serve", async () => {
+    const start = mock(async () => "https://unused.example/");
+
+    expect(() => startStandaloneTailscaleServe({ start }, "http://0.0.0.0:34121/", 443)).toThrow(
+      "requires the backend browser listener",
+    );
+    expect(start).not.toHaveBeenCalled();
   });
 });

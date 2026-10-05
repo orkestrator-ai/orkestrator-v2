@@ -10,7 +10,7 @@ import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
+import { startStandaloneTailscaleServe, TailscaleServeManager } from "./tailscale-serve.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
@@ -140,8 +140,9 @@ if (managedWebClient) {
   }
   tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
   try {
-    const tailscaleUrl = await tailscaleServe.start(
-      getTailscaleServeTargetPort(browserUrl),
+    const tailscaleUrl = await startStandaloneTailscaleServe(
+      tailscaleServe,
+      browserUrl,
       options.tailscaleServePort,
     );
     console.info(`[TailscaleServe] Available at ${tailscaleUrl}`);

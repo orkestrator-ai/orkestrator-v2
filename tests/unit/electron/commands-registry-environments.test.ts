@@ -1,5 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
+import * as shell from "../../../apps/backend/src/core/shell";
+
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -1366,6 +1368,61 @@ esac
       ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication,
     );
     expect(environment.lifecycleError).not.toContain("example.invalid");
+  });
+
+  test("persists and rejects with the sanitized Git remote timeout during startup", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-local-remote-timeout",
+      environmentType: "local",
+      status: "stopped",
+      worktreePath: undefined,
+      branch: `timeout-${randomUUID().slice(0, 8)}`,
+      pendingAgentLaunch: true,
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: "remote-timeout-repo",
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const realRun = shell.runCommand;
+    const run = spyOn(shell, "runCommand").mockImplementation((command, args = [], options) =>
+      command === "git" && args.includes("fetch")
+        ? realRun("sh", ["-c", "exec sleep 5"], { ...options, timeoutMs: 20 })
+        : realRun(command, args, options),
+    );
+    const commands = createCommandRegistry();
+    try {
+      const failure = await commands.get("start_environment")!(
+        { environmentId: environment.id },
+        context,
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut,
+      });
+      expect(environment.status).toBe("error");
+      expect(environment.lifecycleError).toBe(
+        ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut,
+      );
+      expect(environment.lifecycleError).not.toContain("sleep");
+      expect(environment.worktreePath).toBeUndefined();
+      expect(environment.pendingAgentLaunch).toBe(false);
+      expect(context.storage.updateEnvironment).toHaveBeenCalledWith(
+        environment.id,
+        expect.objectContaining({
+          status: "error",
+          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut,
+        }),
+      );
+    } finally {
+      run.mockRestore();
+    }
   });
 
   test("removes a newly created container when persisting its identity fails", async () => {

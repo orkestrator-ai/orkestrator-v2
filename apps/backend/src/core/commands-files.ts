@@ -8,6 +8,8 @@ import {
   inferLanguage,
   runCommand,
   runCommandBuffer,
+  CommandFailedError,
+  GitRemoteTimeoutError,
   assertEditorTextFileSize,
   decodeEditorTextFile,
   MAX_BINARY_FILE_BYTES,
@@ -862,7 +864,14 @@ export async function resolveRemoteWorktreeStartPoint(
   baseBranch: string,
 ): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
-  await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
+  try {
+    await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
+  } catch (error) {
+    if (error instanceof CommandFailedError && error.timedOut) {
+      throw new GitRemoteTimeoutError(error.message, { signal: error.signal });
+    }
+    throw error;
+  }
 
   const remoteRef = `origin/${branch}`;
   if (!(await gitRefExists(projectPath, remoteRef))) {

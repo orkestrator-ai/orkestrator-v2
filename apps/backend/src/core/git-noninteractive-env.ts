@@ -2,28 +2,43 @@ import path from "node:path";
 import { runCommand } from "./shell.js";
 
 /** Keep the executable's original shell spelling, including quoted paths. */
-function openSshExecutable(command: string): string | null {
-  const token = command.trim().match(/^(?:"[^"\n]+"|'[^'\n]+'|[^\s"']+)(?=\s|$)/)?.[0];
-  if (!token) return null;
-  const program = token.replace(/^["']|["']$/g, "");
-  return /^ssh(\.exe)?$/i.test(path.win32.basename(path.basename(program))) ? token : null;
+function openSshExecutable(command: string, variant: string | undefined): string | null {
+  // Recognize literal executables without rewriting expansions or compound commands.
+  const executable = command.match(
+    /^\s*((?:[^\s'"\\$`;&|<>()]+|'[^']*'|"[^"\\$`]*"|\\[^\n])+)(?=\s|$)/,
+  );
+  if (!executable) return null;
+  const literal = executable[1]!.replace(/'([^']*)'|"([^"]*)"|\\(.)/g, "$1$2$3");
+  if (literal.includes("=") || /[;&|<>()`]/.test(command.slice(executable[0].length))) {
+    return null;
+  }
+  const basename = path.win32
+    .basename(path.basename(literal))
+    .toLowerCase()
+    .replace(/\.exe$/, "");
+  const isOpenSsh =
+    variant === undefined || variant === "auto"
+      ? basename === "ssh"
+      : !["simple", "plink", "putty", "tortoiseplink"].includes(variant);
+  return isOpenSsh ? executable[0] : null;
 }
 
-async function configuredSshCommand(
+async function configuredGitValue(
+  key: string,
   cwd: string | undefined,
   env: NodeJS.ProcessEnv,
   run: typeof runCommand,
-): Promise<string | null> {
+): Promise<string | undefined> {
   try {
-    const { stdout } = await run("git", ["config", "--get", "core.sshCommand"], {
+    const { stdout } = await run("git", ["config", "--get", key], {
       cwd,
       env,
       timeoutMs: 10_000,
     });
-    return stdout.trim() || null;
+    return stdout.trim() || undefined;
   } catch {
     // Unset, unreadable or timed-out config must not leave default ssh interactive.
-    return null;
+    return undefined;
   }
 }
 
@@ -51,9 +66,13 @@ export async function nonInteractiveGitEnv(
   // Empty environment values should fall through instead of shadowing Git config.
   delete result.GIT_SSH_COMMAND;
   if (!env.GIT_SSH?.trim()) delete result.GIT_SSH;
-  const command = env.GIT_SSH_COMMAND?.trim() || (await configuredSshCommand(cwd, env, run));
+  const command =
+    env.GIT_SSH_COMMAND?.trim() || (await configuredGitValue("core.sshCommand", cwd, env, run));
   const base = command || (env.GIT_SSH?.trim() ? `'${env.GIT_SSH.replace(/'/g, "'\\''")}'` : "ssh");
-  const executable = openSshExecutable(base);
+  const variant = (
+    env.GIT_SSH_VARIANT ?? (await configuredGitValue("ssh.variant", cwd, env, run))
+  )?.toLowerCase();
+  const executable = openSshExecutable(base, variant);
   if (executable) {
     result.GIT_SSH_COMMAND = `${executable} -o BatchMode=yes${base.slice(executable.length)}`;
   } else if (command) {

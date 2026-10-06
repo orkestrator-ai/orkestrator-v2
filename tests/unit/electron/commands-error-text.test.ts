@@ -9,6 +9,7 @@ const {
   ASYNC_TEST_WAIT_TIMEOUT_MS,
   CONTAINER_UNTRACKED_STATS_SCANNER,
   CommandFailedError,
+  GitRemoteTimeoutError,
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   EnvironmentLifecycleTaskTracker,
   LOCAL_PROJECT_FOR_CREATE,
@@ -193,6 +194,13 @@ exit 1
         ),
       ),
     ).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication);
+
+    // A remote fetch that hangs (e.g. ssh waiting on a passphrase) is a
+    // timeout too, but pointing at the container runtime would be wrong.
+    expect(classify(new GitRemoteTimeoutError("Command failed: git fetch origin main"))).toBe(
+      ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut,
+    );
+    expect(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut).not.toMatch(/container/i);
 
     expect(classify(new Error("Project has no local path - cannot create a local worktree"))).toBe(
       ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath,

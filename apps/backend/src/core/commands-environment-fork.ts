@@ -21,7 +21,7 @@ import {
 } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { toClientEnvironment } from "./commands-terminal.js";
-import { nonInteractiveGitEnv } from "./git-noninteractive-env.js";
+import { runRemoteGit } from "./git-noninteractive-env.js";
 
 const GIT_REMOTE_QUERY_TIMEOUT_MS = 30_000;
 const GIT_FETCH_TIMEOUT_MS = 120_000;
@@ -129,26 +129,23 @@ function remoteRefsContainCommit(stdout: string): boolean {
 }
 
 async function lsRemoteCommitTips(remoteUrl: string): Promise<string> {
-  const { stdout } = await runCommand("git", ["ls-remote", remoteUrl], {
+  const { stdout } = await runRemoteGit("ls-remote", [remoteUrl], {
     timeoutMs: GIT_REMOTE_QUERY_TIMEOUT_MS,
-    env: await nonInteractiveGitEnv(),
   });
   return stdout;
 }
 
 async function fetchProjectRemotes(localPath: string, remoteUrl?: string): Promise<void> {
   try {
-    await runCommand("git", ["fetch", "--prune", "origin"], {
+    await runRemoteGit("fetch", ["--prune", "origin"], {
       cwd: localPath,
       timeoutMs: GIT_FETCH_TIMEOUT_MS,
-      env: await nonInteractiveGitEnv(localPath),
     });
   } catch (error) {
     if (!remoteUrl) throw error;
-    await runCommand("git", ["fetch", "--prune", remoteUrl], {
+    await runRemoteGit("fetch", ["--prune", remoteUrl], {
       cwd: localPath,
       timeoutMs: GIT_FETCH_TIMEOUT_MS,
-      env: await nonInteractiveGitEnv(localPath),
     });
   }
 }

@@ -1,13 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { nonInteractiveGitEnv } from "./git-noninteractive-env.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
-let root: string;
+import { createNonInteractiveGitFixture } from "./git-noninteractive-test-support.js";
+
+let fixture: Awaited<ReturnType<typeof createNonInteractiveGitFixture>>;
 let repo: string;
-let binDir: string;
 let baseEnv: NodeJS.ProcessEnv;
 
 function isolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -19,36 +17,13 @@ function isolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 beforeAll(async () => {
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-git-noninteractive-")));
-  repo = path.join(root, "repo");
-  binDir = path.join(root, "bin");
-  await fs.mkdir(binDir);
-  await fs.writeFile(path.join(root, "gitconfig"), "");
-  baseEnv = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1" };
-  baseEnv.GIT_CONFIG_GLOBAL = path.join(root, "gitconfig");
-  delete baseEnv.GIT_SSH_COMMAND;
-  delete baseEnv.GIT_SSH;
-  await runCommand("git", ["init", "-q", repo], { env: baseEnv });
-
-  // Stands in for OpenSSH: without batch mode it blocks the way a passphrase
-  // prompt on the controlling terminal does.
-  await fs.writeFile(
-    path.join(binDir, "ssh"),
-    `#!/bin/sh
-for arg in "$@"; do
-  if [ "$arg" = "BatchMode=yes" ]; then
-    echo "git@example.invalid: Permission denied (publickey)." >&2
-    exit 255
-  fi
-done
-sleep 30
-`,
-  );
-  await fs.chmod(path.join(binDir, "ssh"), 0o755);
+  fixture = await createNonInteractiveGitFixture();
+  repo = fixture.repo;
+  baseEnv = fixture.env;
 });
 
 afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
+  await fixture.cleanup();
 });
 
 describe("nonInteractiveGitEnv", () => {
@@ -63,7 +38,7 @@ describe("nonInteractiveGitEnv", () => {
       repo,
       isolatedEnv({ GIT_SSH_COMMAND: "ssh -i /keys/deploy" }),
     );
-    expect(env.GIT_SSH_COMMAND).toBe("ssh -i /keys/deploy -o BatchMode=yes");
+    expect(env.GIT_SSH_COMMAND).toBe("ssh -o BatchMode=yes -i /keys/deploy");
   });
 
   test("keeps the repository's core.sshCommand", async () => {
@@ -73,7 +48,7 @@ describe("nonInteractiveGitEnv", () => {
     });
     try {
       const env = await nonInteractiveGitEnv(repo, isolatedEnv());
-      expect(env.GIT_SSH_COMMAND).toBe("/usr/bin/ssh -p 2222 -o BatchMode=yes");
+      expect(env.GIT_SSH_COMMAND).toBe("/usr/bin/ssh -o BatchMode=yes -p 2222");
     } finally {
       await runCommand("git", ["config", "--unset", "core.sshCommand"], {
         cwd: repo,
@@ -95,7 +70,7 @@ describe("nonInteractiveGitEnv", () => {
   });
 
   test("an SSH fetch that would prompt fails fast with ssh's error", async () => {
-    const env = isolatedEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` });
+    const env = isolatedEnv({ GIT_SSH_COMMAND: `${fixture.command} -o BatchMode=no` });
     const started = Date.now();
     const error = await runCommand(
       "git",
@@ -108,4 +83,98 @@ describe("nonInteractiveGitEnv", () => {
     expect((error as Error).message).toContain("Permission denied (publickey)");
     expect(Date.now() - started).toBeLessThan(5_000);
   });
+});
+
+describe("SSH resolver edge cases", () => {
+  test.each([
+    "ssh",
+    "/usr/bin/ssh",
+    "/usr/bin/ssh.exe",
+    "'/path with spaces/ssh'",
+    '"/path with spaces/ssh.exe"',
+  ])("recognizes executable %s", async (program) => {
+    const env = await nonInteractiveGitEnv(
+      repo,
+      isolatedEnv({ GIT_SSH_COMMAND: `${program} -i /keys/deploy` }),
+    );
+    expect(env.GIT_SSH_COMMAND).toBe(`${program} -o BatchMode=yes -i /keys/deploy`);
+  });
+
+  test.each(["ssh", "/usr/bin/ssh", "/path with spaces/ssh"])(
+    "enforces direct GIT_SSH=%s",
+    async (program) => {
+      const env = await nonInteractiveGitEnv(repo, isolatedEnv({ GIT_SSH: program }));
+      expect(env.GIT_SSH_COMMAND).toBe(`'${program}' -o BatchMode=yes`);
+      expect(env.GIT_SSH).toBe(program);
+    },
+  );
+
+  test.each(["", "   "])("empty GIT_SSH_COMMAND falls through to config", async (value) => {
+    await fixture.git(["config", "core.sshCommand", "ssh -i /keys/repo"]);
+    try {
+      expect(
+        (await nonInteractiveGitEnv(repo, isolatedEnv({ GIT_SSH_COMMAND: value }))).GIT_SSH_COMMAND,
+      ).toBe("ssh -o BatchMode=yes -i /keys/repo");
+    } finally {
+      await fixture.git(["config", "--unset", "core.sshCommand"]);
+    }
+  });
+
+  test("undefined cwd reads global config and environment wins over config", async () => {
+    await fixture.git(["config", "--global", "core.sshCommand", "ssh -p 2222"]);
+    try {
+      expect((await nonInteractiveGitEnv(undefined, isolatedEnv())).GIT_SSH_COMMAND).toBe(
+        "ssh -o BatchMode=yes -p 2222",
+      );
+      expect(
+        (
+          await nonInteractiveGitEnv(
+            repo,
+            isolatedEnv({ GIT_SSH_COMMAND: "ssh -p 3333", GIT_SSH: "wrapper" }),
+          )
+        ).GIT_SSH_COMMAND,
+      ).toBe("ssh -o BatchMode=yes -p 3333");
+    } finally {
+      await fixture.git(["config", "--global", "--unset", "core.sshCommand"]);
+    }
+  });
+
+  test.each([false, true])("config failure falls back safely (timeout=%s)", async (timedOut) => {
+    const failingRun: typeof runCommand = async (_command, _args, options) => {
+      expect(options?.cwd).toBe(repo);
+      expect(options?.timeoutMs).toBe(10_000);
+      throw new CommandFailedError("config unavailable", { timedOut });
+    };
+    const env = await nonInteractiveGitEnv(repo, isolatedEnv(), failingRun);
+    expect(env.GIT_SSH_COMMAND).toBe("ssh -o BatchMode=yes");
+  });
+
+  test.each(["environment", "config", "GIT_SSH", "GIT_SSH=ssh"])(
+    "real OpenSSH confirms BatchMode precedence via %s",
+    async (source) => {
+      const command = "/usr/bin/ssh -o BatchMode=no -p 2222";
+      if (source === "config") await fixture.git(["config", "core.sshCommand", command]);
+      try {
+        const env = await nonInteractiveGitEnv(
+          repo,
+          isolatedEnv(
+            source === "environment"
+              ? { GIT_SSH_COMMAND: command }
+              : source.startsWith("GIT_SSH")
+                ? { GIT_SSH: source === "GIT_SSH" ? "/usr/bin/ssh" : "ssh" }
+                : {},
+          ),
+        );
+        const { stdout } = await runCommand(
+          "sh",
+          ["-c", `${env.GIT_SSH_COMMAND} -G -F /dev/null example.invalid`],
+          { env, timeoutMs: 5_000 },
+        );
+        expect(stdout).toContain("batchmode yes");
+        if (!source.startsWith("GIT_SSH")) expect(stdout).toContain("port 2222");
+      } finally {
+        if (source === "config") await fixture.git(["config", "--unset", "core.sshCommand"]);
+      }
+    },
+  );
 });

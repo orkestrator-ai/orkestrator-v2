@@ -1,3 +1,4 @@
+import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   fsConstants,
@@ -444,7 +445,9 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
  * Builds the container fetch program the fetch policy runs, separately from
  * status collection. Runs in the same `docker exec` login shell as the old
  * embedded fetch, so the container's own Git credential configuration is used
- * unchanged; interactive prompts are disabled rather than left to hang. It
+ * unchanged. This is deliberately outside the host runRemoteGit boundary: host
+ * SSH paths and configuration are not valid in a container. HTTPS prompts are
+ * disabled here; SSH behavior belongs to the container credential setup. It
  * reports the clone identity, the exit status and `origin/<ref>` before and
  * after (so a moved baseline is detected), plus at most
  * {@link CONTAINER_FETCH_STDERR_BYTES} of stderr for classification into a
@@ -859,7 +862,7 @@ export async function resolveRemoteWorktreeStartPoint(
   baseBranch: string,
 ): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
-  await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], { timeoutMs: 120_000 });
+  await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
 
   const remoteRef = `origin/${branch}`;
   if (!(await gitRefExists(projectPath, remoteRef))) {
@@ -1602,6 +1605,7 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "}",
 ].join("\n");
 
+/** Container-owned Git/SSH configuration; excluded from the host runRemoteGit boundary. */
 export function containerRevertFileCommand(target: string, branch: string): string {
   return `
     set -euo pipefail

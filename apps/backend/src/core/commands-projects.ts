@@ -1,3 +1,4 @@
+import { runRemoteGit } from "./git-noninteractive-env.js";
 import {
   fs,
   path,
@@ -454,11 +455,16 @@ export async function addExistingProject(
           }
 
           try {
-            await run("git", ["clone", "--", gitUrl, "."], {
-              cwd: temporaryPath,
-              timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
-              redactValues: [gitUrl],
-            });
+            await runRemoteGit(
+              "clone",
+              ["--", gitUrl, "."],
+              {
+                cwd: temporaryPath,
+                timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
+                redactValues: [gitUrl],
+              },
+              run,
+            );
           } catch (error) {
             throw new Error(
               `Could not clone the Git repository: ${cloneCommandFailureDetail(error)}`,
@@ -654,9 +660,16 @@ export async function createProjectFromScratch(
       const gitUrl = await readOriginUrl(projectPath, run);
       if (!gitUrl) throw new Error("Could not verify the origin remote");
 
-      await run("git", ["-C", projectPath, "push", "--set-upstream", "origin", "main"], {
-        timeoutMs: 120_000,
-      });
+      await runRemoteGit(
+        "push",
+        ["--set-upstream", "origin", "main"],
+        {
+          cwd: projectPath,
+          gitOptions: ["-C", projectPath],
+          timeoutMs: 120_000,
+        },
+        run,
+      );
 
       return await storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
     } catch (error) {

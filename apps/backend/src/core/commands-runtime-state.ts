@@ -1,3 +1,4 @@
+import { runRemoteGit } from "./git-noninteractive-env.js";
 import {
   path,
   createHash,
@@ -548,7 +549,10 @@ export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
  * make one fetch rather than N against the same origin.
  */
 export const gitFetchScheduler = new GitFetchScheduler({
-  run: (args, timeoutMs) => runCommand("git", args, { timeoutMs }),
+  run: (args, timeoutMs) =>
+    args[2] === "fetch"
+      ? runRemoteGit("fetch", args.slice(3), { cwd: args[1], timeoutMs })
+      : runCommand("git", args, { timeoutMs }),
 });
 
 /**

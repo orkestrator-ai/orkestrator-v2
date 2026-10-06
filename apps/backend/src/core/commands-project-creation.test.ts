@@ -122,6 +122,36 @@ async function createCloneSource(repositoryPath: string): Promise<void> {
   ]);
 }
 
+test("clone and initial push receive the non-interactive SSH environment", async () => {
+  const previous = process.env.GIT_SSH_COMMAND;
+  process.env.GIT_SSH_COMMAND = "ssh -o BatchMode=no -i /keys/deploy";
+  const remoteEnvironments: NodeJS.ProcessEnv[] = [];
+  const run = successfulRunner();
+  const capture: Run = async (command, args = [], options) => {
+    if (command === "git" && (args.includes("clone") || args.includes("push"))) {
+      remoteEnvironments.push(options?.env ?? {});
+    }
+    return run(command, args, options);
+  };
+  try {
+    await withProjectCreation(capture, async (invoke, _storage, root, _args, invokeCommand) => {
+      const source = path.join(root, "source");
+      await createCloneSource(source);
+      await invokeCommand("add_project", { gitUrl: source, localPath: path.join(root, "clone") });
+      await invoke(path.join(root, "scratch"));
+    });
+    expect(remoteEnvironments).toHaveLength(2);
+    for (const env of remoteEnvironments) {
+      expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+      expect(env.GIT_SSH_COMMAND).toBe("ssh -o BatchMode=yes -o BatchMode=no -i /keys/deploy");
+      expect(env.PATH).toBe(process.env.PATH);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_SSH_COMMAND;
+    else process.env.GIT_SSH_COMMAND = previous;
+  }
+});
+
 describe("create_project_from_scratch", () => {
   test("creates, verifies, pushes, and persists a private repository in separate phases", async () => {
     const calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];

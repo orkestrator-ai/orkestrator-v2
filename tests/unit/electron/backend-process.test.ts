@@ -171,15 +171,88 @@ describe("Electron backend process supervisor", () => {
   });
 
   test("discovers macOS launchd and gpg-agent sockets", async () => {
-    const commandOutput = mock(async (command: string) =>
-      command === "launchctl"
-        ? "/private/tmp/launchd/Listeners"
-        : "/Users/tester/.gnupg/S.gpg-agent.ssh",
-    );
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      if (command === "launchctl" && args[0] === "getenv") return "/private/tmp/launchd/Listeners";
+      if (command === "launchctl") return undefined;
+      return "/Users/tester/.gnupg/S.gpg-agent.ssh";
+    });
 
-    await expect(discoverSessionSshAgentSockets("darwin", { commandOutput })).resolves.toEqual([
-      "/private/tmp/launchd/Listeners",
-      "/Users/tester/.gnupg/S.gpg-agent.ssh",
+    await expect(
+      discoverSessionSshAgentSockets("darwin", { commandOutput, uid: 501 }),
+    ).resolves.toEqual(["/private/tmp/launchd/Listeners", "/Users/tester/.gnupg/S.gpg-agent.ssh"]);
+  });
+
+  test("discovers the macOS system agent socket from its launchd job when getenv is empty", async () => {
+    const calls: string[] = [];
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      calls.push([command, ...args].join(" "));
+      if (command !== "launchctl" || args[0] !== "print") return undefined;
+      return [
+        "gui/501/com.openssh.ssh-agent = {",
+        "\tpath = /System/Library/LaunchAgents/com.openssh.ssh-agent.plist",
+        "\tprogram = /usr/bin/ssh-agent",
+        "\tsockets = {",
+        '\t\t"Listeners" = {',
+        "\t\t\ttype = stream",
+        "\t\t\tpath = /var/run/com.apple.launchd.abc123/Listeners",
+        "\t\t\tsecure key = SSH_AUTH_SOCK",
+        "\t\t\towner uid = 501",
+        "\t\t}",
+        "\t}",
+        "}",
+      ].join("\n");
+    });
+
+    await expect(
+      discoverSessionSshAgentSockets("darwin", { commandOutput, uid: 501 }),
+    ).resolves.toEqual(["/var/run/com.apple.launchd.abc123/Listeners"]);
+    expect(calls).toEqual([
+      "launchctl getenv SSH_AUTH_SOCK",
+      "launchctl print gui/501/com.openssh.ssh-agent",
+      "gpgconf --list-dirs agent-ssh-socket",
+    ]);
+  });
+
+  test("ignores a macOS launchd job that does not publish an SSH_AUTH_SOCK socket", async () => {
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      if (command !== "launchctl" || args[0] !== "print") return undefined;
+      return [
+        "gui/501/com.openssh.ssh-agent = {",
+        "\tpath = /System/Library/LaunchAgents/com.openssh.ssh-agent.plist",
+        "\tprogram = /usr/bin/ssh-agent",
+        "\tsockets = {",
+        '\t\t"Other" = {',
+        "\t\t\tpath = /var/run/com.apple.launchd.abc123/Other",
+        "\t\t\tsecure key = OTHER_SOCK",
+        "\t\t}",
+        "\t}",
+        "}",
+      ].join("\n");
+    });
+
+    await expect(
+      discoverSessionSshAgentSockets("darwin", { commandOutput, uid: 501 }),
+    ).resolves.toEqual([]);
+  });
+
+  test("skips the macOS launchd job lookup when no uid is available", async () => {
+    const calls: string[] = [];
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      calls.push([command, ...args].join(" "));
+      return undefined;
+    });
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
+    try {
+      await expect(discoverSessionSshAgentSockets("darwin", { commandOutput })).resolves.toEqual(
+        [],
+      );
+    } finally {
+      Object.defineProperty(process, "getuid", { configurable: true, value: originalGetuid });
+    }
+    expect(calls).toEqual([
+      "launchctl getenv SSH_AUTH_SOCK",
+      "gpgconf --list-dirs agent-ssh-socket",
     ]);
   });
 

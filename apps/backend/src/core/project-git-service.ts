@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import { CommandFailedError, runCommand } from "./shell.js";
+import { runRemoteGit } from "./git-noninteractive-env.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 
@@ -584,9 +585,9 @@ export class ProjectGitService {
         }
         await this.operationState(projectId, "fetching");
         try {
-          await runCommand(
-            "git",
-            before.remote ? ["fetch", "--prune", before.remote] : ["fetch", "--prune", "--all"],
+          await runRemoteGit(
+            "fetch",
+            before.remote ? ["--prune", before.remote] : ["--prune", "--all"],
             {
               cwd: root,
               timeoutMs: 60_000,
@@ -675,19 +676,10 @@ export class ProjectGitService {
         throw new Error("The branch has diverged; automatic fast-forward sync is unavailable");
       }
       const remoteBranch = status.upstream.slice(status.remote.length + 1);
-      await runCommand(
-        "git",
-        [
-          "-c",
-          "rebase.autoStash=false",
-          "pull",
-          "--ff-only",
-          "--no-rebase",
-          "--no-autostash",
-          status.remote,
-          remoteBranch,
-        ],
-        { cwd: root, timeoutMs: 60_000 },
+      await runRemoteGit(
+        "pull",
+        ["--ff-only", "--no-rebase", "--no-autostash", status.remote, remoteBranch],
+        { cwd: root, gitOptions: ["-c", "rebase.autoStash=false"], timeoutMs: 60_000 },
       );
     });
   }

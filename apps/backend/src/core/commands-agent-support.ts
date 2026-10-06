@@ -22,6 +22,7 @@ import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
+import { runRemoteGit } from "./git-noninteractive-env.js";
 
 type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir">;
 
@@ -275,20 +276,10 @@ async function remoteGitBranchesWithPrefix(options: {
   const remote = options.projectPath ? "origin" : options.remoteUrl?.trim();
   if (!remote) return new Set();
 
-  const result = await runCommand(
-    "git",
-    [
-      ...(options.projectPath ? ["-C", options.projectPath] : []),
-      "ls-remote",
-      "--heads",
-      remote,
-      `refs/heads/${base}*`,
-    ],
-    {
-      timeoutMs: GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    },
-  ).catch(() => null);
+  const result = await runRemoteGit("ls-remote", ["--heads", remote, `refs/heads/${base}*`], {
+    timeoutMs: GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS,
+    cwd: options.projectPath ?? undefined,
+  }).catch(() => null);
   if (!result) return new Set();
 
   const branches = new Set<string>();

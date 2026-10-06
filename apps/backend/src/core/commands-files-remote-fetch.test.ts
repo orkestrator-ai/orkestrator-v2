@@ -74,7 +74,7 @@ describe("resolveRemoteWorktreeStartPoint", () => {
   test("fetches without any chance of prompting on the backend's terminal", async () => {
     const git = await useRecordingGit();
 
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
 
     expect(await git.recorded()).toBe("prompt=0 ssh=ssh -o BatchMode=yes");
   });
@@ -82,7 +82,7 @@ describe("resolveRemoteWorktreeStartPoint", () => {
   test("keeps a configured ssh command and only adds BatchMode", async () => {
     const git = await useRecordingGit({ sshCommandConfig: "ssh -i /keys/work" });
 
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
 
     expect(await git.recorded()).toBe("prompt=0 ssh=ssh -o BatchMode=yes -i /keys/work");
   });
@@ -93,7 +93,7 @@ describe("SSH command precedence and argument contracts", () => {
     const git = await useRecordingGit({ sshCommandConfig: "plink -i config-key" });
     process.env.GIT_SSH = "/custom/wrapper";
     process.env.GIT_SSH_COMMAND = "ssh -i env-key";
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
     expect(await git.recorded()).toBe("prompt=0 ssh=ssh -o BatchMode=yes -i env-key");
     expect(process.env.GIT_SSH).toBe("/custom/wrapper");
   });
@@ -101,14 +101,14 @@ describe("SSH command precedence and argument contracts", () => {
   test("core.sshCommand wins over GIT_SSH", async () => {
     const git = await useRecordingGit({ sshCommandConfig: "ssh -i config-key" });
     process.env.GIT_SSH = "/custom/wrapper";
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
     expect(await git.recorded()).toBe("prompt=0 ssh=ssh -o BatchMode=yes -i config-key");
   });
 
   test("keeps an arbitrary selected GIT_SSH program", async () => {
     const git = await useRecordingGit();
     process.env.GIT_SSH = "/custom/wrapper";
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
     expect(await git.recorded()).toBe("prompt=0 ssh=");
   });
 
@@ -165,16 +165,16 @@ exit 17
   test("environment variant overrides repository config", async () => {
     const git = await useRecordingGit({ sshCommandConfig: "ssh", variantConfig: "ssh" });
     process.env.GIT_SSH_VARIANT = "simple";
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
-    expect(await git.recorded()).toBe("prompt=0 ssh=");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
+    expect(await git.recorded()).toBe("prompt=0 ssh=ssh");
   });
 
   test.each(["plink", "putty", "tortoiseplink", "custom-wrapper"])(
     "does not add OpenSSH options to auto-detected %s",
     async (command) => {
       const git = await useRecordingGit({ sshCommandConfig: `${command} -i key` });
-      await resolveRemoteWorktreeStartPoint("/repo", "main");
-      expect(await git.recorded()).toBe("prompt=0 ssh=");
+      await resolveRemoteWorktreeStartPoint(git.root, "main");
+      expect(await git.recorded()).toBe(`prompt=0 ssh=${command} -i key`);
     },
   );
 
@@ -195,7 +195,7 @@ exit 17
     );
     process.env.GIT_SSH_COMMAND = `${quote(transport)} -o BatchMode=no -i 'key with spaces'`;
     process.env.GIT_SSH_VARIANT = "ssh";
-    await resolveRemoteWorktreeStartPoint("/repo", "main");
+    await resolveRemoteWorktreeStartPoint(git.root, "main");
     expect(await git.recorded()).toBe(
       `prompt=0 ssh=${quote(transport)} -o BatchMode=yes -o BatchMode=no -i 'key with spaces'`,
     );
@@ -212,7 +212,7 @@ exit 17
       realRun(command, args, { ...options, cwd: git.root }),
     );
     try {
-      await resolveRemoteWorktreeStartPoint("/repo", "main");
+      await resolveRemoteWorktreeStartPoint(git.root, "main");
       expect(await fs.readFile(path.join(git.root, "ssh-config.txt"), "utf8")).toContain(
         "batchmode yes",
       );
@@ -227,13 +227,13 @@ exit 17
 
 describe("remote fetch failure outcomes", () => {
   test("converts a real subprocess timeout and preserves the timeout and signal", async () => {
-    await useRecordingGit({ fetchScript: "exec sleep 5" });
+    const git = await useRecordingGit({ fetchScript: "exec sleep 5" });
     const realRun = shell.runCommand;
     const run = spyOn(shell, "runCommand").mockImplementation((command, args = [], options) =>
       realRun(command, args, args.includes("fetch") ? { ...options, timeoutMs: 20 } : options),
     );
     try {
-      const failure = await resolveRemoteWorktreeStartPoint("/repo", "main").catch(
+      const failure = await resolveRemoteWorktreeStartPoint(git.root, "main").catch(
         (error: unknown) => error,
       );
       expect(failure).toBeInstanceOf(GitRemoteTimeoutError);
@@ -249,8 +249,8 @@ describe("remote fetch failure outcomes", () => {
   });
 
   test("propagates non-timeout fetch failures unchanged", async () => {
-    await useRecordingGit({ fetchScript: "printf 'remote refused\\n' >&2; exit 17" });
-    const failure = await resolveRemoteWorktreeStartPoint("/repo", "main").catch(
+    const git = await useRecordingGit({ fetchScript: "printf 'remote refused\\n' >&2; exit 17" });
+    const failure = await resolveRemoteWorktreeStartPoint(git.root, "main").catch(
       (error: unknown) => error,
     );
     expect(failure).toBeInstanceOf(CommandFailedError);

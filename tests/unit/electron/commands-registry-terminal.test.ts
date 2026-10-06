@@ -796,7 +796,9 @@ exit 1
         createContext(createEnvironment()).context,
       );
 
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("fetch origin main");
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
+        "fetch --no-recurse-submodules origin main",
+      );
     });
   });
 

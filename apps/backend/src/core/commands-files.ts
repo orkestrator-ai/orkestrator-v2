@@ -1,3 +1,4 @@
+import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   fsConstants,
@@ -446,7 +447,9 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
  * Builds the container fetch program the fetch policy runs, separately from
  * status collection. Runs in the same `docker exec` login shell as the old
  * embedded fetch, so the container's own Git credential configuration is used
- * unchanged; interactive prompts are disabled rather than left to hang. It
+ * unchanged. This is deliberately outside the host runRemoteGit boundary: host
+ * SSH paths and configuration are not valid in a container. HTTPS prompts are
+ * disabled here; SSH behavior belongs to the container credential setup. It
  * reports the clone identity, the exit status and `origin/<ref>` before and
  * after (so a moved baseline is detected), plus at most
  * {@link CONTAINER_FETCH_STDERR_BYTES} of stderr for classification into a
@@ -856,65 +859,13 @@ export async function gitRefExists(worktreePath: string, refName: string): Promi
   );
 }
 
-/**
- * Environment for a remote git command run by a backend nobody is watching.
- *
- * The backend keeps its launching terminal as the controlling tty, so an SSH
- * key that needs a passphrase (and is not in an agent) makes `ssh` prompt on
- * that terminal and wait forever. BatchMode turns the prompt into an immediate
- * "Permission denied (publickey)", which is classified and shown to the user.
- * Only a known OpenSSH command accepts BatchMode. Arbitrary shell commands and
- * other transports keep their argument contract and rely on the fetch timeout.
- */
-async function gitNonInteractiveEnv(projectPath: string): Promise<NodeJS.ProcessEnv> {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-  const readConfig = (key: string) =>
-    runCommand("git", ["-C", projectPath, "config", "--get", key], {
-      timeoutMs: 10_000,
-    }).then(
-      ({ stdout }) => stdout.trim(),
-      () => undefined,
-    );
-  // Match Git's precedence, including core.sshCommand before GIT_SSH.
-  const configured = env.GIT_SSH_COMMAND ?? (await readConfig("core.sshCommand"));
-  if (configured === undefined && env.GIT_SSH !== undefined) return env;
-  const command = configured ?? "ssh";
-  // Recognize a literal executable, retaining its exact shell spelling. Do not
-  // rewrite expansions, assignments, pipelines or compound shell commands.
-  const executable = command.match(
-    /^\s*((?:[^\s'"\\$`;&|<>()]+|'[^']*'|"[^"\\$`]*"|\\[^\n])+)(?=\s|$)/,
-  );
-  if (!executable) return env;
-  const literal = executable[1]!.replace(/'([^']*)'|"([^"]*)"|\\(.)/g, "$1$2$3");
-  if (literal.includes("=") || /[;&|<>()`]/.test(command.slice(executable[0].length))) {
-    return env;
-  }
-  const variant = (env.GIT_SSH_VARIANT ?? (await readConfig("ssh.variant")))?.toLowerCase();
-  const basename = path
-    .basename(literal)
-    .toLowerCase()
-    .replace(/\.exe$/, "");
-  const isOpenSsh =
-    variant === undefined || variant === "auto"
-      ? basename === "ssh"
-      : !["simple", "plink", "putty", "tortoiseplink"].includes(variant);
-  if (!isOpenSsh) return env;
-  // OpenSSH uses the first value for each option, so this must precede any
-  // configured BatchMode=no. Leave the executable and all other options intact.
-  env.GIT_SSH_COMMAND = `${command.slice(0, executable[0].length)} -o BatchMode=yes${command.slice(executable[0].length)}`;
-  return env;
-}
-
 export async function resolveRemoteWorktreeStartPoint(
   projectPath: string,
   baseBranch: string,
 ): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
   try {
-    await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], {
-      timeoutMs: 120_000,
-      env: await gitNonInteractiveEnv(projectPath),
-    });
+    await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
   } catch (error) {
     if (error instanceof CommandFailedError && error.timedOut) {
       throw new GitRemoteTimeoutError(error.message, { signal: error.signal });
@@ -1663,6 +1614,7 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "}",
 ].join("\n");
 
+/** Container-owned Git/SSH configuration; excluded from the host runRemoteGit boundary. */
 export function containerRevertFileCommand(target: string, branch: string): string {
   return `
     set -euo pipefail

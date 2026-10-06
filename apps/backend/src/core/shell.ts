@@ -1,4 +1,9 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  execFile,
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -121,6 +126,87 @@ export function commandInvocationCount(command: string): number {
   return commandInvocations.get(command) ?? 0;
 }
 
+/**
+ * Makes a `git` child fail instead of waiting for someone to answer it.
+ *
+ * The backend has no terminal to type into, but a child inherits whatever
+ * controlling tty the backend was launched from. An `ssh` that cannot read its
+ * key then sits on a passphrase or host-key prompt until the timeout, which
+ * surfaces as "Environment start timed out" and hides the real cause.
+ * `SSH_ASKPASS_REQUIRE=force` routes every ssh prompt to a program that refuses,
+ * so the failure is an immediate `Permission denied (publickey)`. That is used
+ * rather than `GIT_SSH_COMMAND=ssh -o BatchMode=yes` because the env var would
+ * override a `core.sshCommand` the user configured. Keychain and agent lookups
+ * happen before ssh prompts, so a key that is available still works.
+ *
+ * Anything the caller or the backend's own environment already set wins.
+ */
+function nonInteractiveGitEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const merged = { ...(env ?? process.env) };
+  merged.GIT_TERMINAL_PROMPT ??= "0";
+  if (
+    process.platform !== "win32" &&
+    merged.SSH_ASKPASS === undefined &&
+    merged.SSH_ASKPASS_REQUIRE === undefined
+  ) {
+    merged.SSH_ASKPASS = "/usr/bin/false";
+    merged.SSH_ASKPASS_REQUIRE = "force";
+  }
+  return merged;
+}
+
+async function descendantPids(rootPid: number): Promise<number[]> {
+  if (process.platform === "win32") return [];
+  try {
+    const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,ppid="], {
+      encoding: "utf8",
+      timeout: 2_000,
+    });
+    const childrenOf = new Map<number, number[]>();
+    for (const line of stdout.split("\n")) {
+      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+      if (pid === undefined || ppid === undefined || Number.isNaN(pid) || Number.isNaN(ppid)) {
+        continue;
+      }
+      childrenOf.set(ppid, [...(childrenOf.get(ppid) ?? []), pid]);
+    }
+    const found: number[] = [];
+    const queue = [rootPid];
+    for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+      for (const child of childrenOf.get(next) ?? []) {
+        found.push(child);
+        queue.push(child);
+      }
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Stops a timed-out child and everything it started.
+ *
+ * Killing only the child is not enough: `git fetch` runs `ssh` as a subprocess,
+ * and once git dies that ssh is reparented to init and keeps its connection
+ * open forever. The descendants have to be found before the child is killed,
+ * because afterwards nothing links them to it.
+ */
+async function killProcessTree(child: ChildProcess): Promise<void> {
+  const descendants = child.pid === undefined ? [] : await descendantPids(child.pid);
+  // The child may have finished while its descendants were being listed; its
+  // pid and theirs could then belong to unrelated processes.
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  for (const pid of descendants) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 async function runCommandBytes(
   command: string,
   args: string[] = [],
@@ -132,14 +218,20 @@ async function runCommandBytes(
   // The one boundary every `runCommand` spawn crosses, so each process is
   // counted exactly once and charged to whichever recurring job caused it.
   recurringWorkMetrics.work(spawnWorkUnit(command, args));
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // execFile's own `timeout` is deliberately not used: it signals only the
+    // child, which leaves anything the child started running.
     const execPromise = execFileAsync(command, args, {
       cwd: options.cwd,
       encoding: "buffer",
-      env: options.env,
-      timeout: options.timeoutMs ?? 60_000,
+      env: command === "git" ? nonInteractiveGitEnv(options.env) : options.env,
       maxBuffer: 50 * 1024 * 1024,
     });
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+      timeoutTimer = setTimeout(() => void killProcessTree(execPromise.child), timeoutMs);
+    }
     // execFile leaves the child's stdin pipe open. Close it immediately when
     // there is no payload so non-TTY CLIs cannot hang waiting for EOF.
     execPromise.child.stdin?.end(options.stdin);
@@ -178,6 +270,8 @@ async function runCommandBytes(
       throw new CommandFailedError(message || "Command failed", outcome);
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutTimer);
   }
 }
 

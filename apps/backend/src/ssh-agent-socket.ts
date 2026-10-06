@@ -88,6 +88,19 @@ function valueFromSystemdEnvironment(
   return line?.slice(prefix.length);
 }
 
+function socketFromLaunchdJob(output: string | undefined): string | undefined {
+  if (!output) return undefined;
+  // `launchctl print` lists each socket's `path` before its `secure key`; the
+  // job's own plist path also appears earlier, so keep the most recent one.
+  let socketPath: string | undefined;
+  for (const line of output.split("\n")) {
+    const entry = line.trim();
+    if (entry.startsWith("path = ")) socketPath = entry.slice("path = ".length);
+    else if (entry === "secure key = SSH_AUTH_SOCK") return socketPath;
+  }
+  return undefined;
+}
+
 export async function discoverSessionSshAgentSockets(
   platform: NodeJS.Platform,
   dependencies: {
@@ -120,6 +133,13 @@ export async function discoverSessionSshAgentSockets(
     }
   } else if (platform === "darwin") {
     candidates.push(await run("launchctl", ["getenv", "SSH_AUTH_SOCK"]));
+    // macOS 27 no longer publishes the system agent through `launchctl getenv`,
+    // but launchd still reports the socket it owns for the agent's job.
+    if (uid !== undefined) {
+      candidates.push(
+        socketFromLaunchdJob(await run("launchctl", ["print", `gui/${uid}/com.openssh.ssh-agent`])),
+      );
+    }
   } else {
     return [];
   }

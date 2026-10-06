@@ -1,8 +1,7 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILE_SIZE_LABEL,
@@ -11,8 +10,6 @@ import {
   writeConfinedFile,
 } from "./path-safety.js";
 import { recurringWorkMetrics, spawnWorkUnit } from "./recurring-work-metrics.js";
-
-const execFileAsync = promisify(execFile);
 
 export type ExecResult = {
   stdout: string;
@@ -61,6 +58,7 @@ type RunCommandOptions = {
   env?: NodeJS.ProcessEnv;
   /** Optional stdin payload. When omitted, stdin is closed immediately. */
   stdin?: string | Buffer;
+  /** Defaults to 60 seconds; 0 disables the deadline. Invalid durations are rejected. */
   timeoutMs?: number;
   /**
    * Values that must never escape this process boundary. Both successful
@@ -85,12 +83,7 @@ function redactCommandValues(
   return secrets.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), value);
 }
 
-/**
- * `execFile` reports a timeout only through `killed`, never in the message: it
- * SIGTERMs the child, so stdout/stderr are empty and the message is the generic
- * "Command failed: <argv>". A missing executable arrives as an ENOENT
- * `SystemError` with no output fields at all.
- */
+/** Classify failures using structured outcomes rather than CLI output. */
 function commandFailureOutcome(error: unknown): {
   timedOut: boolean;
   executableMissing: boolean;
@@ -133,11 +126,165 @@ export function commandInvocationCount(command: string): number {
   return commandInvocations.get(command) ?? 0;
 }
 
+/**
+ * Makes a `git` child fail instead of waiting for someone to answer it.
+ *
+ * The backend has no terminal to type into, but a child inherits whatever
+ * controlling tty the backend was launched from. An `ssh` that cannot read its
+ * key then sits on a passphrase or host-key prompt until the timeout, which
+ * surfaces as "Environment start timed out" and hides the real cause.
+ * `SSH_ASKPASS_REQUIRE=force` routes every ssh prompt to a program that refuses,
+ * so the failure is an immediate `Permission denied (publickey)`. That is used
+ * rather than `GIT_SSH_COMMAND=ssh -o BatchMode=yes` because the env var would
+ * override a `core.sshCommand` the user configured. Keychain and agent lookups
+ * happen before ssh prompts, so a key that is available still works.
+ *
+ * Anything the caller or the backend's own environment already set wins.
+ */
+function nonInteractiveGitEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const merged = { ...(env ?? process.env) };
+  merged.GIT_TERMINAL_PROMPT ??= "0";
+  if (process.platform !== "win32") {
+    merged.SSH_ASKPASS ??= "/usr/bin/false";
+    merged.SSH_ASKPASS_REQUIRE ??= "force";
+  }
+  return merged;
+}
+
+const MAX_COMMAND_OUTPUT_BYTES = 50 * 1024 * 1024;
+const COMMAND_KILL_GRACE_MS = 100;
+
+/** Signal only the group created for this command, never PIDs from a ps snapshot. */
+function signalCommand(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  try {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      // The group can still own output pipes after its leader has exited.
+      process.kill(-child.pid, signal);
+    } else {
+      child.kill(signal);
+    }
+  } catch {
+    // Already gone or no longer signalable. Settlement must not depend on this.
+  }
+}
+
+function executeCommandBytes(
+  command: string,
+  args: string[],
+  options: RunCommandOptions,
+  timeoutMs: number,
+): Promise<ExecBufferResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: command === "git" ? nonInteractiveGitEnv(options.env) : options.env,
+      // POSIX detached children lead a private session/process group. These are
+      // captured commands, so they do not need the backend's controlling tty.
+      detached: process.platform !== "win32",
+      stdio: "pipe",
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const stopCapture = () => {
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      stopCapture();
+      reject(
+        Object.assign(error, {
+          stdout: Buffer.concat(stdout, stdoutBytes),
+          stderr: Buffer.concat(stderr, stderrBytes),
+          killed: timedOut,
+        }),
+      );
+    };
+    const capture = (chunks: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
+      if (settled || timedOut) return;
+      const previousBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
+      const retained = chunk.subarray(0, MAX_COMMAND_OUTPUT_BYTES - previousBytes);
+      chunks.push(retained);
+      if (stream === "stdout") stdoutBytes += retained.length;
+      else stderrBytes += retained.length;
+      if (previousBytes + chunk.length > MAX_COMMAND_OUTPUT_BYTES) {
+        signalCommand(child, "SIGKILL");
+        fail(new Error(`${stream} maxBuffer length exceeded`));
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk, "stdout"));
+    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk, "stderr"));
+    const onError = (error: Error) => {
+      if (timedOut || settled) return;
+      signalCommand(child, "SIGKILL");
+      fail(error);
+    };
+    child.on("error", onError);
+    child.stdout.on("error", onError);
+    child.stderr.on("error", onError);
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      // A command may close its input before consuming all of a supplied payload.
+      if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") onError(error);
+    });
+    child.on("close", (code, signal) => {
+      if (settled || timedOut) return;
+      if (code !== 0 || signal !== null) {
+        fail(
+          Object.assign(new Error(`Command failed: ${[command, ...args].join(" ")}`), {
+            code,
+            signal,
+          }),
+        );
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      resolve({
+        stdout: Buffer.concat(stdout, stdoutBytes),
+        stderr: Buffer.concat(stderr, stderrBytes),
+      });
+    });
+    if (timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        signalCommand(child, "SIGTERM");
+        stopCapture();
+        // Always escalate, even if the leader exits or the pipes close during
+        // the grace period. Neither proves that the group's descendants exited.
+        timeoutTimer = setTimeout(() => {
+          signalCommand(child, "SIGKILL");
+          fail(
+            Object.assign(new Error(`Command timed out after ${timeoutMs} ms`), {
+              code: child.exitCode,
+              signal: child.signalCode,
+            }),
+          );
+        }, COMMAND_KILL_GRACE_MS);
+      }, timeoutMs);
+    }
+    // Close stdin immediately when there is no payload, so CLIs cannot await EOF.
+    child.stdin.end(options.stdin);
+  });
+}
+
 async function runCommandBytes(
   command: string,
   args: string[] = [],
   options: RunCommandOptions = {},
 ): Promise<ExecBufferResult> {
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) {
+    throw new RangeError("timeoutMs must be an integer between 0 and 2147483647");
+  }
   if (commandInvocations.size < 64 || commandInvocations.has(command)) {
     commandInvocations.set(command, (commandInvocations.get(command) ?? 0) + 1);
   }
@@ -145,17 +292,7 @@ async function runCommandBytes(
   // counted exactly once and charged to whichever recurring job caused it.
   recurringWorkMetrics.work(spawnWorkUnit(command, args));
   try {
-    const execPromise = execFileAsync(command, args, {
-      cwd: options.cwd,
-      encoding: "buffer",
-      env: options.env,
-      timeout: options.timeoutMs ?? 60_000,
-      maxBuffer: 50 * 1024 * 1024,
-    });
-    // execFile leaves the child's stdin pipe open. Close it immediately when
-    // there is no payload so non-TTY CLIs cannot hang waiting for EOF.
-    execPromise.child.stdin?.end(options.stdin);
-    const { stdout, stderr } = await execPromise;
+    const { stdout, stderr } = await executeCommandBytes(command, args, options, timeoutMs);
     recurringWorkMetrics.bytes(stdout.length);
     return {
       stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout),

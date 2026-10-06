@@ -22,6 +22,7 @@ import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
+import { nonInteractiveGitEnv } from "./git-noninteractive-env.js";
 
 type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir">;
 
@@ -286,7 +287,7 @@ async function remoteGitBranchesWithPrefix(options: {
     ],
     {
       timeoutMs: GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      env: await nonInteractiveGitEnv(options.projectPath ?? undefined),
     },
   ).catch(() => null);
   if (!result) return new Set();

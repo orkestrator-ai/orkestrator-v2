@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import { CommandFailedError, runCommand } from "./shell.js";
+import { nonInteractiveGitEnv } from "./git-noninteractive-env.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 
@@ -589,6 +590,7 @@ export class ProjectGitService {
             before.remote ? ["fetch", "--prune", before.remote] : ["fetch", "--prune", "--all"],
             {
               cwd: root,
+              env: await nonInteractiveGitEnv(root),
               timeoutMs: 60_000,
             },
           );
@@ -687,7 +689,7 @@ export class ProjectGitService {
           status.remote,
           remoteBranch,
         ],
-        { cwd: root, timeoutMs: 60_000 },
+        { cwd: root, env: await nonInteractiveGitEnv(root), timeoutMs: 60_000 },
       );
     });
   }

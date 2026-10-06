@@ -213,6 +213,49 @@ describe("Electron backend process supervisor", () => {
     ]);
   });
 
+  test("ignores a macOS launchd job that does not publish an SSH_AUTH_SOCK socket", async () => {
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      if (command !== "launchctl" || args[0] !== "print") return undefined;
+      return [
+        "gui/501/com.openssh.ssh-agent = {",
+        "\tpath = /System/Library/LaunchAgents/com.openssh.ssh-agent.plist",
+        "\tprogram = /usr/bin/ssh-agent",
+        "\tsockets = {",
+        '\t\t"Other" = {',
+        "\t\t\tpath = /var/run/com.apple.launchd.abc123/Other",
+        "\t\t\tsecure key = OTHER_SOCK",
+        "\t\t}",
+        "\t}",
+        "}",
+      ].join("\n");
+    });
+
+    await expect(
+      discoverSessionSshAgentSockets("darwin", { commandOutput, uid: 501 }),
+    ).resolves.toEqual([]);
+  });
+
+  test("skips the macOS launchd job lookup when no uid is available", async () => {
+    const calls: string[] = [];
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      calls.push([command, ...args].join(" "));
+      return undefined;
+    });
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
+    try {
+      await expect(discoverSessionSshAgentSockets("darwin", { commandOutput })).resolves.toEqual(
+        [],
+      );
+    } finally {
+      Object.defineProperty(process, "getuid", { configurable: true, value: originalGetuid });
+    }
+    expect(calls).toEqual([
+      "launchctl getenv SSH_AUTH_SOCK",
+      "gpgconf --list-dirs agent-ssh-socket",
+    ]);
+  });
+
   test("applies resolved sockets to standalone backend environments and clears agent-test access", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-ssh-agent-config-"));
     directories.push(directory);

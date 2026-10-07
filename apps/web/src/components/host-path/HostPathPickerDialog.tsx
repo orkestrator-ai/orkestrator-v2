@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ArrowUp, File, Folder, Home, Loader2 } from "lucide-react";
+import { ArrowUp, File, Folder, FolderPlus, Home, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,7 +10,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { listHostDirectory, type HostDirectoryListing } from "@/lib/backend/files-sessions";
+import {
+  createHostDirectory,
+  listHostDirectory,
+  type HostDirectoryListing,
+} from "@/lib/backend/files-sessions";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
@@ -31,17 +35,33 @@ export function HostPathPickerDialog() {
   const [showHidden, setShowHidden] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Name typed for a new folder in the current listing; null while that form is closed. */
+  const [newFolderName, setNewFolderName] = useState<string | null>(null);
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [createFolderError, setCreateFolderError] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const createOperation = useRef<object | null>(null);
   const navigationPending = useRef(false);
   const addressId = useId();
+  const newFolderId = useId();
+
+  const closeNewFolder = () => {
+    setNewFolderName(null);
+    setCreateFolderError(null);
+  };
 
   const load = useCallback(
     async (path: string | undefined, hidden: boolean) => {
       const generation = ++loadGeneration.current;
+      createOperation.current = null;
+      setIsCreatingFolder(false);
       navigationPending.current = true;
       setIsLoading(true);
       setSelectedFile(null);
       setError(null);
+      // The new-folder form targets the listed folder, so it never outlives a navigation.
+      setNewFolderName(null);
+      setCreateFolderError(null);
       try {
         const next = await listHostDirectory(path, {
           includeFiles: isFileMode,
@@ -76,11 +96,15 @@ export function HostPathPickerDialog() {
   useEffect(() => {
     if (!request) {
       loadGeneration.current += 1;
+      createOperation.current = null;
       navigationPending.current = false;
       setListing(null);
       setSelectedFile(null);
       setError(null);
       setIsLoading(false);
+      setNewFolderName(null);
+      setCreateFolderError(null);
+      setIsCreatingFolder(false);
       return;
     }
     setShowHidden(false);
@@ -101,6 +125,32 @@ export function HostPathPickerDialog() {
     if (chosenPath && !navigationPending.current) settle(chosenPath);
   };
 
+  const createFolder = async () => {
+    const name = newFolderName?.trim();
+    if (!listing || !name || createOperation.current || navigationPending.current) return;
+    const generation = loadGeneration.current;
+    const operation = {};
+    createOperation.current = operation;
+    setIsCreatingFolder(true);
+    setCreateFolderError(null);
+    try {
+      const created = await createHostDirectory(listing.path, name);
+      // A navigation or new request started meanwhile owns the view now.
+      if (generation !== loadGeneration.current) return;
+      navigate(created.path);
+    } catch (createError) {
+      if (generation !== loadGeneration.current) return;
+      setCreateFolderError(
+        createError instanceof Error ? createError.message : "Could not create that folder.",
+      );
+    } finally {
+      if (createOperation.current === operation) {
+        createOperation.current = null;
+        setIsCreatingFolder(false);
+      }
+    }
+  };
+
   const noun = isFileMode ? "file" : "folder";
   const showRoots = (listing?.roots.length ?? 0) > 1;
 
@@ -109,6 +159,12 @@ export function HostPathPickerDialog() {
       <DialogContent
         className={cn("flex max-h-[80dvh] flex-col sm:max-w-xl", Z_FULLSCREEN_DIALOG)}
         overlayClassName={Z_FULLSCREEN_DIALOG}
+        onEscapeKeyDown={(event) => {
+          // Escape backs out of the new-folder form before it closes the picker.
+          if (newFolderName === null) return;
+          event.preventDefault();
+          if (!isCreatingFolder) closeNewFolder();
+        }}
       >
         <DialogHeader>
           <DialogTitle>{request?.title ?? `Choose a ${noun}`}</DialogTitle>
@@ -176,15 +232,77 @@ export function HostPathPickerDialog() {
             ))}
           <Button
             type="button"
+            variant={newFolderName === null ? "ghost" : "secondary"}
+            size="sm"
+            className="ml-auto"
+            disabled={!canChoose || isCreatingFolder}
+            onClick={() => {
+              setCreateFolderError(null);
+              setNewFolderName((current) => (current === null ? "" : null));
+            }}
+          >
+            <FolderPlus /> New folder
+          </Button>
+          <Button
+            type="button"
             variant={showHidden ? "secondary" : "ghost"}
             size="sm"
             aria-pressed={showHidden}
-            className="ml-auto"
             onClick={toggleHidden}
           >
             Hidden items
           </Button>
         </div>
+
+        {newFolderName !== null && listing && (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createFolder();
+            }}
+          >
+            <label htmlFor={newFolderId} className="sr-only">
+              New folder name
+            </label>
+            <Input
+              id={newFolderId}
+              autoFocus
+              value={newFolderName}
+              maxLength={255}
+              disabled={isCreatingFolder}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="Folder name"
+              onChange={(event) => {
+                setNewFolderName(event.target.value);
+                setCreateFolderError(null);
+              }}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!newFolderName.trim() || isCreatingFolder || isLoading}
+            >
+              {isCreatingFolder ? "Creating…" : "Create"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="Cancel new folder"
+              disabled={isCreatingFolder}
+              onClick={closeNewFolder}
+            >
+              Cancel
+            </Button>
+          </form>
+        )}
+        {createFolderError && (
+          <p role="alert" className="text-sm text-destructive">
+            {createFolderError}
+          </p>
+        )}
 
         <div
           className="min-h-48 flex-1 overflow-y-auto rounded-md border border-border/70"

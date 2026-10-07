@@ -120,7 +120,7 @@ test.describe("host path browsing", () => {
     { name: "desktop", width: 1280, height: 860 },
     { name: "narrow", width: 390, height: 844 },
   ]) {
-    test(`host picker browses through the authenticated gateway above fullscreen settings (${viewport.name})`, async ({
+    test(`host picker creates and browses folders through the authenticated gateway above fullscreen settings (${viewport.name})`, async ({
       page,
     }) => {
       page.setDefaultTimeout(15_000);
@@ -133,6 +133,7 @@ test.describe("host path browsing", () => {
       expect(fixture).toBeTruthy();
       // Keep the disposable fixture socket below the POSIX socket path length limit.
       const directory = await fs.mkdtemp("/tmp/orkestrator-picker-");
+      const createdDirectory = path.join(directory, "New destination");
       // Use a real socket: SSH agents expose sockets rather than regular files.
       const socketPath = path.join(directory, "agent.sock");
       const socket = createServer();
@@ -224,9 +225,44 @@ test.describe("host path browsing", () => {
           await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
           await picker.getByLabel("Path", { exact: true }).fill(directory);
           await picker.getByLabel("Path", { exact: true }).press("Enter");
+          await expect(
+            picker.getByRole("button", { name: "New folder", exact: true }),
+          ).toBeEnabled();
+          if (pass === "initial") {
+            await picker.getByRole("button", { name: "New folder", exact: true }).click();
+            const folderName = picker.getByLabel("New folder name", { exact: true });
+            await expect(folderName).toBeFocused();
+            await expect(
+              picker.getByRole("button", { name: "Create", exact: true }),
+            ).toBeDisabled();
+            await folderName.fill("New destination");
+            await folderName.press("Enter");
+            await expect(picker.getByLabel("Path", { exact: true })).toHaveValue(createdDirectory);
+            await expect(folderName).toHaveCount(0);
+            await expect(picker.getByText("No subfolders here.", { exact: true })).toBeVisible();
+            expect((await fs.stat(createdDirectory)).isDirectory()).toBe(true);
+          } else {
+            await picker.getByRole("button", { name: "New destination", exact: true }).click();
+            await expect(picker.getByLabel("Path", { exact: true })).toHaveValue(createdDirectory);
+          }
           await expect(picker.getByRole("button", { name: "Select this folder" })).toBeEnabled();
           await picker.getByRole("button", { name: "Select this folder" }).click();
-          await expect(repository.getByLabel("Local Path", { exact: true })).toHaveValue(directory);
+          await expect(repository.getByLabel("Local Path", { exact: true })).toHaveValue(
+            createdDirectory,
+          );
+          // Reopen immediately, then revisit after reload to prove host filesystem persistence.
+          await repository.getByRole("button", { name: "Browse for local path" }).click();
+          await expect(picker.getByLabel("Path", { exact: true })).toHaveValue(createdDirectory);
+          await picker.getByRole("button", { name: "Parent folder", exact: true }).click();
+          await expect(picker.getByLabel("Path", { exact: true })).toHaveValue(directory);
+          await picker.getByRole("button", { name: "New folder", exact: true }).click();
+          await picker.getByLabel("New folder name", { exact: true }).fill("New destination");
+          // Duplicate creation is a real backend error and leaves the current listing intact.
+          await picker.getByRole("button", { name: "Create", exact: true }).click();
+          await expect(picker.getByRole("alert")).toContainText("already exists");
+          await expect(picker.getByLabel("Path", { exact: true })).toHaveValue(directory);
+          await picker.getByRole("button", { name: "Cancel new folder", exact: true }).click();
+          await picker.getByRole("button", { name: "Cancel", exact: true }).click();
           // Cancel repository edits so the fixture's authoritative local path stays intact.
           await repository.getByRole("button", { name: "Close settings" }).click();
 

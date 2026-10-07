@@ -246,6 +246,22 @@ describe("createPRPrompt", () => {
     expect(result).toContain("git diff origin/develop...HEAD");
   });
 
+  test("opens a PR from existing commits when the working tree is clean", () => {
+    const result = createPRPrompt("develop");
+    expect(result).toContain("A clean working tree does NOT mean there is nothing to do");
+    expect(result).toContain("git log origin/develop..HEAD --oneline");
+    expect(result).toContain("skip Steps 1 and 2 — do not create an empty commit");
+    expect(result).toContain("no relevant uncommitted changes AND no commits ahead of `develop`");
+    expect(result.indexOf("## Before You Start")).toBeLessThan(
+      result.indexOf("## Step 1: Stage Relevant Changes Safely"),
+    );
+  });
+
+  test("reuses an existing PR instead of creating a duplicate", () => {
+    const result = createPRPrompt("main");
+    expect(result).toContain("If a PR already exists for this branch");
+  });
+
   test("instructs not to reference Claude", () => {
     const result = createPRPrompt("main");
     expect(result).toContain("Do NOT reference Claude");

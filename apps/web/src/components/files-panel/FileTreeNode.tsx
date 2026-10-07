@@ -7,6 +7,7 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  Pencil,
   RotateCcw,
   Trash2,
 } from "lucide-react";
@@ -102,6 +103,7 @@ interface FileTreeNodeProps {
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
+  onRequestRename?: (path: string) => void;
   onCreateFolder?: (parentDirectory: string) => void;
   movePending?: boolean;
 }
@@ -119,6 +121,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onMove,
   onCopyFiles,
   onRequestMove,
+  onRequestRename,
   onCreateFolder,
   movePending = false,
 }: FileTreeNodeProps) {
@@ -251,6 +254,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               onMove={onMove}
               onCopyFiles={onCopyFiles}
               onRequestMove={onRequestMove}
+              onRequestRename={onRequestRename}
               onCreateFolder={onCreateFolder}
               movePending={movePending}
             />
@@ -336,6 +340,12 @@ export const FileTreeNode = memo(function FileTreeNode({
           <Copy />
           Copy path
         </ContextMenuItem>
+        {onRequestRename && (
+          <ContextMenuItem disabled={movePending} onSelect={() => onRequestRename(item.path)}>
+            <Pencil />
+            Rename…
+          </ContextMenuItem>
+        )}
         {onRequestMove && (
           <ContextMenuItem disabled={movePending} onSelect={() => onRequestMove(actionPaths)}>
             <FolderInput />

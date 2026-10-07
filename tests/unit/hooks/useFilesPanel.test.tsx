@@ -91,6 +91,14 @@ const mockMoveLocalFile = mock<
 >((_environmentId, sourcePath, destinationDirectory) =>
   Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
 );
+const renamedPath = (filePath: string, newName: string) =>
+  filePath.includes("/") ? `${filePath.slice(0, filePath.lastIndexOf("/"))}/${newName}` : newName;
+const mockRenameContainerFile = mock<
+  (environmentId: string, filePath: string, newName: string) => Promise<string>
+>((_environmentId, filePath, newName) => Promise.resolve(renamedPath(filePath, newName)));
+const mockRenameLocalFile = mock<
+  (environmentId: string, filePath: string, newName: string) => Promise<string>
+>((_environmentId, filePath, newName) => Promise.resolve(renamedPath(filePath, newName)));
 const mockCreateContainerFolder = mock<
   (environmentId: string, parentDirectory: string, folderName: string) => Promise<string>
 >((_environmentId, parentDirectory, folderName) =>
@@ -118,6 +126,8 @@ mock.module("@/lib/backend", () => ({
   deleteLocalFile: mockDeleteLocalFile,
   moveContainerFile: mockMoveContainerFile,
   moveLocalFile: mockMoveLocalFile,
+  renameContainerFile: mockRenameContainerFile,
+  renameLocalFile: mockRenameLocalFile,
   createContainerFolder: mockCreateContainerFolder,
   createLocalFolder: mockCreateLocalFolder,
 }));
@@ -234,6 +244,8 @@ describe("useFilesPanel", () => {
     mockDeleteLocalFile.mockClear();
     mockMoveContainerFile.mockClear();
     mockMoveLocalFile.mockClear();
+    mockRenameContainerFile.mockClear();
+    mockRenameLocalFile.mockClear();
     mockCreateContainerFolder.mockClear();
     mockCreateLocalFolder.mockClear();
     mockToastError.mockClear();
@@ -267,6 +279,12 @@ describe("useFilesPanel", () => {
     );
     mockMoveLocalFile.mockImplementation((_environmentId, sourcePath, destinationDirectory) =>
       Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+    );
+    mockRenameContainerFile.mockImplementation((_environmentId, filePath, newName) =>
+      Promise.resolve(renamedPath(filePath, newName)),
+    );
+    mockRenameLocalFile.mockImplementation((_environmentId, filePath, newName) =>
+      Promise.resolve(renamedPath(filePath, newName)),
     );
     mockCreateContainerFolder.mockImplementation((_environmentId, parentDirectory, folderName) =>
       Promise.resolve(parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`),
@@ -1148,6 +1166,84 @@ describe("useFilesPanel", () => {
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
   });
 
+  test("routes local and container renames and refreshes authoritative snapshots", async () => {
+    const containerEnvironment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(containerEnvironment);
+    const containerHook = renderHook(() => useFilesPanel());
+    await act(async () => {
+      await expect(
+        containerHook.result.current.renameFile("src/App.tsx", "Main.tsx"),
+      ).resolves.toBe("src/Main.tsx");
+    });
+    expect(mockRenameContainerFile).toHaveBeenCalledWith(
+      "env-container",
+      "src/App.tsx",
+      "Main.tsx",
+    );
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+    expect(mockToastSuccess).toHaveBeenCalledWith("File renamed", { description: "src/Main.tsx" });
+    expect(containerHook.result.current.fileActionPending).toBeNull();
+    containerHook.unmount();
+
+    const localEnvironment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(localEnvironment);
+    const localHook = renderHook(() => useFilesPanel());
+    await act(async () => {
+      await localHook.result.current.renameFile("README.md", "readme.md");
+    });
+    expect(mockRenameLocalFile).toHaveBeenCalledWith("env-local", "README.md", "readme.md");
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
+    expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+  });
+
+  test("clears rename pending state after failure and does not refresh stale data", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    let rejectRename: (error: Error) => void = () => {};
+    mockRenameContainerFile.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRename = reject;
+        }),
+    );
+    const { result } = renderHook(() => useFilesPanel());
+
+    let mutation: Promise<string>;
+    act(() => {
+      mutation = result.current.renameFile("src/App.tsx", "Main.tsx");
+    });
+    await waitFor(() => expect(result.current.fileActionPending).toBe("src/App.tsx"));
+    await act(async () => {
+      rejectRename(new Error("A file already exists at src/Main.tsx"));
+      await expect(mutation).rejects.toThrow("A file already exists at src/Main.tsx");
+    });
+    expect(result.current.fileActionPending).toBeNull();
+    expect(mockGetGitStatus).not.toHaveBeenCalled();
+    expect(mockGetFileTree).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to rename file", {
+      description: "A file already exists at src/Main.tsx",
+    });
+  });
+
   test("clears create-folder pending state after failure and does not refresh stale data", async () => {
     const environment = createMockEnvironment({
       id: "env-container",
@@ -1267,6 +1363,57 @@ describe("useFilesPanel", () => {
     expect(result.current.fileActionPending).toBeNull();
   });
 
+  test("blocks renaming a file that is open in any pane", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment);
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-local",
+      environments: new Map([
+        [
+          "env-local",
+          {
+            containerId: null,
+            activePaneId: "pane",
+            root: {
+              kind: "leaf",
+              id: "pane",
+              activeTabId: "file-tab",
+              tabs: [
+                {
+                  id: "file-tab",
+                  type: "file",
+                  fileData: {
+                    filePath: "src/App.tsx",
+                    isLocalEnvironment: true,
+                    worktreePath: "/tmp/worktree",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      ]),
+    });
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await expect(result.current.renameFile("src/App.tsx", "Main.tsx")).rejects.toThrow(
+        "Close the file's editor tab before renaming it",
+      );
+    });
+    expect(mockRenameLocalFile).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to rename file", {
+      description: "Close the file's editor tab before renaming it",
+    });
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
   test("keeps pending state while a mutation runs and clears it after failure", async () => {
     const environment = createMockEnvironment({
       id: "env-container",
@@ -1335,11 +1482,15 @@ describe("useFilesPanel", () => {
     await expect(result.current.moveFile("src/App.tsx", "archive")).rejects.toThrow(
       "The selected environment is not available",
     );
+    await expect(result.current.renameFile("src/App.tsx", "Main.tsx")).rejects.toThrow(
+      "The selected environment is not available",
+    );
     await expect(result.current.createFolder("src", "hooks")).rejects.toThrow(
       "The selected environment is not available",
     );
     expect(mockRevertContainerFile).not.toHaveBeenCalled();
     expect(mockDeleteContainerFile).not.toHaveBeenCalled();
+    expect(mockRenameContainerFile).not.toHaveBeenCalled();
     expect(mockCreateContainerFolder).not.toHaveBeenCalled();
   });
 

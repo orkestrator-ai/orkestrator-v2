@@ -18,6 +18,7 @@ import {
   workspaceParentDirectory,
 } from "./FileTreeNode";
 import { CreateFolderDialog } from "./CreateFolderDialog";
+import { RenameFileDialog } from "./RenameFileDialog";
 import { Loader2, Folder, FolderPlus, FolderTree } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 import {
@@ -56,6 +57,7 @@ interface AllFilesViewProps {
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
+  onRename?: (path: string, newName: string) => Promise<string>;
   movePending?: boolean;
   /** Opens a file when no environment panes are mounted (the project root). */
   onOpenFile?: (path: string, options?: CreateFileTabOptions) => void;
@@ -91,6 +93,7 @@ export function AllFilesView({
   onMove,
   onCopyFiles,
   onCreateFolder,
+  onRename,
   movePending = false,
   onOpenFile,
 }: AllFilesViewProps = {}) {
@@ -104,6 +107,7 @@ export function AllFilesView({
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [moveSourcePaths, setMoveSourcePaths] = useState<string[] | null>(null);
   const [createParentDirectory, setCreateParentDirectory] = useState<string | null>(null);
+  const [renamePath, setRenamePath] = useState<string | null>(null);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [anchorPath, setAnchorPath] = useState<string | null>(null);
@@ -180,6 +184,16 @@ export function AllFilesView({
       setFolderExpanded(parentDirectory, true);
     }
     setCreateParentDirectory(null);
+  };
+
+  const handleRename = async (path: string, newName: string) => {
+    if (!onRename) return;
+    const renamed = await onRename(path, newName);
+    setSelectedPaths((current) =>
+      current.map((selected) => (selected === path ? renamed : selected)),
+    );
+    setAnchorPath((current) => (current === path ? renamed : current));
+    setRenamePath(null);
   };
 
   const moveTo = (destinationDirectory: string) => {
@@ -325,6 +339,7 @@ export function AllFilesView({
             onMove={onMove}
             onCopyFiles={onCopyFiles}
             onRequestMove={onMove ? setMoveSourcePaths : undefined}
+            onRequestRename={onRename ? setRenamePath : undefined}
             onCreateFolder={requestCreateFolder}
             movePending={movePending}
           />
@@ -340,6 +355,12 @@ export function AllFilesView({
         isPending={movePending}
         onCancel={() => setCreateParentDirectory(null)}
         onCreate={handleCreateFolder}
+      />
+      <RenameFileDialog
+        filePath={renamePath}
+        isPending={movePending}
+        onCancel={() => setRenamePath(null)}
+        onRename={handleRename}
       />
       <Dialog
         open={moveSourcePaths !== null}

@@ -10,6 +10,7 @@ import { ChangedFileItem } from "./ChangedFileItem";
 import { ChangesView } from "./ChangesView";
 import { CreateFolderDialog, DEFAULT_NEW_FOLDER_NAME } from "./CreateFolderDialog";
 import { FileTreeNode } from "./FileTreeNode";
+import { fileNameStemLength, RenameFileDialog } from "./RenameFileDialog";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
@@ -621,6 +622,118 @@ describe("files panel views", () => {
     fireEvent.keyDown(screen.getByRole("dialog", { name: "New folder" }), { key: "Escape" });
     expect(onCancel).not.toHaveBeenCalled();
     release();
+  });
+
+  test("renames a file from its context menu", async () => {
+    const onRename = mock(async (path: string, newName: string) =>
+      path.includes("/") ? `${path.slice(0, path.lastIndexOf("/"))}/${newName}` : newName,
+    );
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onRename={onRename} />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(await screen.findByText("Rename…"));
+    expect(await screen.findByRole("dialog", { name: "Rename file" })).toBeTruthy();
+    const nameInput = screen.getByLabelText("File name") as HTMLInputElement;
+    expect(nameInput.value).toBe("App.tsx");
+    expect(screen.getByRole("button", { name: "Rename" }).hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(nameInput, { target: { value: "  Main.tsx " } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await waitFor(() => expect(onRename).toHaveBeenCalledWith("src/App.tsx", "Main.tsx"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Rename file" }) === null).toBe(true),
+    );
+  });
+
+  test("offers Rename only for files and only when renaming is available", async () => {
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    const { unmount } = renderWithTerminal(
+      <AllFilesView onRename={mock(async () => "x")} onCreateFolder={mock(async () => "x")} />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
+    expect(await screen.findByText("Copy path")).toBeTruthy();
+    expect(screen.queryByText("Rename…") === null).toBe(true);
+    unmount();
+
+    renderWithTerminal(<AllFilesView />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    expect(await screen.findByText("Copy path")).toBeTruthy();
+    expect(screen.queryByText("Rename…") === null).toBe(true);
+  });
+
+  test("keeps Rename disabled while a mutation is pending", async () => {
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onRename={mock(async () => "x")} movePending />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    const item = await screen.findByText("Rename…");
+    expect(item.closest("[data-disabled]") !== null || item.hasAttribute("data-disabled")).toBe(
+      true,
+    );
+  });
+
+  test("RenameFileDialog keeps the dialog open and shows the error when renaming fails", async () => {
+    const onRename = mock(async () => {
+      throw new Error("A file already exists at src/Main.tsx");
+    });
+    render(
+      <RenameFileDialog
+        filePath="src/App.tsx"
+        isPending={false}
+        onCancel={() => undefined}
+        onRename={onRename}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("File name"), { target: { value: "Main.tsx" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await waitFor(() =>
+      expect(screen.getByText("A file already exists at src/Main.tsx")).toBeTruthy(),
+    );
+    expect(screen.getByRole("dialog", { name: "Rename file" })).toBeTruthy();
+  });
+
+  test("RenameFileDialog rejects path separators without calling rename", async () => {
+    const onRename = mock(async () => undefined);
+    render(
+      <RenameFileDialog
+        filePath="src/App.tsx"
+        isPending={false}
+        onCancel={() => undefined}
+        onRename={onRename}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("File name"), { target: { value: "../App.tsx" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(await screen.findByText("File names cannot contain / or \\")).toBeTruthy();
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
+  test("RenameFileDialog ignores dismissals while renaming is pending", () => {
+    const onCancel = mock(() => undefined);
+    render(
+      <RenameFileDialog
+        filePath="src/App.tsx"
+        isPending
+        onCancel={onCancel}
+        onRename={mock(async () => undefined)}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Renaming…" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Rename file" }), { key: "Escape" });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  test("fileNameStemLength selects the name before its extension", () => {
+    expect(fileNameStemLength("App.tsx")).toBe(3);
+    expect(fileNameStemLength("archive.tar.gz")).toBe(11);
+    expect(fileNameStemLength(".env")).toBe(4);
+    expect(fileNameStemLength("Makefile")).toBe(8);
   });
 
   test("Shift-click selects a visible file range without opening files", async () => {

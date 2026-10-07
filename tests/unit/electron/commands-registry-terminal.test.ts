@@ -1054,6 +1054,37 @@ exit 1
     expect(existsSync(path.join(worktree, "tracked.txt"))).toBe(false);
   });
 
+  test("renames local files through the environment-scoped command", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const commands = createCommandRegistry();
+    const environment = createEnvironment({ worktreePath: worktree });
+    const context = createContext(environment).context;
+
+    await expect(
+      commands.get("rename_local_file")?.(
+        { environmentId: environment.id, filePath: "tracked.txt", newName: "renamed-tracked.txt" },
+        context,
+      ),
+    ).resolves.toBe("renamed-tracked.txt");
+    await expect(fs.readFile(path.join(worktree, "renamed-tracked.txt"), "utf8")).resolves.toBe(
+      "base\n",
+    );
+    expect(existsSync(path.join(worktree, "tracked.txt"))).toBe(false);
+
+    await expect(
+      commands.get("rename_local_file")?.(
+        { environmentId: environment.id, filePath: "renamed-tracked.txt", newName: "../out.txt" },
+        context,
+      ),
+    ).rejects.toThrow("path separators are not allowed");
+    await expect(
+      commands.get("rename_local_file")?.(
+        { environmentId: environment.id, filePath: "renamed-tracked.txt", newName: ".GIT" },
+        context,
+      ),
+    ).rejects.toThrow("Git metadata cannot be modified");
+  });
+
   test("creates local folders through the environment-scoped command", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const commands = createCommandRegistry();
@@ -1266,6 +1297,24 @@ exit 1
         context,
       ),
     ).rejects.toThrow("Expected destinationDirectory to be a string");
+    await expect(
+      commands.get("rename_local_file")?.(
+        { environmentId: "missing", filePath: "tracked.txt", newName: "other.txt" },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("rename_local_file")?.(
+        { environmentId: containerEnvironment.id, filePath: "tracked.txt", newName: "other.txt" },
+        context,
+      ),
+    ).rejects.toThrow("not a local worktree");
+    await expect(
+      commands.get("rename_local_file")?.(
+        { environmentId: localEnvironment.id, filePath: "tracked.txt", newName: undefined },
+        context,
+      ),
+    ).rejects.toThrow("Expected newName to be a string");
     await expect(
       commands.get("create_local_folder")?.(
         { environmentId: "missing", parentDirectory: ".", folderName: "docs" },
@@ -1879,6 +1928,16 @@ exit 0
             context,
           ),
         ).resolves.toBe("src/hooks");
+        await expect(
+          commands.get("rename_container_file")?.(
+            {
+              environmentId: environment.id,
+              filePath: "src/file name.ts",
+              newName: "renamed file.ts",
+            },
+            context,
+          ),
+        ).resolves.toBe("src/renamed file.ts");
 
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("set -euo pipefail");
@@ -1938,6 +1997,24 @@ exit 0
         context,
       ),
     ).rejects.toThrow("Expected destinationDirectory to be a string");
+    await expect(
+      commands.get("rename_container_file")?.(
+        { environmentId: environment.id, filePath: "src/file.ts", newName: "../file.ts" },
+        context,
+      ),
+    ).rejects.toThrow("path separators are not allowed");
+    await expect(
+      commands.get("rename_container_file")?.(
+        { environmentId: environment.id, filePath: "src/file.ts", newName: "file.ts" },
+        context,
+      ),
+    ).rejects.toThrow("File is already named file.ts");
+    await expect(
+      commands.get("rename_container_file")?.(
+        { environmentId: environment.id, filePath: ".git/config", newName: "config2" },
+        context,
+      ),
+    ).rejects.toThrow("Git metadata cannot be modified");
     await expect(
       commands.get("create_container_folder")?.(
         {
@@ -2145,6 +2222,18 @@ exec sleep 30
           sourcePath: "tracked.txt",
           destinationDirectory: ".",
         },
+        context,
+      ),
+    ).rejects.toThrow("not containerized");
+    await expect(
+      commands.get("rename_container_file")?.(
+        { environmentId: "missing", filePath: "tracked.txt", newName: "other.txt" },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("rename_container_file")?.(
+        { environmentId: localEnvironment.id, filePath: "tracked.txt", newName: "other.txt" },
         context,
       ),
     ).rejects.toThrow("not containerized");

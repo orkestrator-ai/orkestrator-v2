@@ -245,6 +245,15 @@ export async function moveContainerFile(
   });
 }
 
+/** Rename a container file in place without replacing an existing path. */
+export async function renameContainerFile(
+  environmentId: string,
+  filePath: string,
+  newName: string,
+): Promise<string> {
+  return invoke<string>("rename_container_file", { environmentId, filePath, newName });
+}
+
 /** Create an empty folder inside an existing container workspace directory. */
 export async function createContainerFolder(
   environmentId: string,
@@ -477,6 +486,15 @@ export async function moveLocalFile(
     sourcePath,
     destinationDirectory,
   });
+}
+
+/** Rename a local-worktree file in place without replacing an existing path. */
+export async function renameLocalFile(
+  environmentId: string,
+  filePath: string,
+  newName: string,
+): Promise<string> {
+  return invoke<string>("rename_local_file", { environmentId, filePath, newName });
 }
 
 /** Create an empty folder inside an existing local-worktree directory. */

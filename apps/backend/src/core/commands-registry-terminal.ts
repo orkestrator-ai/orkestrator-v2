@@ -104,6 +104,7 @@ import {
   revertLocalFile,
   deleteLocalFile,
   moveLocalFile,
+  renameLocalFile,
   copyExternalFileToLocalWorkspace,
   createLocalFolder,
   requireLocalMutationEnvironment,
@@ -111,6 +112,7 @@ import {
   containerRevertFileCommand,
   containerDeleteFileCommand,
   resolveWorkspaceFileMove,
+  resolveWorkspaceFileRename,
   resolveWorkspaceExternalFileCopy,
   resolveWorkspaceFolderCreate,
   containerMoveFileCommand,
@@ -917,6 +919,19 @@ export function registerTerminalCommands(
       });
     },
   );
+  register("rename_local_file", async ({ environmentId, filePath, newName }, context) => {
+    const id = asString(environmentId, "environmentId");
+    return withLocalFileMutation(context, id, async (environment) => {
+      const result = await renameLocalFile(
+        environment.worktreePath!,
+        asString(filePath, "filePath"),
+        asString(newName, "newName"),
+      );
+      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+      diffStatsService.refresh(id);
+      return result;
+    });
+  });
   register(
     "create_local_folder",
     async ({ environmentId, parentDirectory, folderName }, context) => {
@@ -1162,6 +1177,25 @@ export function registerTerminalCommands(
       return move.destination;
     },
   );
+  register("rename_container_file", async ({ environmentId, filePath, newName }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    const environment = await requireContainerMutationEnvironment(
+      context.storage,
+      environmentIdString,
+    );
+    const id = environment.containerId!;
+    const rename = resolveWorkspaceFileRename(
+      asString(filePath, "filePath"),
+      asString(newName, "newName"),
+    );
+    await dockerExec(
+      id,
+      containerMoveFileCommand(rename.source, rename.directory, rename.destination),
+    );
+    diffStatsService.invalidateChanges({ containerId: id });
+    diffStatsService.refresh(environmentIdString);
+    return rename.destination;
+  });
   register(
     "create_container_folder",
     async ({ environmentId, parentDirectory, folderName }, context) => {

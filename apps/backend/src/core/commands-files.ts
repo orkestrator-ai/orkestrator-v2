@@ -17,6 +17,7 @@ import {
   writeConfinedFile,
   moveConfinedFile,
   createConfinedDirectory,
+  randomUUID,
   INITIAL_PROMPT_STAGING_DIRECTORY,
 } from "./commands-dependencies.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
@@ -1322,6 +1323,77 @@ export async function moveLocalFile(
 // The confined writers stage to `.<name>.<uuid>.tmp`, a 42-byte suffix/prefix.
 // Leave enough room for that sibling on filesystems with 255-byte components.
 const MAX_WORKSPACE_FILE_NAME_BYTES = 213;
+
+/**
+ * Resolve a replacement leaf name for one workspace file.
+ *
+ * The file keeps its directory: separators are rejected so a rename cannot be
+ * used to move the file elsewhere in the workspace.
+ */
+export function resolveWorkspaceFileRename(
+  relativePath: string,
+  newName: string,
+): { source: string; directory: string; destination: string } {
+  const name = newName.trim();
+  if (name.length === 0) {
+    throw new Error("Invalid newName: name is required");
+  }
+  if (Buffer.byteLength(name, "utf8") > MAX_WORKSPACE_FILE_NAME_BYTES) {
+    throw new Error(`Invalid newName: name exceeds ${MAX_WORKSPACE_FILE_NAME_BYTES} bytes`);
+  }
+  if (name === "." || name === "..") {
+    throw new Error("Invalid newName: path must stay inside the workspace");
+  }
+  if (name.toLowerCase() === ".git") {
+    throw new Error("Invalid newName: Git metadata cannot be modified");
+  }
+  if (name.includes("/") || name.includes("\\")) {
+    throw new Error("Invalid newName: path separators are not allowed");
+  }
+
+  const source = validateWorkspaceMutationPath(relativePath, "filePath");
+  const directory = path.posix.dirname(source);
+  const destination = validateWorkspaceMutationPath(
+    directory === "." ? name : path.posix.join(directory, name),
+    "destinationPath",
+  );
+  if (path.posix.basename(destination) !== name) {
+    throw new Error("Invalid newName: path must stay inside the workspace");
+  }
+  if (destination === source) {
+    throw new Error(`File is already named ${name}`);
+  }
+  return { source, directory, destination };
+}
+
+/** Rename one regular file in place without replacing an existing path. */
+export async function renameLocalFile(
+  worktreePath: string,
+  relativePath: string,
+  newName: string,
+): Promise<string> {
+  const rename = resolveWorkspaceFileRename(relativePath, newName);
+
+  if (rename.source.toLowerCase() !== rename.destination.toLowerCase()) {
+    await moveConfinedFile(worktreePath, rename.source, rename.destination);
+    return rename.destination;
+  }
+
+  // A case-only rename collides with itself on case-insensitive filesystems
+  // (the macOS default), so stage through a unique sibling name. The staged
+  // file is restored if the final no-replace rename is refused.
+  const stagedName = `.${path.posix.basename(rename.source)}.${randomUUID()}.rename`;
+  const staged =
+    rename.directory === "." ? stagedName : path.posix.join(rename.directory, stagedName);
+  await moveConfinedFile(worktreePath, rename.source, staged);
+  try {
+    await moveConfinedFile(worktreePath, staged, rename.destination);
+  } catch (error) {
+    await moveConfinedFile(worktreePath, staged, rename.source).catch(() => undefined);
+    throw error;
+  }
+  return rename.destination;
+}
 
 /** Resolve one externally supplied leaf filename against an existing workspace directory. */
 export function resolveWorkspaceExternalFileCopy(

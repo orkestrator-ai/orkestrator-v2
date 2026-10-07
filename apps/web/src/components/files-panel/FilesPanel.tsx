@@ -27,6 +27,7 @@ export function FilesPanel() {
     revertFile,
     deleteFile,
     moveFile,
+    renameFile,
     createFolder,
     copyExternalFiles,
     fileActionPending,
@@ -138,6 +139,7 @@ export function FilesPanel() {
             onMove={moveFileInTree}
             onCopyFiles={copyFilesIntoTree}
             onCreateFolder={createFolder}
+            onRename={renameFile}
             movePending={fileActionPending !== null}
             onOpenFile={onOpenFile}
           />

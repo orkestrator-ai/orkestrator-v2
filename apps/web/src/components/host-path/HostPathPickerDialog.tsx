@@ -40,6 +40,7 @@ export function HostPathPickerDialog() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [createFolderError, setCreateFolderError] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const createOperation = useRef<object | null>(null);
   const navigationPending = useRef(false);
   const addressId = useId();
   const newFolderId = useId();
@@ -52,6 +53,8 @@ export function HostPathPickerDialog() {
   const load = useCallback(
     async (path: string | undefined, hidden: boolean) => {
       const generation = ++loadGeneration.current;
+      createOperation.current = null;
+      setIsCreatingFolder(false);
       navigationPending.current = true;
       setIsLoading(true);
       setSelectedFile(null);
@@ -93,6 +96,7 @@ export function HostPathPickerDialog() {
   useEffect(() => {
     if (!request) {
       loadGeneration.current += 1;
+      createOperation.current = null;
       navigationPending.current = false;
       setListing(null);
       setSelectedFile(null);
@@ -123,8 +127,10 @@ export function HostPathPickerDialog() {
 
   const createFolder = async () => {
     const name = newFolderName?.trim();
-    if (!listing || !name || isCreatingFolder || navigationPending.current) return;
+    if (!listing || !name || createOperation.current || navigationPending.current) return;
     const generation = loadGeneration.current;
+    const operation = {};
+    createOperation.current = operation;
     setIsCreatingFolder(true);
     setCreateFolderError(null);
     try {
@@ -138,7 +144,10 @@ export function HostPathPickerDialog() {
         createError instanceof Error ? createError.message : "Could not create that folder.",
       );
     } finally {
-      setIsCreatingFolder(false);
+      if (createOperation.current === operation) {
+        createOperation.current = null;
+        setIsCreatingFolder(false);
+      }
     }
   };
 

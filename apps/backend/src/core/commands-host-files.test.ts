@@ -262,6 +262,38 @@ describe("create_host_directory", () => {
     await expect(createHostDirectory("   ", "child")).rejects.toThrow("parent is required");
   });
 
+  for (const code of ["EACCES", "EPERM", "ENOTDIR", "ENOENT"]) {
+    test(`reports parent stat ${code} without creating a folder`, async () => {
+      const stat = spyOn(fs, "stat").mockRejectedValueOnce(
+        Object.assign(new Error("parent stat failed"), { code }),
+      );
+      const mkdir = spyOn(fs, "mkdir");
+      try {
+        const message =
+          code === "ENOENT"
+            ? `Folder ${root} does not exist`
+            : code === "ENOTDIR"
+              ? `${root} is not a folder`
+              : `Permission denied accessing ${root}`;
+        await expect(createHostDirectory(root, "child")).rejects.toThrow(message);
+        expect(mkdir).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+        mkdir.mockRestore();
+      }
+    });
+  }
+
+  test("preserves unexpected parent stat errors", async () => {
+    const error = Object.assign(new Error("I/O failure"), { code: "EIO" });
+    const stat = spyOn(fs, "stat").mockRejectedValueOnce(error);
+    try {
+      await expect(createHostDirectory(root, "child")).rejects.toBe(error);
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
   test("names cannot escape the parent folder", async () => {
     for (const name of ["", "  ", ".", "..", "a/b", "../escape", "a\\b", "bad\u0000name"]) {
       await expect(createHostDirectory(root, name)).rejects.toThrow("Folder name");

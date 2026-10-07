@@ -208,8 +208,14 @@ export async function createHostDirectory(parent: string, name: string): Promise
   let parentStat;
   try {
     parentStat = await fs.stat(directory);
-  } catch {
-    throw new Error(`Folder ${directory} does not exist`);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new Error(`Folder ${directory} does not exist`);
+    if (code === "ENOTDIR") throw new Error(`${directory} is not a folder`);
+    if (code === "EACCES" || code === "EPERM") {
+      throw new Error(`Permission denied accessing ${directory}`);
+    }
+    throw error;
   }
   if (!parentStat.isDirectory()) throw new Error(`${directory} is not a folder`);
 

@@ -460,6 +460,61 @@ describe("HostPathPickerDialog", () => {
     await expect(result).resolves.toBe("/home/me");
   });
 
+  for (const outcome of ["success", "failure"] as const) {
+    test(`a stale create ${outcome} cannot clear a newer request's busy state`, async () => {
+      render(<HostPathPickerDialog />);
+      let first!: Promise<string | null>;
+      act(() => {
+        first = pickHostPath({ mode: "directory" });
+      });
+      await screen.findByRole("button", { name: "repo" });
+      const old = deferred<{ path: string }>();
+      invoke.mockImplementationOnce(() => old.promise);
+      const firstInput = openNewFolderForm();
+      fireEvent.change(firstInput, { target: { value: "old" } });
+      fireEvent.submit(firstInput.closest("form")!);
+      fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+      await expect(first).resolves.toBeNull();
+
+      let second!: Promise<string | null>;
+      act(() => {
+        second = pickHostPath({ mode: "directory", defaultPath: "/home/me/repo" });
+      });
+      await waitFor(() =>
+        expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),
+      );
+      const current = deferred<{ path: string }>();
+      invoke.mockImplementationOnce(() => current.promise);
+      const input = openNewFolderForm();
+      fireEvent.change(input, { target: { value: "new" } });
+      fireEvent.submit(input.closest("form")!);
+      await act(async () => {
+        if (outcome === "success") old.resolve({ path: "/home/me/old" });
+        else old.reject(new Error("old create failed"));
+      });
+
+      expect(screen.getByRole("button", { name: "Creating…" }).hasAttribute("disabled")).toBe(true);
+      expect(input.disabled).toBe(true);
+      expectDomAbsent(screen.queryByRole("alert"), "stale create error in newer picker");
+      expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo");
+      fireEvent.submit(input.closest("form")!);
+      expect(
+        invoke.mock.calls.filter(([command]) => command === "create_host_directory"),
+      ).toHaveLength(2);
+
+      createdFolders.add("/home/me/repo/new");
+      await act(async () => current.resolve({ path: "/home/me/repo/new" }));
+      await waitFor(() =>
+        expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo/new"),
+      );
+      expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(
+        false,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
+      await expect(second).resolves.toBe("/home/me/repo/new");
+    });
+  }
+
   test("a create that finishes after navigating away does not move the picker", async () => {
     render(<HostPathPickerDialog />);
     act(() => {

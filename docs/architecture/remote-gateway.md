@@ -157,6 +157,11 @@ desktop connection, or a browser over the gateway. Listings are capped at
 stale path falls back to its nearest existing ancestor. New path fields should
 call `pickHostPath()`, not add a native dialog.
 
+The picker's **New folder** button creates one folder inside the folder being
+browsed with the `create_host_directory` command, then opens it. The name must
+be a single path component (no separators, `.` or `..`); missing parents are
+never created and an existing entry is reported rather than reused.
+
 Out of scope: pickers whose target is not a host path (for example, MCP server
 working directories, which can resolve inside a container) and file uploads from
 the client's own disk.

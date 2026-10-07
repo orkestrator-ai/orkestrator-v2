@@ -3,10 +3,12 @@ import { promises as fs } from "node:fs";
 import os, { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  createHostDirectory,
   listHostDirectory,
   listHostDirectoryRoots,
   MAX_HOST_DIRECTORY_ENTRIES,
   registerHostFileCommands,
+  validateHostFolderName,
 } from "./commands-host-files.js";
 import type { CommandHandler } from "./commands-context.js";
 
@@ -203,6 +205,106 @@ describe("list_host_directory", () => {
       await expect(
         Promise.resolve().then(() => run({ [field]: value }, {} as never)),
       ).rejects.toThrow(`Expected ${field} to be a ${type}`);
+    }
+  });
+});
+
+describe("create_host_directory", () => {
+  let root = "";
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "orkestrator-host-mkdir-")));
+    await fs.writeFile(path.join(root, "notes.txt"), "x");
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test("creates one trimmed folder inside an existing directory", async () => {
+    const created = await createHostDirectory(root, "  New Project  ");
+
+    expect(created.path).toBe(path.join(root, "New Project"));
+    expect((await fs.stat(created.path)).isDirectory()).toBe(true);
+  });
+
+  test("expands ~ in the parent", async () => {
+    const home = spyOn(os, "homedir").mockReturnValue(root);
+    try {
+      const created = await createHostDirectory("~", "from-home");
+      expect(created.path).toBe(path.join(root, "from-home"));
+    } finally {
+      home.mockRestore();
+    }
+  });
+
+  test("refuses an entry that already exists instead of reusing it", async () => {
+    await fs.mkdir(path.join(root, "taken"));
+
+    await expect(createHostDirectory(root, "taken")).rejects.toThrow(
+      `"taken" already exists in ${root}`,
+    );
+    await expect(createHostDirectory(root, "notes.txt")).rejects.toThrow("already exists");
+  });
+
+  test("never creates missing parents or writes under a file", async () => {
+    await expect(createHostDirectory(path.join(root, "gone"), "child")).rejects.toThrow(
+      "does not exist",
+    );
+    await expect(createHostDirectory(path.join(root, "notes.txt"), "child")).rejects.toThrow(
+      "is not a folder",
+    );
+    await expect(fs.stat(path.join(root, "gone"))).rejects.toThrow();
+  });
+
+  test("rejects relative parents", async () => {
+    await expect(createHostDirectory("relative", "child")).rejects.toThrow("absolute");
+    await expect(createHostDirectory("   ", "child")).rejects.toThrow("parent is required");
+  });
+
+  test("names cannot escape the parent folder", async () => {
+    for (const name of ["", "  ", ".", "..", "a/b", "../escape", "a\\b", "bad\u0000name"]) {
+      await expect(createHostDirectory(root, name)).rejects.toThrow("Folder name");
+    }
+    expect(await fs.readdir(root)).toEqual(["notes.txt"]);
+  });
+
+  test("validates names for the host platform", () => {
+    expect(validateHostFolderName("a:b", "linux")).toBe("a:b");
+    expect(() => validateHostFolderName("a:b", "win32")).toThrow("cannot contain");
+    expect(() => validateHostFolderName("x".repeat(256), "linux")).toThrow("too long");
+    // 255 UTF-8 bytes is the limit, not 255 characters.
+    expect(() => validateHostFolderName("é".repeat(128), "linux")).toThrow("too long");
+    expect(validateHostFolderName("x".repeat(255), "linux")).toHaveLength(255);
+  });
+
+  test("reports permission-denied folder creation", async () => {
+    const mkdir = spyOn(fs, "mkdir").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    try {
+      await expect(createHostDirectory(root, "locked")).rejects.toThrow(
+        `Permission denied creating a folder in ${root}`,
+      );
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+
+  test("the registered command validates its arguments", async () => {
+    const commands = new Map<string, CommandHandler>();
+    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    const run = commands.get("create_host_directory")!;
+
+    expect(await run({ parent: root, name: "made" }, {} as never)).toEqual({
+      path: path.join(root, "made"),
+    });
+    for (const [args, message] of [
+      [{ parent: root, name: "x", extra: true }, "Unexpected arguments field: extra"],
+      [{ parent: 42, name: "x" }, "Expected parent to be a string"],
+      [{ parent: root }, "Expected name to be a string"],
+    ] as const) {
+      await expect(Promise.resolve().then(() => run(args, {} as never))).rejects.toThrow(message);
     }
   });
 });

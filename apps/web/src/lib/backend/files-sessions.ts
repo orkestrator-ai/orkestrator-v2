@@ -811,3 +811,11 @@ export async function listHostDirectory(
     showHidden: options.showHidden ?? false,
   });
 }
+
+/**
+ * Creates one folder named `name` inside `parent` on the backend host and
+ * returns its absolute path. Fails if the entry already exists.
+ */
+export async function createHostDirectory(parent: string, name: string): Promise<{ path: string }> {
+  return invoke<{ path: string }>("create_host_directory", { parent, name });
+}

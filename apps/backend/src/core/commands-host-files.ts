@@ -7,6 +7,10 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 /** Upper bound on entries returned for one directory; the rest are reported as truncated. */
 export const MAX_HOST_DIRECTORY_ENTRIES = 2_000;
 const MAX_HOST_PATH_LENGTH = 4_096;
+/** Common filesystem limit for a single path component, in UTF-8 bytes. */
+const MAX_HOST_FOLDER_NAME_BYTES = 255;
+/** Characters Windows rejects in file names, in addition to path separators. */
+const WINDOWS_RESERVED_NAME_CHARACTERS = /[<>:"|?*]/;
 /** Symlinks need a follow-up stat to learn whether they point at a directory. */
 const SYMLINK_STAT_CONCURRENCY = 16;
 
@@ -160,6 +164,70 @@ export async function listHostDirectory(
   };
 }
 
+/**
+ * Checks a folder name typed into the picker. It must name exactly one new
+ * entry inside the parent, so separators and `.`/`..` are refused rather than
+ * letting the name escape into another directory.
+ */
+export function validateHostFolderName(name: string, platform = process.platform): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Folder name is required");
+  if (trimmed === "." || trimmed === "..") throw new Error("Folder name cannot be . or ..");
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("Folder name cannot contain / or \\");
+  }
+  if (Array.from(trimmed).some((character) => character.charCodeAt(0) < 0x20)) {
+    throw new Error("Folder name cannot contain control characters");
+  }
+  if (platform === "win32" && WINDOWS_RESERVED_NAME_CHARACTERS.test(trimmed)) {
+    throw new Error('Folder name cannot contain < > : " | ? *');
+  }
+  if (Buffer.byteLength(trimmed, "utf8") > MAX_HOST_FOLDER_NAME_BYTES) {
+    throw new Error("Folder name is too long");
+  }
+  return trimmed;
+}
+
+/**
+ * Creates one new folder inside an existing directory on the backend host, so
+ * the picker can make a destination (for example a new project's parent) on the
+ * machine it is browsing. It never creates missing parents or reuses an
+ * existing entry.
+ */
+export async function createHostDirectory(parent: string, name: string): Promise<{ path: string }> {
+  const trimmedParent = parent.trim();
+  if (!trimmedParent) throw new Error("parent is required");
+  if (trimmedParent.length > MAX_HOST_PATH_LENGTH) throw new Error("path is too long");
+  const expandedParent = expandHome(trimmedParent);
+  if (!path.isAbsolute(expandedParent)) {
+    throw new Error("path must be absolute or start with ~");
+  }
+  const directory = path.resolve(expandedParent);
+  const folderName = validateHostFolderName(name);
+
+  let parentStat;
+  try {
+    parentStat = await fs.stat(directory);
+  } catch {
+    throw new Error(`Folder ${directory} does not exist`);
+  }
+  if (!parentStat.isDirectory()) throw new Error(`${directory} is not a folder`);
+
+  const target = path.join(directory, folderName);
+  if (target.length > MAX_HOST_PATH_LENGTH) throw new Error("path is too long");
+  try {
+    await fs.mkdir(target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") throw new Error(`"${folderName}" already exists in ${directory}`);
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+      throw new Error(`Permission denied creating a folder in ${directory}`);
+    }
+    throw error;
+  }
+  return { path: target };
+}
+
 export function registerHostFileCommands(register: CommandRegistrar): void {
   register("list_host_directory", async (args) => {
     assertOnlyKeys(args, ["path", "includeFiles", "showHidden"], "arguments");
@@ -173,5 +241,10 @@ export function registerHostFileCommands(register: CommandRegistrar): void {
       includeFiles: args.includeFiles === true,
       showHidden: args.showHidden === true,
     });
+  });
+
+  register("create_host_directory", async (args) => {
+    assertOnlyKeys(args, ["parent", "name"], "arguments");
+    return createHostDirectory(asString(args.parent, "parent"), asString(args.name, "name"));
   });
 }

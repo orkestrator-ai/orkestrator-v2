@@ -35,9 +35,33 @@ const listings: Record<string, Listing> = {
   },
 };
 
-const defaultInvoke = async (command: string, args?: Record<string, unknown>): Promise<Listing> => {
+/** Folders made through create_host_directory during the current test. */
+const createdFolders = new Set<string>();
+
+const defaultInvoke = async (
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<Listing | { path: string }> => {
+  if (command === "create_host_directory") {
+    const created = `${args?.parent as string}/${args?.name as string}`;
+    if (listings[created] || createdFolders.has(created)) throw new Error("already exists");
+    createdFolders.add(created);
+    return { path: created };
+  }
   if (command !== "list_host_directory") throw new Error(`unexpected command ${command}`);
-  const listing = listings[(args?.path as string | undefined) ?? "/home/me"];
+  const requested = (args?.path as string | undefined) ?? "/home/me";
+  if (createdFolders.has(requested)) {
+    const parent = requested.slice(0, requested.lastIndexOf("/"));
+    return {
+      path: requested,
+      parent,
+      home: "/home/me",
+      roots: ["/"],
+      entries: [],
+      truncated: false,
+    };
+  }
+  const listing = listings[requested];
   if (!listing) throw new Error("not found");
   const entries = args?.includeFiles
     ? listing.entries
@@ -51,6 +75,7 @@ mock.module("@/lib/native/backend", () => ({ invoke }));
 const { HostPathPickerDialog } = await import("./HostPathPickerDialog");
 
 beforeEach(() => {
+  createdFolders.clear();
   invoke.mockReset();
   invoke.mockImplementation(defaultInvoke);
 });
@@ -64,6 +89,11 @@ function submitPath(path: string) {
   const input = screen.getByLabelText("Path");
   fireEvent.change(input, { target: { value: path } });
   fireEvent.submit(input.closest("form")!);
+}
+
+function openNewFolderForm() {
+  fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+  return screen.getByLabelText("New folder name") as HTMLInputElement;
 }
 
 function deferred<T>() {
@@ -339,5 +369,117 @@ describe("HostPathPickerDialog", () => {
     expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo");
     fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
     await expect(replacement).resolves.toBe("/home/me/repo");
+  });
+
+  test("creates a folder in the listed folder, opens it and can select it", async () => {
+    render(<HostPathPickerDialog />);
+    let result!: Promise<string | null>;
+    act(() => {
+      result = pickHostPath({ mode: "directory", title: "Where should the project live?" });
+    });
+    await screen.findByRole("button", { name: "repo" });
+
+    const input = openNewFolderForm();
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(input, { target: { value: "  new-project " } });
+    fireEvent.click(create);
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe(
+        "/home/me/new-project",
+      ),
+    );
+    expect(invoke).toHaveBeenCalledWith("create_host_directory", {
+      parent: "/home/me",
+      name: "new-project",
+    });
+    expectDomAbsent(screen.queryByLabelText("New folder name"), "new-folder form after create");
+    await screen.findByText("No subfolders here.");
+    fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
+
+    await expect(result).resolves.toBe("/home/me/new-project");
+  });
+
+  test("file mode can create a folder too and browses into it", async () => {
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "file" });
+    });
+    await screen.findByText("notes.txt");
+    const input = openNewFolderForm();
+    fireEvent.change(input, { target: { value: "drafts" } });
+    fireEvent.submit(input.closest("form")!);
+
+    await screen.findByText("This folder is empty.");
+    expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/drafts");
+    expect(screen.getByRole("button", { name: "Select file" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("a failed create keeps the form and the current folder", async () => {
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "directory" });
+    });
+    await screen.findByRole("button", { name: "repo" });
+
+    const input = openNewFolderForm();
+    fireEvent.change(input, { target: { value: "repo" } });
+    fireEvent.submit(input.closest("form")!);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("already exists");
+    expect((screen.getByLabelText("New folder name") as HTMLInputElement).value).toBe("repo");
+    expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me");
+    expect(screen.getByRole("button", { name: "repo" })).toBeTruthy();
+
+    // Editing the name clears the stale error.
+    fireEvent.change(input, { target: { value: "repo-2" } });
+    expectDomAbsent(screen.queryByRole("alert"), "stale create error");
+  });
+
+  test("escape and cancel close the new-folder form without closing the picker", async () => {
+    render(<HostPathPickerDialog />);
+    let result!: Promise<string | null>;
+    act(() => {
+      result = pickHostPath({ mode: "directory" });
+    });
+    await screen.findByRole("button", { name: "repo" });
+
+    const input = openNewFolderForm();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expectDomAbsent(screen.queryByLabelText("New folder name"), "form after escape");
+    expect(useHostPathPickerStore.getState().request !== null).toBe(true);
+
+    openNewFolderForm();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel new folder" }));
+    expectDomAbsent(screen.queryByLabelText("New folder name"), "form after cancel");
+    expect(useHostPathPickerStore.getState().request !== null).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("create_host_directory", expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
+    await expect(result).resolves.toBe("/home/me");
+  });
+
+  test("a create that finishes after navigating away does not move the picker", async () => {
+    render(<HostPathPickerDialog />);
+    act(() => {
+      void pickHostPath({ mode: "directory" });
+    });
+    await screen.findByRole("button", { name: "repo" });
+    const pending = deferred<{ path: string }>();
+    invoke.mockImplementationOnce(() => pending.promise);
+
+    const input = openNewFolderForm();
+    fireEvent.change(input, { target: { value: "slow" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(screen.getByRole("button", { name: "Creating…" }).hasAttribute("disabled")).toBe(true);
+
+    submitPath("/home/me/repo");
+    await waitFor(() =>
+      expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),
+    );
+    await act(async () => pending.resolve({ path: "/home/me/slow" }));
+    expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo");
+    expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(false);
   });
 });

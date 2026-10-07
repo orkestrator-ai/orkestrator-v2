@@ -16,8 +16,9 @@ export function createPRPrompt(targetBranch: string): string {
 The PR is made of the commits on the current branch that are not on \`${targetBranch}\`, plus any relevant uncommitted changes. A clean working tree does NOT mean there is nothing to do.
 1. Run \`git status --porcelain\` to find uncommitted changes
 2. Run \`git fetch origin ${targetBranch}\`, then \`git log origin/${targetBranch}..HEAD --oneline\` to find commits already on this branch (use \`${targetBranch}..HEAD\` if there is no remote copy)
-3. If there are no relevant uncommitted changes but the branch has commits ahead of \`${targetBranch}\`, skip Steps 1 and 2 — do not create an empty commit — and continue from Step 3 with the existing commits
-4. Only stop early if there are no relevant uncommitted changes AND no commits ahead of \`${targetBranch}\`; then report that there is nothing to open a PR for
+3. Only stop early if there are no relevant uncommitted changes AND no commits ahead of \`${targetBranch}\`; then report that there is nothing to open a PR for
+4. Before either committing changes or pushing existing commits, run \`git branch --show-current\`. If it prints nothing (a detached HEAD) or \`${targetBranch}\` — as it does when working directly in the project's main checkout — create and switch to a new descriptive branch with \`git switch -c <type>/<short-description>\`; existing commits and uncommitted changes carry over. Never commit the PR's changes onto \`${targetBranch}\`
+5. After branch preparation, if there are no relevant uncommitted changes but the branch has commits ahead of \`${targetBranch}\`, skip Steps 1 and 2 — do not create an empty commit — and continue from Step 3 with the existing commits
 
 ## Step 1: Stage Relevant Changes Safely
 
@@ -34,15 +35,14 @@ Create a deliberate staging set:
 
 Skip this step if nothing is staged and the branch already has commits ahead of \`${targetBranch}\`.
 
-Make sure the work is on its own branch, then create a well-formatted commit with all staged changes:
-1. Run \`git branch --show-current\`. If it prints nothing (a detached HEAD) or \`${targetBranch}\` — as it does when working directly in the project's main checkout — create and switch to a new descriptive branch first with \`git switch -c <type>/<short-description>\`; the staged changes carry over. Never commit the PR's changes onto \`${targetBranch}\`
-2. Run \`git diff --cached\` to review what will be committed
-3. Create a commit with a well-formatted message following conventional commit format:
+Create a well-formatted commit with all staged changes on the branch prepared under "Before You Start":
+1. Run \`git diff --cached\` to review what will be committed
+2. Create a commit with a well-formatted message following conventional commit format:
    - First line: type(scope): brief description
    - Blank line
    - Bullet points describing the key changes
-4. Do NOT reference Claude or add Claude as a contributor
-5. Do NOT use --no-verify or skip any hooks
+3. Do NOT reference Claude or add Claude as a contributor
+4. Do NOT use --no-verify or skip any hooks
 
 ## Step 3: Push to Remote
 

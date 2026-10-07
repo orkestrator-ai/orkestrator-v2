@@ -257,6 +257,35 @@ describe("createPRPrompt", () => {
     );
   });
 
+  test.each(["main", "develop"])(
+    "prepares target-branch and detached-HEAD existing commits before skipping to push (base: %s)",
+    (targetBranch) => {
+      const result = createPRPrompt(targetBranch);
+      const preflight = result.slice(
+        result.indexOf("## Before You Start"),
+        result.indexOf("## Step 1: Stage Relevant Changes Safely"),
+      );
+      const branchPreparation =
+        "Before either committing changes or pushing existing commits, run `git branch --show-current`";
+      const createBranch = "git switch -c <type>/<short-description>";
+      const skipCommits = "skip Steps 1 and 2";
+
+      expect(preflight).toContain(branchPreparation);
+      expect(preflight).toContain(`If it prints nothing (a detached HEAD) or \`${targetBranch}\``);
+      expect(preflight).toContain(createBranch);
+      expect(preflight).toContain("existing commits and uncommitted changes carry over");
+      expect(preflight).toContain(
+        "After branch preparation, if there are no relevant uncommitted changes",
+      );
+      expect(preflight).toContain(skipCommits);
+      expect(preflight.indexOf(branchPreparation)).toBeLessThan(preflight.indexOf(createBranch));
+      expect(preflight.indexOf(createBranch)).toBeLessThan(preflight.indexOf(skipCommits));
+      expect(preflight.indexOf("Only stop early")).toBeLessThan(
+        preflight.indexOf(branchPreparation),
+      );
+    },
+  );
+
   test("reuses an existing PR instead of creating a duplicate", () => {
     const result = createPRPrompt("main");
     expect(result).toContain("If a PR already exists for this branch");

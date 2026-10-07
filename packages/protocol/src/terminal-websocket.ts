@@ -494,7 +494,7 @@ function assertUnsignedInteger(value: number, max: number, label: string): void 
 }
 
 /** Encode a raw terminal frame. All multi-byte integers use network byte order. */
-export function encodeTerminalBinaryFrame(frame: TerminalBinaryFrame): Uint8Array {
+export function encodeTerminalBinaryFrame(frame: TerminalBinaryFrame): Uint8Array<ArrayBuffer> {
   if (
     frame.type !== TERMINAL_BINARY_FRAME_TYPE.input &&
     frame.type !== TERMINAL_BINARY_FRAME_TYPE.output

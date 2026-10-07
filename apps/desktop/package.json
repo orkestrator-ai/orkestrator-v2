@@ -26,6 +26,6 @@
     "@types/node": "^25.9.7",
     "electron": "^42.11.5",
     "electron-updater": "6.8.10",
-    "typescript": "~5.9.3"
+    "typescript": "~7.0.2"
   }
 }

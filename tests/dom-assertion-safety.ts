@@ -1,4 +1,4 @@
-import * as ts from "typescript";
+import { parseSync, visitorKeys, type Expression, type Node } from "oxc-parser";
 
 export type UnsafeDomAssertion = {
   start: number;
@@ -7,12 +7,28 @@ export type UnsafeDomAssertion = {
   receivedEnd: number;
 };
 
-function isDomProducingQuery(expression: ts.LeftHandSideExpression): boolean {
-  const name = ts.isPropertyAccessExpression(expression)
-    ? expression.name.text
-    : ts.isIdentifier(expression)
-      ? expression.text
-      : "";
+function forEachChild(node: Node, visit: (child: Node) => void): void {
+  for (const key of visitorKeys[node.type] ?? []) {
+    const value = (node as unknown as Record<string, unknown>)[key];
+    if (Array.isArray(value)) {
+      for (const child of value) if (child) visit(child as Node);
+    } else if (value) {
+      visit(value as Node);
+    }
+  }
+}
+
+/** The member named by `a.b`; `undefined` for `a[b]` and `a.#b`. */
+function staticMemberName(expression: Expression): string | undefined {
+  return expression.type === "MemberExpression" &&
+    !expression.computed &&
+    expression.property.type === "Identifier"
+    ? expression.property.name
+    : undefined;
+}
+
+function isDomProducingQuery(callee: Expression): boolean {
+  const name = staticMemberName(callee) ?? (callee.type === "Identifier" ? callee.name : "");
   return (
     name === "querySelector" ||
     name === "querySelectorAll" ||
@@ -59,40 +75,45 @@ export const DOM_SCALAR_PROPERTIES: ReadonlySet<string> = new Set([
   "value",
 ]);
 
-function containsDomQuery(node: ts.Node): boolean {
+function containsDomQuery(node: Node): boolean {
   let found = false;
-  const visit = (candidate: ts.Node): void => {
+  const visit = (candidate: Node): void => {
     if (found) return;
-    if (ts.isCallExpression(candidate) && isDomProducingQuery(candidate.expression)) {
+    if (candidate.type === "CallExpression" && isDomProducingQuery(candidate.callee)) {
       found = true;
       return;
     }
-    candidate.forEachChild(visit);
+    forEachChild(candidate, visit);
   };
   visit(node);
   return found;
 }
 
-function unwrapExpression(expression: ts.Expression): ts.Expression {
+/**
+ * ESTree wraps an optional chain (`a?.b`) in a `ChainExpression`, which carries
+ * no meaning here, so it is looked through like the TypeScript wrappers.
+ */
+function unwrapExpression(expression: Expression): Expression {
   if (
-    ts.isParenthesizedExpression(expression) ||
-    ts.isNonNullExpression(expression) ||
-    ts.isAsExpression(expression) ||
-    ts.isTypeAssertionExpression(expression) ||
-    ts.isSatisfiesExpression(expression)
+    expression.type === "ParenthesizedExpression" ||
+    expression.type === "ChainExpression" ||
+    expression.type === "TSNonNullExpression" ||
+    expression.type === "TSAsExpression" ||
+    expression.type === "TSTypeAssertion" ||
+    expression.type === "TSSatisfiesExpression"
   )
     return unwrapExpression(expression.expression);
   return expression;
 }
 
 /** The member being read, whether written `a.b` or `a["b"]`. */
-function projectedName(expression: ts.Expression): string | undefined {
-  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
-  if (
-    ts.isElementAccessExpression(expression) &&
-    ts.isStringLiteralLike(expression.argumentExpression)
-  )
-    return expression.argumentExpression.text;
+function projectedName(expression: Expression): string | undefined {
+  if (expression.type !== "MemberExpression") return undefined;
+  if (!expression.computed) return staticMemberName(expression);
+  const property = expression.property;
+  if (property.type === "Literal" && typeof property.value === "string") return property.value;
+  if (property.type === "TemplateLiteral" && property.expressions.length === 0)
+    return property.quasis[0]?.value.cooked ?? undefined;
   return undefined;
 }
 
@@ -104,10 +125,10 @@ function projectedName(expression: ts.Expression): string | undefined {
  * return type of `el.getAttribute(...)` does not depend on where the query
  * sits, so this must not re-inspect the receiver.
  */
-function isKnownScalarDomProjection(expression: ts.Expression): boolean {
+function isKnownScalarDomProjection(expression: Expression): boolean {
   const unwrapped = unwrapExpression(expression);
-  if (ts.isCallExpression(unwrapped)) {
-    const method = projectedName(unwrapExpression(unwrapped.expression));
+  if (unwrapped.type === "CallExpression") {
+    const method = projectedName(unwrapExpression(unwrapped.callee));
     return method !== undefined && DOM_SCALAR_METHODS.has(method);
   }
   const property = projectedName(unwrapped);
@@ -118,30 +139,36 @@ export function findUnsafeDomAbsenceAssertions(
   fileName: string,
   source: string,
 ): UnsafeDomAssertion[] {
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
+  const { program, errors } = parseSync(fileName, source);
+  // A file that does not parse must not pass the scan by yielding a partial tree.
+  if (errors.length > 0) throw new Error(`${fileName}: ${errors[0]!.message}`);
   const assertions: UnsafeDomAssertion[] = [];
-  const visit = (node: ts.Node): void => {
+  const visit = (node: Node): void => {
     if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === "toBeNull" &&
-      ts.isCallExpression(node.expression.expression) &&
-      ts.isIdentifier(node.expression.expression.expression) &&
-      node.expression.expression.expression.text === "expect"
+      node.type === "CallExpression" &&
+      staticMemberName(node.callee) === "toBeNull" &&
+      node.callee.type === "MemberExpression" &&
+      node.callee.object.type === "CallExpression" &&
+      node.callee.object.callee.type === "Identifier" &&
+      node.callee.object.callee.name === "expect"
     ) {
-      const received = node.expression.expression.arguments[0];
-      if (received && containsDomQuery(received) && !isKnownScalarDomProjection(received)) {
+      const received = node.callee.object.arguments[0];
+      if (
+        received &&
+        containsDomQuery(received) &&
+        (received.type === "SpreadElement" || !isKnownScalarDomProjection(received))
+      ) {
         assertions.push({
-          start: node.getStart(sourceFile),
-          end: node.getEnd(),
-          receivedStart: received.getStart(sourceFile),
-          receivedEnd: received.getEnd(),
+          start: node.start,
+          end: node.end,
+          receivedStart: received.start,
+          receivedEnd: received.end,
         });
       }
     }
-    node.forEachChild(visit);
+    forEachChild(node, visit);
   };
-  visit(sourceFile);
+  visit(program);
   return assertions;
 }
 

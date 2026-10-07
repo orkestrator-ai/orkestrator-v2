@@ -1,69 +1,15 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  ImageBlockParam,
-  TextBlockParam,
-  ContentBlockParam,
-} from "@anthropic-ai/sdk/resources/messages/messages";
-import type {
-  ModelInfo,
   SessionState,
-  NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-  QuestionInfo,
-  QuestionRequest,
-  PlanApprovalRequest,
-  PromptOptions,
-  SessionInitData,
-  McpServerRuntimeStatus,
-  PluginRuntimeStatus,
-  SdkMessageBase,
-  SdkCompactBoundaryMessage,
-  SdkResultMessage,
-  SdkSystemMessage,
-  TaskListSnapshot,
-  MessagePatchEventData,
-  SessionUsageSnapshot,
   BackgroundTaskSnapshot,
-  SessionRateLimitWindow,
   StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
-import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import {
-  structuredOutputFailure,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
-import {
-  deleteSessionPreferences,
-  MAX_DISPATCHED_REQUEST_IDS,
-  readSessionPreferences,
-  sessionPreferencesUnavailable,
-  updateSessionPreferences,
-  type SessionPreferences,
-} from "./session-preferences.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { debugLog, isDebugLoggingEnabled } from "./logger.js";
-import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { getMcpRuntimeConfig } from "./mcp-config.js";
-import { getPluginsForSdk } from "./plugin-config.js";
-import type { McpToolMetadata } from "../types/mcp.js";
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, existsSync, type Stats } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-
-import * as core from "./session-manager-core.js";
+import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
+
 type BackgroundTaskLaunch = {
   id: string;
   toolUseId?: string;
@@ -157,18 +103,23 @@ export function takeProvisionalBackgroundTask(
   return { task, owner };
 }
 
-/**
- * Publish a background launch before the delayed lifecycle stream catches up.
- * A terminal record always wins over this launch edge: SDK ordering is
- * explicitly unspecified, so a late tool result must never resurrect work that
- * already reported completion or failure.
- *
- * `newRun` is the exception: the caller knows a fresh run of this id has begun
- * (a `SubagentStart` hook fires only as a run starts, never late). A subagent
- * that paused on its own background work reports completion, then wakes under
- * the same task and tool-use ids; left terminal, nothing would hold the query
- * open for it and the next idle settle would close the CLI underneath it.
- */
+// Hook-restarted runs have an authoritative stop hook. Stream frames have no run
+// identity, so they cannot end that run while its hook still says it is live.
+// Weak membership follows immutable snapshots without retaining task history.
+const hookRunningTasks = new WeakSet<BackgroundTaskSnapshot>();
+
+export function isHookRunningBackgroundTask(task: BackgroundTaskSnapshot | undefined): boolean {
+  return !!task && LIVE_BACKGROUND_TASK_STATUSES.has(task.status) && hookRunningTasks.has(task);
+}
+
+export function inheritBackgroundTaskHookRun(
+  previous: BackgroundTaskSnapshot | undefined,
+  next: BackgroundTaskSnapshot,
+): void {
+  if (isHookRunningBackgroundTask(previous)) hookRunningTasks.add(next);
+}
+
+/** Publish a launch, preserving terminal records unless a start hook names a new run. */
 export function recordBackgroundTaskLaunch(
   session: SessionState,
   launch: BackgroundTaskLaunch,
@@ -183,13 +134,13 @@ export function recordBackgroundTaskLaunch(
     provisionalId && provisionalId !== launch.id
       ? session.backgroundTasks?.[provisionalId]
       : undefined;
-  const stored = session.backgroundTasks?.[launch.id] ?? provisional;
+  const parked = options?.newRun ? takeSettlingBackgroundTask(session, launch.id) : undefined;
+  const stored = session.backgroundTasks?.[launch.id] ?? provisional ?? parked?.task;
   const restarted =
     options?.newRun === true &&
     stored !== undefined &&
-    !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status);
+    (!LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) || parked !== undefined);
   // The finished run's parked snapshot must not describe this one.
-  const parked = restarted ? takeSettlingBackgroundTask(session, launch.id) : undefined;
   const previous = restarted
     ? { ...stored, startedAt: Date.now(), endedAt: undefined, error: undefined }
     : stored;
@@ -216,6 +167,9 @@ export function recordBackgroundTaskLaunch(
       error: previous?.error,
     },
   });
+  const task = session.backgroundTasks[launch.id]!;
+  if (restarted) hookRunningTasks.add(task);
+  else inheritBackgroundTaskHookRun(stored, task);
   if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) {
     (session.backgroundTaskControls ??= new Map()).set(launch.id, control);
   }

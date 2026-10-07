@@ -246,6 +246,8 @@ import {
 } from "./session-manager-persistence.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
+  inheritBackgroundTaskHookRun,
+  isHookRunningBackgroundTask,
   boundBackgroundTaskHistory,
   closeQueryControlIfUnused,
   emitBackgroundTaskSnapshot,
@@ -719,6 +721,7 @@ export async function sendPrompt(
   let queryIteratorControl: SessionState["queryControl"];
   let structuredUsageRefresh: StructuredUsageRefreshCoordinator | undefined;
   let queryStarted = false;
+  let queryEnded = false;
   let closeSdkInput: (() => void) | undefined;
   let finishTurnInputForThisTurn: (() => void) | undefined;
   let turnReleasedToBackgroundTasks = false;
@@ -1220,6 +1223,8 @@ export async function sendPrompt(
         // as its stream-side task messages are.
         sessions.get(sessionId) !== session ||
         session.deleting ||
+        abortController.signal.aborted ||
+        queryEnded ||
         !queryIteratorControl ||
         (hookInput.hook_event_name !== "TaskCreated" &&
           hookInput.hook_event_name !== "TaskCompleted" &&
@@ -1228,6 +1233,12 @@ export async function sendPrompt(
       ) {
         return {};
       }
+      const hookTaskId =
+        hookInput.hook_event_name === "TaskCreated" || hookInput.hook_event_name === "TaskCompleted"
+          ? hookInput.task_id
+          : hookInput.agent_id;
+      const owner = session.backgroundTaskControls?.get(hookTaskId);
+      if (owner && owner !== queryIteratorControl) return {};
       if (
         hookInput.hook_event_name === "TaskCreated" ||
         hookInput.hook_event_name === "SubagentStart"
@@ -2040,6 +2051,12 @@ export async function sendPrompt(
             taskMessage.subtype === "task_updated") &&
           taskMessage.task_id
         ) {
+          if (
+            isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id]) &&
+            taskMessage.patch?.status &&
+            !LIVE_BACKGROUND_TASK_STATUSES.has(taskMessage.patch.status)
+          )
+            continue;
           const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
           const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
           // A `SendMessage` resume re-runs a finished agent under its old task
@@ -2088,6 +2105,7 @@ export async function sendPrompt(
             endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
             error: taskMessage.patch?.error ?? previous?.error,
           };
+          inheritBackgroundTaskHookRun(previous, task);
           session.backgroundTasks = boundBackgroundTaskHistory({
             ...session.backgroundTasks,
             [task.id]: task,
@@ -2102,6 +2120,12 @@ export async function sendPrompt(
           closeQueryControlIfUnused(session, correlated.owner);
           emitBackgroundTasks();
         } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
+          // A same-id wake can happen while usage settlement holds the JSONL
+          // consumer. This frame may belong to the preceding run; only the
+          // current run's stop hook can retire its live control.
+          if (isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id])) {
+            continue;
+          }
           // A task notification can re-enter the root agent loop after an
           // earlier result. That earlier result is only the response boundary
           // before the notification, not permission to close streaming input.
@@ -2185,9 +2209,9 @@ export async function sendPrompt(
           >) {
             if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
             const owner = previousControls?.get(id);
-            if (owner && owner !== queryIterator) {
+            if ((owner && owner !== queryIterator) || isHookRunningBackgroundTask(task)) {
               replacement[id] = task;
-              replacementControls.set(id, owner);
+              if (owner) replacementControls.set(id, owner);
               continue;
             }
             // Owned by this query (or by no handle at all, which only this
@@ -2213,6 +2237,7 @@ export async function sendPrompt(
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
             };
+            inheritBackgroundTaskHookRun(previous, replacement[id]!);
             // An id already owned by another live control keeps that owner:
             // only the process that started a task can stop it, and a control
             // asked to stop an id it never started answers `ok` without
@@ -3243,6 +3268,7 @@ export async function sendPrompt(
     }
     throw error;
   } finally {
+    queryEnded = true;
     diagnostics?.close();
     flushDebugLogs();
     abortController.signal.removeEventListener("abort", observeAbort);

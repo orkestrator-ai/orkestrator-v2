@@ -795,80 +795,270 @@ describe("background task reducer", () => {
     await promptPromise;
   });
 
-  test("holds input for the continuation when the last agent stops while the result settles", async () => {
-    let releaseContextUsage!: () => void;
-    let contextUsageRequested = false;
-    queryControlOverrides.getContextUsage = mock(() => {
-      // Only the first result's request is held; a continuation's answers.
-      if (contextUsageRequested) return Promise.resolve({ totalTokens: 1, maxTokens: 100 });
-      contextUsageRequested = true;
-      return new Promise((resolve) => {
-        releaseContextUsage = () => resolve({ totalTokens: 1, maxTokens: 100 });
+  test.each(["SubagentStop", "TaskCompleted"])(
+    "holds input when %s arrives while the result settles",
+    async (event) => {
+      let releaseContextUsage!: () => void;
+      let contextUsageRequested = false;
+      queryControlOverrides.getContextUsage = mock(() => {
+        // Only the first result's request is held; a continuation's answers.
+        if (contextUsageRequested) return Promise.resolve({ totalTokens: 1, maxTokens: 100 });
+        contextUsageRequested = true;
+        return new Promise((resolve) => {
+          releaseContextUsage = () => resolve({ totalTokens: 1, maxTokens: 100 });
+        });
       });
-    });
-    const created = createSession("stop during result settle");
+      const created = createSession("stop during result settle");
+      track(created.id);
+      const promptPromise = sendPrompt(created.id, "delegate one survey");
+      const call = await nextQueryCall();
+      const hooks = call.options.hooks as Record<
+        string,
+        Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+      >;
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      expect((await input.next()).done).toBe(false);
+      let inputClosed = false;
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+        return result;
+      });
+
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-survey",
+        tool_use_id: "agent-survey-call",
+      });
+      call.push({ type: "result", subtype: "success" });
+      await waitFor(() => contextUsageRequested);
+
+      // The agent finishes after the CLI wrote its result, so the CLI will answer
+      // the notification with a continuation that needs open input.
+      await hooks[event]![0]!.hooks[0]!({
+        hook_event_name: event,
+        agent_id: "agent-survey",
+        task_id: "agent-survey",
+        task_subject: "Survey",
+        agent_type: "general-purpose",
+        stop_hook_active: false,
+        agent_transcript_path: "/tmp/agent-survey.jsonl",
+      });
+      releaseContextUsage();
+      await Bun.sleep(10);
+      expect(created.backgroundTasks?.["agent-survey"]?.status).toBe("completed");
+      expect(inputClosed).toBe(false);
+      expect(call.isClosed()).toBe(false);
+
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "agent-survey",
+        tool_use_id: "agent-survey-call",
+        status: "completed",
+      });
+      call.push({
+        type: "assistant",
+        message: {
+          id: "assistant-after-settle-stop",
+          role: "assistant",
+          content: [{ type: "text", text: "The survey is in." }],
+          stop_reason: "end_turn",
+        },
+        parent_tool_use_id: null,
+      });
+      pushSuccessfulContinuationResult(call);
+      await waitFor(() => inputClosed);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      call.finish();
+      await promptPromise;
+      expect(created.status).toBe("idle");
+    },
+  );
+
+  test.each(["edge-first", "level-first"])(
+    "preserves a wake ahead of queued terminal frames (%s)",
+    async (order) => {
+      let releaseUsage!: () => void;
+      let usagePending = false;
+      queryControlOverrides.getContextUsage = mock(() => {
+        if (usagePending) return Promise.resolve({ totalTokens: 1, maxTokens: 100 });
+        usagePending = true;
+        return new Promise((resolve) => {
+          releaseUsage = () => resolve({ totalTokens: 1, maxTokens: 100 });
+        });
+      });
+      const created = createSession("wake before old stream drains");
+      track(created.id);
+      const prompt = sendPrompt(created.id, "delegate");
+      const call = await nextQueryCall();
+      const hooks = call.options.hooks as Record<
+        string,
+        Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+      >;
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      await input.next();
+      let inputClosed = false;
+      const completion = input.next().then((value) => {
+        inputClosed = true;
+        return value;
+      });
+      await hooks.SubagentStart![0]!.hooks[0]!({
+        hook_event_name: "SubagentStart",
+        agent_id: "waking",
+        agent_type: "Explore",
+      });
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "waking",
+        tool_use_id: "same-call",
+      });
+      call.push({ type: "result", subtype: "success" });
+      await waitFor(() => usagePending);
+      await hooks.SubagentStop![0]!.hooks[0]!({
+        hook_event_name: "SubagentStop",
+        agent_id: "waking",
+        agent_type: "Explore",
+        stop_hook_active: false,
+        agent_transcript_path: "/tmp/waking.jsonl",
+      });
+      const edge = {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "waking",
+        tool_use_id: "same-call",
+        status: "completed",
+      };
+      const level = { type: "system", subtype: "background_tasks_changed", tasks: [] };
+      for (const frame of order === "edge-first" ? [edge, level] : [level, edge]) call.push(frame);
+      // Both old frames are queued behind usage. The hook revives the same id
+      // before the consumer has seen either terminal lifecycle signal.
+      await hooks.SubagentStart![0]!.hooks[0]!({
+        hook_event_name: "SubagentStart",
+        agent_id: "waking",
+        agent_type: "Explore",
+      });
+      call.push({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "waking",
+        patch: { status: "failed", end_time: 1, error: "Old failure" },
+      });
+      releaseUsage();
+      // Exercise inheritance through a progress snapshot and another level.
+      call.push({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "waking",
+        description: "Woken work",
+      });
+      call.push({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "waking" }],
+      });
+      pushSuccessfulContinuationResult(call);
+      call.push({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "waking",
+        description: "After old result",
+      });
+      // This progress frame is after the old continuation result, proving
+      // the consumer drained every old frame before the assertions.
+      await waitFor(() => created.backgroundTasks?.waking?.description === "After old result");
+      expect(created.backgroundTasks?.waking).toMatchObject({
+        status: "running",
+        toolUseId: "same-call",
+        endedAt: undefined,
+        error: undefined,
+      });
+      expect(created.backgroundTaskControls?.get("waking")).toBeDefined();
+      expect(inputClosed).toBe(false);
+      expect(call.isClosed()).toBe(false);
+      await hooks.SubagentStop![0]!.hooks[0]!({
+        hook_event_name: "SubagentStop",
+        agent_id: "waking",
+        agent_type: "Explore",
+        stop_hook_active: false,
+        agent_transcript_path: "/tmp/waking.jsonl",
+      });
+      call.push(edge);
+      pushSuccessfulContinuationResult(call);
+      expect(await completion).toEqual({ done: true, value: undefined });
+      call.finish();
+      await prompt;
+      expect(created.backgroundTasks?.waking?.status).toBe("completed");
+    },
+  );
+
+  test("a wake consumes a parked snapshot that coexists with its terminal record", async () => {
+    const created = createSession("parked wake");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate one survey");
+    const prompt = sendPrompt(created.id, "delegate");
     const call = await nextQueryCall();
     const hooks = call.options.hooks as Record<
       string,
       Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
     >;
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    expect((await input.next()).done).toBe(false);
+    await input.next();
     let inputClosed = false;
-    const inputCompletion = input.next().then((result) => {
-      inputClosed = result.done === true;
-      return result;
+    const completion = input.next().then((value) => {
+      inputClosed = true;
+      return value;
     });
-
     call.push({
       type: "system",
       subtype: "task_started",
-      task_id: "agent-survey",
-      tool_use_id: "agent-survey-call",
+      task_id: "parked-wake",
+      description: "Original work",
+      tool_use_id: "original-call",
     });
     call.push({ type: "result", subtype: "success" });
-    await waitFor(() => contextUsageRequested);
-
-    // The agent finishes after the CLI wrote its result, so the CLI will answer
-    // the notification with a continuation that needs open input.
-    await hooks.SubagentStop![0]!.hooks[0]!({
-      hook_event_name: "SubagentStop",
-      agent_id: "agent-survey",
-      agent_type: "general-purpose",
-      stop_hook_active: false,
-      agent_transcript_path: "/tmp/agent-survey.jsonl",
-    });
-    releaseContextUsage();
-    await Bun.sleep(10);
-    expect(created.backgroundTasks?.["agent-survey"]?.status).toBe("completed");
-    expect(inputClosed).toBe(false);
-    expect(call.isClosed()).toBe(false);
-
+    await waitFor(() => created.status === "idle");
+    call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    await waitFor(() => created.settlingBackgroundTasks?.has("parked-wake") === true);
     call.push({
       type: "system",
-      subtype: "task_notification",
-      task_id: "agent-survey",
-      tool_use_id: "agent-survey-call",
-      status: "completed",
+      subtype: "task_updated",
+      task_id: "parked-wake",
+      description: "Original work",
+      tool_use_id: "original-call",
+      patch: { status: "completed", end_time: 1, error: "old error" },
     });
-    call.push({
-      type: "assistant",
-      message: {
-        id: "assistant-after-settle-stop",
-        role: "assistant",
-        content: [{ type: "text", text: "The survey is in." }],
-        stop_reason: "end_turn",
-      },
-      parent_tool_use_id: null,
+    await waitFor(() => created.backgroundTasks?.["parked-wake"]?.status === "completed");
+    expect(created.settlingBackgroundTasks?.has("parked-wake")).toBe(true);
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "parked-wake",
+      agent_type: "Explore",
+    });
+    expect(created.settlingBackgroundTasks).toBeUndefined();
+    expect(created.backgroundTasks?.["parked-wake"]).toMatchObject({
+      status: "running",
+      description: "Original work",
+      toolUseId: "original-call",
+      endedAt: undefined,
+      error: undefined,
+    });
+    expect(created.backgroundTaskControls?.get("parked-wake")).toBeDefined();
+    pushSuccessfulContinuationResult(call);
+    await Bun.sleep(10);
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "parked-wake",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/parked-wake.jsonl",
     });
     pushSuccessfulContinuationResult(call);
-    await waitFor(() => inputClosed);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    expect(await completion).toEqual({ done: true, value: undefined });
     call.finish();
-    await promptPromise;
-    expect(created.status).toBe("idle");
+    await prompt;
   });
 
   test("revives a subagent that wakes from a pause under its original tool-use id", async () => {
@@ -1034,6 +1224,58 @@ describe("background task reducer", () => {
     const secondCall = await nextQueryCall();
     await waitFor(() => created.status === "running");
 
+    const successorHooks = secondCall.options.hooks as typeof hooks;
+    await successorHooks.TaskCreated![0]!.hooks[0]!({
+      hook_event_name: "TaskCreated",
+      task_id: "foreground-task",
+      task_subject: "New work",
+    });
+    const foregroundTask = created.backgroundTasks?.["foreground-task"];
+    for (const event of ["SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted"]) {
+      await hooks[event]![0]!.hooks[0]!({
+        hook_event_name: event,
+        agent_id: "foreground-task",
+        task_id: "foreground-task",
+        task_subject: "Old work",
+        agent_type: "Explore",
+        stop_hook_active: false,
+        agent_transcript_path: "/tmp/foreground-task.jsonl",
+      });
+    }
+    expect(created.backgroundTasks?.["foreground-task"]).toBe(foregroundTask);
+    const foregroundControl = created.queryControl;
+    const foregroundController = created.abortController;
+    for (const [event, id] of [
+      ["SubagentStart", "older-agent"],
+      ["TaskCreated", "older-task"],
+    ]) {
+      await hooks[event!]![0]!.hooks[0]!({
+        hook_event_name: event,
+        agent_id: id,
+        task_id: id,
+        task_subject: "Older work",
+        agent_type: "Explore",
+      });
+      expect(created.backgroundTasks?.[id!]?.status).toBe("running");
+      expect(created.backgroundTaskControls?.get(id!)).not.toBe(foregroundControl);
+    }
+    await hooks.TaskCompleted![0]!.hooks[0]!({
+      hook_event_name: "TaskCompleted",
+      task_id: "older-task",
+      task_subject: "Older work",
+    });
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "older-agent",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/older-agent.jsonl",
+    });
+    expect(created.backgroundTasks?.["older-task"]?.status).toBe("completed");
+    expect(created.backgroundTasks?.["older-agent"]?.status).toBe("completed");
+    expect(created.queryControl).toBe(foregroundControl);
+    expect(created.abortController).toBe(foregroundController);
+
     // The older CLI still owns the agent; its stop hook must be recorded and
     // must hold that CLI open for the continuation the stop leads to.
     await hooks.SubagentStop![0]!.hooks[0]!({
@@ -1059,7 +1301,26 @@ describe("background task reducer", () => {
     firstCall.finish();
     await firstPrompt;
     expect(created.status).toBe("running");
+    const tasksAfterClose = created.backgroundTasks;
+    for (const event of ["SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted"]) {
+      await hooks[event]![0]!.hooks[0]!({
+        hook_event_name: event,
+        agent_id: "late-closed",
+        task_id: "late-closed",
+        task_subject: "Late work",
+        agent_type: "Explore",
+        stop_hook_active: false,
+        agent_transcript_path: "/tmp/late-closed.jsonl",
+      });
+    }
+    expect(created.backgroundTasks).toBe(tasksAfterClose);
+    expect(created.queryControl).toBe(foregroundControl);
 
+    await successorHooks.TaskCompleted![0]!.hooks[0]!({
+      hook_event_name: "TaskCompleted",
+      task_id: "foreground-task",
+      task_subject: "New work",
+    });
     secondCall.push({ type: "result", subtype: "success" });
     secondCall.finish();
     await secondPrompt;
@@ -1586,8 +1847,32 @@ describe("background task reducer", () => {
       const secondPrompt = sendPrompt(created.id, "restart immediately");
       const secondCall = await nextQueryCall();
 
+      const hooks = firstCall.options.hooks as Record<
+        string,
+        Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+      >;
+      const verifyStaleHooks = async () => {
+        const tasksBefore = created.backgroundTasks;
+        for (const event of ["SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted"]) {
+          await hooks[event]![0]!.hooks[0]!({
+            hook_event_name: event,
+            agent_id: "late-aborted",
+            task_id: "late-aborted",
+            task_subject: "Late work",
+            agent_type: "Explore",
+            stop_hook_active: false,
+            agent_transcript_path: "/tmp/late-aborted.jsonl",
+          });
+        }
+        expect(created.backgroundTasks).toBe(tasksBefore);
+        expect(created.abortController).toBe(secondCall.options.abortController);
+        expect(created.queryControl).toBeDefined();
+        expect(created.status).toBe("running");
+      };
+      await verifyStaleHooks();
       resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
       await firstPrompt;
+      await verifyStaleHooks();
 
       expect(getSession(created.id)?.status).toBe("running");
       expect(getSession(created.id)?.abortController).toBe(secondCall.options.abortController);
@@ -1617,75 +1902,102 @@ describe("background task reducer", () => {
     }
   });
 
-  test("keeps the retained input open when a later turn takes ownership", async () => {
-    let resolveUsage!: (value: unknown) => void;
-    let usageRequestStarted = false;
-    queryControlOverrides.getContextUsage = mock(() => {
-      usageRequestStarted = true;
-      return new Promise<unknown>((resolve) => {
-        resolveUsage = resolve;
+  test.each(["refresh", "context"])(
+    "retains live tasks when a successor takes over during %s settlement",
+    async (stage) => {
+      let resolveUsage!: (value: unknown) => void;
+      let usageRequestStarted = false;
+      const holdUsage = mock(() => {
+        usageRequestStarted = true;
+        return new Promise<unknown>((resolve) => {
+          resolveUsage = resolve;
+        });
       });
-    });
-
-    const created = createSession("superseded held input");
-    track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate then supersede");
-    const call = await nextQueryCall();
-    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    expect((await input.next()).done).toBe(false);
-    const inputCompletion = input.next();
-
-    call.push({
-      type: "system",
-      subtype: "task_started",
-      task_id: "agent-superseded",
-      description: "Wait for usage",
-    });
-    call.push({
-      type: "result",
-      subtype: "success",
-      modelUsage: {
-        "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
-      },
-    });
-    await waitFor(() => usageRequestStarted);
-
-    const staleSettlement = created.finishTurnInputIfSettled;
-    expect(staleSettlement).toBeFunction();
-    const replacementController = new AbortController();
-    created.abortController = replacementController;
-    staleSettlement!();
-
-    let inputClosed = false;
-    void inputCompletion.then(() => {
-      inputClosed = true;
-    });
-    await Bun.sleep(0);
-    expect(inputClosed).toBe(false);
-    expect(created.completionBlockedByBackgroundTasks).toBe(false);
-    resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
-    // Losing the foreground is not a stop: the agent this query started is
-    // still running, so its CLI must outlive the superseded result.
-    await Bun.sleep(10);
-    expect(inputClosed).toBe(false);
-    expect(call.isClosed()).toBe(false);
-    call.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "agent-superseded",
-      status: "completed",
-    });
-    pushSuccessfulContinuationResult(call);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    call.finish();
-    await promptPromise;
-    expect(created.abortController).toBe(replacementController);
-
-    // Restore the artificial replacement ownership used to exercise the stale
-    // callback branch; normal restart cleanup belongs to the replacement turn.
-    created.abortController = undefined;
-    created.status = "idle";
-  });
+      if (stage === "context") queryControlOverrides.getContextUsage = holdUsage;
+      else {
+        let calls = 0;
+        queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+          () => {
+            // The startup refresh answers; the final refresh is held.
+            if (++calls === 1) return Promise.resolve({});
+            return holdUsage();
+          },
+        );
+      }
+      const created = createSession("superseded held input");
+      track(created.id);
+      const promptPromise = sendPrompt(created.id, "delegate then supersede");
+      const call = await nextQueryCall();
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      expect((await input.next()).done).toBe(false);
+      const inputCompletion = input.next();
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-superseded",
+        description: "Wait for usage",
+      });
+      call.push({
+        type: "result",
+        subtype: "success",
+        modelUsage: { "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 } },
+      });
+      await waitFor(() => usageRequestStarted);
+      const staleSettlement = created.finishTurnInputIfSettled;
+      const baseline = created.claudeUsageBaseline;
+      const usage = created.usage;
+      const oldControl = created.backgroundTaskControls?.get("agent-superseded");
+      // Force foreground release at this asynchronous boundary so the real
+      // successor dispatch can exercise both post-await ownership checks.
+      created.status = "idle";
+      created.abortController = undefined;
+      delete queryControlOverrides.getContextUsage;
+      delete queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+      const successorPrompt = sendPrompt(created.id, "foreground successor");
+      const successor = await nextQueryCall();
+      const successorControl = created.queryControl;
+      staleSettlement!();
+      let inputClosed = false;
+      void inputCompletion.then(() => {
+        inputClosed = true;
+      });
+      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+      call.push({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "agent-superseded",
+        description: "After ownership check",
+      });
+      await waitFor(
+        () =>
+          created.backgroundTasks?.["agent-superseded"]?.description === "After ownership check",
+      );
+      expect(inputClosed).toBe(false);
+      expect(call.isClosed()).toBe(false);
+      expect(created.backgroundTaskControls?.get("agent-superseded")).toBe(oldControl);
+      expect(created.backgroundTasks?.["agent-superseded"]?.status).toBe("running");
+      expect(created.claudeUsageBaseline).toBe(baseline);
+      expect(created.usage).toBe(usage);
+      expect(created.status).toBe("running");
+      expect(created.queryControl).toBe(successorControl);
+      expect(created.abortController).toBe(successor.options.abortController);
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "agent-superseded",
+        status: "completed",
+      });
+      pushSuccessfulContinuationResult(call);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      call.finish();
+      await promptPromise;
+      expect(created.queryControl).toBe(successorControl);
+      expect(created.abortController).toBe(successor.options.abortController);
+      successor.push({ type: "result", subtype: "success" });
+      successor.finish();
+      await successorPrompt;
+    },
+  );
 
   test("deleting a session closes its retained background runtime", async () => {
     const created = createSession("delete retained background runtime");

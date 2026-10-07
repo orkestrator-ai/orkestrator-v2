@@ -724,9 +724,11 @@ export interface SessionState {
   /**
    * Tasks the level signal dropped before their terminal edge explained why.
    *
-   * `background_tasks_changed` is documented as arriving *before*
-   * `task_notification` for the same transition, so the moment a task stops
-   * running it leaves the live set with no outcome attached. Parking the
+   * The SDK leaves the order of `background_tasks_changed` and
+   * `task_notification` for one transition unspecified. Through Agent SDK
+   * 0.3.284 the level came first; 0.3.292 documents a finishing task leaving
+   * the level *after* its edge. When the level does come first, the task
+   * leaves the live set with no outcome attached. Parking the
    * snapshot here keeps liveness honest — the task is gone from
    * {@link backgroundTasks}, so no stale running indicator can wedge — while
    * still letting the edge settle it with its original description and start

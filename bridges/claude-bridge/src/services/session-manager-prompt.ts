@@ -120,6 +120,8 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
       return "This Claude Code version is below the provider's minimum. Update Claude Code and retry.";
     case "bypass_root":
       return "Claude cannot use bypass-permissions mode while running as root. Run the agent as a non-root user.";
+    case "provider_not_allowed":
+      return "Managed settings do not allow the API provider this session is configured for. Ask an administrator to allow it, or switch provider.";
   }
 }
 
@@ -1350,8 +1352,13 @@ export async function sendPrompt(
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
-          append:
+          append: [
             "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
+            // Since Claude Code 2.1.285 an Agent SDK session stops a background
+            // shell command at its `timeout` (30 minutes by default, 2 hours at
+            // most), so a dev server Claude starts here does not outlive that.
+            "Background shell commands in this session are stopped when they reach their timeout (30 minutes by default, 2 hours at most). For a dev server or watcher that must keep running longer, tell the user to start it in an Orkestrator terminal tab instead of running it yourself.",
+          ].join("\n\n"),
         },
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
@@ -1403,7 +1410,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.284: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.292: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK
@@ -2192,8 +2199,10 @@ export async function sendPrompt(
             replacementControls.size > 0 ? replacementControls : undefined;
           // Anything this query owned that the level no longer lists has
           // stopped running, but the level says nothing about *how* it ended.
-          // The edge that does is documented to arrive after this frame, so
-          // the query still owes a continuation and must not be torn down
+          // The edge that does may still be on its way (the SDK leaves the
+          // order unspecified; an edge that already landed made the task
+          // terminal, so it is not in this list), so the query still owes a
+          // continuation and must not be torn down
           // here — that close is what silently dropped the "I'll report back
           // when it finishes" reply the model had already promised.
           const droppedByThisQuery = previouslyLiveOwnedByThisQuery.filter(

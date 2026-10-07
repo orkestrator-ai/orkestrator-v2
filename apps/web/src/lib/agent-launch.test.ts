@@ -126,6 +126,20 @@ describe("defaultEffortFor", () => {
     expect(firstModelFor("claude", upgraded, { claude: "claude-opus-5[1m]" })).toBe("default");
   });
 
+  test("follows a chain of superseded Claude ids to the alias Claude Code 2.1.287 reports", () => {
+    // 2.1.287 lists Fable 5.1 under the `fable` alias rather than its full id.
+    const upgraded: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        { id: "default", name: "Default", reasoningEfforts: [] },
+        { id: "fable[1m]", name: "Fable", reasoningEfforts: [], resolvedModel: "claude-fable-5-1" },
+      ],
+    };
+    expect(firstModelFor("claude", upgraded, { claude: "claude-fable-5-1[1m]" })).toBe("fable[1m]");
+    expect(firstModelFor("claude", upgraded, { claude: "claude-fable-5[1m]" })).toBe("fable[1m]");
+    expect(firstModelFor("claude", upgraded, { claude: "claude-fable-5-1" })).toBe("fable[1m]");
+  });
+
   test("carries the previous Sonnet default to Sonnet 5.5's alias", () => {
     // Claude Code 2.1.284's `sonnet` alias resolves to Sonnet 5.5, so a default
     // stored as `claude-sonnet-5` matches no row's `resolvedModel` any more.

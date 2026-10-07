@@ -30,6 +30,21 @@ import {
 // AskUserQuestion flow via canUseTool
 // ---------------------------------------------------------------------------
 
+describe("session system prompt", () => {
+  test("tells Claude that background commands stop at their timeout", async () => {
+    const session = createSession("system-prompt");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    const systemPrompt = call.options.systemPrompt as { append?: string };
+    expect(systemPrompt.append).toContain("MUST read a file before editing");
+    expect(systemPrompt.append).toContain("Orkestrator terminal tab");
+    call.push({ type: "result", subtype: "success", is_error: false, result: "" });
+    call.finish();
+    await promptPromise.catch(() => undefined);
+  });
+});
+
 describe("AskUserQuestion flow", () => {
   test("pins AskUserQuestion as parked in canUseTool under bypassPermissions", async () => {
     const session = createSession("question-flow");

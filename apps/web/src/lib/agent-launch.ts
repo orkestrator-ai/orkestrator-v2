@@ -87,7 +87,17 @@ export function resolveCatalogModelId(
 ): string | undefined {
   const direct = catalogIdFor(models, modelId);
   if (direct || !modelId) return direct;
-  return catalogIdFor(models, SUPERSEDED_MODEL_IDS[agent]?.[modelId]);
+  // Successors can themselves be superseded (`claude-fable-5[1m]` →
+  // `claude-fable-5-1[1m]` → `fable[1m]`), so follow the chain until the
+  // catalog offers one. `seen` stops a cyclic table from looping.
+  const superseded = SUPERSEDED_MODEL_IDS[agent];
+  const seen = new Set([modelId]);
+  for (let next = superseded?.[modelId]; next && !seen.has(next); next = superseded?.[next]) {
+    const match = catalogIdFor(models, next);
+    if (match) return match;
+    seen.add(next);
+  }
+  return undefined;
 }
 
 /**

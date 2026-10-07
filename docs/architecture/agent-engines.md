@@ -149,6 +149,14 @@ in an isolated environment. `plan` mode is the read-only alternative, and the
 SDK's `canUseTool` callback is what routes a tool request back through the
 bridge's approval flow when one is raised.
 
+Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
+session stops a `run_in_background` command at its `timeout` (30 minutes by
+default, 2 hours at most) and reports a `stopped` task notification saying why;
+interactive terminal sessions have no such limit. A dev server Claude starts in
+a native tab therefore does not run indefinitely, and the bridge's appended
+system prompt tells Claude to hand long-lived servers to an Orkestrator
+terminal tab instead.
+
 Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.ts`
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.

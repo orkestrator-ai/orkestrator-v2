@@ -714,6 +714,358 @@ describe("background task reducer", () => {
     await promptPromise;
   });
 
+  test("keeps released agents alive when a lifecycle hook lands while the result settles", async () => {
+    // The result handler waits on control round trips (rate limits, context
+    // usage) that can take seconds on a large session. A hook that released the
+    // turn in that gap took ownership away from the handler, which then left
+    // the message loop — closing the query and every agent it owned.
+    let releaseContextUsage!: () => void;
+    let contextUsageRequested = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      // Only the first result's request is held; a continuation's answers.
+      if (contextUsageRequested) return Promise.resolve({ totalTokens: 1, maxTokens: 100 });
+      contextUsageRequested = true;
+      return new Promise((resolve) => {
+        releaseContextUsage = () => resolve({ totalTokens: 1, maxTokens: 100 });
+      });
+    });
+    const created = createSession("hook during result settle");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate the research");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    for (const id of ["agent-research-1", "agent-research-2"]) {
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: id,
+        tool_use_id: `${id}-call`,
+      });
+      await hooks.SubagentStart![0]!.hooks[0]!({
+        hook_event_name: "SubagentStart",
+        agent_id: id,
+        agent_type: "general-purpose",
+      });
+    }
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => contextUsageRequested);
+
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-research-3",
+      agent_type: "general-purpose",
+    });
+    // The handler, not the hook, settles the turn.
+    expect(created.status).toBe("running");
+
+    releaseContextUsage();
+    await waitFor(() => created.status === "idle");
+    await Bun.sleep(10);
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+    for (const id of ["agent-research-1", "agent-research-2", "agent-research-3"]) {
+      expect(created.backgroundTasks?.[id]?.status).toBe("running");
+    }
+
+    for (const id of ["agent-research-1", "agent-research-2", "agent-research-3"]) {
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: id,
+        tool_use_id: `${id}-call`,
+        status: "completed",
+      });
+    }
+    await waitFor(() => created.backgroundTasks?.["agent-research-3"]?.status === "completed");
+    pushSuccessfulContinuationResult(call);
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("holds input for the continuation when the last agent stops while the result settles", async () => {
+    let releaseContextUsage!: () => void;
+    let contextUsageRequested = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      // Only the first result's request is held; a continuation's answers.
+      if (contextUsageRequested) return Promise.resolve({ totalTokens: 1, maxTokens: 100 });
+      contextUsageRequested = true;
+      return new Promise((resolve) => {
+        releaseContextUsage = () => resolve({ totalTokens: 1, maxTokens: 100 });
+      });
+    });
+    const created = createSession("stop during result settle");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate one survey");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-survey",
+      tool_use_id: "agent-survey-call",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => contextUsageRequested);
+
+    // The agent finishes after the CLI wrote its result, so the CLI will answer
+    // the notification with a continuation that needs open input.
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-survey",
+      agent_type: "general-purpose",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-survey.jsonl",
+    });
+    releaseContextUsage();
+    await Bun.sleep(10);
+    expect(created.backgroundTasks?.["agent-survey"]?.status).toBe("completed");
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-survey",
+      tool_use_id: "agent-survey-call",
+      status: "completed",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-after-settle-stop",
+        role: "assistant",
+        content: [{ type: "text", text: "The survey is in." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    pushSuccessfulContinuationResult(call);
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
+  test("revives a subagent that wakes from a pause under its original tool-use id", async () => {
+    const created = createSession("subagent wakes from pause");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate a long download");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+    const level = (ids: string[]) =>
+      call.push({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: ids.map((id) => ({
+          task_id: id,
+          task_type: id.startsWith("bash") ? "local_bash" : "local_agent",
+          description: id === "agent-dl" ? "Download artifacts" : "python3 download.py",
+        })),
+      });
+    // Hooks run on the control channel while pushed frames are consumed
+    // asynchronously; let the stream catch up so each step sees the order the
+    // CLI produced.
+    const drain = () => Bun.sleep(5);
+
+    level(["agent-dl"]);
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-dl",
+      tool_use_id: "agent-dl-call",
+      description: "Download artifacts",
+    });
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-dl",
+      agent_type: "general-purpose",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    // The subagent backgrounds its own Bash and pauses: CLI 2.1.284 reports
+    // that exactly like completion, while the Bash task stays live.
+    level(["agent-dl", "bash-dl"]);
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "bash-dl",
+      tool_use_id: "bash-dl-call",
+    });
+    await drain();
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-dl",
+      agent_type: "general-purpose",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-dl.jsonl",
+    });
+    level(["bash-dl"]);
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-dl",
+      tool_use_id: "agent-dl-call",
+      status: "completed",
+    });
+    pushSuccessfulContinuationResult(call);
+    await waitFor(() => created.backgroundTasks?.["agent-dl"]?.status === "completed");
+
+    // The Bash finishes and wakes the subagent under the same ids.
+    level(["agent-dl"]);
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash-dl",
+      tool_use_id: "bash-dl-call",
+      status: "completed",
+    });
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-dl",
+      tool_use_id: "agent-dl-call",
+    });
+    await drain();
+    expect(created.backgroundTasks?.["agent-dl"]?.status).toBe("completed");
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-dl",
+      agent_type: "general-purpose",
+    });
+    await waitFor(() => created.backgroundTasks?.["agent-dl"]?.status === "running");
+    expect(created.backgroundTasks?.["agent-dl"]).toMatchObject({
+      description: "Download artifacts",
+      toolUseId: "agent-dl-call",
+    });
+    expect(created.backgroundTasks?.["agent-dl"]?.endedAt).toBeUndefined();
+
+    // The Bash notification's own continuation must not close the CLI under
+    // the woken agent.
+    pushSuccessfulContinuationResult(call);
+    await drain();
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-dl",
+      agent_type: "general-purpose",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-dl.jsonl",
+    });
+    level([]);
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-dl",
+      tool_use_id: "agent-dl-call",
+      status: "completed",
+    });
+    pushSuccessfulContinuationResult(call);
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+    expect(created.backgroundTasks?.["agent-dl"]?.status).toBe("completed");
+  });
+
+  test("records a released query's agent lifecycle after a follow-up turn takes the foreground", async () => {
+    const created = createSession("released query hooks");
+    track(created.id);
+    const firstPrompt = sendPrompt(created.id, "delegate then keep chatting");
+    const firstCall = await nextQueryCall();
+    const hooks = firstCall.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    void input.next().then((result) => {
+      inputClosed = result.done === true;
+    });
+
+    firstCall.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-bg",
+      tool_use_id: "agent-bg-call",
+    });
+    firstCall.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    const secondPrompt = sendPrompt(created.id, "a follow-up while it runs");
+    const secondCall = await nextQueryCall();
+    await waitFor(() => created.status === "running");
+
+    // The older CLI still owns the agent; its stop hook must be recorded and
+    // must hold that CLI open for the continuation the stop leads to.
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-bg",
+      agent_type: "general-purpose",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-bg.jsonl",
+    });
+    expect(created.backgroundTasks?.["agent-bg"]?.status).toBe("completed");
+    expect(inputClosed).toBe(false);
+    expect(created.status).toBe("running");
+
+    firstCall.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-bg",
+      tool_use_id: "agent-bg-call",
+      status: "completed",
+    });
+    pushSuccessfulContinuationResult(firstCall);
+    await waitFor(() => inputClosed);
+    firstCall.finish();
+    await firstPrompt;
+    expect(created.status).toBe("running");
+
+    secondCall.push({ type: "result", subtype: "success" });
+    secondCall.finish();
+    await secondPrompt;
+    expect(created.status).toBe("idle");
+  });
+
   test("reclaims a resumed turn from its first streamed partial, before any assistant record", async () => {
     const created = createSession("long thinking continuation");
     track(created.id);
@@ -1312,12 +1664,18 @@ describe("background task reducer", () => {
     expect(inputClosed).toBe(false);
     expect(created.completionBlockedByBackgroundTasks).toBe(false);
     resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+    // Losing the foreground is not a stop: the agent this query started is
+    // still running, so its CLI must outlive the superseded result.
+    await Bun.sleep(10);
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
     call.push({
       type: "system",
       subtype: "task_notification",
       task_id: "agent-superseded",
       status: "completed",
     });
+    pushSuccessfulContinuationResult(call);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
     await promptPromise;

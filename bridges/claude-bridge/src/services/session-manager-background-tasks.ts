@@ -162,11 +162,18 @@ export function takeProvisionalBackgroundTask(
  * A terminal record always wins over this launch edge: SDK ordering is
  * explicitly unspecified, so a late tool result must never resurrect work that
  * already reported completion or failure.
+ *
+ * `newRun` is the exception: the caller knows a fresh run of this id has begun
+ * (a `SubagentStart` hook fires only as a run starts, never late). A subagent
+ * that paused on its own background work reports completion, then wakes under
+ * the same task and tool-use ids; left terminal, nothing would hold the query
+ * open for it and the next idle settle would close the CLI underneath it.
  */
 export function recordBackgroundTaskLaunch(
   session: SessionState,
   launch: BackgroundTaskLaunch,
   control: NonNullable<SessionState["queryControl"]>,
+  options?: { newRun?: boolean },
 ): void {
   takeBackgroundTaskCandidate(session, launch.toolUseId);
   const provisionalId = launch.toolUseId
@@ -176,8 +183,17 @@ export function recordBackgroundTaskLaunch(
     provisionalId && provisionalId !== launch.id
       ? session.backgroundTasks?.[provisionalId]
       : undefined;
-  const previous = session.backgroundTasks?.[launch.id] ?? provisional;
-  const status = previous?.status ?? "running";
+  const stored = session.backgroundTasks?.[launch.id] ?? provisional;
+  const restarted =
+    options?.newRun === true &&
+    stored !== undefined &&
+    !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status);
+  // The finished run's parked snapshot must not describe this one.
+  const parked = restarted ? takeSettlingBackgroundTask(session, launch.id) : undefined;
+  const previous = restarted
+    ? { ...stored, startedAt: Date.now(), endedAt: undefined, error: undefined }
+    : stored;
+  const status = restarted ? "running" : (previous?.status ?? "running");
   const nextTasks = { ...session.backgroundTasks };
   if (provisionalId && provisionalId !== launch.id) {
     delete nextTasks[provisionalId];
@@ -188,7 +204,11 @@ export function recordBackgroundTaskLaunch(
     [launch.id]: {
       id: launch.id,
       toolUseId: launch.toolUseId ?? previous?.toolUseId,
-      description: launch.description ?? previous?.description,
+      // A hook names only the agent type; the original launch said what the
+      // work was, and a woken run is still that work.
+      description: restarted
+        ? (previous?.description ?? launch.description)
+        : (launch.description ?? previous?.description),
       status,
       isBackgrounded: previous?.isBackgrounded ?? true,
       startedAt: previous?.startedAt ?? Date.now(),
@@ -199,6 +219,7 @@ export function recordBackgroundTaskLaunch(
   if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) {
     (session.backgroundTaskControls ??= new Map()).set(launch.id, control);
   }
+  if (parked) closeQueryControlIfUnused(session, parked.owner);
   emitBackgroundTaskSnapshot(session);
 }
 

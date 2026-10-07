@@ -190,6 +190,67 @@ describe("Pi MCP config", () => {
     expect(byId.get("stdio")?.env).toEqual({ KEY: "k", PLAIN: "value" });
   });
 
+  test("merges project overrides, clashes and auth entries the way Pi 1.0 does", async () => {
+    const root = await tempRoot("pi-mcp-merge-");
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "project");
+    await mkdir(agentDir, { recursive: true });
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(agentDir, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          "internal-tools": { command: "internal" },
+          dormant: { command: "dormant", enabled: false },
+          replaced: { command: "user-replaced" },
+          "my-tools": { command: "mine" },
+          // A Pi provider token is not something the bridge can send.
+          provider: { url: "https://p.example/mcp", auth: { provider: "github" } },
+          unlaunchable: { command: "kept-off" },
+        },
+      }),
+    );
+    await writeFile(
+      join(cwd, ".pi", "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          // Overrides: change only the enabled state of the user server.
+          "internal-tools": { enabled: false },
+          dormant: { enabled: true, exposure: "direct" },
+          // An override may not set anything else, and needs a base.
+          "my-tools": { enabled: false, args: ["x"] },
+          orphan: { enabled: true },
+          // A full project entry replaces the user entry, even a disabled one.
+          replaced: { command: "project-replaced", enabled: false },
+          // Differs from a user server only in `-`/`_`: rejected.
+          my_tools: { command: "clash" },
+          // `auth` is refused in a project file, leaving the user entry alone.
+          unlaunchable: { url: "https://u.example/mcp", auth: { provider: "github" } },
+        },
+      }),
+    );
+
+    const servers = await resolvePiMcpServers({ agentDir, cwd, projectResources: true, env: {} });
+    expect(servers.map((server) => `${server.scope}:${server.id}`).sort()).toEqual([
+      "user:dormant",
+      "user:my-tools",
+      "user:unlaunchable",
+    ]);
+    const byId = new Map(servers.map((server) => [server.id, server]));
+    expect(byId.get("dormant")?.command).toBe("dormant");
+    expect(byId.get("my-tools")?.command).toBe("mine");
+    expect(byId.get("unlaunchable")?.command).toBe("kept-off");
+
+    // Without project resources the overrides are not read at all.
+    const host = await resolvePiMcpServers({ agentDir, cwd, projectResources: false, env: {} });
+    expect(host.map((server) => server.id).sort()).toEqual([
+      "internal-tools",
+      "my-tools",
+      "replaced",
+      "unlaunchable",
+    ]);
+  });
+
   test("keeps the reserved Orkestrator server when the cap is full", async () => {
     const root = await tempRoot("pi-mcp-cap-");
     const agentDir = join(root, "agent");

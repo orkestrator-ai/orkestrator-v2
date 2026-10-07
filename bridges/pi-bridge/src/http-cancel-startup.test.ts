@@ -722,7 +722,7 @@ describe("a provider abort that hangs", () => {
 });
 
 /**
- * Pi's follow-up queue is the SDK's, not the bridge's. Pinned SDK 0.99.0:
+ * Pi's follow-up queue is the SDK's, not the bridge's. Pinned SDK 1.0.4:
  * `followUp()` pushes onto `AgentSession._followUpMessages` and the agent's
  * queue, and `abort()` (`abortRetry`/`abortCompaction`/`agent.abort()`) never
  * clears either — only `clearQueue()` does, which the bridge calls solely for

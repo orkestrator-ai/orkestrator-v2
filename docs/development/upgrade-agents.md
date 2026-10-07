@@ -12,7 +12,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.35` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.36` (latest stable, verified 2026-10-07) |
 | Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.46` (stable channel; verified 2026-10-07) |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.99.0` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.0.4` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
 Verified against upstream stable releases on 2026-09-29.
@@ -673,7 +673,7 @@ published two ways:
   packages it exposes types from (`@earendil-works/pi-ai` and
   `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
   `0.85.0` public entry point imported without declaring. Since `0.85.1` no
-  published SDK file imports it — as of `0.99.0` pi-coding-agent lists it only
+  published SDK file imports it — as of `1.0.4` pi-coding-agent lists it only
   as a devDependency — so nothing at runtime needs it. It stays pinned and
   vendored as a runtime root anyway: dropping it means changing the vendor
   script, its test and the drift test together, for no behavioural gain. Check
@@ -746,7 +746,12 @@ Dockerfile pins the same archive digests the manifest does.
    `${NAME}` values, `~/` and `cwd`. `resolveConfigValue` is not a public SDK
    export, so the bridge re-implements the variable rules and deliberately does
    **not** run `!command` values: an entry that needs one is skipped, as Pi skips
-   an entry it cannot resolve. Pi's built-in `mcp`, `codemode` and `tool-search`
+   an entry it cannot resolve. The merge follows Pi 1.0's loader
+   (`dist/extensions/mcp/config.js`): a project override (no `command`, `url`
+   or `type`) flips only the user server's `enabled`, names that differ only in
+   `-`/`_` clash, and `auth: { provider }` is refused in a project file and,
+   in the user file, not launched (the bridge holds no Pi provider token).
+   Re-read that loader on each bump. Pi's built-in `mcp`, `codemode` and `tool-search`
    extensions are loaded only by its CLI (`main.js`), never by an SDK session, so
    they do not collide with the bridge's own `orkestrator-mcp` extension. Confirm
    that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`

@@ -193,7 +193,7 @@ ARG CLAUDE_CLI_VERSION=2.1.284
 ARG CODEX_CLI_VERSION=0.160.1
 ARG OPENCODE_CLI_VERSION=1.18.35
 ARG GROK_BUILD_VERSION=1.0.46
-ARG PI_CLI_VERSION=0.99.0
+ARG PI_CLI_VERSION=1.0.4
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -243,8 +243,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # packages/toolchain/src/manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=2d51edb25b264d0418ac889a3452cb8235ba1721e063d8d9dc8dfb4826586447 ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=42dbacde2192afb91fd066eb41df74aba2593a90508e9f0fbcfbc9c22c5c38b0 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=284c45dd28cf975a13cff6af34741dd0a0cdca6634e8bdfc0083ae7d452e86d6 ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=6a6bc66a6ac2750bd7ccd7f2109090463f564d447feefb10a5965f6b6aed2211 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \

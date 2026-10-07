@@ -107,7 +107,7 @@ export function setStartupTimeoutForTests(timeoutMs?: number): void {
 /**
  * Apply a cancel to a prompt Pi has not accepted yet.
  *
- * Pinned SDK 0.99.0 (`dist/core/agent-session.js`): `abort()` calls
+ * Pinned SDK 1.0.4 (`dist/core/agent-session.js`): `abort()` calls
  * `abortCompaction()`, which aborts the auto-compaction `prompt()` may be
  * running in preflight (`_checkCompaction`), and waits for idle. It cannot
  * pre-empt the run itself — `_runAgentPrompt` resets `_agentRunAbortRequested`

@@ -87,6 +87,56 @@ describe("bounded test diagnostics", () => {
     );
   });
 
+  test("rejects malformed source instead of scanning a partial tree", () => {
+    const source = [
+      "expect(container.querySelector('.spinner')).toBeNull();",
+      "const broken = ;",
+    ].join("\n");
+
+    for (const scan of [findUnsafeDomAbsenceAssertions, rewriteUnsafeDomAbsenceAssertions]) {
+      expect(() => scan("malformed.test.ts", source)).toThrow(/^malformed\.test\.ts: .+/);
+    }
+  });
+
+  test("classifies template literal projections conservatively", () => {
+    const assertions = [
+      { source: "expect(container.querySelector('.spinner')[`id`]).toBeNull();", hits: 0 },
+      {
+        source: "expect(container.querySelector('.spinner')[`getAttribute`]('x')).toBeNull();",
+        hits: 0,
+      },
+      {
+        source: "expect(container.querySelector('.spinner')[`textContent`]).toBeNull();",
+        hits: 1,
+      },
+      { source: "expect(container.querySelector('.spinner')[`${key}`]).toBeNull();", hits: 1 },
+    ];
+
+    for (const { source, hits } of assertions) {
+      expect({
+        source,
+        hits: findUnsafeDomAbsenceAssertions("fixture.test.ts", source).length,
+      }).toEqual({ source, hits });
+    }
+  });
+
+  test("flags spread DOM arguments even when their expression is a scalar projection", () => {
+    for (const received of [
+      "...container.querySelectorAll('.item')",
+      "...container.querySelector('.spinner')!.id",
+      "...container.querySelector('.spinner')!.getAttribute('x')",
+    ]) {
+      const source = `expect(${received}).toBeNull();`;
+      const hits = findUnsafeDomAbsenceAssertions("fixture.test.ts", source);
+      expect(hits).toHaveLength(1);
+      expect(source.slice(hits[0]!.receivedStart, hits[0]!.receivedEnd)).toBe(received);
+    }
+
+    expect(
+      findUnsafeDomAbsenceAssertions("fixture.test.ts", "expect(...values).toBeNull();"),
+    ).toEqual([]);
+  });
+
   test("exempts every allowlisted scalar projection", () => {
     const source = [
       "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",

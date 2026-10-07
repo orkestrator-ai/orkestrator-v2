@@ -48,11 +48,20 @@ function packageManifestPaths(): string[] {
 }
 
 /** `bun.lock` is JSONC — trailing commas are legal and `JSON.parse` rejects them. */
-function lockfileRootDependencies(rel: string): Record<string, string> {
+function lockfileRootDependencies(
+  rel: string,
+  section: "dependencies" | "devDependencies",
+): Record<string, string> {
   const lock = JSON.parse(read(rel).replace(/,(\s*[}\]])/g, "$1")) as {
-    workspaces?: Record<string, { dependencies?: Record<string, string> }>;
+    workspaces?: Record<
+      string,
+      {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      }
+    >;
   };
-  return lock.workspaces?.[""]?.dependencies ?? {};
+  return lock.workspaces?.[""]?.[section] ?? {};
 }
 
 /**
@@ -569,22 +578,26 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
-  test("every nested lockfile agrees with its own package.json", () => {
-    // A nested lockfile is only safe while it describes the package next to it.
-    // Once it drifts it is a lie that survives every package.json-only check.
-    for (const lockfile of lockfilePaths()) {
-      if (lockfile === "bun.lock") continue;
-      const packageRel = lockfile.replace(/bun\.lock$/, "package.json");
-      const manifest = JSON.parse(read(packageRel)) as {
-        dependencies?: Record<string, string>;
-      };
-      const locked = lockfileRootDependencies(lockfile);
+  test.each(["dependencies", "devDependencies"] as const)(
+    "every nested lockfile agrees with its own package.json %s",
+    (section) => {
+      // A nested lockfile is only safe while it describes the package next to it.
+      // Once it drifts it is a lie that survives every package.json-only check.
+      for (const lockfile of lockfilePaths()) {
+        if (lockfile === "bun.lock") continue;
+        const packageRel = lockfile.replace(/bun\.lock$/, "package.json");
+        const manifest = JSON.parse(read(packageRel)) as {
+          dependencies?: Record<string, string>;
+          devDependencies?: Record<string, string>;
+        };
+        const locked = lockfileRootDependencies(lockfile, section);
 
-      expect(locked, `${lockfile} disagrees with ${packageRel}`).toEqual(
-        externalDependencies(manifest.dependencies ?? {}),
-      );
-    }
-  });
+        expect(locked, `${lockfile} ${section} disagrees with ${packageRel}`).toEqual(
+          externalDependencies(manifest[section] ?? {}),
+        );
+      }
+    },
+  );
 
   test("root lockfile workspace versions agree with their package manifests", () => {
     // Bun rewrites stale workspace metadata as soon as a validation command

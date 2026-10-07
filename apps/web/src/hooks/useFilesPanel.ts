@@ -844,10 +844,19 @@ export function useFilesPanel() {
           throw new Error("Close the file's editor tab before renaming it");
         }
         const environmentId = await resolveMutationEnvironmentId();
-        const renamed =
-          isLocalEnvironment && worktreePath
-            ? await backend.renameLocalFile(environmentId, filePath, newName)
-            : await backend.renameContainerFile(environmentId, filePath, newName);
+        let renamed: string;
+        try {
+          renamed =
+            isLocalEnvironment && worktreePath
+              ? await backend.renameLocalFile(environmentId, filePath, newName)
+              : await backend.renameContainerFile(environmentId, filePath, newName);
+        } catch (error) {
+          // A case-only rename may have staged the file before failing. Refresh
+          // both snapshots even on failure so any recovery file is visible.
+          // A refresh failure must not hide the mutation's recovery message.
+          await refreshAllFilesData().catch(() => undefined);
+          throw error;
+        }
         await refreshAllFilesData();
         toast.success("File renamed", { description: renamed });
         return renamed;

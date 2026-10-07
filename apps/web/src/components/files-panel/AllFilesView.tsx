@@ -188,11 +188,15 @@ export function AllFilesView({
 
   const handleRename = async (path: string, newName: string) => {
     if (!onRename) return;
+    // The refreshed tree can prune the old path before onRename resolves.
+    const wasSelected = selectedPaths.includes(path);
+    const wasAnchor = anchorPath === path;
     const renamed = await onRename(path, newName);
-    setSelectedPaths((current) =>
-      current.map((selected) => (selected === path ? renamed : selected)),
-    );
-    setAnchorPath((current) => (current === path ? renamed : current));
+    setSelectedPaths((current) => {
+      const next = current.map((selected) => (selected === path ? renamed : selected));
+      return wasSelected && !next.includes(renamed) ? [...next, renamed] : next;
+    });
+    setAnchorPath((current) => (wasAnchor || current === path ? renamed : current));
     setRenamePath(null);
   };
 

@@ -1381,15 +1381,23 @@ export async function renameLocalFile(
 
   // A case-only rename collides with itself on case-insensitive filesystems
   // (the macOS default), so stage through a unique sibling name. The staged
-  // file is restored if the final no-replace rename is refused.
-  const stagedName = `.${path.posix.basename(rename.source)}.${randomUUID()}.rename`;
+  // file is restored if the final no-replace rename is refused. Keep the
+  // staging name independent of the source's length.
+  const stagedName = `.${randomUUID()}.rename`;
   const staged =
     rename.directory === "." ? stagedName : path.posix.join(rename.directory, stagedName);
   await moveConfinedFile(worktreePath, rename.source, staged);
   try {
     await moveConfinedFile(worktreePath, staged, rename.destination);
   } catch (error) {
-    await moveConfinedFile(worktreePath, staged, rename.source).catch(() => undefined);
+    try {
+      await moveConfinedFile(worktreePath, staged, rename.source);
+    } catch (rollbackError) {
+      throw new Error(
+        `Rename failed and the original path could not be restored. Recover the original file from ${staged}. ${error instanceof Error ? error.message : String(error)}`,
+        { cause: rollbackError },
+      );
+    }
     throw error;
   }
   return rename.destination;

@@ -1209,7 +1209,7 @@ describe("useFilesPanel", () => {
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
   });
 
-  test("clears rename pending state after failure and does not refresh stale data", async () => {
+  test("refreshes snapshots after a failed rename and preserves the recovery error", async () => {
     const environment = createMockEnvironment({
       id: "env-container",
       projectId: "project-1",
@@ -1233,14 +1233,14 @@ describe("useFilesPanel", () => {
     });
     await waitFor(() => expect(result.current.fileActionPending).toBe("src/App.tsx"));
     await act(async () => {
-      rejectRename(new Error("A file already exists at src/Main.tsx"));
-      await expect(mutation).rejects.toThrow("A file already exists at src/Main.tsx");
+      rejectRename(new Error("Recover the original file from src/.recovery.rename"));
+      await expect(mutation).rejects.toThrow("Recover the original file from src/.recovery.rename");
     });
     expect(result.current.fileActionPending).toBeNull();
-    expect(mockGetGitStatus).not.toHaveBeenCalled();
-    expect(mockGetFileTree).not.toHaveBeenCalled();
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
     expect(mockToastError).toHaveBeenCalledWith("Failed to rename file", {
-      description: "A file already exists at src/Main.tsx",
+      description: "Recover the original file from src/.recovery.rename",
     });
   });
 

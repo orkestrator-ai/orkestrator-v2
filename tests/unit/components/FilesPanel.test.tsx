@@ -26,6 +26,7 @@ const realAlertDialogSnapshot = { ...realAlertDialog };
 const refreshMock = mock(() => {});
 const revertFileMock = mock(async () => {});
 const deleteFileMock = mock(async () => {});
+const renameFileMock = mock(async () => "renamed.txt");
 const moveFileMock = mock(async () => {});
 let mockEnvironmentId: string | null = "env-container";
 let mockFileActionPending: string | null = null;
@@ -53,6 +54,7 @@ mock.module("@/hooks", () => ({
     revertFile: revertFileMock,
     deleteFile: deleteFileMock,
     moveFile: moveFileMock,
+    renameFile: renameFileMock,
     fileActionPending: mockFileActionPending,
   }),
   useMediaQuery: () => mockIsMobile,
@@ -180,6 +182,7 @@ describe("Files panel components", () => {
     revertFileMock.mockClear();
     deleteFileMock.mockClear();
     moveFileMock.mockClear();
+    renameFileMock.mockClear();
     revertFileMock.mockImplementation(async () => {});
     deleteFileMock.mockImplementation(async () => {});
     moveFileMock.mockImplementation(async () => {});
@@ -205,6 +208,35 @@ describe("Files panel components", () => {
     mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
     mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   });
+
+  for (const nextTarget of ["env-other", "project-root:other-project"]) {
+    test(`cancels pending rename when switching to ${nextTarget}`, async () => {
+      useFilesPanelStore.setState({
+        activeTab: "all-files",
+        isLoadingTree: false,
+        fileTree: [{ name: "same.txt", path: "same.txt", isDirectory: false }],
+      });
+      const renderPanel = () => (
+        <TerminalProvider>
+          <FilesPanel />
+        </TerminalProvider>
+      );
+      const view = render(renderPanel());
+      fireEvent.click(screen.getByRole("button", { name: "Rename…" }));
+      fireEvent.change(screen.getByLabelText("File name"), { target: { value: "renamed.txt" } });
+      const staleConfirm = screen.getByRole("button", { name: "Rename" });
+      mockEnvironmentId = nextTarget;
+      view.rerender(renderPanel());
+      expect(screen.queryByRole("dialog", { name: "Rename file" }) === null).toBe(true);
+      fireEvent.click(staleConfirm);
+      expect(renameFileMock).not.toHaveBeenCalled();
+      // The same path in the new workspace can still be renamed explicitly.
+      fireEvent.click(screen.getByRole("button", { name: "Rename…" }));
+      fireEvent.change(screen.getByLabelText("File name"), { target: { value: "renamed.txt" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+      await waitFor(() => expect(renameFileMock).toHaveBeenCalledTimes(1));
+    });
+  }
 
   test("ChangedFileItem renders directory, filename, stats, and click target", () => {
     const onClick = mock(() => {});

@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import * as dependencies from "./commands-dependencies.js";
 import { renameLocalFile, resolveWorkspaceFileRename } from "./commands-files.js";
 
 describe("workspace file renames", () => {
@@ -49,6 +50,85 @@ describe("workspace file renames", () => {
     await expect(fs.readFile(path.join(worktreePath, "src", "README.md"), "utf8")).resolves.toBe(
       "case",
     );
+  });
+
+  for (const name of ["a".repeat(210), "a".repeat(211), "a".repeat(213), `${"é".repeat(106)}a`]) {
+    test(`case-only rename succeeds for a ${Buffer.byteLength(name)}-byte ${name.startsWith("é") ? "multibyte" : "ASCII"} name`, async () => {
+      await fs.writeFile(path.join(worktreePath, "src", name), "long name");
+      const newName = name.toUpperCase();
+      await expect(renameLocalFile(worktreePath, `src/${name}`, newName)).resolves.toBe(
+        `src/${newName}`,
+      );
+      expect(await fs.readdir(path.join(worktreePath, "src"))).toEqual([newName]);
+      expect(await fs.readFile(path.join(worktreePath, "src", newName), "utf8")).toBe("long name");
+    });
+  }
+
+  test("restores the source when case-only publication fails", async () => {
+    await fs.writeFile(path.join(worktreePath, "src", "readme.md"), "original");
+    const move = dependencies.moveConfinedFile;
+    const publicationError = new Error("Publication refused");
+    const spy = spyOn(dependencies, "moveConfinedFile").mockImplementation(
+      async (root, source, destination) => {
+        if (destination === "src/README.md") throw publicationError;
+        await move(root, source, destination);
+      },
+    );
+    try {
+      await expect(renameLocalFile(worktreePath, "src/readme.md", "README.md")).rejects.toBe(
+        publicationError,
+      );
+      expect(await fs.readdir(path.join(worktreePath, "src"))).toEqual(["readme.md"]);
+      expect(await fs.readFile(path.join(worktreePath, "src", "readme.md"), "utf8")).toBe(
+        "original",
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("reports the recovery path when a concurrent writer blocks publication and rollback", async () => {
+    await fs.writeFile(path.join(worktreePath, "src", "readme.md"), "original");
+    const move = dependencies.moveConfinedFile;
+    let recoveryPath = "";
+    const spy = spyOn(dependencies, "moveConfinedFile").mockImplementation(
+      async (root, source, destination) => {
+        await move(root, source, destination);
+        if (source === "src/readme.md") {
+          recoveryPath = destination;
+          await fs.writeFile(path.join(root, "src", "readme.md"), "concurrent", { flag: "wx" });
+          // Occupy publication on case-sensitive hosts too. On case-insensitive
+          // hosts this names the file just created by the concurrent writer.
+          try {
+            await fs.writeFile(path.join(root, "src", "README.md"), "destination", { flag: "wx" });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          }
+        }
+      },
+    );
+    try {
+      let failure: unknown;
+      try {
+        await renameLocalFile(worktreePath, "src/readme.md", "README.md");
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(
+        `Recover the original file from ${recoveryPath}`,
+      );
+      expect(recoveryPath).toMatch(/^src\/\.[a-f0-9-]+\.rename$/);
+      expect(await fs.readFile(path.join(worktreePath, recoveryPath), "utf8")).toBe("original");
+      expect(await fs.readFile(path.join(worktreePath, "src", "readme.md"), "utf8")).toBe(
+        "concurrent",
+      );
+      expect(await fs.readFile(path.join(worktreePath, "src", "README.md"), "utf8")).toMatch(
+        /^(concurrent|destination)$/,
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("does not overwrite an existing file", async () => {

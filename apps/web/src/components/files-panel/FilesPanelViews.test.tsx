@@ -646,6 +646,61 @@ describe("files panel views", () => {
     );
   });
 
+  test("preserves rename selection and range anchor when the tree refreshes before completion", async () => {
+    let resolveRename: (path: string) => void = () => {};
+    const onRename = mock(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRename = resolve;
+        }),
+    );
+    useFilesPanelStore.setState({ fileTree: multiFileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onRename={onRename} />);
+    fireEvent.click(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(await screen.findByText("Rename…"));
+    fireEvent.change(screen.getByLabelText("File name"), { target: { value: "Main.tsx" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await waitFor(() => expect(onRename).toHaveBeenCalledWith("src/App.tsx", "Main.tsx"));
+
+    act(() =>
+      useFilesPanelStore.setState({
+        fileTree: multiFileTree.map((node) =>
+          node.path === "src"
+            ? {
+                ...node,
+                children: node.children?.map((child) =>
+                  child.path === "src/App.tsx"
+                    ? { ...child, name: "Main.tsx", path: "src/Main.tsx" }
+                    : child,
+                ),
+              }
+            : node,
+        ),
+      }),
+    );
+    expect(screen.getByText("Main.tsx").closest("button")?.getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    await act(async () => resolveRename("src/Main.tsx"));
+    expect(screen.getByRole("button", { name: "Main.tsx" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    createFileTab.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "utils.ts" }), { shiftKey: true });
+    expect(createFileTab).not.toHaveBeenCalled();
+    for (const name of ["Main.tsx", "main.ts", "utils.ts"]) {
+      expect(screen.getByRole("button", { name }).getAttribute("aria-pressed")).toBe("true");
+    }
+    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
   test("offers Rename only for files and only when renaming is available", async () => {
     useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
     const { unmount } = renderWithTerminal(

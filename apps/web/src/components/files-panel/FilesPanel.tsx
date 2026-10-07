@@ -133,6 +133,7 @@ export function FilesPanel() {
           />
         ) : (
           <AllFilesView
+            key={JSON.stringify([environmentId, worktreePath])}
             onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}

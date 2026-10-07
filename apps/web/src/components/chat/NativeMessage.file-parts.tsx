@@ -19,6 +19,7 @@ import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
+import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
   imagePreviewCacheKey,
   isImagePreviewUnavailable,
@@ -505,10 +506,12 @@ export function TextPart({
    * user's own messages, which are shown back as written.
    */
   renderJsonPayload?: boolean;
-  /** Stable identity used to persist the folded payload's expansion state. */
+  /** Stable identity used to persist the folded payload's and prompt's expansion state. */
   expansionKey: string;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  // Expanding a long prompt grows its virtualized row, which can remount it;
+  // local state would reset and snap the prompt shut again.
+  const [isExpanded, setIsExpanded] = useMessagePartExpansion(`${expansionKey}/prompt-truncation`);
   const promptEvidence = useContext(UserPromptEvidenceContext);
   const presentedPrompt = useMemo(
     () =>
@@ -581,7 +584,7 @@ export function TextPart({
           type="button"
           className="mt-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           aria-expanded={isExpanded}
-          onClick={() => setIsExpanded((current) => !current)}
+          onClick={() => setIsExpanded(!isExpanded)}
         >
           {isExpanded ? "show less" : "show more"}
         </button>

@@ -123,6 +123,27 @@ describe("NativeMessage", () => {
     );
   });
 
+  test("keeps an expanded user prompt open when its virtualized row remounts", () => {
+    const content = Array.from({ length: 13 }, (_, index) => `Line ${index + 1}`).join("\n");
+    const message: NativeMessageType = {
+      id: "msg-long-user-prompt-remount",
+      role: "user",
+      content,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content }],
+    };
+
+    const first = render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: "show more" }));
+    first.unmount();
+
+    render(<NativeMessage message={message} />);
+
+    const toggle = screen.getByRole("button", { name: "show less" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect((toggle.previousElementSibling as HTMLElement).style.maxHeight).toBe("");
+  });
+
   test("does not add prompt truncation controls to short user or assistant messages", () => {
     const shortContent = Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join("\n");
     const longContent = Array.from({ length: 13 }, (_, index) => `Line ${index + 1}`).join("\n");

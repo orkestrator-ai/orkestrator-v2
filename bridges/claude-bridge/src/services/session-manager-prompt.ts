@@ -248,6 +248,8 @@ import {
 } from "./session-manager-persistence.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
+  inheritBackgroundTaskHookRun,
+  isHookRunningBackgroundTask,
   boundBackgroundTaskHistory,
   closeQueryControlIfUnused,
   emitBackgroundTaskSnapshot,
@@ -721,6 +723,7 @@ export async function sendPrompt(
   let queryIteratorControl: SessionState["queryControl"];
   let structuredUsageRefresh: StructuredUsageRefreshCoordinator | undefined;
   let queryStarted = false;
+  let queryEnded = false;
   let closeSdkInput: (() => void) | undefined;
   let finishTurnInputForThisTurn: (() => void) | undefined;
   let turnReleasedToBackgroundTasks = false;
@@ -916,6 +919,12 @@ export async function sendPrompt(
     // Unlike `receivedResult`, never reset: a task notification re-arms the
     // turn for a continuation whose result names no prompt at all.
     let receivedPromptResult = false;
+    // True while the result handler awaits its final control round trips. The
+    // handler settles the turn itself once they return; a hook or stop that
+    // released the turn in that gap took ownership away from the handler, whose
+    // ownership check then ended the loop early — and leaving the loop closes
+    // the query, killing every background agent the turn had just released to.
+    let settlingResult = false;
     let localCommandOutputSeen = false;
     const ownsActiveTurn = () =>
       !abortController.signal.aborted &&
@@ -1131,7 +1140,7 @@ export async function sendPrompt(
       });
     };
     const finishTurnInputIfSettled = () => {
-      if (!receivedResult) return;
+      if (!receivedResult || settlingResult) return;
       const hasLiveTask = hasLiveTaskOwnedByThisQuery();
       if (hasLiveTask || hasBackgroundTaskCandidateOwnedByThisQuery()) {
         // The model turn is complete, but its CLI process owns work that must
@@ -1147,6 +1156,21 @@ export async function sendPrompt(
       // or `closeQueryControlIfUnused` would keep treating it as referenced.
       stopWaitingForContinuation();
       closeTurnInput();
+    };
+    /**
+     * A result reached this turn after it lost the foreground without being
+     * stopped: it was released to background work and the continuation
+     * produced no root assistant record to reclaim it, or a follow-up turn
+     * took over. The CLI behind it may still be running agents this turn
+     * started, so the loop keeps draining and task state decides whether input
+     * closes. Leaving the loop instead closes the query — the iterator's
+     * `return()` is the SDK's `transport.close()` — and kills those agents.
+     */
+    const settleResultWithoutOwnership = () => {
+      // A later notification then waits for its continuation under the bounded
+      // watchdog, exactly as for a turn released at its own result.
+      turnReleasedToBackgroundTasks = true;
+      finishTurnInputIfSettled();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
@@ -1195,7 +1219,14 @@ export async function sendPrompt(
     };
     const recordBackgroundTaskHook: HookCallback = async (hookInput) => {
       if (
-        session.latestTurnGeneration !== turnGeneration ||
+        // Not gated on the turn generation: a released query keeps running the
+        // agents it started after a follow-up turn takes the foreground, and
+        // their lifecycle is recorded against this query's own control, exactly
+        // as its stream-side task messages are.
+        sessions.get(sessionId) !== session ||
+        session.deleting ||
+        abortController.signal.aborted ||
+        queryEnded ||
         !queryIteratorControl ||
         (hookInput.hook_event_name !== "TaskCreated" &&
           hookInput.hook_event_name !== "TaskCompleted" &&
@@ -1204,6 +1235,12 @@ export async function sendPrompt(
       ) {
         return {};
       }
+      const hookTaskId =
+        hookInput.hook_event_name === "TaskCreated" || hookInput.hook_event_name === "TaskCompleted"
+          ? hookInput.task_id
+          : hookInput.agent_id;
+      const owner = session.backgroundTaskControls?.get(hookTaskId);
+      if (owner && owner !== queryIteratorControl) return {};
       if (
         hookInput.hook_event_name === "TaskCreated" ||
         hookInput.hook_event_name === "SubagentStart"
@@ -1217,6 +1254,10 @@ export async function sendPrompt(
               }
             : { id: hookInput.agent_id, description: hookInput.agent_type },
           queryIteratorControl,
+          // The hook fires as a run starts, so a terminal record under this id
+          // belongs to an earlier run: a SendMessage resume, or a subagent
+          // waking from a pause under the same tool-use id.
+          { newRun: hookInput.hook_event_name === "SubagentStart" },
         );
       } else {
         const taskId =
@@ -1230,9 +1271,11 @@ export async function sendPrompt(
         // dies in the gap, having written the notification to its rollout with
         // nothing left to answer it. Retain exactly as the `task_notification`
         // and `background_tasks_changed` branches do — the edge that follows
-        // still writes the authoritative terminal status over this one.
+        // still writes the authoritative terminal status over this one. A stop
+        // landing while the result is still settling follows that result too,
+        // so it owes the same continuation.
         const settlesReleasedTurn =
-          turnReleasedToBackgroundTasks &&
+          (turnReleasedToBackgroundTasks || settlingResult) &&
           session.backgroundTaskControls?.get(taskId) === queryIteratorControl &&
           LIVE_BACKGROUND_TASK_STATUSES.has(
             session.backgroundTasks?.[taskId]?.status ?? "completed",
@@ -2015,6 +2058,12 @@ export async function sendPrompt(
             taskMessage.subtype === "task_updated") &&
           taskMessage.task_id
         ) {
+          if (
+            isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id]) &&
+            taskMessage.patch?.status &&
+            !LIVE_BACKGROUND_TASK_STATUSES.has(taskMessage.patch.status)
+          )
+            continue;
           const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
           const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
           // A `SendMessage` resume re-runs a finished agent under its old task
@@ -2063,6 +2112,7 @@ export async function sendPrompt(
             endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
             error: taskMessage.patch?.error ?? previous?.error,
           };
+          inheritBackgroundTaskHookRun(previous, task);
           session.backgroundTasks = boundBackgroundTaskHistory({
             ...session.backgroundTasks,
             [task.id]: task,
@@ -2077,6 +2127,12 @@ export async function sendPrompt(
           closeQueryControlIfUnused(session, correlated.owner);
           emitBackgroundTasks();
         } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
+          // A same-id wake can happen while usage settlement holds the JSONL
+          // consumer. This frame may belong to the preceding run; only the
+          // current run's stop hook can retire its live control.
+          if (isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id])) {
+            continue;
+          }
           // A task notification can re-enter the root agent loop after an
           // earlier result. That earlier result is only the response boundary
           // before the notification, not permission to close streaming input.
@@ -2160,9 +2216,9 @@ export async function sendPrompt(
           >) {
             if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
             const owner = previousControls?.get(id);
-            if (owner && owner !== queryIterator) {
+            if ((owner && owner !== queryIterator) || isHookRunningBackgroundTask(task)) {
               replacement[id] = task;
-              replacementControls.set(id, owner);
+              if (owner) replacementControls.set(id, owner);
               continue;
             }
             // Owned by this query (or by no handle at all, which only this
@@ -2188,6 +2244,7 @@ export async function sendPrompt(
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
             };
+            inheritBackgroundTaskHookRun(previous, replacement[id]!);
             // An id already owned by another live control keeps that owner:
             // only the process that started a task can stop it, and a control
             // asked to stop an id it never started answers `ok` without
@@ -2785,29 +2842,46 @@ export async function sendPrompt(
         // one final coalesced refresh before publishing the completed token
         // snapshot, preserving the previous end-of-turn exactness.
         if (!ownsActiveTurn()) {
-          if (abortController.signal.aborted) recordInterruptedStructuredOutputIfCurrent();
+          if (!abortController.signal.aborted) {
+            settleResultWithoutOwnership();
+            continue;
+          }
+          recordInterruptedStructuredOutputIfCurrent();
           closeTurnInput();
           return;
         }
-        await structuredUsageRefresh?.trigger();
-        const exactUsage = await buildClaudeUsageSnapshot(
-          session,
-          resultMsg,
-          queryIteratorControl,
-          options?.model,
-          {
-            ...(bootstrapClaudeUsage ? { bootstrapTurnTokens: streamUsage.completedTotals() } : {}),
-            stillOwnsTurn: ownsActiveTurn,
-          },
-        );
+        // Both round trips can take seconds. Lifecycle hooks and task stops
+        // keep arriving meanwhile; they record task state, and the settle they
+        // would trigger waits for `finishTurnInputIfSettled` below.
+        settlingResult = true;
+        let exactUsage: Awaited<ReturnType<typeof buildClaudeUsageSnapshot>>;
+        try {
+          await structuredUsageRefresh?.trigger();
+          exactUsage = await buildClaudeUsageSnapshot(
+            session,
+            resultMsg,
+            queryIteratorControl,
+            options?.model,
+            {
+              ...(bootstrapClaudeUsage
+                ? { bootstrapTurnTokens: streamUsage.completedTotals() }
+                : {}),
+              stillOwnsTurn: ownsActiveTurn,
+            },
+          );
+        } finally {
+          settlingResult = false;
+        }
         if (!ownsActiveTurn()) {
-          if (abortController.signal.aborted) {
-            // The provider accepted this request, so the caller needs a
-            // terminal outcome even though abort won the race with the final
-            // usage snapshot. A newer structured turn replaces the request id
-            // before taking ownership; never let this old turn overwrite it.
-            recordInterruptedStructuredOutputIfCurrent();
+          if (!abortController.signal.aborted) {
+            settleResultWithoutOwnership();
+            continue;
           }
+          // The provider accepted this request, so the caller needs a
+          // terminal outcome even though abort won the race with the final
+          // usage snapshot. A newer structured turn replaces the request id
+          // before taking ownership; never let this old turn overwrite it.
+          recordInterruptedStructuredOutputIfCurrent();
           closeTurnInput();
           return;
         }
@@ -3203,6 +3277,7 @@ export async function sendPrompt(
     }
     throw error;
   } finally {
+    queryEnded = true;
     diagnostics?.close();
     flushDebugLogs();
     abortController.signal.removeEventListener("abort", observeAbort);

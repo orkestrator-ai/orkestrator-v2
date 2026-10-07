@@ -91,11 +91,28 @@ export function orkestratorMcpServer(
   }
 }
 
+/**
+ * One `mcp.json` entry before the scopes merge.
+ *
+ * A `server` entry defines a server; `launch` is absent when the bridge cannot
+ * start it (invalid, an unresolvable value, or a Pi provider `auth` the bridge
+ * cannot supply), which still lets it shadow a same-named user entry the way
+ * Pi's own loader does. An `override` entry (project only, since Pi 1.0.1) has
+ * no `command`, `url` or `type` and changes only whether the user-level server
+ * of the same name is enabled.
+ */
+type McpConfigEntry =
+  | { kind: "server"; id: string; enabled: boolean; hasAuth: boolean; launch?: ResolvedMcpServer }
+  | { kind: "override"; id: string; enabled?: boolean };
+
+/** Pi's override keys; an override setting anything else is rejected. */
+const MCP_OVERRIDE_KEYS: ReadonlySet<string> = new Set(["enabled", "exposure", "toolExposure"]);
+
 export async function loadMcpConfigFile(
   path: string,
   scope: Exclude<McpScope, "orkestrator">,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<ResolvedMcpServer[]> {
+): Promise<McpConfigEntry[]> {
   try {
     const stat = await fs.stat(path);
     if (stat.size > MAX_MCP_CONFIG_BYTES) return [];
@@ -103,18 +120,79 @@ export async function loadMcpConfigFile(
     if (!isObject(parsed)) return [];
     const record = isObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
     if (!isObject(record)) return [];
-    const servers: ResolvedMcpServer[] = [];
+    const entries: McpConfigEntry[] = [];
     for (const [name, value] of Object.entries(record)) {
-      if (servers.length >= MAX_MCP_SERVERS) break;
+      if (entries.length >= MAX_MCP_SERVERS) break;
       const id = sanitizeMcpName(name);
-      if (!id || id === ORKESTRATOR_MCP_SERVER_NAME) continue;
-      const server = normalizeMcpServer(id, scope, value, env);
-      if (server) servers.push(server);
+      if (!id || id === ORKESTRATOR_MCP_SERVER_NAME || !isObject(value)) continue;
+      if (value.command === undefined && value.url === undefined && value.type === undefined) {
+        // Pi accepts this shape only as a project override, and only when it
+        // sets nothing but the override keys; anything else is an invalid entry.
+        if (scope !== "project" || Object.keys(value).some((key) => !MCP_OVERRIDE_KEYS.has(key))) {
+          continue;
+        }
+        entries.push({
+          kind: "override",
+          id,
+          ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+        });
+        continue;
+      }
+      entries.push({
+        kind: "server",
+        id,
+        // `disabled: true` is the Claude/Cursor spelling; `enabled: false` is
+        // Pi's own (`pi mcp`, the `/mcp` manager), and both files are the same
+        // `mcp.json`.
+        enabled: value.disabled !== true && value.enabled !== false,
+        hasAuth: value.auth !== undefined,
+        launch: normalizeMcpServer(id, scope, value, env),
+      });
     }
-    return servers;
+    return entries;
   } catch {
     return [];
   }
+}
+
+/** Pi's MCP namespace: names that differ only in `-` and `_` are one server. */
+function mcpNamespace(id: string): string {
+  return id.replace(/-/g, "_");
+}
+
+/**
+ * Merge user and project entries with Pi 1.0's rules (`extensions/mcp/config.js`):
+ * a project server replaces the user server of the same name, an override
+ * flips only its enabled state, a server whose name clashes with another in
+ * `-`/`_` is rejected, and `auth` is refused in a project file.
+ */
+function mergeMcpConfigEntries(
+  scopes: ReadonlyArray<{ scope: Exclude<McpScope, "orkestrator">; entries: McpConfigEntry[] }>,
+): ResolvedMcpServer[] {
+  const merged = new Map<string, { enabled: boolean; launch?: ResolvedMcpServer }>();
+  for (const { scope, entries } of scopes) {
+    for (const entry of entries) {
+      if (entry.kind === "override") {
+        const base = merged.get(entry.id);
+        if (base && entry.enabled !== undefined) base.enabled = entry.enabled;
+        continue;
+      }
+      const namespace = mcpNamespace(entry.id);
+      const clash = [...merged.keys()].some(
+        (other) => other !== entry.id && mcpNamespace(other) === namespace,
+      );
+      if (clash || (scope === "project" && entry.hasAuth)) continue;
+      // A Pi provider token is not something the bridge holds, so a user entry
+      // that asks for one is kept (it can still be overridden) but not launched.
+      const launch = entry.hasAuth ? undefined : entry.launch;
+      merged.set(entry.id, { enabled: entry.enabled, ...(launch ? { launch } : {}) });
+    }
+  }
+  const servers: ResolvedMcpServer[] = [];
+  for (const { enabled, launch } of merged.values()) {
+    if (enabled && launch) servers.push(launch);
+  }
+  return servers;
 }
 
 export async function resolvePiMcpServers(input: {
@@ -129,16 +207,17 @@ export async function resolvePiMcpServers(input: {
   const project = input.projectResources
     ? await loadMcpConfigFile(join(input.cwd, ".pi", "mcp.json"), "project", env)
     : [];
-  const merged = new Map<string, ResolvedMcpServer>();
-  for (const server of user) merged.set(server.id, server);
-  for (const server of project) merged.set(server.id, server);
+  const fileServers = mergeMcpConfigEntries([
+    { scope: "user", entries: user },
+    { scope: "project", entries: project },
+  ]);
   const orkestrator = orkestratorMcpServer(input.agentMcp, input.env);
   // The Orkestrator entry is reserved: it is inserted last so it wins a name
   // collision, but the file scopes are truncated first so it is never the entry
   // `slice` discards. Without this, 64 user servers silently disabled agent mail
   // and coordinator delegation.
   const limit = orkestrator ? MAX_MCP_SERVERS - 1 : MAX_MCP_SERVERS;
-  const resolved = [...merged.values()].slice(0, limit);
+  const resolved = fileServers.slice(0, limit);
   if (orkestrator) resolved.push(orkestrator);
   return resolved;
 }
@@ -156,9 +235,7 @@ function normalizeMcpServer(
   value: unknown,
   env: NodeJS.ProcessEnv,
 ): ResolvedMcpServer | undefined {
-  // `disabled: true` is the Claude/Cursor spelling; `enabled: false` is Pi's own
-  // (`pi mcp`, the `/mcp` manager), and both files are the same `mcp.json`.
-  if (!isObject(value) || value.disabled === true || value.enabled === false) return undefined;
+  if (!isObject(value)) return undefined;
   const transport = readTransport(value);
   if (transport === "http") {
     if (!nonBlank(value.url) || typeof value.url !== "string") return undefined;

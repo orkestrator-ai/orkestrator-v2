@@ -59,7 +59,6 @@ describe.if(existsSync(distEntry))("the built bundle", () => {
     for (const dependency of [
       path.join("@bufbuild", "protobuf"),
       path.join("@connectrpc", "connect"),
-      path.join("@connectrpc", "connect-node"),
     ]) {
       expect(existsSync(path.join(vendored, dependency))).toBe(true);
     }

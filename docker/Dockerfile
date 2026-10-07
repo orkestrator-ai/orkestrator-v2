@@ -189,11 +189,11 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.284
-ARG CODEX_CLI_VERSION=0.159.0
-ARG OPENCODE_CLI_VERSION=1.18.33
-ARG GROK_BUILD_VERSION=1.0.44
-ARG PI_CLI_VERSION=0.99.0
+ARG CLAUDE_CLI_VERSION=2.1.292
+ARG CODEX_CLI_VERSION=0.160.1
+ARG OPENCODE_CLI_VERSION=1.18.35
+ARG GROK_BUILD_VERSION=1.0.46
+ARG PI_CLI_VERSION=1.0.4
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -205,8 +205,8 @@ ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 # Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=e546123213ae47909a4268692aa4b94950d011afe9cac9938753a2194f1c16d5 ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=c63486624621924bf43be5c01abd252885661a734814224f6d70188a33aea858 ;; \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=c8f888b451f5494a18f858fffb0e0b68f4e4baa9c241761c5f206884f0fa640d ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=f7f2ba59ee8aa94d388f9696575a32d20e71c2ee48def9f80fc693a60fec6c72 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \
@@ -228,8 +228,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=f76431873efc5c8a50892d1e1247eaee23f6664bca385fbd55a06a8e7d3caedc ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=a31506d73b4454bbf70c3c2821e41a042fa7838058ba1b271b009a926d175239 ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=41626a53292324140b92556b9d42ff5542e3dcd04aff85eafb8689dd4adb44fc ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=45b0943e736f00a249b9cf02af2be9e0749d97c09a6f55cfcf3029a1a836f23e ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
@@ -243,8 +243,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # packages/toolchain/src/manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=2d51edb25b264d0418ac889a3452cb8235ba1721e063d8d9dc8dfb4826586447 ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=42dbacde2192afb91fd066eb41df74aba2593a90508e9f0fbcfbc9c22c5c38b0 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=284c45dd28cf975a13cff6af34741dd0a0cdca6634e8bdfc0083ae7d452e86d6 ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=6a6bc66a6ac2750bd7ccd7f2109090463f564d447feefb10a5965f6b6aed2211 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \

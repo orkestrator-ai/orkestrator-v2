@@ -55,6 +55,7 @@ describe("Claude startup failure diagnostics", () => {
       "background session",
     );
     expect(claudeStartupFailureMessage("bypass_root")).toContain("non-root user");
+    expect(claudeStartupFailureMessage("provider_not_allowed")).toContain("API provider");
   });
 
   test("surfaces a numbered startup failure without a prompt uuid", async () => {

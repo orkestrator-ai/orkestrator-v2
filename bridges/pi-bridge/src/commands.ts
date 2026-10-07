@@ -6,7 +6,7 @@
  * so a refreshed list can never describe commands differently from the one an
  * attach produced.
  *
- * The inventory mirrors what `AgentSession.prompt` (0.99.0) will actually do
+ * The inventory mirrors what `AgentSession.prompt` (1.0.4) will actually do
  * with the text, not what the resource loader happens to hold:
  *
  * 1. `_tryExecuteExtensionCommand` runs first, looking the text up with

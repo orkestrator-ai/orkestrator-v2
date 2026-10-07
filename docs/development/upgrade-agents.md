@@ -7,15 +7,15 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.284`, Anthropic SDK `0.129.0`, CLI `2.1.284` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.159.0` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.33` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.32` (latest stable, verified 2026-09-28) |
-| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.44` (stable channel; verified 2026-09-29) |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.99.0` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.292`, Anthropic SDK `0.131.0`, CLI `2.1.292` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.160.1` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.35` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.36` (latest stable, verified 2026-10-07) |
+| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.46` (stable channel; verified 2026-10-07) |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.0.4` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-09-29.
+Verified against upstream stable releases on 2026-10-07.
 
 ## What is enforced, and what is not
 
@@ -62,7 +62,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.32 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.0.36 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -72,8 +72,8 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.0.32 those are `LA0`,
-`Im0` and `BA0`. Run the Cursor
+`serverStream;clientStream;controlledExecManager`. In 1.0.36 those are `aE0`,
+`Xn0` and `dE0` (1.0.32: `LA0`, `Im0`, `BA0`). Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.
@@ -673,7 +673,7 @@ published two ways:
   packages it exposes types from (`@earendil-works/pi-ai` and
   `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
   `0.85.0` public entry point imported without declaring. Since `0.85.1` no
-  published SDK file imports it — as of `0.99.0` pi-coding-agent lists it only
+  published SDK file imports it — as of `1.0.4` pi-coding-agent lists it only
   as a devDependency — so nothing at runtime needs it. It stays pinned and
   vendored as a runtime root anyway: dropping it means changing the vendor
   script, its test and the drift test together, for no behavioural gain. Check
@@ -746,7 +746,12 @@ Dockerfile pins the same archive digests the manifest does.
    `${NAME}` values, `~/` and `cwd`. `resolveConfigValue` is not a public SDK
    export, so the bridge re-implements the variable rules and deliberately does
    **not** run `!command` values: an entry that needs one is skipped, as Pi skips
-   an entry it cannot resolve. Pi's built-in `mcp`, `codemode` and `tool-search`
+   an entry it cannot resolve. The merge follows Pi 1.0's loader
+   (`dist/extensions/mcp/config.js`): a project override (no `command`, `url`
+   or `type`) flips only the user server's `enabled`, names that differ only in
+   `-`/`_` clash, and `auth: { provider }` is refused in a project file and,
+   in the user file, not launched (the bridge holds no Pi provider token).
+   Re-read that loader on each bump. Pi's built-in `mcp`, `codemode` and `tool-search`
    extensions are loaded only by its CLI (`main.js`), never by an SDK session, so
    they do not collide with the bridge's own `orkestrator-mcp` extension. Confirm
    that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`
@@ -910,7 +915,10 @@ grok --help | rg -- '--always-approve'
 (sleep 4 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
-# (typed `headers` array, `additionalDirectories: []`). 1.0.44 answers both.
+# (typed `headers` array, `additionalDirectories: []`). 1.0.44 and 1.0.46
+# answer both. Run it signed in (`grok login`): signed out, `session/new` ends
+# in `Authentication required`, and once signed in `authMethods[0]` (the id the
+# bridge authenticates with) is `cached_token` rather than `grok.com`.
 ```
 
 Run these against the pinned version, not whatever is on `PATH` — compare
@@ -938,7 +946,7 @@ default.
 6. Smoke-test an interactive tab, including the inactive-environment path.
 
 The `stable` pointer, not the binary, decides the channel. `grok --version` for
-1.0.44 prints `[alpha]` although `…/cli/stable` names it; a build can be promoted
+1.0.44 printed `[alpha]` although `…/cli/stable` named it; a build can be promoted
 without being rebuilt, so the label is not evidence that the pin is wrong. Compare
 against the pointer (and `…/cli/alpha`, which may already be ahead) instead.
 

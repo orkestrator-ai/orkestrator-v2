@@ -573,7 +573,7 @@ describe("Claude steer journal and transcript", () => {
   test("keeps the interrupted message on its row and starts the steer's reply on a new one", async () => {
     const { call, promptUuid, finish } = await steerAfterFirstText("Live split");
 
-    // CLI 2.1.284 aborts the interrupted message and writes its final record
+    // CLI 2.1.284 (unchanged in 2.1.292) aborts the interrupted message and writes its final record
     // only now, after the steer, then answers the steer in a new API message.
     call.push(finalText("msg-plan", "before steer"));
     call.push({
@@ -621,7 +621,7 @@ describe("Claude steer journal and transcript", () => {
     ]);
   });
 
-  // The frames CLI 2.1.284 sends for a `priority: "now"` steer: a result for
+  // The frames CLI 2.1.284 and 2.1.292 send for a `priority: "now"` steer: a result for
   // the interrupted prompt, then the steer's own turn and result.
   const interruptedPromptResults = {
     "mid-thinking": {
@@ -720,4 +720,130 @@ describe("Claude steer journal and transcript", () => {
       expect(transcript[0]?.sdkUuid).toBe(promptUuid);
     });
   }
+
+  test("keeps the turn running through a steer that arrives while a command runs", async () => {
+    // Recorded from CLI 2.1.292 / Agent SDK 0.3.292: a `priority: "now"` steer
+    // no longer aborts a running foreground command. The command finishes, the
+    // interrupted prompt's result reports `aborted_tools`, and only then is the
+    // steer answered. The CLI also tracks the foreground command as a task.
+    const session = createSession("Steer mid-command");
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Run the slow command");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const first = await input.next();
+    if (first.done) throw new Error("Held prompt closed before sending its user message");
+    const promptUuid = first.value.uuid!;
+    let inputClosed = false;
+    const steerInput = input.next();
+
+    call.push({
+      type: "assistant",
+      uuid: "command-call",
+      message: {
+        id: "msg-plan",
+        model: "claude-haiku-test",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-fg",
+            name: "Bash",
+            input: { command: "python3 -c 'import time; time.sleep(25); print(1234)'" },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    });
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-fg",
+      tool_use_id: "tool-fg",
+      run_id: "run-fg",
+      description: "Sleep then print 1234",
+    });
+    const steerId = "1f0c8a43-3c3e-4f1d-9d55-6a2a3b8c9e10";
+    expect(
+      await steerClaudeSession(
+        session.id,
+        "reply with PINEAPPLE too",
+        steerId,
+        String(session.latestTurnGeneration ?? ""),
+      ),
+    ).toBe("applied");
+    const steered = await steerInput;
+    expect(steered.done ? undefined : steered.value.uuid).toBe(steerId);
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+    });
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-fg",
+      tool_use_id: "tool-fg",
+      status: "completed",
+      run_id: "run-fg",
+      summary: "Sleep then print 1234",
+    });
+    call.push({
+      type: "user",
+      uuid: "command-result",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-fg", content: "1234" }],
+      },
+      tool_use_result: { stdout: "1234", stderr: "", interrupted: false },
+      parent_tool_use_id: null,
+    });
+    call.push({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "",
+      result_index: 0,
+      terminal_reason: "aborted_tools",
+      user_message_uuids: [promptUuid],
+    });
+    call.push({
+      type: "assistant",
+      uuid: "steer-reply",
+      message: {
+        id: "msg-steer",
+        model: "claude-haiku-test",
+        content: [{ type: "text", text: "The command printed 1234. PINEAPPLE" }],
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() =>
+      getSessionMessages(session.id).some(
+        (message) => message.content === "The command printed 1234. PINEAPPLE",
+      ),
+    );
+    expect(sessions.get(session.id)?.status).toBe("running");
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result_index: 1,
+      user_message_uuid: steerId,
+      user_message_uuids: [steerId],
+    });
+    await waitFor(() => inputClosed);
+    await inputCompletion;
+    call.finish();
+    await prompt;
+
+    const settled = sessions.get(session.id);
+    expect(settled?.status).toBe("idle");
+    expect(settled?.backgroundTasks?.["task-fg"]?.status).toBe("completed");
+    const transcript = getSessionMessages(session.id);
+    expect(transcript.filter((message) => message.role === "user").map((m) => m.content)).toEqual([
+      "Run the slow command",
+      "reply with PINEAPPLE too",
+    ]);
+    expect(transcript.at(-1)?.content).toBe("The command printed 1234. PINEAPPLE");
+  });
 });

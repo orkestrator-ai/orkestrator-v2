@@ -163,7 +163,7 @@
     "artifactName": "orkestrator-v2-${os}-${arch}.${ext}"
   },
   "patchedDependencies": {
-    "@cursor/sdk@1.0.32": "patches/@cursor%2Fsdk@1.0.32.patch",
-    "@opencode-ai/sdk@1.18.33": "patches/@opencode-ai%2Fsdk@1.18.33.patch"
+    "@cursor/sdk@1.0.36": "patches/@cursor%2Fsdk@1.0.36.patch",
+    "@opencode-ai/sdk@1.18.35": "patches/@opencode-ai%2Fsdk@1.18.35.patch"
   }
 }

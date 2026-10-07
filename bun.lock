@@ -40,7 +40,7 @@
       "dependencies": {
         "@modelcontextprotocol/node": "2.0.0",
         "@modelcontextprotocol/server": "2.0.0",
-        "@opencode-ai/sdk": "1.18.33",
+        "@opencode-ai/sdk": "1.18.35",
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/toolchain": "workspace:*",
         "@xterm/addon-serialize": "0.14.0",
@@ -79,7 +79,7 @@
         "@dnd-kit/sortable": "^10.0.0",
         "@dnd-kit/utilities": "^3.2.2",
         "@monaco-editor/react": "^4.7.0",
-        "@opencode-ai/sdk": "1.18.33",
+        "@opencode-ai/sdk": "1.18.35",
         "@orkestrator/protocol": "workspace:*",
         "@radix-ui/react-alert-dialog": "^1.1.23",
         "@radix-ui/react-checkbox": "^1.3.11",
@@ -272,7 +272,7 @@
     },
   },
   "patchedDependencies": {
-    "@opencode-ai/sdk@1.18.33": "patches/@opencode-ai%2Fsdk@1.18.33.patch",
+    "@opencode-ai/sdk@1.18.35": "patches/@opencode-ai%2Fsdk@1.18.35.patch",
     "@cursor/sdk@1.0.32": "patches/@cursor%2Fsdk@1.0.32.patch",
   },
   "overrides": {
@@ -603,7 +603,7 @@
 
     "@noble/hashes": ["@noble/hashes@2.4.0", "", {}, "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.33", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-Nyurky9+AA2tvZ6my8UtO5pxPoXxrNypqjeEqMshBGiR542glOy+KE1Y+3lwWU+Z6HC/hSmrdXNbX81+qiuTzg=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.35", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-cp3IFKwnqgeUbflrrwz/WmG/dALVyM2k0LA1aqCvWe58Tu4utNTNw+BwZzQEML1HxDaLrIB+Fc4Ztb8S16Ijcw=="],
 
     "@orkestrator/backend": ["@orkestrator/backend@workspace:apps/backend"],
 

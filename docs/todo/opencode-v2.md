@@ -2,7 +2,7 @@
 
 Status: Deferred — do not bump the OpenCode binary or SDK to 2.x.  
 Recorded: 2026-08-28; refreshed 2026-09-27 against OpenCode `v2.0.18`.  
-Orkestrator OpenCode SDK and CLI pin: `1.18.33` (`@opencode-ai/sdk`, `opencode-ai`)
+Orkestrator OpenCode SDK and CLI pin: `1.18.35` (`@opencode-ai/sdk`, `opencode-ai`)
 
 ## Summary
 
@@ -173,7 +173,7 @@ Consequences:
 
 ## Recommendation
 
-Stay on `1.18.33` for production. 1.x is still receiving releases and fixes
+Stay on the 1.x line (pin `1.18.35`) for production. 1.x is still receiving releases and fixes
 on `dev`; no end-of-life notice for 1.x was found.
 
 When picking this up, treat it as a new provider rather than an upgrade:

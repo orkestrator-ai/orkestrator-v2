@@ -829,6 +829,56 @@ export function useFilesPanel() {
     ],
   );
 
+  const renameFile = useCallback(
+    async (filePath: string, newName: string) => {
+      if (!isAvailable || !targetId) {
+        throw new Error("The selected environment is not available");
+      }
+
+      setFileActionPending(filePath);
+      try {
+        const openTabs = snapshotEnvironmentId
+          ? usePaneLayoutStore.getState().getAllTabs(snapshotEnvironmentId)
+          : [];
+        if (openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === filePath)) {
+          throw new Error("Close the file's editor tab before renaming it");
+        }
+        const environmentId = await resolveMutationEnvironmentId();
+        let renamed: string;
+        try {
+          renamed =
+            isLocalEnvironment && worktreePath
+              ? await backend.renameLocalFile(environmentId, filePath, newName)
+              : await backend.renameContainerFile(environmentId, filePath, newName);
+        } catch (error) {
+          // A case-only rename may have staged the file before failing. Refresh
+          // both snapshots even on failure so any recovery file is visible.
+          // A refresh failure must not hide the mutation's recovery message.
+          await refreshAllFilesData().catch(() => undefined);
+          throw error;
+        }
+        await refreshAllFilesData();
+        toast.success("File renamed", { description: renamed });
+        return renamed;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error("Failed to rename file", { description: message });
+        throw error;
+      } finally {
+        setFileActionPending(null);
+      }
+    },
+    [
+      isAvailable,
+      targetId,
+      snapshotEnvironmentId,
+      resolveMutationEnvironmentId,
+      isLocalEnvironment,
+      worktreePath,
+      refreshAllFilesData,
+    ],
+  );
+
   const createFolder = useCallback(
     async (parentDirectory: string, folderName: string) => {
       if (!isAvailable || !targetId) {
@@ -1026,6 +1076,7 @@ export function useFilesPanel() {
     revertFile,
     deleteFile,
     moveFile,
+    renameFile,
     createFolder,
     copyExternalFiles,
     fileActionPending,

@@ -27,6 +27,7 @@ export function FilesPanel() {
     revertFile,
     deleteFile,
     moveFile,
+    renameFile,
     createFolder,
     copyExternalFiles,
     fileActionPending,
@@ -132,12 +133,14 @@ export function FilesPanel() {
           />
         ) : (
           <AllFilesView
+            key={JSON.stringify([environmentId, worktreePath])}
             onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
             onMove={moveFileInTree}
             onCopyFiles={copyFilesIntoTree}
             onCreateFolder={createFolder}
+            onRename={renameFile}
             movePending={fileActionPending !== null}
             onOpenFile={onOpenFile}
           />

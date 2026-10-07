@@ -424,6 +424,108 @@ test("real browser gateway exercises an authoritative local environment", async 
   }
 });
 
+test("file rename preserves selection, survives reload and cancels on workspace change", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  // This file-browser scenario uses no agents or host credentials.
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    if (route.request().postDataJSON()?.command === "check_claude_cli") {
+      await route.fulfill({ json: { result: false } });
+    } else {
+      await route.continue();
+    }
+  });
+  const invoke = await authenticatedInvoke(page, status);
+  const projects = await invoke<Project[]>("get_projects");
+  const fixture = projects.find((project) => project.localPath === status.testProject)!;
+  expect(fixture).toBeTruthy();
+  const environments: Environment[] = [];
+  try {
+    for (const suffix of ["source", "other"]) {
+      const environment = await invoke<Environment>("create_environment", {
+        projectId: fixture.id,
+        name: `file-rename-${suffix}-${Date.now()}`,
+        environmentType: "local",
+        networkAccessMode: "restricted",
+      });
+      environments.push(environment);
+      await invoke("start_environment", { environmentId: environment.id });
+      const hydrated = await invoke<Environment>("get_environment", {
+        environmentId: environment.id,
+      });
+      environment.worktreePath = hydrated.worktreePath;
+      await fs.writeFile(path.join(environment.worktreePath!, "rename-source.txt"), suffix);
+      await fs.writeFile(path.join(environment.worktreePath!, "rename-conflict.txt"), "conflict");
+    }
+    const [source, other] = environments;
+    await page.reload();
+    const expand = page.getByRole("button", {
+      name: `Expand project ${fixture.name}`,
+      exact: true,
+    });
+    const entry = page.getByText(source!.name, { exact: true }).first();
+    const openSourceFiles = async () => {
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click();
+      const showFiles = page.getByRole("button", { name: "Show file panel", exact: true });
+      if (await showFiles.isVisible()) await showFiles.click();
+      await page.getByRole("tab", { name: "All files", exact: true }).click();
+    };
+    await openSourceFiles();
+    const file = page.getByRole("button", { name: "rename-source.txt", exact: true });
+    await file.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Rename file", exact: true });
+    await expect(dialog.getByLabel("File name")).toBeFocused();
+    await expect(dialog.getByRole("button", { name: "Rename", exact: true })).toBeDisabled();
+    await dialog.getByLabel("File name").fill("rename-conflict.txt");
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(dialog.getByText("A file already exists at rename-conflict.txt")).toBeVisible();
+    await dialog.getByLabel("File name").fill("RENAMED.txt");
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "RENAMED.txt", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(await fs.readFile(path.join(source!.worktreePath!, "RENAMED.txt"), "utf8")).toBe(
+      "source",
+    );
+    await page.reload();
+    await openSourceFiles();
+    await expect(page.getByRole("button", { name: "RENAMED.txt", exact: true })).toBeVisible();
+    await expect(file).toHaveCount(0);
+
+    await page.getByRole("button", { name: "RENAMED.txt", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+    await dialog.getByLabel("File name").fill("wrong-workspace.txt");
+    // A selection change can arrive from outside this modal (e.g. another
+    // navigation control). Exercise the renderer's real selection store.
+    await page.evaluate(
+      async ({ projectId, environmentId }) => {
+        const modulePath = "/src/stores/uiStore.ts";
+        const { useUIStore } = await import(modulePath);
+        useUIStore.getState().selectProjectAndEnvironment(projectId, environmentId);
+      },
+      { projectId: fixture.id, environmentId: other!.id },
+    );
+    await expect(dialog).not.toBeVisible();
+    await expect(file).toBeVisible();
+    expect(await fs.readdir(other!.worktreePath!)).toContain("rename-source.txt");
+    expect(await fs.readdir(other!.worktreePath!)).not.toContain("wrong-workspace.txt");
+    await page.getByText(source!.name, { exact: true }).first().click();
+    await expect(page.getByRole("button", { name: "RENAMED.txt", exact: true })).toBeVisible();
+  } finally {
+    for (const environment of environments) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+  }
+});
+
 test("signed-out Codex recovery and account reads survive reload and environment switches", async ({
   page,
 }) => {

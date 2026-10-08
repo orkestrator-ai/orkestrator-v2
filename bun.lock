@@ -37,7 +37,7 @@
     },
     "apps/backend": {
       "name": "@orkestrator/backend",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@modelcontextprotocol/node": "2.0.0",
         "@modelcontextprotocol/server": "2.0.0",
@@ -58,7 +58,7 @@
     },
     "apps/desktop": {
       "name": "@orkestrator/desktop",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@orkestrator/backend": "workspace:*",
         "@orkestrator/protocol": "workspace:*",
@@ -74,7 +74,7 @@
     },
     "apps/web": {
       "name": "@orkestrator/web",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -141,7 +141,7 @@
     },
     "apps/web-public": {
       "name": "@orkestrator/web-public",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/web": "workspace:*",
@@ -161,7 +161,7 @@
     },
     "bridges/acp-bridge": {
       "name": "acp-bridge",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@agentclientprotocol/sdk": "1.5.1",
         "@orkestrator/protocol": "workspace:*",
@@ -174,7 +174,7 @@
     },
     "bridges/claude-bridge": {
       "name": "claude-bridge",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.292",
         "@anthropic-ai/sdk": "0.131.0",
@@ -192,7 +192,7 @@
     },
     "bridges/codex-bridge": {
       "name": "codex-bridge",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@hono/node-server": "^1.19.17",
         "@orkestrator/protocol": "workspace:*",
@@ -206,7 +206,7 @@
     },
     "bridges/cursor-bridge": {
       "name": "cursor-bridge",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@cursor/sdk": "1.0.36",
         "@modelcontextprotocol/client": "2.0.0",
@@ -220,7 +220,7 @@
     },
     "bridges/pi-bridge": {
       "name": "pi-bridge",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@earendil-works/pi-agent-core": "1.0.4",
         "@earendil-works/pi-ai": "1.0.4",
@@ -237,7 +237,7 @@
     },
     "packages/cli": {
       "name": "orkestrator",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "bin": {
         "orkestrator": "bin/orkestrator.js",
       },
@@ -253,11 +253,11 @@
     },
     "packages/protocol": {
       "name": "@orkestrator/protocol",
-      "version": "2.19.11",
+      "version": "2.19.12",
     },
     "packages/toolchain": {
       "name": "@orkestrator/toolchain",
-      "version": "2.19.11",
+      "version": "2.19.12",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
         "tar-stream": "3.2.1",

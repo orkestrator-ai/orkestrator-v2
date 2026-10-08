@@ -2,13 +2,23 @@
 
 /**
  * Generates the prompt for the PR creation workflow.
- * This prompt instructs Claude to commit all changes, push, and create a PR.
+ * This prompt instructs the agent to commit relevant changes (if any), push,
+ * and create a PR from the commits ahead of the target branch.
  *
  * Used by the manual "Create PR" action bar button and by the Multi Review
  * auto-PR handoff, so both launch exactly the same workflow.
  */
 export function createPRPrompt(targetBranch: string): string {
   return `You are performing a complete PR creation workflow. Execute these steps in order:
+
+## Before You Start: Work Out What the PR Contains
+
+The PR is made of the commits on the current branch that are not on \`${targetBranch}\`, plus any relevant uncommitted changes. A clean working tree does NOT mean there is nothing to do.
+1. Run \`git status --porcelain\` to find uncommitted changes
+2. Run \`git fetch origin ${targetBranch}\`, then \`git log origin/${targetBranch}..HEAD --oneline\` to find commits already on this branch (use \`${targetBranch}..HEAD\` if there is no remote copy)
+3. Only stop early if there are no relevant uncommitted changes AND no commits ahead of \`${targetBranch}\`; then report that there is nothing to open a PR for
+4. Before either committing changes or pushing existing commits, run \`git branch --show-current\`. If it prints nothing (a detached HEAD) or \`${targetBranch}\` — as it does when working directly in the project's main checkout — create and switch to a new descriptive branch with \`git switch -c <type>/<short-description>\`; existing commits and uncommitted changes carry over. Never commit the PR's changes onto \`${targetBranch}\`
+5. After branch preparation, if there are no relevant uncommitted changes but the branch has commits ahead of \`${targetBranch}\`, skip Steps 1 and 2 — do not create an empty commit — and continue from Step 3 with the existing commits
 
 ## Step 1: Stage Relevant Changes Safely
 
@@ -23,15 +33,16 @@ Create a deliberate staging set:
 
 ## Step 2: Create Commit
 
-Make sure the work is on its own branch, then create a well-formatted commit with all staged changes:
-1. Run \`git branch --show-current\`. If it prints nothing (a detached HEAD) or \`${targetBranch}\` — as it does when working directly in the project's main checkout — create and switch to a new descriptive branch first with \`git switch -c <type>/<short-description>\`; the staged changes carry over. Never commit the PR's changes onto \`${targetBranch}\`
-2. Run \`git diff --cached\` to review what will be committed
-3. Create a commit with a well-formatted message following conventional commit format:
+Skip this step if nothing is staged and the branch already has commits ahead of \`${targetBranch}\`.
+
+Create a well-formatted commit with all staged changes on the branch prepared under "Before You Start":
+1. Run \`git diff --cached\` to review what will be committed
+2. Create a commit with a well-formatted message following conventional commit format:
    - First line: type(scope): brief description
    - Blank line
    - Bullet points describing the key changes
-4. Do NOT reference Claude or add Claude as a contributor
-5. Do NOT use --no-verify or skip any hooks
+3. Do NOT reference Claude or add Claude as a contributor
+4. Do NOT use --no-verify or skip any hooks
 
 ## Step 3: Push to Remote
 
@@ -47,6 +58,7 @@ Create a PR against the \`${targetBranch}\` branch:
 2. Run \`git log ${targetBranch}..HEAD --oneline\` to see all commits
 3. Create the PR using: \`gh pr create --base ${targetBranch} --fill\`
    - If --fill doesn't provide enough context, use --title and --body with a detailed description
+   - If a PR already exists for this branch, do not create another; report the existing PR URL instead
 4. The PR description should:
    - Summarize the key changes and their purpose
    - List the main features or fixes included
@@ -58,5 +70,5 @@ After completing all steps:
 1. Confirm each step completed successfully
 2. Provide the PR URL at the end so the user can review it
 
-Begin by running git status to understand the current state.`;
+Begin with the checks under "Before You Start".`;
 }

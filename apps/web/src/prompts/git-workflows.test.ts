@@ -246,6 +246,51 @@ describe("createPRPrompt", () => {
     expect(result).toContain("git diff origin/develop...HEAD");
   });
 
+  test("opens a PR from existing commits when the working tree is clean", () => {
+    const result = createPRPrompt("develop");
+    expect(result).toContain("A clean working tree does NOT mean there is nothing to do");
+    expect(result).toContain("git log origin/develop..HEAD --oneline");
+    expect(result).toContain("skip Steps 1 and 2 — do not create an empty commit");
+    expect(result).toContain("no relevant uncommitted changes AND no commits ahead of `develop`");
+    expect(result.indexOf("## Before You Start")).toBeLessThan(
+      result.indexOf("## Step 1: Stage Relevant Changes Safely"),
+    );
+  });
+
+  test.each(["main", "develop"])(
+    "prepares target-branch and detached-HEAD existing commits before skipping to push (base: %s)",
+    (targetBranch) => {
+      const result = createPRPrompt(targetBranch);
+      const preflight = result.slice(
+        result.indexOf("## Before You Start"),
+        result.indexOf("## Step 1: Stage Relevant Changes Safely"),
+      );
+      const branchPreparation =
+        "Before either committing changes or pushing existing commits, run `git branch --show-current`";
+      const createBranch = "git switch -c <type>/<short-description>";
+      const skipCommits = "skip Steps 1 and 2";
+
+      expect(preflight).toContain(branchPreparation);
+      expect(preflight).toContain(`If it prints nothing (a detached HEAD) or \`${targetBranch}\``);
+      expect(preflight).toContain(createBranch);
+      expect(preflight).toContain("existing commits and uncommitted changes carry over");
+      expect(preflight).toContain(
+        "After branch preparation, if there are no relevant uncommitted changes",
+      );
+      expect(preflight).toContain(skipCommits);
+      expect(preflight.indexOf(branchPreparation)).toBeLessThan(preflight.indexOf(createBranch));
+      expect(preflight.indexOf(createBranch)).toBeLessThan(preflight.indexOf(skipCommits));
+      expect(preflight.indexOf("Only stop early")).toBeLessThan(
+        preflight.indexOf(branchPreparation),
+      );
+    },
+  );
+
+  test("reuses an existing PR instead of creating a duplicate", () => {
+    const result = createPRPrompt("main");
+    expect(result).toContain("If a PR already exists for this branch");
+  });
+
   test("instructs not to reference Claude", () => {
     const result = createPRPrompt("main");
     expect(result).toContain("Do NOT reference Claude");

@@ -40,3 +40,21 @@ The existing Git lock suggests an overlapping Git operation or a stale lock
 inside the test fixture. The isolated pass establishes intermittent behavior,
 but the available evidence does not identify the lock owner. No test assertion,
 timeout or skip was changed.
+
+## Recurrence on 2026-10-08
+
+During capped file-tree validation, `mise run test:logged -- --name full-suite -- mise run test`
+failed this same assertion in 121.94 ms with an existing Git index lock. The backend
+package ran with one Bun worker alongside the web package; the aggregate groups used
+2/3/2/1 worker slots. Backend totals were 5772 passed, 2 failed and 15 skipped.
+
+The owning file passed alone in 2.2 seconds:
+
+```bash
+mise run test:logged -- --name project-home-rerun -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XzVEFK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No assertion, timeout or skip was changed.

@@ -239,6 +239,14 @@ export const FileTreeNode = memo(function FileTreeNode({
           folderRow
         )}
         <CollapsibleContent>
+          {item.truncated && (
+            <p
+              className="py-1 pr-2 text-xs text-muted-foreground"
+              style={{ paddingLeft: paddingLeft + 12 }}
+            >
+              Some folder contents are not shown.
+            </p>
+          )}
           {item.children?.map((child) => (
             <FileTreeNode
               key={child.path}

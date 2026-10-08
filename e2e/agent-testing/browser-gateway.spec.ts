@@ -562,6 +562,110 @@ test("file rename preserves selection, survives reload and cancels on workspace 
   }
 });
 
+test("capped file tree retains source files and shows incomplete folders after reload", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    if (route.request().postDataJSON()?.command === "check_claude_cli") {
+      await route.fulfill({ json: { result: false } });
+    } else {
+      await route.continue();
+    }
+  });
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  )!;
+  expect(fixture).toBeTruthy();
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: fixture.id,
+    name: `capped-files-${Date.now()}`,
+    environmentType: "local",
+    networkAccessMode: "restricted",
+  });
+  try {
+    await invoke("start_environment", { environmentId: environment.id });
+    const hydrated = await invoke<Environment>("get_environment", {
+      environmentId: environment.id,
+    });
+    const root = hydrated.worktreePath!;
+    await fs.mkdir(path.join(root, "build"), { recursive: true });
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.mkdir(path.join(root, "build", "unopened-folder"));
+    await fs.writeFile(path.join(root, "build", "unopened-folder", "hidden.o"), "");
+    await fs.mkdir(path.join(root, "empty-folder"));
+    await fs.writeFile(path.join(root, "src", "cap-source.ts"), "");
+    for (let start = 0; start < 5_100; start += 100) {
+      await Promise.all(
+        Array.from({ length: 100 }, (_, offset) =>
+          fs.writeFile(path.join(root, "build", `artifact-${start + offset}.o`), ""),
+        ),
+      );
+    }
+    const openFiles = async () => {
+      const expand = page.getByRole("button", {
+        name: `Expand project ${fixture.name}`,
+        exact: true,
+      });
+      const entry = page.getByText(environment.name, { exact: true }).first();
+      const projects = page.getByRole("button", {
+        name: "Open projects and environments",
+        exact: true,
+      });
+      if (await projects.isVisible()) await projects.click();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click();
+      const allFiles = page.getByRole("tab", { name: "All files", exact: true });
+      if (!(await allFiles.isVisible())) {
+        const tools = page.getByRole("button", { name: "Open tools", exact: true });
+        if (await tools.isVisible()) await tools.click();
+        await page.getByRole("button", { name: "Show file panel", exact: true }).click();
+      }
+      await allFiles.click();
+    };
+    const expandFolder = async (name: string) => {
+      const folder = page.getByRole("button", { name, exact: true });
+      await expect(folder).toBeVisible();
+      if ((await folder.getAttribute("aria-expanded")) !== "true") {
+        await folder.focus();
+        await page.keyboard.press("Enter");
+      }
+    };
+    await page.reload();
+    await openFiles();
+    await expandFolder("src");
+    await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
+    await expandFolder("empty-folder");
+    await expect(
+      page.getByText("Some folder contents are not shown.", { exact: true }),
+    ).toHaveCount(0);
+    await expandFolder("build");
+    await expect(
+      page.getByText("Some folder contents are not shown.", { exact: true }).first(),
+    ).toBeVisible();
+    await expandFolder("unopened-folder");
+    await expect(
+      page.getByText("Some folder contents are not shown.", { exact: true }),
+    ).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    await openFiles();
+    await expandFolder("build");
+    await expect(
+      page.getByText("Some folder contents are not shown.", { exact: true }).first(),
+    ).toBeVisible();
+    await expandFolder("src");
+    await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
+  } finally {
+    await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+  }
+});
+
 test("signed-out Codex recovery and account reads survive reload and environment switches", async ({
   page,
 }) => {

@@ -57,6 +57,8 @@ export type FileTreeNode = {
   path: string;
   isDirectory: boolean;
   children?: FileTreeNode[];
+  /** Contents were omitted by the node cap or could not be read. */
+  truncated?: boolean;
   extension?: string;
 };
 
@@ -78,6 +80,8 @@ function sortFileTree(nodes: FileTreeNode[]): FileTreeNode[] {
  * record framing. The container already ships Node for the safe base64 reader,
  * so using it here also makes the production traversal directly testable
  * without a Docker daemon or host-specific GNU find extensions.
+ *
+ * The walk is breadth-first for the same reason as {@link buildFileTree}.
  */
 export const CONTAINER_FILE_TREE_LISTER = String.raw`
 const fs = require("node:fs");
@@ -86,32 +90,60 @@ const root = path.resolve(process.argv[1]);
 const limit = Number(process.argv[2]);
 const records = [];
 let count = 0;
+let level = Number.isSafeInteger(limit) && limit > 0 ? [[root, "", 0]] : [];
+const truncated = new Set();
 
-function visit(directory, relativeDirectory) {
-  let entries;
-  try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (count >= limit) return;
-    if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
-    const relativePath = relativeDirectory
-      ? path.posix.join(relativeDirectory, entry.name)
-      : entry.name;
-    if (entry.isDirectory()) {
-      records.push("d\t" + relativePath + "\0");
-      count += 1;
-      visit(path.join(directory, entry.name), relativePath);
-    } else if (entry.isFile()) {
-      records.push("f\t" + relativePath + "\0");
-      count += 1;
+while (level.length && count < limit) {
+  const nextLevel = [];
+  // Reassign unused shares before descending, retaining only bounded cursors.
+  while (level.length && count < limit) {
+    const deferred = [];
+    for (let index = 0; index < level.length && count < limit; index += 1) {
+      const [directory, relativeDirectory, cursor] = level[index];
+      // Reserve a share for every sibling directory at this depth. A wide
+      // generated directory must not spend the source directory's entire share.
+      const quota = Math.ceil((limit - count) / (level.length - index));
+      let entries;
+      try {
+        entries = fs.readdirSync(directory, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      entries.sort((a, b) =>
+        Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+      let added = 0;
+      let complete = true;
+      for (let entryIndex = cursor; entryIndex < entries.length; entryIndex += 1) {
+        const entry = entries[entryIndex];
+        if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
+        if (!entry.isDirectory() && !entry.isFile()) continue;
+        if (added >= quota) {
+          complete = false;
+          deferred.push([directory, relativeDirectory, entryIndex]);
+          break;
+        }
+        const relativePath = relativeDirectory
+          ? path.posix.join(relativeDirectory, entry.name)
+          : entry.name;
+        records.push((entry.isDirectory() ? "d\t" : "f\t") + relativePath + "\0");
+        count += 1;
+        added += 1;
+        if (entry.isDirectory()) {
+          truncated.add(relativePath);
+          nextLevel.push([path.join(directory, entry.name), relativePath, 0]);
+        }
+      }
+      if (complete) truncated.delete(relativeDirectory);
     }
+    level = deferred;
   }
+  level = nextLevel;
 }
 
-if (Number.isSafeInteger(limit) && limit > 0) visit(root, "");
+// Metadata records do not spend the node budget; there is at most one per
+// directory node. Unopened and unreadable directories remain incomplete.
+for (const relativePath of truncated) records.push("t\t" + relativePath + "\0");
+
 process.stdout.write(records.join(""));
 `.trim();
 
@@ -131,7 +163,7 @@ export function parseContainerFileTree(output: string): FileTreeNode[] {
     const separator = record.indexOf("\t");
     const entryType = separator === -1 ? "" : record.slice(0, separator);
     const relativePath = separator === -1 ? "" : record.slice(separator + 1);
-    if ((entryType !== "d" && entryType !== "f") || !relativePath) {
+    if ((entryType !== "d" && entryType !== "f" && entryType !== "t") || !relativePath) {
       throw new Error("Malformed container file tree entry");
     }
 
@@ -145,6 +177,13 @@ export function parseContainerFileTree(output: string): FileTreeNode[] {
       continue;
     }
     if (validatedPath !== relativePath || UNSAFE_CONTAINER_TREE_PATH_CHARS.test(relativePath)) {
+      continue;
+    }
+
+    if (entryType === "t") {
+      const directory = directories.get(relativePath);
+      if (!directory) throw new Error("Malformed container file tree: missing truncated directory");
+      directory.truncated = true;
       continue;
     }
 
@@ -177,42 +216,94 @@ export function parseContainerFileTree(output: string): FileTreeNode[] {
  * budget here, opening the files panel on a generated or dependency-heavy
  * worktree recursively read every directory and retained an unbounded response
  * object before any bytes crossed IPC.
+ *
+ * Traverse breadth-first and reserve a share of the remaining budget for each
+ * directory at the current depth. Partial, unopened and unreadable directories
+ * carry explicit metadata so a capped listing never presents them as empty.
  */
 export async function buildFileTree(
   rootPath: string,
-  relativePath = "",
   budget: { remaining: number } = { remaining: MAX_FILE_TREE_NODES },
 ): Promise<FileTreeNode[]> {
-  if (budget.remaining <= 0) return [];
-  const fullPath = path.join(rootPath, relativePath);
-  recurringWorkMetrics.work("directory-read");
-  const entries = await fs.readdir(fullPath, { withFileTypes: true });
-  const nodes: FileTreeNode[] = [];
-  for (const entry of entries) {
-    if (budget.remaining <= 0) break;
-    // Workspace symlinks are not valid picker targets. In addition to keeping
-    // the tree inside its declared root, skipping them here prevents recursive
-    // traversal if platform Dirent semantics ever change.
-    if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
-    budget.remaining -= 1;
-    const childRelativePath = path.join(relativePath, entry.name);
-    if (entry.isDirectory()) {
-      nodes.push({
-        name: entry.name,
-        path: childRelativePath,
-        isDirectory: true,
-        children: await buildFileTree(rootPath, childRelativePath, budget),
-      });
-    } else {
-      nodes.push({
-        name: entry.name,
-        path: childRelativePath,
-        isDirectory: false,
-        extension: path.extname(entry.name),
-      });
+  const roots: FileTreeNode[] = [];
+  type Directory = {
+    relativePath: string;
+    nodes: FileTreeNode[];
+    node?: FileTreeNode;
+    cursor: number;
+  };
+  let level: Directory[] = [{ relativePath: "", nodes: roots, cursor: 0 }];
+  while (level.length > 0 && budget.remaining > 0) {
+    const nextLevel: Directory[] = [];
+    // Reassign unused shares at this depth before descending. Store only
+    // cursors and reread deferred directories rather than retaining wide lists.
+    while (level.length > 0 && budget.remaining > 0) {
+      const deferred: Directory[] = [];
+      for (let index = 0; index < level.length && budget.remaining > 0; index += 1) {
+        const directory = level[index]!;
+        const { relativePath, nodes, node, cursor } = directory;
+        const quota = Math.ceil(budget.remaining / (level.length - index));
+        recurringWorkMetrics.work("directory-read");
+        let entries;
+        try {
+          entries = await fs.readdir(path.join(rootPath, relativePath), { withFileTypes: true });
+        } catch (error) {
+          if (!node) throw error;
+          continue;
+        }
+        entries.sort(
+          (a, b) =>
+            Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name),
+        );
+        let added = 0;
+        let complete = true;
+        for (let entryIndex = cursor; entryIndex < entries.length; entryIndex += 1) {
+          const entry = entries[entryIndex]!;
+          // Symlinks are not valid picker targets and must never escape the root.
+          if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) {
+            continue;
+          }
+          if (!entry.isDirectory() && !entry.isFile()) continue;
+          if (added >= quota) {
+            complete = false;
+            deferred.push({ ...directory, cursor: entryIndex });
+            break;
+          }
+          budget.remaining -= 1;
+          added += 1;
+          const childRelativePath = path.join(relativePath, entry.name);
+          if (entry.isDirectory()) {
+            const children: FileTreeNode[] = [];
+            const child: FileTreeNode = {
+              name: entry.name,
+              path: childRelativePath,
+              isDirectory: true,
+              children,
+              truncated: true,
+            };
+            nodes.push(child);
+            nextLevel.push({
+              relativePath: childRelativePath,
+              nodes: children,
+              node: child,
+              cursor: 0,
+            });
+          } else {
+            nodes.push({
+              name: entry.name,
+              path: childRelativePath,
+              isDirectory: false,
+              extension: path.extname(entry.name),
+            });
+          }
+        }
+        if (node && complete) delete node.truncated;
+      }
+      level = deferred;
     }
+    level = nextLevel;
   }
-  return sortFileTreeLevel(nodes);
+  return sortFileTree(roots);
 }
 
 export type GitFileChange = {

@@ -944,6 +944,65 @@ sleep 5
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
   });
 
+  test("HTTP client serializes terminal writes and coalesces input typed meanwhile", async () => {
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const bodies: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const releases: Array<() => void> = [];
+    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return Response.json({ result: { delivered: true } });
+    }) as unknown as typeof fetch;
+
+    const writes = ["a", "b", "c"].map((data) =>
+      client.invoke("terminal_write", { sessionId: "remote-1", data }),
+    );
+    const otherTerminal = client.invoke("terminal_write", { sessionId: "remote-2", data: "z" });
+    await Bun.sleep(0);
+    // One in flight per terminal; other terminals and commands are not held up.
+    expect(bodies.map((body) => body.args)).toEqual([
+      { sessionId: "remote-1", data: "a" },
+      { sessionId: "remote-2", data: "z" },
+    ]);
+
+    releases.shift()!();
+    await Bun.sleep(0);
+    expect(bodies[2]?.args).toEqual({ sessionId: "remote-1", data: "bc" });
+    for (const release of releases.splice(0)) release();
+    await expect(Promise.all([...writes, otherTerminal])).resolves.toEqual(
+      Array.from({ length: 4 }, () => ({ delivered: true })),
+    );
+  });
+
+  test("HTTP client fails terminal input queued behind a failed write", async () => {
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const sent: string[] = [];
+    let failFirst!: () => void;
+    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+      const data = String(JSON.parse(String(init?.body)).args.data);
+      sent.push(data);
+      if (sent.length === 1) {
+        await new Promise<void>((resolve) => (failFirst = resolve));
+        return new Response("gone", { status: 502 });
+      }
+      return Response.json({ result: { delivered: true } });
+    }) as unknown as typeof fetch;
+
+    const first = client.invoke("terminal_write", { sessionId: "remote-1", data: "a" });
+    const queued = client.invoke("terminal_write", { sessionId: "remote-1", data: "b" });
+    await Bun.sleep(0);
+    failFirst();
+    await expect(Promise.all([first.catch(String), queued.catch(String)])).resolves.toEqual([
+      "Error: Backend request failed with HTTP 502",
+      "Error: Backend request failed with HTTP 502",
+    ]);
+    // The queue recovers for the next keystroke.
+    await expect(
+      client.invoke("terminal_write", { sessionId: "remote-1", data: "c" }),
+    ).resolves.toEqual({ delivered: true });
+    expect(sent).toEqual(["a", "c"]);
+  });
+
   test("delivers a legitimate event frame larger than 1 MiB", async () => {
     useNativeWebPlatform();
     const payload = "y".repeat(1.5 * 1024 * 1024);

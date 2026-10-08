@@ -274,16 +274,95 @@ export function createBackendProcessEnvironment(
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 /** Match SSE_CLIENT_HARD_BUFFER_BYTES so a legitimate snapshot is not dropped. */
 export const MAX_BACKEND_EVENT_FRAME_BYTES = 8 * 1024 * 1024;
+/** Matches the browser gateway's TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES. */
+export const MAX_TERMINAL_WRITE_BATCH_BYTES = 64 * 1024;
+
+type TerminalWriteBatch = {
+  data: string;
+  bytes: number;
+  waiters: Array<{ resolve: (result: unknown) => void; reject: (error: unknown) => void }>;
+};
+
+type TerminalWriteQueue = { sending: boolean; batches: TerminalWriteBatch[] };
 
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
+  private readonly terminalWrites = new Map<string, TerminalWriteQueue>();
 
   constructor(
     private baseUrl: string,
     private token: string,
   ) {}
 
-  async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+    if (
+      (command === "terminal_write" || command === "local_terminal_write") &&
+      typeof args.sessionId === "string" &&
+      typeof args.data === "string"
+    ) {
+      return this.enqueueTerminalWrite(command, args.sessionId, args.data) as Promise<T>;
+    }
+    return this.request<T>(command, args);
+  }
+
+  /**
+   * Every keystroke is its own write, and concurrent fetches share no ordering:
+   * undici spreads them across pooled connections, so a remote backend could
+   * apply "ab" as "ba". One write per terminal is in flight at a time, and
+   * keystrokes typed meanwhile coalesce into the next request so a slow link
+   * costs one round trip per batch rather than per character.
+   */
+  private enqueueTerminalWrite(command: string, sessionId: string, data: string): Promise<unknown> {
+    const key = `${command}\0${sessionId}`;
+    let queue = this.terminalWrites.get(key);
+    if (!queue) {
+      queue = { sending: false, batches: [] };
+      this.terminalWrites.set(key, queue);
+    }
+    const bytes = Buffer.byteLength(data, "utf8");
+    return new Promise((resolve, reject) => {
+      // The in-flight batch has already been shifted off, so the tail is always
+      // still open for more input.
+      let batch = queue.batches.at(-1);
+      if (!batch || (batch.bytes > 0 && batch.bytes + bytes > MAX_TERMINAL_WRITE_BATCH_BYTES)) {
+        batch = { data: "", bytes: 0, waiters: [] };
+        queue.batches.push(batch);
+      }
+      batch.data += data;
+      batch.bytes += bytes;
+      batch.waiters.push({ resolve, reject });
+      if (!queue.sending) void this.drainTerminalWrites(key, command, sessionId, queue);
+    });
+  }
+
+  private async drainTerminalWrites(
+    key: string,
+    command: string,
+    sessionId: string,
+    queue: TerminalWriteQueue,
+  ): Promise<void> {
+    queue.sending = true;
+    try {
+      while (queue.batches.length > 0) {
+        const batch = queue.batches.shift()!;
+        try {
+          const result = await this.request(command, { sessionId, data: batch.data });
+          for (const waiter of batch.waiters) waiter.resolve(result);
+        } catch (error) {
+          // A failed write may or may not have reached the shell. Input queued
+          // behind it must not land without it, so it fails with the same error.
+          for (const dropped of [batch, ...queue.batches.splice(0)]) {
+            for (const waiter of dropped.waiters) waiter.reject(error);
+          }
+        }
+      }
+    } finally {
+      queue.sending = false;
+      if (this.terminalWrites.get(key) === queue) this.terminalWrites.delete(key);
+    }
+  }
+
+  private async request<T>(command: string, args: Record<string, unknown>): Promise<T> {
     const response = await fetch(new URL("/__orkestrator/invoke", this.baseUrl), {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },

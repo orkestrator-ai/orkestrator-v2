@@ -274,20 +274,327 @@ export function createBackendProcessEnvironment(
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 /** Match SSE_CLIENT_HARD_BUFFER_BYTES so a legitimate snapshot is not dropped. */
 export const MAX_BACKEND_EVENT_FRAME_BYTES = 8 * 1024 * 1024;
+/** Matches the browser gateway's TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES. */
+export const MAX_TERMINAL_WRITE_BATCH_BYTES = 64 * 1024;
+
+export const MAX_TERMINAL_QUEUED_BYTES = 1024 * 1024;
+export const MAX_TERMINAL_QUEUE_OPERATIONS = 256;
+export const MAX_TERMINAL_QUEUE_WAITERS = 1024;
+export const MAX_TERMINAL_QUEUES = 1024;
+export const TERMINAL_SEND_TIMEOUT_MS = 30_000;
+
+type TerminalWaiter = {
+  resolve: (result: unknown) => void;
+  reject: (error: unknown) => void;
+  remaining: number;
+};
+
+type TerminalOperation =
+  | { kind: "write"; data: string; bytes: number; waiters: Set<TerminalWaiter> }
+  | {
+      kind: "resize" | "close" | "start";
+      command: string;
+      args: Record<string, unknown>;
+      waiter: TerminalWaiter;
+    };
+
+type TerminalWriteQueue = {
+  sending: boolean;
+  operations: TerminalOperation[];
+  bytes: number;
+  operationCount: number;
+  waiters: Set<TerminalWaiter>;
+  failure: unknown;
+  failed: boolean;
+  closed: boolean;
+};
+
+/** Split without dividing a UTF-8 code point (including surrogate pairs). */
+function splitTerminalInput(data: string): Array<{ data: string; bytes: number }> {
+  const chunks: Array<{ data: string; bytes: number }> = [];
+  let start = 0;
+  let end = 0;
+  let bytes = 0;
+  for (const character of data) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > MAX_TERMINAL_WRITE_BATCH_BYTES) {
+      chunks.push({ data: data.slice(start, end), bytes });
+      start = end;
+      bytes = 0;
+    }
+    bytes += size;
+    end += character.length;
+  }
+  chunks.push({ data: data.slice(start), bytes });
+  return chunks;
+}
+
+function terminalLifecycle(command: string): {
+  writeCommand: string;
+  kind: "resize" | "close" | "start";
+} | null {
+  switch (command) {
+    case "terminal_resize":
+      return { writeCommand: "terminal_write", kind: "resize" };
+    case "detach_terminal":
+      return { writeCommand: "terminal_write", kind: "close" };
+    case "start_terminal_session":
+      return { writeCommand: "terminal_write", kind: "start" };
+    case "local_terminal_resize":
+      return { writeCommand: "local_terminal_write", kind: "resize" };
+    case "close_local_terminal_session":
+      return { writeCommand: "local_terminal_write", kind: "close" };
+    case "start_local_terminal_session":
+      return { writeCommand: "local_terminal_write", kind: "start" };
+    default:
+      return null;
+  }
+}
 
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
+  private readonly terminalWrites = new Map<string, TerminalWriteQueue>();
+
+  private readonly terminalSendTimeoutMs: number;
 
   constructor(
     private baseUrl: string,
     private token: string,
-  ) {}
+    options: { terminalSendTimeoutMs?: number } = {},
+  ) {
+    this.terminalSendTimeoutMs = options.terminalSendTimeoutMs ?? TERMINAL_SEND_TIMEOUT_MS;
+    if (!Number.isFinite(this.terminalSendTimeoutMs) || this.terminalSendTimeoutMs <= 0) {
+      throw new RangeError("Terminal send timeout must be positive");
+    }
+  }
 
-  async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+    if (
+      (command === "terminal_write" || command === "local_terminal_write") &&
+      typeof args.sessionId === "string" &&
+      typeof args.data === "string"
+    ) {
+      return this.enqueueTerminalWrite(command, args.sessionId, args.data) as Promise<T>;
+    }
+    const lifecycle = terminalLifecycle(command);
+    if (lifecycle && typeof args.sessionId === "string") {
+      return this.enqueueTerminalLifecycle(command, args, args.sessionId, lifecycle) as Promise<T>;
+    }
+    return this.request<T>(command, args);
+  }
+
+  private terminalQueue(key: string): TerminalWriteQueue {
+    const existing = this.terminalWrites.get(key);
+    if (existing) return existing;
+    // Never evict a failure/close fence to make room for another terminal.
+    if (this.terminalWrites.size >= MAX_TERMINAL_QUEUES) {
+      throw new Error("Terminal input queue capacity reached; reconnect to the backend");
+    }
+    const queue: TerminalWriteQueue = {
+      sending: false,
+      operations: [],
+      bytes: 0,
+      operationCount: 0,
+      waiters: new Set(),
+      failure: null,
+      failed: false,
+      closed: false,
+    };
+    this.terminalWrites.set(key, queue);
+    return queue;
+  }
+
+  /** Accepted writes and lifecycle commands share one ordered, bounded queue. */
+  private enqueueTerminalWrite(command: string, sessionId: string, data: string): Promise<unknown> {
+    const key = `${command}\0${sessionId}`;
+    return new Promise((resolve, reject) => {
+      const queue = this.terminalQueue(key);
+      if (queue.failed) {
+        reject(queue.failure);
+        return;
+      }
+      if (queue.closed) {
+        reject(new Error("Terminal input is closed until the session restarts"));
+        return;
+      }
+      const bytes = Buffer.byteLength(data, "utf8");
+      if (
+        queue.bytes + bytes > MAX_TERMINAL_QUEUED_BYTES ||
+        queue.waiters.size >= MAX_TERMINAL_QUEUE_WAITERS
+      ) {
+        const error = new Error(
+          "Terminal input queue limit exceeded; restart the session before sending more input",
+        );
+        this.failTerminalWrites(queue, error);
+        reject(error);
+        return;
+      }
+      const chunks = splitTerminalInput(data);
+      const tail = queue.operations.at(-1);
+      const coalesces =
+        tail?.kind === "write" && tail.bytes + chunks[0]!.bytes <= MAX_TERMINAL_WRITE_BATCH_BYTES;
+      if (
+        queue.operationCount + chunks.length - Number(coalesces) >
+        MAX_TERMINAL_QUEUE_OPERATIONS
+      ) {
+        const error = new Error(
+          "Terminal input queue operation limit exceeded; restart the session before sending more input",
+        );
+        this.failTerminalWrites(queue, error);
+        reject(error);
+        return;
+      }
+      const waiter: TerminalWaiter = { resolve, reject, remaining: chunks.length };
+      queue.waiters.add(waiter);
+      queue.bytes += bytes;
+      for (const chunk of chunks) {
+        const batch = queue.operations.at(-1);
+        if (
+          batch?.kind === "write" &&
+          batch.bytes + chunk.bytes <= MAX_TERMINAL_WRITE_BATCH_BYTES
+        ) {
+          batch.data += chunk.data;
+          batch.bytes += chunk.bytes;
+          batch.waiters.add(waiter);
+        } else {
+          queue.operations.push({ kind: "write", ...chunk, waiters: new Set([waiter]) });
+          queue.operationCount += 1;
+        }
+      }
+      if (!queue.sending) void this.drainTerminalWrites(key, command, sessionId, queue);
+    });
+  }
+
+  private enqueueTerminalLifecycle(
+    command: string,
+    args: Record<string, unknown>,
+    sessionId: string,
+    lifecycle: NonNullable<ReturnType<typeof terminalLifecycle>>,
+  ): Promise<unknown> {
+    const key = `${lifecycle.writeCommand}\0${sessionId}`;
+    return new Promise((resolve, reject) => {
+      const queue = this.terminalQueue(key);
+      if (
+        queue.operationCount >= MAX_TERMINAL_QUEUE_OPERATIONS ||
+        queue.waiters.size >= MAX_TERMINAL_QUEUE_WAITERS
+      ) {
+        reject(new Error("Terminal lifecycle queue limit exceeded"));
+        return;
+      }
+      const waiter: TerminalWaiter = { resolve, reject, remaining: 1 };
+      queue.waiters.add(waiter);
+      queue.operations.push({ kind: lifecycle.kind, command, args: { ...args }, waiter });
+      queue.operationCount += 1;
+      // Close fences input immediately. Only a successful explicit start reopens it.
+      if (lifecycle.kind === "close") queue.closed = true;
+      if (!queue.sending)
+        void this.drainTerminalWrites(key, lifecycle.writeCommand, sessionId, queue);
+    });
+  }
+
+  private failTerminalWrites(queue: TerminalWriteQueue, error: unknown): void {
+    queue.failure = error;
+    queue.failed = true;
+    // Keep lifecycle operations: users must still be able to close/restart.
+    queue.operations = queue.operations.filter((operation) => {
+      if (operation.kind !== "write") return true;
+      queue.bytes -= operation.bytes;
+      queue.operationCount -= 1;
+      for (const waiter of operation.waiters) {
+        if (queue.waiters.delete(waiter)) waiter.reject(error);
+      }
+      return false;
+    });
+  }
+
+  private async drainTerminalWrites(
+    key: string,
+    command: string,
+    sessionId: string,
+    queue: TerminalWriteQueue,
+  ): Promise<void> {
+    queue.sending = true;
+    try {
+      while (queue.operations.length > 0) {
+        const operation = queue.operations.shift()!;
+        try {
+          const result = await this.terminalRequest(
+            operation.kind === "write" ? command : operation.command,
+            operation.kind === "write" ? { sessionId, data: operation.data } : operation.args,
+          );
+          if (operation.kind === "write") {
+            if ((result as { delivered?: boolean } | null)?.delivered === false) {
+              throw new Error("Terminal input was not delivered to the shell");
+            }
+            for (const waiter of operation.waiters) {
+              waiter.remaining -= 1;
+              if (waiter.remaining === 0 && queue.waiters.delete(waiter)) waiter.resolve(result);
+            }
+          } else {
+            if (operation.kind === "start") {
+              queue.failure = null;
+              queue.failed = false;
+              queue.closed = queue.operations.some((pending) => pending.kind === "close");
+            }
+            if (operation.kind === "close") {
+              queue.closed = true;
+              queue.failure = null;
+              queue.failed = false;
+            }
+            queue.waiters.delete(operation.waiter);
+            operation.waiter.resolve(result);
+          }
+        } catch (error) {
+          if (operation.kind === "write") {
+            this.failTerminalWrites(queue, error);
+            for (const waiter of operation.waiters) {
+              if (queue.waiters.delete(waiter)) waiter.reject(error);
+            }
+          } else {
+            // A lost lifecycle response also leaves terminal state uncertain.
+            this.failTerminalWrites(queue, error);
+            queue.waiters.delete(operation.waiter);
+            operation.waiter.reject(error);
+          }
+        } finally {
+          queue.operationCount -= 1;
+          if (operation.kind === "write") queue.bytes -= operation.bytes;
+        }
+      }
+    } finally {
+      queue.sending = false;
+      if (!queue.failed && !queue.closed) this.terminalWrites.delete(key);
+    }
+  }
+
+  /** The deadline includes response decoding, even if fetch ignores abort. */
+  private terminalRequest(command: string, args: Record<string, unknown>): Promise<unknown> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(
+          "Terminal command send timed out; restart the session before sending more input",
+        );
+        controller.abort(error);
+        reject(error);
+      }, this.terminalSendTimeoutMs);
+    });
+    return Promise.race([this.request(command, args, controller.signal), timeout]).finally(() =>
+      clearTimeout(timer),
+    );
+  }
+
+  private async request<T>(
+    command: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const response = await fetch(new URL("/__orkestrator/invoke", this.baseUrl), {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ command, args }),
+      signal,
     });
     const payload = (await response.json().catch((error) => {
       if (!response.ok) return {};

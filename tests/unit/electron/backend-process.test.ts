@@ -979,7 +979,9 @@ sleep 5
     const sent: string[] = [];
     let failFirst!: () => void;
     globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
-      const data = String(JSON.parse(String(init?.body)).args.data);
+      const body = JSON.parse(String(init?.body));
+      if (body.command !== "terminal_write") return Response.json({ result: undefined });
+      const data = String(body.args.data);
       sent.push(data);
       if (sent.length === 1) {
         await new Promise<void>((resolve) => (failFirst = resolve));
@@ -996,7 +998,10 @@ sleep 5
       "Error: Backend request failed with HTTP 502",
       "Error: Backend request failed with HTTP 502",
     ]);
-    // The queue recovers for the next keystroke.
+    await expect(
+      client.invoke("terminal_write", { sessionId: "remote-1", data: "c" }),
+    ).rejects.toThrow("HTTP 502");
+    await client.invoke("start_terminal_session", { sessionId: "remote-1" });
     await expect(
       client.invoke("terminal_write", { sessionId: "remote-1", data: "c" }),
     ).resolves.toEqual({ delivered: true });

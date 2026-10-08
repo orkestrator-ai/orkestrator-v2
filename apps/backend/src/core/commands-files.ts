@@ -78,6 +78,8 @@ function sortFileTree(nodes: FileTreeNode[]): FileTreeNode[] {
  * record framing. The container already ships Node for the safe base64 reader,
  * so using it here also makes the production traversal directly testable
  * without a Docker daemon or host-specific GNU find extensions.
+ *
+ * The walk is breadth-first for the same reason as {@link buildFileTree}.
  */
 export const CONTAINER_FILE_TREE_LISTER = String.raw`
 const fs = require("node:fs");
@@ -86,16 +88,18 @@ const root = path.resolve(process.argv[1]);
 const limit = Number(process.argv[2]);
 const records = [];
 let count = 0;
+const queue = Number.isSafeInteger(limit) && limit > 0 ? [[root, ""]] : [];
 
-function visit(directory, relativeDirectory) {
+for (let index = 0; index < queue.length && count < limit; index += 1) {
+  const [directory, relativeDirectory] = queue[index];
   let entries;
   try {
     entries = fs.readdirSync(directory, { withFileTypes: true });
   } catch {
-    return;
+    continue;
   }
   for (const entry of entries) {
-    if (count >= limit) return;
+    if (count >= limit) break;
     if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
     const relativePath = relativeDirectory
       ? path.posix.join(relativeDirectory, entry.name)
@@ -103,7 +107,7 @@ function visit(directory, relativeDirectory) {
     if (entry.isDirectory()) {
       records.push("d\t" + relativePath + "\0");
       count += 1;
-      visit(path.join(directory, entry.name), relativePath);
+      queue.push([path.join(directory, entry.name), relativePath]);
     } else if (entry.isFile()) {
       records.push("f\t" + relativePath + "\0");
       count += 1;
@@ -111,7 +115,6 @@ function visit(directory, relativeDirectory) {
   }
 }
 
-if (Number.isSafeInteger(limit) && limit > 0) visit(root, "");
 process.stdout.write(records.join(""));
 `.trim();
 
@@ -177,42 +180,49 @@ export function parseContainerFileTree(output: string): FileTreeNode[] {
  * budget here, opening the files panel on a generated or dependency-heavy
  * worktree recursively read every directory and retained an unbounded response
  * object before any bytes crossed IPC.
+ *
+ * The walk is breadth-first so the budget runs out in the deepest levels. A
+ * depth-first walk let the first large directory in readdir order (an ignored
+ * Xcode `build/` or nested agent worktrees) consume the whole budget, and every
+ * later sibling - including shallow source directories - silently vanished.
  */
 export async function buildFileTree(
   rootPath: string,
-  relativePath = "",
   budget: { remaining: number } = { remaining: MAX_FILE_TREE_NODES },
 ): Promise<FileTreeNode[]> {
-  if (budget.remaining <= 0) return [];
-  const fullPath = path.join(rootPath, relativePath);
-  recurringWorkMetrics.work("directory-read");
-  const entries = await fs.readdir(fullPath, { withFileTypes: true });
-  const nodes: FileTreeNode[] = [];
-  for (const entry of entries) {
-    if (budget.remaining <= 0) break;
-    // Workspace symlinks are not valid picker targets. In addition to keeping
-    // the tree inside its declared root, skipping them here prevents recursive
-    // traversal if platform Dirent semantics ever change.
-    if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
-    budget.remaining -= 1;
-    const childRelativePath = path.join(relativePath, entry.name);
-    if (entry.isDirectory()) {
-      nodes.push({
-        name: entry.name,
-        path: childRelativePath,
-        isDirectory: true,
-        children: await buildFileTree(rootPath, childRelativePath, budget),
-      });
-    } else {
-      nodes.push({
-        name: entry.name,
-        path: childRelativePath,
-        isDirectory: false,
-        extension: path.extname(entry.name),
-      });
+  const roots: FileTreeNode[] = [];
+  const queue: Array<{ relativePath: string; nodes: FileTreeNode[] }> = [
+    { relativePath: "", nodes: roots },
+  ];
+  for (let index = 0; index < queue.length && budget.remaining > 0; index += 1) {
+    const { relativePath, nodes } = queue[index]!;
+    recurringWorkMetrics.work("directory-read");
+    const entries = await fs.readdir(path.join(rootPath, relativePath), { withFileTypes: true });
+    for (const entry of entries) {
+      if (budget.remaining <= 0) break;
+      // Workspace symlinks are not valid picker targets. In addition to keeping
+      // the tree inside its declared root, skipping them here prevents recursive
+      // traversal if platform Dirent semantics ever change.
+      if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) {
+        continue;
+      }
+      budget.remaining -= 1;
+      const childRelativePath = path.join(relativePath, entry.name);
+      if (entry.isDirectory()) {
+        const children: FileTreeNode[] = [];
+        nodes.push({ name: entry.name, path: childRelativePath, isDirectory: true, children });
+        queue.push({ relativePath: childRelativePath, nodes: children });
+      } else {
+        nodes.push({
+          name: entry.name,
+          path: childRelativePath,
+          isDirectory: false,
+          extension: path.extname(entry.name),
+        });
+      }
     }
   }
-  return sortFileTreeLevel(nodes);
+  return sortFileTree(roots);
 }
 
 export type GitFileChange = {

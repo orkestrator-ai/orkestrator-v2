@@ -71,6 +71,7 @@ const {
   CONTAINER_FILE_TREE_LISTER,
   CONTAINER_SAFE_BASE64_READER,
   buildContainerSafeBase64Reader,
+  buildFileTree,
   createCommandRegistry,
   parseContainerFileTree,
   __testing: commandTesting,
@@ -539,6 +540,32 @@ describe("backend command I/O coverage", () => {
     const cappedTree = parseContainerFileTree(cappedListing.stdout);
     expect(cappedTree).toHaveLength(1);
     expect(cappedTree[0]).toMatchObject({ isDirectory: true, children: [] });
+  });
+
+  test("spends a capped tree budget breadth-first so a deep directory cannot hide its siblings", async () => {
+    const root = await createTempDir("ork-tree-breadth-first-");
+    await fs.mkdir(path.join(root, "build", "a", "b", "c"), { recursive: true });
+    await fs.writeFile(path.join(root, "build", "a", "b", "c", "artifact.o"), "");
+    await fs.mkdir(path.join(root, "web"));
+    await fs.writeFile(path.join(root, "web", "page.tsx"), "");
+    await fs.writeFile(path.join(root, "README.md"), "");
+
+    const expectedShallowTree = [
+      { name: "build", path: "build", isDirectory: true, children: [] },
+      { name: "web", path: "web", isDirectory: true, children: [] },
+      { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
+    ];
+    expect(await buildFileTree(root, { remaining: 3 })).toEqual(expectedShallowTree);
+
+    const listing = await runCommand("node", ["-e", CONTAINER_FILE_TREE_LISTER, "--", root, "3"]);
+    expect(parseContainerFileTree(listing.stdout)).toEqual(expectedShallowTree);
+
+    const secondLevel = await buildFileTree(root, { remaining: 5 });
+    expect(secondLevel.map((node) => node.children?.map((child) => child.path))).toEqual([
+      ["build/a"],
+      ["web/page.tsx"],
+      undefined,
+    ]);
   });
 
   test("reads base64 only from regular files in workspace storage", async () => {

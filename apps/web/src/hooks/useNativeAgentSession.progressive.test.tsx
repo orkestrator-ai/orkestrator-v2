@@ -707,6 +707,53 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.transcriptAvailability).toBe("unavailable");
   });
 
+  test("a background poll whose delta falls back to a snapshot never raises transcriptRefreshing", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const seen: boolean[] = [];
+    const { result } = renderHook(() => {
+      const session = useNativeAgentSession<TestMessage>({
+        platform: "codex",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive: true,
+        enabled: true,
+      });
+      seen.push(session.transcriptRefreshing);
+      return session;
+    });
+    await waitFor(() => expect(result.current.transcriptAvailability).toBe("current"));
+
+    transcriptCalls = [];
+    transcriptUpdates = [
+      () => ({
+        viewVersion: 1,
+        status: "delta",
+        baseToken: "transcript-stale",
+        token: "transcript-2",
+        identity,
+        delta: {
+          messageUpserts: [message("m2")],
+          liveMessageIds: ["m1", "m2"],
+          deletedMessageIds: [],
+          freshness: "current",
+          historyEpoch: "epoch-1",
+          historyComplete: true,
+        },
+      }),
+      () => transcriptSnapshot("transcript-2", [message("m1"), message("m2")]),
+    ];
+    seen.length = 0;
+    await waitFor(
+      () => expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
+      { timeout: IDLE_PROJECTION_REFRESH_MS * 3 },
+    );
+    expect(transcriptCalls[1]?.forceSnapshot).toBe(true);
+    expect(seen).not.toContain(true);
+    expect(result.current.transcriptAvailability).toBe("current");
+  });
+
   test("clears transcriptRefreshing when the transcript read fails", async () => {
     transcriptUpdates = [
       async () => {

@@ -2101,8 +2101,14 @@ export function useNativeAgentSession<TMessage = unknown>({
                 progressiveTranscriptTokenRef.current !== undefined && update.status !== "snapshot",
               );
               if (result === "retry-snapshot") {
-                setTranscriptRefreshing(true);
-                updateProgressiveCache({ transcriptRefreshing: true });
+                // A delta that no longer applies (a trimmed long turn, a moved
+                // base) is routine mid-turn. The held messages stay on screen
+                // until the snapshot replaces them, so a background read must
+                // not flash the skeleton under them on every fallback.
+                if (!background) {
+                  setTranscriptRefreshing(true);
+                  updateProgressiveCache({ transcriptRefreshing: true });
+                }
                 const snapshot = await requestTranscript(true);
                 if (!stillCurrent()) return;
                 result = applyTranscriptUpdate(snapshot, false);

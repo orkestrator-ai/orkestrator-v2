@@ -301,6 +301,25 @@ describe("files panel views", () => {
     expect(onDelete).toHaveBeenCalledWith(["src/App.tsx"]);
   });
 
+  test("FileTreeNode shows incomplete contents after expansion and remount, but not for empty folders", async () => {
+    const incomplete: FileNode = {
+      name: "build",
+      path: "build",
+      isDirectory: true,
+      children: [],
+      truncated: true,
+    };
+    const view = render(<FileTreeNode item={incomplete} depth={0} />);
+    expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "build" }));
+    expect(await screen.findByText("Some folder contents are not shown.")).toBeTruthy();
+    view.unmount();
+    const remounted = render(<FileTreeNode item={incomplete} depth={0} />);
+    expect(await screen.findByText("Some folder contents are not shown.")).toBeTruthy();
+    remounted.rerender(<FileTreeNode item={{ ...incomplete, truncated: undefined }} depth={0} />);
+    expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
+  });
+
   test("FileTreeNode drags a file onto a destination folder", async () => {
     const onMove = mock(() => undefined);
     useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });

@@ -539,7 +539,7 @@ describe("backend command I/O coverage", () => {
     ]);
     const cappedTree = parseContainerFileTree(cappedListing.stdout);
     expect(cappedTree).toHaveLength(1);
-    expect(cappedTree[0]).toMatchObject({ isDirectory: true, children: [] });
+    expect(cappedTree[0]).toMatchObject({ isDirectory: true, children: [], truncated: true });
   });
 
   test("spends a capped tree budget breadth-first so a deep directory cannot hide its siblings", async () => {
@@ -551,8 +551,8 @@ describe("backend command I/O coverage", () => {
     await fs.writeFile(path.join(root, "README.md"), "");
 
     const expectedShallowTree = [
-      { name: "build", path: "build", isDirectory: true, children: [] },
-      { name: "web", path: "web", isDirectory: true, children: [] },
+      { name: "build", path: "build", isDirectory: true, children: [], truncated: true },
+      { name: "web", path: "web", isDirectory: true, children: [], truncated: true },
       { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
     ];
     expect(await buildFileTree(root, { remaining: 3 })).toEqual(expectedShallowTree);
@@ -561,11 +561,124 @@ describe("backend command I/O coverage", () => {
     expect(parseContainerFileTree(listing.stdout)).toEqual(expectedShallowTree);
 
     const secondLevel = await buildFileTree(root, { remaining: 5 });
+    const secondLevelListing = await runCommand("node", [
+      "-e",
+      CONTAINER_FILE_TREE_LISTER,
+      "--",
+      root,
+      "5",
+    ]);
+    expect(parseContainerFileTree(secondLevelListing.stdout)).toEqual(secondLevel);
     expect(secondLevel.map((node) => node.children?.map((child) => child.path))).toEqual([
       ["build/a"],
       ["web/page.tsx"],
       undefined,
     ]);
+  });
+
+  test("shares a partially available second level across wide and source directories in both walkers", async () => {
+    const root = await createTempDir("ork-tree-wide-");
+    await fs.mkdir(path.join(root, "build"));
+    await fs.mkdir(path.join(root, "src"));
+    await fs.writeFile(path.join(root, "src", "app.ts"), "");
+    for (let start = 0; start < 5_100; start += 100) {
+      await Promise.all(
+        Array.from({ length: 100 }, (_, offset) =>
+          fs.writeFile(path.join(root, "build", `artifact-${start + offset}.o`), ""),
+        ),
+      );
+    }
+
+    for (const limit of [4, 5_000]) {
+      const local = await buildFileTree(root, { remaining: limit });
+      const listing = await runCommand("node", [
+        "-e",
+        CONTAINER_FILE_TREE_LISTER,
+        "--",
+        root,
+        String(limit),
+      ]);
+      const container = parseContainerFileTree(listing.stdout);
+      expect(container).toEqual(local);
+      for (const tree of [local, container]) {
+        expect(tree.find((node) => node.path === "src")).toMatchObject({
+          children: [{ path: "src/app.ts" }],
+        });
+        expect(tree.find((node) => node.path === "src")?.truncated).toBeUndefined();
+        expect(tree.find((node) => node.path === "build")?.truncated).toBe(true);
+        const count = tree.reduce((total, node) => total + 1 + (node.children?.length ?? 0), 0);
+        expect(count).toBe(limit);
+      }
+    }
+  }, 15_000);
+
+  test("reassigns unused sibling shares before descending without truncating a tree below the cap", async () => {
+    const root = await createTempDir("ork-tree-unused-share-");
+    await fs.mkdir(path.join(root, "build"));
+    await fs.mkdir(path.join(root, "src"));
+    await fs.writeFile(path.join(root, "src", "app.ts"), "");
+    for (let index = 0; index < 30; index += 1) {
+      await fs.writeFile(path.join(root, "build", `artifact-${index}.o`), "");
+    }
+    const local = await buildFileTree(root, { remaining: 40 });
+    const listing = await runCommand("node", ["-e", CONTAINER_FILE_TREE_LISTER, "--", root, "40"]);
+    expect(parseContainerFileTree(listing.stdout)).toEqual(local);
+    expect(local[0]?.children).toHaveLength(30);
+    expect(local[1]?.children).toHaveLength(1);
+    expect(local.some((node) => node.truncated)).toBe(false);
+  });
+
+  test("distinguishes read-empty folders from unopened folders and complete exact-cap folders", async () => {
+    const root = await createTempDir("ork-tree-empty-");
+    await fs.mkdir(path.join(root, "a-empty"));
+    await fs.mkdir(path.join(root, "b-source"));
+    await fs.writeFile(path.join(root, "b-source", "app.ts"), "");
+
+    for (const limit of [2, 3, 4]) {
+      const local = await buildFileTree(root, { remaining: limit });
+      const listing = await runCommand("node", [
+        "-e",
+        CONTAINER_FILE_TREE_LISTER,
+        "--",
+        root,
+        String(limit),
+      ]);
+      expect(parseContainerFileTree(listing.stdout)).toEqual(local);
+      expect(local[0]?.children).toEqual([]);
+      expect(local[0]?.truncated).toBe(limit === 2 ? true : undefined);
+      expect(local[1]?.truncated).toBe(limit === 2 ? true : undefined);
+      expect(local[1]?.children).toHaveLength(limit === 2 ? 0 : 1);
+    }
+  });
+
+  test("container listing marks an unreadable directory incomplete and still reads its sibling", async () => {
+    const root = await createTempDir("ork-tree-unreadable-");
+    await fs.mkdir(path.join(root, "a-unreadable"));
+    await fs.mkdir(path.join(root, "src"));
+    await fs.writeFile(path.join(root, "src", "app.ts"), "");
+    // Force a deterministic readdir failure even when the runner has elevated
+    // filesystem privileges; keep the production lister itself unchanged.
+    const failDirectoryRead = `
+      const originalRead = require("node:fs").readdirSync;
+      require("node:fs").readdirSync = function(directory, options) {
+        if (require("node:path").basename(directory) === "a-unreadable") {
+          throw new Error("Directory became unavailable");
+        }
+        return originalRead.call(this, directory, options);
+      };
+    `;
+    const listing = await runCommand("node", [
+      "-e",
+      failDirectoryRead + CONTAINER_FILE_TREE_LISTER,
+      "--",
+      root,
+      "4",
+    ]);
+    const tree = parseContainerFileTree(listing.stdout);
+    expect(tree[0]).toMatchObject({ path: "a-unreadable", children: [], truncated: true });
+    expect(tree[1]).toMatchObject({ path: "src", children: [{ path: "src/app.ts" }] });
+    expect(tree[1]?.truncated).toBeUndefined();
+    expect(() => parseContainerFileTree("t\tmissing\0")).toThrow("missing truncated directory");
   });
 
   test("reads base64 only from regular files in workspace storage", async () => {

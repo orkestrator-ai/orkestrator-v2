@@ -47,6 +47,8 @@ export interface FileNode {
   path: string;
   isDirectory: boolean;
   children?: FileNode[];
+  /** Contents were omitted by the node cap or could not be read. */
+  truncated?: boolean;
   extension?: string;
 }
 

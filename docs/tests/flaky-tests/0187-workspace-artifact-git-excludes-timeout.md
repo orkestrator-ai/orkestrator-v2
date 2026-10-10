@@ -1,6 +1,8 @@
 # 0187 — Workspace artifact Git excludes aggregate timeout
 
-Status: open
+- **ID:** 0187
+- **Status:** open
+- **Date observed:** 2026-10-11
 
 ## Observation — 2026-10-11
 

@@ -3,7 +3,30 @@
  * oversized image must not be able to clear it out.
  */
 import { describe, expect, test } from "bun:test";
-import { cacheToolDetails, cachedToolDetails } from "./NativeMessage.shared";
+import { cacheToolDetails, cachedToolDetails, getAgentExpansionKey } from "./NativeMessage.shared";
+import type { NativeAgentActivityPart } from "@/lib/chat/native-message-types";
+
+test("background metadata arriving later preserves an existing durable agent expansion key", () => {
+  const parts: NativeAgentActivityPart[] = [
+    { type: "subagent", content: "Reviewer", subagentId: "agent-1" },
+    {
+      type: "task-group",
+      content: "Tester",
+      task: { type: "tool-invocation", content: "Agent", toolUseId: "tool-1" },
+      childTools: [],
+    },
+  ];
+  const backgroundTask = { id: "background-1", status: "running" as const };
+  for (const part of parts) {
+    const withSnapshot: NativeAgentActivityPart =
+      part.type === "task-group"
+        ? { ...part, task: { ...part.task, backgroundTask } }
+        : { ...part, backgroundTask };
+    expect(getAgentExpansionKey(withSnapshot, "new-row-part")).toBe(
+      getAgentExpansionKey(part, "original-row-part"),
+    );
+  }
+});
 
 describe("tool detail browser cache", () => {
   test("does not retain one oversized detail at the expense of the rest", () => {

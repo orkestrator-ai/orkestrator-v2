@@ -266,6 +266,7 @@ interface AgentPartExtraction {
 function extractPinnedAgentParts(
   parts: NativeMessagePart[],
   anchors: NativeAgentSettleAnchors,
+  sourceMessageId: string,
 ): AgentPartExtraction {
   const retainedParts: NativeMessagePart[] = [];
   const activeParts: NativeAgentActivityPart[] = [];
@@ -273,8 +274,12 @@ function extractPinnedAgentParts(
 
   for (const part of parts) {
     if (isAgentPart(part)) {
+      const launchMessageId =
+        part.sourceMessageId ??
+        (part.type === "task-group" ? part.task.sourceMessageId : undefined) ??
+        sourceMessageId;
       if (isNativeAgentActive(part)) {
-        activeParts.push(part);
+        activeParts.push({ ...part, sourceMessageId: launchMessageId });
         continue;
       }
 
@@ -284,7 +289,11 @@ function extractPinnedAgentParts(
       const settledAt = settledAtOf(part);
       const anchorMessageId = anchors.resolve(settledAt);
       if (anchorMessageId && settledAt) {
-        settledParts.push({ part, anchorMessageId, settledAt });
+        settledParts.push({
+          part: { ...part, sourceMessageId: launchMessageId },
+          anchorMessageId,
+          settledAt,
+        });
         continue;
       }
 
@@ -293,7 +302,7 @@ function extractPinnedAgentParts(
     }
 
     if (part.type === "tool-group") {
-      const extracted = extractPinnedAgentParts(part.parts, anchors);
+      const extracted = extractPinnedAgentParts(part.parts, anchors, sourceMessageId);
       activeParts.push(...extracted.activeParts);
       settledParts.push(...extracted.settledParts);
 
@@ -307,7 +316,7 @@ function extractPinnedAgentParts(
     }
 
     if (part.type === "agent-group") {
-      const extracted = extractPinnedAgentParts(part.parts, anchors);
+      const extracted = extractPinnedAgentParts(part.parts, anchors, sourceMessageId);
       activeParts.push(...extracted.activeParts);
       settledParts.push(...extracted.settledParts);
       const retainedAgentParts = extracted.retainedParts.filter(isAgentPart);
@@ -429,6 +438,7 @@ export function pinNativeAgentParts(
     const { retainedParts, activeParts, settledParts } = extractPinnedAgentParts(
       message.parts,
       anchors,
+      message.id,
     );
 
     if (activeParts.length === 0 && settledParts.length === 0) {
@@ -536,7 +546,8 @@ function agentRowParts(message: NativeMessage): NativeAgentActivityPart[] {
  * consumed by extraction, and the last one can meet the running row at the
  * bottom. Nothing separates them for the reader, so neither does the layout.
  * A run that reaches the running row keeps that row's id; any other keeps its
- * first row's, which is stable because runs only grow at their end.
+ * first row's. Individual disclosures keep their source message identity even
+ * when a transcript row splits the run or the last running child settles.
  */
 function coalesceAdjacentAgentRows(
   messages: NativeMessage[],
@@ -570,6 +581,7 @@ function coalesceAdjacentAgentRows(
         message,
         last.id === ACTIVE_AGENTS_MESSAGE_ID ? ACTIVE_AGENTS_MESSAGE_ID : message.id,
         run.flatMap(agentRowParts),
+        last.id === ACTIVE_AGENTS_MESSAGE_ID ? last.createdAt : message.createdAt,
       ),
     );
   }

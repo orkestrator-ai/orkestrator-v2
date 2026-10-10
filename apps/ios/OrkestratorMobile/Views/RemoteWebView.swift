@@ -283,8 +283,10 @@ struct RemoteWebView: UIViewRepresentable {
             case .timedOut:
                 return NativeGatewayLoginError.timedOut
             case .serverCertificateUntrusted, .serverCertificateHasBadDate,
-                 .serverCertificateHasUnknownRoot, .secureConnectionFailed:
+                 .serverCertificateHasUnknownRoot:
                 return NativeGatewayLoginError.untrustedConnection
+            case .secureConnectionFailed:
+                return NativeGatewayLoginError.secureConnectionFailed
             default:
                 return NativeGatewayLoginError.unreachable
             }
@@ -700,6 +702,7 @@ final class LoginRedirectBlocker: NSObject, URLSessionTaskDelegate {
 enum NativeGatewayLoginError: LocalizedError {
     case timedOut
     case untrustedConnection
+    case secureConnectionFailed
     case unreachable
     case rejectedToken
     case originRejected
@@ -711,6 +714,7 @@ enum NativeGatewayLoginError: LocalizedError {
         switch self {
         case .timedOut: return "The remote machine did not respond within 20 seconds."
         case .untrustedConnection: return "The server’s HTTPS certificate could not be trusted."
+        case .secureConnectionFailed: return "A secure connection could not be established. Check that Tailscale is connected and Tailscale DNS is enabled on this device."
         case .unreachable: return "The remote machine could not be reached. Check Tailscale and try again."
         case .rejectedToken: return "The saved gateway token was rejected."
         case .originRejected: return "The remote machine rejected the native login request."

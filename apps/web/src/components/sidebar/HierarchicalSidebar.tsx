@@ -78,6 +78,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
+import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
@@ -489,9 +490,21 @@ export function HierarchicalSidebar() {
   const collapseEmptyProjects = useUIStore((state) => state.collapseEmptyProjects);
   const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
 
+  // A project home has no row of its own: selecting its project activates it.
+  const sidebarEnvironments = useMemo(
+    () => withoutProjectHomes(allEnvironments),
+    [allEnvironments],
+  );
+  const selectedProjectHomeActive = useMemo(
+    () =>
+      allEnvironments.some(
+        (environment) => environment.id === selectedEnvironmentId && environment.projectHome,
+      ),
+    [allEnvironments, selectedEnvironmentId],
+  );
   const activityEnvironments = useMemo(
-    () => sortEnvironmentsByActivity(allEnvironments, projects),
-    [allEnvironments, projects],
+    () => sortEnvironmentsByActivity(sidebarEnvironments, projects),
+    [sidebarEnvironments, projects],
   );
   const projectsById = useMemo(
     () => new Map(projects.map((project) => [project.id, project])),
@@ -508,8 +521,8 @@ export function HierarchicalSidebar() {
   );
   const totalEnvironmentCount = activityEnvironments.length;
   const waitingEnvironmentCount = useMemo(
-    () => allEnvironments.filter((environment) => environment.hasUnreadWork).length,
-    [allEnvironments],
+    () => sidebarEnvironments.filter((environment) => environment.hasUnreadWork).length,
+    [sidebarEnvironments],
   );
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
@@ -573,19 +586,19 @@ export function HierarchicalSidebar() {
       return;
     }
     // Apply collapse and mark as done
-    const projectsWithEnvs = new Set(allEnvironments.map((e) => e.projectId));
+    const projectsWithEnvs = new Set(sidebarEnvironments.map((e) => e.projectId));
     collapseEmptyProjects(
       projects.map((p) => p.id),
       projectsWithEnvs,
     );
     initialCollapseAppliedRef.current = true;
-  }, [projects, allEnvironments, collapseEmptyProjects]);
+  }, [projects, sidebarEnvironments, collapseEmptyProjects]);
 
   // Group environments by project in one memoized pass, instead of a
   // filter+sort per project per render.
   const environmentsByProject = useMemo(() => {
     const grouped = new Map<string, Environment[]>();
-    for (const environment of allEnvironments) {
+    for (const environment of sidebarEnvironments) {
       const bucket = grouped.get(environment.projectId);
       if (bucket) bucket.push(environment);
       else grouped.set(environment.projectId, [environment]);
@@ -594,7 +607,7 @@ export function HierarchicalSidebar() {
       bucket.sort((a, b) => a.order - b.order);
     }
     return grouped;
-  }, [allEnvironments]);
+  }, [sidebarEnvironments]);
 
   // Get environments for a specific project
   const getProjectEnvironments = useCallback(
@@ -722,7 +735,10 @@ export function HierarchicalSidebar() {
   };
 
   const handleDeleteProject = async (projectId: string) => {
-    const projectEnvs = getProjectEnvironments(projectId);
+    // Includes the project home, which has no sidebar row.
+    const projectEnvs = allEnvironments.filter(
+      (environment) => environment.projectId === projectId,
+    );
     try {
       await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
       // Clean up the loaded projects ref since project is deleted
@@ -975,7 +991,9 @@ export function HierarchicalSidebar() {
       project={project}
       environments={getProjectEnvironments(project.id)}
       isCollapsed={collapsedProjects.includes(project.id)}
-      isSelected={selectedProjectId === project.id && !selectedEnvironmentId}
+      isSelected={
+        selectedProjectId === project.id && (!selectedEnvironmentId || selectedProjectHomeActive)
+      }
       onToggleCollapse={() => toggleProjectCollapse(project.id)}
       selectedEnvironmentId={selectedEnvironmentId}
       onSelectProject={() => selectProject(project.id)}
@@ -1116,7 +1134,7 @@ export function HierarchicalSidebar() {
 
       <ProjectSearchBar
         projects={projects}
-        environments={allEnvironments}
+        environments={sidebarEnvironments}
         onSelectProject={handleSearchSelectProject}
         onSelectEnvironment={handleSearchSelectEnvironment}
       />

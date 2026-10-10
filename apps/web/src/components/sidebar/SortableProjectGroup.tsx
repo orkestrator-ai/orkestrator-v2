@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -126,15 +126,6 @@ export function SortableProjectGroup({
     e.currentTarget.blur();
     onCreateEnvironment();
   };
-
-  // The project home is the checkout itself, so it heads the list.
-  const orderedEnvironments = useMemo(
-    () => [
-      ...environments.filter((environment) => environment.projectHome === true),
-      ...environments.filter((environment) => environment.projectHome !== true),
-    ],
-    [environments],
-  );
 
   // Count running environments
   const runningCount = environments.filter((e) => e.status === "running").length;
@@ -319,12 +310,12 @@ export function SortableProjectGroup({
 
           {/* Environments List */}
           <CollapsibleContent>
-            {orderedEnvironments.length > 0 && (
+            {environments.length > 0 && (
               <SortableContext
-                items={orderedEnvironments.filter((e) => !e.projectHome).map((e) => e.id)}
+                items={environments.map((e) => e.id)}
                 strategy={verticalListSortingStrategy}
               >
-                {orderedEnvironments.map((environment) => (
+                {environments.map((environment) => (
                   <SortableEnvironmentItem
                     key={environment.id}
                     environment={environment}

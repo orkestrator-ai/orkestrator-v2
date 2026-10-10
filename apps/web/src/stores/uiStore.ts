@@ -19,7 +19,11 @@ const withoutFolder = (collapsed: string[], folder: string): string[] =>
 const addRecentProject = (recentProjectIds: string[], projectId: string): string[] =>
   [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(0, RECENT_PROJECT_LIMIT);
 
-export type ProjectBoardTab = "coordinator" | "kanban" | "github" | "linear" | "features";
+/**
+ * The panel a project's page shows. `home` is the project home's own tabs;
+ * the rest are the project board.
+ */
+export type ProjectBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
 export type EnvironmentSortMode = "project" | "activity";
 
 interface UIState {

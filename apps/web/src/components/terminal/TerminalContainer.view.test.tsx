@@ -5472,6 +5472,47 @@ describe("TerminalContainer", () => {
     await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("2"));
   });
 
+  test("an obscured container reveals itself for context tabs and ignores close requests", async () => {
+    const onReveal = mock(() => {});
+    function ObscuredHarness() {
+      const { createTab, closeActiveTab, tabCount } = useTerminalContext();
+      return (
+        <div>
+          <output data-testid="obscured-tab-count">{tabCount}</output>
+          <button type="button" onClick={() => createTab?.("plain")}>
+            Add tab while obscured
+          </button>
+          <button type="button" onClick={() => closeActiveTab?.()}>
+            Close tab while obscured
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+          obscured
+          onReveal={onReveal}
+        />
+        <ObscuredHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("obscured-tab-count").textContent).toBe("1"));
+    act(() => screen.getByRole("button", { name: "Close tab while obscured" }).click());
+    fireEvent.keyDown(window, { key: "w", metaKey: true });
+    expect(onReveal).not.toHaveBeenCalled();
+
+    act(() => screen.getByRole("button", { name: "Add tab while obscured" }).click());
+    await waitFor(() => expect(screen.getByTestId("obscured-tab-count").textContent).toBe("2"));
+    expect(onReveal).toHaveBeenCalledTimes(1);
+  });
+
   test("normalizes an absolute container path before creating a file tab", async () => {
     render(
       <TerminalProvider>

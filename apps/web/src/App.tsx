@@ -51,6 +51,7 @@ import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
 import { useNotificationSoundService } from "@/hooks/useNotificationSoundService";
+import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { useEnvironments, useEnvironmentLifecycleService } from "@/hooks";
 import {
   AlertDialog,
@@ -228,6 +229,8 @@ function App() {
   const zoomIn = useUIStore((state) => state.zoomIn);
   const zoomOut = useUIStore((state) => state.zoomOut);
   const resetZoom = useUIStore((state) => state.resetZoom);
+  const projectBoardTab = useUIStore((state) => state.projectBoardTab);
+  const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
   const environments = useEnvironmentStore((state) => state.environments);
   const getEnvironmentById = useEnvironmentStore((state) => state.getEnvironmentById);
   const setConfig = useConfigStore((state) => state.setConfig);
@@ -273,6 +276,8 @@ function App() {
   useEnvironmentLifecycleService();
   // Opening an environment clears its unread badge for every client.
   useUnreadEnvironmentSync();
+  // Selecting a project activates the environment working in its checkout.
+  useProjectHomeActivation();
   // The backend change feed must be attached before the store bindings that
   // consume it, and both before anything that reads a backend snapshot.
   useEffect(
@@ -400,6 +405,13 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
     : null;
+  const isProjectHomeSelected = selectedEnvironment?.projectHome === true;
+  // A project's page runs on its project home: the board panels cover the
+  // home's own tabs, which stay mounted so toolbar actions can open tabs there.
+  const showProjectBoard =
+    !!selectedProjectId &&
+    (!selectedEnvironment || (isProjectHomeSelected && projectBoardTab !== "home"));
+  const revealProjectHome = useCallback(() => setProjectBoardTab("home"), [setProjectBoardTab]);
   const refreshMacOsPermissions = useCallback(async () => {
     const permissionsApi = window.orkestrator?.permissions;
     if (!permissionsApi) {
@@ -1103,37 +1115,55 @@ function App() {
                 </Button>
               </div>
             )}
-            {selectedEnvironment ? (
+            {selectedEnvironment || selectedProjectId ? (
               <div className="relative h-full bg-background">
-                <div className="absolute inset-0 z-10 bg-background">
-                  {/*
-                  `isContainerRunning` is deliberately not gated on Docker
-                  availability. A false value means "this container stopped",
-                  and TerminalContainer answers it by disposing every terminal
-                  and resetting the pane layout, so feeding a daemon-wide probe
-                  into a per-environment fact would destroy the user's tabs on a
-                  transient outage. The daemon state gates *actions* instead:
-                  handleStartEnvironmentFromOverlay refuses to start a container
-                  while Docker is down.
-                */}
-                  <TerminalContainer
-                    environmentId={selectedEnvironment.id}
-                    containerId={selectedEnvironment.containerId ?? null}
-                    isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
-                    isContainerCreating={selectedEnvironment.status === "creating"}
-                    isActive
-                    className="h-full"
-                    onStartContainer={(initialPrompt) => {
-                      void handleStartEnvironmentFromOverlay(selectedEnvironment.id, initialPrompt);
-                    }}
-                    onCreateScript={(initialPrompt) => {
-                      void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
-                    }}
-                  />
-                </div>
+                {selectedEnvironment && (
+                  <div
+                    {...(isProjectHomeSelected
+                      ? { id: "project-panel-home", role: "tabpanel" }
+                      : {})}
+                    className={cn(
+                      "absolute inset-0 z-10 bg-background",
+                      showProjectBoard && "invisible",
+                    )}
+                  >
+                    {/*
+                    `isContainerRunning` is deliberately not gated on Docker
+                    availability. A false value means "this container stopped",
+                    and TerminalContainer answers it by disposing every terminal
+                    and resetting the pane layout, so feeding a daemon-wide probe
+                    into a per-environment fact would destroy the user's tabs on a
+                    transient outage. The daemon state gates *actions* instead:
+                    handleStartEnvironmentFromOverlay refuses to start a container
+                    while Docker is down.
+                  */}
+                    <TerminalContainer
+                      environmentId={selectedEnvironment.id}
+                      containerId={selectedEnvironment.containerId ?? null}
+                      isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
+                      isContainerCreating={selectedEnvironment.status === "creating"}
+                      isActive
+                      className="h-full"
+                      onStartContainer={(initialPrompt) => {
+                        void handleStartEnvironmentFromOverlay(
+                          selectedEnvironment.id,
+                          initialPrompt,
+                        );
+                      }}
+                      onCreateScript={(initialPrompt) => {
+                        void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
+                      }}
+                      obscured={showProjectBoard}
+                      onReveal={isProjectHomeSelected ? revealProjectHome : undefined}
+                    />
+                  </div>
+                )}
+                {showProjectBoard && selectedProjectId && (
+                  <div className="absolute inset-0 z-20 bg-background">
+                    <ProjectWorkspace projectId={selectedProjectId} />
+                  </div>
+                )}
               </div>
-            ) : selectedProjectId ? (
-              <ProjectWorkspace projectId={selectedProjectId} />
             ) : (
               <ProjectLauncher
                 createEnvironment={createEnvironment}

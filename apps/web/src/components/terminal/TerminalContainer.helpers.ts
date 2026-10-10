@@ -38,6 +38,16 @@ export interface TerminalContainerProps {
   className?: string;
   onStartContainer?: (initialPrompt?: string) => void;
   onCreateScript?: (initialPrompt: string) => void;
+  /**
+   * Another surface covers this container (the project board over the project
+   * home). Close requests stand down, since the user cannot see the tab.
+   */
+  obscured?: boolean;
+  /**
+   * Uncovers this container. Called while obscured when a toolbar, shortcut or
+   * file action creates or selects a tab here, so its result is visible.
+   */
+  onReveal?: () => void;
 }
 
 /**

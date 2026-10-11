@@ -141,6 +141,46 @@ describe("sendPrompt", () => {
     await prompt;
   });
 
+  test("passes --chrome when the session enables Claude in Chrome", async () => {
+    const session = createSession();
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Open the dashboard", {
+      parameterValues: { chrome: true },
+    });
+    const call = await nextQueryCall();
+    expect(call.options.extraArgs).toEqual({ chrome: null });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test("keeps a read-only turn away from Claude in Chrome", async () => {
+    const session = createSession();
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Just look", {
+      readOnly: true,
+      parameterValues: { chrome: true },
+    });
+    const call = await nextQueryCall();
+    expect(call.options.extraArgs).toBeUndefined();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test("leaves Claude in Chrome off without the chrome parameter", async () => {
+    const session = createSession();
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Inspect the implementation", {
+      parameterValues: { context1m: true },
+    });
+    const call = await nextQueryCall();
+    expect(call.options.extraArgs).toBeUndefined();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
   test.each([undefined, "default", "claude-sonnet-test"])(
     "applies the 1M-context parameter to the supported model selection %s",
     async (model) => {

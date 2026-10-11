@@ -600,7 +600,9 @@ export abstract class StorageNative extends StorageReviews {
       const retainedParameterValues = modelChanged
         ? Object.fromEntries(
             Object.entries(existing.controls?.parameterValues ?? {}).filter(
-              ([id]) => existing.agent === "claude" && (id === "thinking" || id === "context1m"),
+              ([id]) =>
+                existing.agent === "claude" &&
+                (id === "thinking" || id === "context1m" || id === "chrome"),
             ),
           )
         : Object.fromEntries(

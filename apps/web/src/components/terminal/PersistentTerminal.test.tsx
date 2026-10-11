@@ -2475,6 +2475,36 @@ describe("PersistentTerminal", () => {
     expect(screen.getByRole("button", { name: "Open earlier terminal output" })).toBeDefined();
   });
 
+  it("reveals the history button only while the pointer is in the top-right corner", () => {
+    const { container } = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+    const historyButton = screen.getByRole("button", { name: "Open earlier terminal output" });
+    const terminalElement = container.querySelector(".inset-x-0") as HTMLElement;
+    const rect = { top: 0, left: 0, right: 800, bottom: 600, width: 800, height: 600 };
+    terminalElement.getBoundingClientRect = () => ({ ...rect, x: 0, y: 0, toJSON: () => rect });
+
+    expect(historyButton.classList.contains("opacity-0")).toBe(true);
+    fireEvent.mouseMove(terminalElement, { clientX: 780, clientY: 20 });
+    expect(historyButton.classList.contains("opacity-100")).toBe(true);
+    fireEvent.mouseMove(terminalElement, { clientX: 100, clientY: 300 });
+    expect(historyButton.classList.contains("opacity-0")).toBe(true);
+    fireEvent.mouseMove(terminalElement, { clientX: 780, clientY: 20 });
+    fireEvent.mouseLeave(terminalElement);
+    expect(historyButton.classList.contains("opacity-0")).toBe(true);
+  });
+
   it("replaces a truncated tail with late durable history plus post-snapshot live output", async () => {
     let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
     persistentSessionStore.loadSessionBuffer.mockImplementation(

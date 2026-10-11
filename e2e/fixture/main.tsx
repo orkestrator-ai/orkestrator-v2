@@ -75,6 +75,10 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const TerminalCornerToolbarFixture = lazy(async () => ({
+  default: (await import("./TerminalCornerToolbarFixture")).TerminalCornerToolbarFixture,
+}));
+
 const TerminalLinksFixture = lazy(async () => ({
   default: (await import("./TerminalLinksFixture")).TerminalLinksFixture,
 }));
@@ -1591,6 +1595,14 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/terminal-corner-toolbar") {
+    return (
+      <Suspense fallback={null}>
+        <TerminalCornerToolbarFixture />
+      </Suspense>
+    );
+  }
+
   if (window.location.pathname === "/terminal-links") {
     return (
       <Suspense fallback={null}>

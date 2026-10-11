@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
 import { createTerminalTargetIdentity } from "@/hooks/terminal-target-identity";
@@ -55,11 +55,11 @@ import {
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
 import { TerminalDisconnectedBanner } from "@/components/terminal/TerminalDisconnectedBanner";
-import { CheckCircle2, History } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
 import { TerminalHistoryPanel } from "./TerminalHistoryPanel";
+import { TerminalCornerToolbar, useTerminalCornerHover } from "./TerminalCornerToolbar";
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -88,9 +88,6 @@ const TERMINAL_DISCONNECTED_NOTICE_DELAY_MS = 3000;
 // create a duplicate persistent session for a tab that already has one.
 const SESSION_SNAPSHOT_RETRY_BASE_MS = 250;
 const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
-// Top-right corner of the terminal in which the history button is revealed.
-const HISTORY_HOVER_ZONE_WIDTH_PX = 96;
-const HISTORY_HOVER_ZONE_HEIGHT_PX = 56;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
 function serializeLegacyTerminalBuffer(
@@ -1976,20 +1973,7 @@ export function PersistentTerminal({
 
   const [manuallyCompleted, setManuallyCompleted] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyCornerHovered, setHistoryCornerHovered] = useState(false);
-  // The history button only reveals itself while the pointer is in the
-  // terminal's top-right corner. Tracking the pointer on the terminal element
-  // (in the capture phase, so xterm's mouse-reporting handlers can't swallow
-  // it) avoids laying an invisible hit area over the terminal that would
-  // block text selection and the scrollbar there.
-  const handleTerminalPointerMove = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    setHistoryCornerHovered(
-      event.clientX >= rect.right - HISTORY_HOVER_ZONE_WIDTH_PX &&
-        event.clientY <= rect.top + HISTORY_HOVER_ZONE_HEIGHT_PX,
-    );
-  }, []);
-  const handleTerminalPointerLeave = useCallback(() => setHistoryCornerHovered(false), []);
+  const cornerHover = useTerminalCornerHover();
   const handleMarkSetupComplete = useCallback(() => {
     if (!setupCompleteRef.current) {
       console.log("[PersistentTerminal] Manually marking setup complete for tab:", tabId);
@@ -2105,7 +2089,7 @@ export function PersistentTerminal({
     disconnectedNoticeVisible && !disconnectedNoticeDismissed && isActive;
   const showHistoryButton = isActive && Boolean(sessionId) && !historyOpen;
   const showMarkSetupComplete =
-    isSetupTab &&
+    Boolean(isSetupTab) &&
     isActive &&
     !setupScriptsComplete &&
     !manuallyCompleted &&
@@ -2130,42 +2114,19 @@ export function PersistentTerminal({
       {isActive && historyOpen && sessionId && (
         <TerminalHistoryPanel sessionId={sessionId} onClose={() => setHistoryOpen(false)} />
       )}
-      {(showHistoryButton || showMarkSetupComplete) && (
-        <div className="absolute top-1 right-2 z-20 flex items-center gap-1.5">
-          {showMarkSetupComplete && (
-            <button
-              onClick={handleMarkSetupComplete}
-              className="flex items-center gap-1.5 rounded-md bg-zinc-800/90 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 border border-zinc-700/50 transition-colors shadow-md backdrop-blur-sm"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Mark setup complete
-            </button>
-          )}
-          {showHistoryButton && (
-            <button
-              type="button"
-              aria-label="Open earlier terminal output"
-              title="Earlier output"
-              onClick={() => setHistoryOpen(true)}
-              onMouseEnter={() => setHistoryCornerHovered(true)}
-              onMouseLeave={handleTerminalPointerLeave}
-              className={cn(
-                "rounded-md border border-zinc-700/50 bg-zinc-800/90 p-1.5 text-zinc-400 shadow-md backdrop-blur-sm transition-opacity hover:bg-zinc-700 hover:text-zinc-100 focus-visible:opacity-100",
-                historyCornerHovered || isMobile ? "opacity-100" : "opacity-0",
-              )}
-            >
-              <History className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      )}
+      <TerminalCornerToolbar
+        showHistoryButton={showHistoryButton}
+        showMarkSetupComplete={showMarkSetupComplete}
+        onOpenHistory={() => setHistoryOpen(true)}
+        onMarkSetupComplete={handleMarkSetupComplete}
+        hover={cornerHover}
+      />
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
             ref={terminalRef}
             onClick={handleTerminalClick}
-            onMouseMoveCapture={handleTerminalPointerMove}
-            onMouseLeave={handleTerminalPointerLeave}
+            {...cornerHover.terminalHoverProps}
             className={cn(
               "absolute inset-x-0 top-0",
               isMobile ? "bottom-[calc(3rem+env(safe-area-inset-bottom))]" : "bottom-0",

@@ -3342,6 +3342,7 @@ describe("NativeAgentService", () => {
                   mode: "native",
                   claudeThinkingMode: "budget-16384",
                   claudeContext1m: true,
+                  claudeChrome: true,
                 },
               },
             },
@@ -3363,14 +3364,14 @@ describe("NativeAgentService", () => {
             logicalSessionKey: "env-env-1:startup-agent",
             prompt: "Use the inherited Claude controls",
             requestId: "user-first-send",
-            parameterValues: { thinking: "budget-16384", context1m: true },
+            parameterValues: { thinking: "budget-16384", context1m: true, chrome: true },
           });
 
           expect(send).toHaveBeenCalledWith(
             "provider-session",
             "Use the inherited Claude controls",
             expect.objectContaining({
-              parameterValues: { thinking: "budget-16384", context1m: true },
+              parameterValues: { thinking: "budget-16384", context1m: true, chrome: true },
             }),
           );
           expect(
@@ -3382,6 +3383,7 @@ describe("NativeAgentService", () => {
           ).toEqual({
             thinking: "budget-16384",
             context1m: true,
+            chrome: true,
           });
         },
       );
@@ -3532,6 +3534,7 @@ describe("NativeAgentService", () => {
                     model: preferredModel,
                     claudeThinkingMode: "budget-16384",
                     claudeContext1m: true,
+                    claudeChrome: true,
                   },
                 },
               },
@@ -3553,12 +3556,13 @@ describe("NativeAgentService", () => {
               expect(stored?.controls?.parameterValues).toEqual({
                 thinking: "budget-16384",
                 context1m: true,
+                chrome: true,
               });
               expect(send).toHaveBeenCalledWith(
                 "provider-session",
                 initialPrompt,
                 expect.objectContaining({
-                  parameterValues: { thinking: "budget-16384", context1m: true },
+                  parameterValues: { thinking: "budget-16384", context1m: true, chrome: true },
                 }),
               );
             } else {

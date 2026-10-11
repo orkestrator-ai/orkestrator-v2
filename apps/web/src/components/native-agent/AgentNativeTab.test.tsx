@@ -4456,7 +4456,7 @@ describe("AgentNativeTab", () => {
       agentSettings: {
         defaultAgent: "claude",
         platforms: {
-          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true, claudeChrome: true },
         },
       },
     });
@@ -4473,7 +4473,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
       agent: "claude",
-      parameterValues: { thinking: "budget-16384", context1m: true },
+      parameterValues: { thinking: "budget-16384", context1m: true, chrome: true },
     });
   });
 
@@ -4481,7 +4481,7 @@ describe("AgentNativeTab", () => {
     useConfigStore.getState().updateGlobalConfig({
       agentSettings: {
         platforms: {
-          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true, claudeChrome: true },
         },
       },
     });
@@ -4491,8 +4491,70 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
       agent: "claude",
-      parameterValues: { thinking: "budget-16384", context1m: true },
+      parameterValues: { thinking: "budget-16384", context1m: true, chrome: true },
     });
+  });
+
+  test("rehydrates a Chrome-enabled Claude session created while its environment is inactive", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      agentSettings: { platforms: { claude: { claudeChrome: true } } },
+    });
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settleEnsure = () => resolve(defaultEnsureNativeAgentSession(input));
+        }),
+    );
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        { kind: "toggle" as const, id: "parameter:chrome", label: "Chrome", value: true },
+      ],
+    }));
+
+    const view = render(
+      <AgentNativeTab tabId="tab-claude-chrome-inactive" data={freshTab("claude")} isActive />,
+    );
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(ensureNativeAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "claude",
+      parameterValues: { chrome: true },
+    });
+    view.rerender(
+      <AgentNativeTab
+        tabId="tab-claude-chrome-inactive"
+        data={freshTab("claude")}
+        isActive={false}
+      />,
+    );
+    await act(async () => {
+      settleEnsure!();
+    });
+    getNativeAgentProjectionMock.mockClear();
+    view.rerender(
+      <AgentNativeTab tabId="tab-claude-chrome-inactive" data={identity("claude")} isActive />,
+    );
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Chrome: On" }).getAttribute("aria-pressed")).toBe(
+        "true",
+      ),
+    );
+    view.unmount();
+    useNativeAgentProjectionStore.getState().reset();
+    getNativeAgentProjectionMock.mockClear();
+
+    render(
+      <AgentNativeTab tabId="tab-claude-chrome-inactive" data={identity("claude")} isActive />,
+    );
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Chrome: On" }).getAttribute("aria-pressed")).toBe(
+        "true",
+      ),
+    );
+    expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
   test("renders an unrelated Claude parameter supplied by the projection", async () => {

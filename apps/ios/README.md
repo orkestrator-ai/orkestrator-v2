@@ -40,7 +40,9 @@ If the active server is offline or its credential has expired, use **Switch save
 Run the native unit tests on an installed simulator with:
 
 ```bash
-mise run test:ios
+mise run test:logged -- --name ios-tests -- mise run test:ios
 ```
+
+If the runner reports that the Xcode license has not been accepted, it stops before Swift compilation and no test assertions execute. Open Xcode, review and accept its license, and complete first-launch setup before rerunning the command. An exit caused by this prerequisite leaves iOS validation incomplete; it is not an assertion failure.
 
 Plain HTTP and invalid TLS certificates are intentionally rejected. Use Tailscale Serve HTTPS as described in the repository root README.

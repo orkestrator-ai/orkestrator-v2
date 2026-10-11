@@ -606,6 +606,7 @@ final class GatewayConnectionValidatorTests: XCTestCase {
         for (code, expected) in [
             (URLError.timedOut, "10 seconds"),
             (URLError.serverCertificateUntrusted, "certificate"),
+            (URLError.secureConnectionFailed, "Tailscale DNS"),
             (URLError.notConnectedToInternet, "could not be reached"),
         ] {
             StubURLProtocol.handler = { _ in throw URLError(code) }
@@ -768,7 +769,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             (URLError.serverCertificateUntrusted, "certificate"),
             (URLError.serverCertificateHasBadDate, "certificate"),
             (URLError.serverCertificateHasUnknownRoot, "certificate"),
-            (URLError.secureConnectionFailed, "certificate"),
+            (URLError.secureConnectionFailed, "Tailscale DNS"),
             (URLError.notConnectedToInternet, "could not be reached"),
         ] {
             let error = RemoteWebView.Coordinator.loginTransportError(

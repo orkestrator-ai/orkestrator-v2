@@ -1,69 +1,75 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
-import { DndContext } from "@dnd-kit/core";
-import { SortableProjectGroup } from "./SortableProjectGroup";
+import { afterEach, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
+import { SortableProjectGroup } from "./SortableProjectGroup";
 
 afterEach(cleanup);
-const environment = (id: string, projectHome = false) =>
-  ({
-    id,
-    projectId: "project-1",
-    name: id,
-    projectHome,
-    branch: "feature/x",
-    status: "running",
-    environmentType: "local",
-    order: 0,
-    networkAccessMode: "full",
-    createdAt: "2026-10-01T00:00:00Z",
-  }) as Environment;
 
-test("the home stays first and cannot be dragged when regular environment order changes", () => {
-  const props = {
-    project: { id: "project-1", name: "Project", gitUrl: "https://github.com/org/repo" } as Project,
-    isCollapsed: false,
-    isSelected: false,
-    selectedEnvironmentId: null,
-    onToggleCollapse: () => {},
-    onSelectProject: () => {},
-    onSelectEnvironment: () => {},
-    onDeleteProject: () => {},
-    onOpenSettings: () => {},
-    onDeleteEnvironment: () => {},
-    onStartEnvironment: () => {},
-    onStopEnvironment: () => {},
-    onRestartEnvironment: () => {},
-    onCreateEnvironment: () => {},
-  };
+test("project header highlights Home selection, counts worker rows, and opens the board", () => {
+  const project = { id: "project", name: "Checkout", gitUrl: "", order: 0 } as Project;
+  const home = {
+    id: "home",
+    projectId: project.id,
+    projectHome: true,
+    hasUnreadWork: true,
+  } as Environment;
+  useUIStore.setState({
+    selectedProjectId: project.id,
+    selectedEnvironmentId: home.id,
+    projectBoardTab: "home",
+  });
+  const noop = mock(() => {});
   const view = render(
-    <DndContext>
-      <SortableProjectGroup
-        {...props}
-        environments={[environment("worker-a"), environment("home", true), environment("worker-b")]}
-      />
-    </DndContext>,
+    <SortableProjectGroup
+      project={project}
+      home={home}
+      environments={[]}
+      isCollapsed
+      isSelected
+      selectedEnvironmentId={home.id}
+      onToggleCollapse={noop}
+      onSelectProject={() => useUIStore.getState().selectProject(project.id)}
+      onSelectEnvironment={noop}
+      onDeleteProject={noop}
+      onOpenSettings={noop}
+      onDeleteEnvironment={noop}
+      onStartEnvironment={noop}
+      onStopEnvironment={noop}
+      onRestartEnvironment={noop}
+      onCreateEnvironment={noop}
+    />,
   );
-  const order = () =>
-    screen
-      .getAllByRole("button")
-      .filter((button) =>
-        ["home", "worker-a", "worker-b"].includes(button.textContent?.trim() ?? ""),
-      )
-      .map((button) => button.textContent?.trim());
-  expect(order()).toEqual(["home", "worker-a", "worker-b"]);
-  expect(
-    screen
-      .getAllByRole("button", { name: "" })
-      .filter((button) => button.getAttribute("aria-roledescription") === "sortable"),
-  ).toHaveLength(2);
+  const row = screen.getByRole("button", { name: "Checkout" });
+  expect(row.getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("button", { name: "Checkout Home needs attention" })).toBeTruthy();
+  expect(screen.queryByText("project-home") === null).toBe(true);
+  fireEvent.click(row);
+  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+  useUIStore.setState({ projectBoardTab: "home" });
+  fireEvent.contextMenu(row);
+  fireEvent.click(screen.getByText("Open Board"));
+  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
   view.rerender(
-    <DndContext>
-      <SortableProjectGroup
-        {...props}
-        environments={[environment("worker-b"), environment("worker-a"), environment("home", true)]}
-      />
-    </DndContext>,
+    <SortableProjectGroup
+      project={project}
+      environments={[{ id: "worker", status: "running" } as Environment]}
+      isCollapsed
+      isSelected={false}
+      selectedEnvironmentId="worker"
+      onToggleCollapse={noop}
+      onSelectProject={noop}
+      onSelectEnvironment={noop}
+      onDeleteProject={noop}
+      onOpenSettings={noop}
+      onDeleteEnvironment={noop}
+      onStartEnvironment={noop}
+      onStopEnvironment={noop}
+      onRestartEnvironment={noop}
+      onCreateEnvironment={noop}
+    />,
   );
-  expect(order()).toEqual(["home", "worker-b", "worker-a"]);
+  expect(
+    screen.getByRole("button", { name: "Checkout 1" }).getAttribute("aria-current"),
+  ).toBeNull();
 });

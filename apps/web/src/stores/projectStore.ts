@@ -16,6 +16,8 @@ const advanceProjectMutationVersion = (): void => {
 interface ProjectState {
   // State
   projects: Project[];
+  deletingProjects: Set<string>;
+  setDeleting: (projectId: string, deleting: boolean) => void;
   isLoading: boolean;
   error: string | null;
 
@@ -38,6 +40,14 @@ interface ProjectState {
 export const useProjectStore = create<ProjectState>()((set, get) => ({
   // Initial state
   projects: [],
+  deletingProjects: new Set(),
+  setDeleting: (projectId, deleting) =>
+    set((state) => {
+      const deletingProjects = new Set(state.deletingProjects);
+      if (deleting) deletingProjects.add(projectId);
+      else deletingProjects.delete(projectId);
+      return { deletingProjects };
+    }),
   isLoading: false,
   error: null,
 

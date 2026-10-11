@@ -60,14 +60,17 @@ Every file mutation and every session needs an environment record, so the
 checkout is represented by one **project home** environment per project
 (`projectHome: true`, `apps/backend/src/core/project-home-environment.ts`). It
 is a local environment whose `worktreePath` is the canonical repository root.
-`ensure_project_home_environment` creates it on first use (the first mutation
-from the board, **Project Home** in the board toolbar, or opening a file from
-the board) and re-reads the checkout's current branch on every call. It is
-pinned first in the sidebar as **Project home**. Selecting it gives the
-ordinary environment toolbar, so Review, Multi Review, its Fix session and
-Create PR run directly on the main checkout. The PR prompt branches off the base
-branch before committing when the checkout is on it, and the stored branch
-follows the checkout after each agent turn.
+`ensure_project_home_environment` creates it on first use and re-reads the
+checkout's current branch on every call. It has no sidebar row: selecting a
+project with a checkout activates its home (`useProjectHomeActivation`). The
+toolbar then shows the ordinary environment controls, acting on the home, so
+Review, Multi Review, its Fix session and Create PR run directly on the main
+checkout. The project tabs sit on a row beneath: **Home** shows the home's own
+tabs, and Coordinator, Kanban, GitHub, Linear and Features cover them with a
+board panel. The home's tabs stay mounted under the board, so a tab launched
+from the toolbar while a board panel is showing switches the page to **Home**.
+The PR prompt branches off the base branch before committing when the checkout
+is on it, and the stored branch follows the checkout after each agent turn.
 
 The project home is a writable environment, not a coordinator, and is never a
 disposable workspace. These invariants are enforced by the backend:

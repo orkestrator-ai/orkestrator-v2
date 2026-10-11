@@ -116,21 +116,29 @@ mock.module("@/components/terminal", () => ({
     environmentId,
     isActive,
     isContainerRunning,
+    obscured,
+    onReveal,
     onStartContainer,
     onCreateScript,
   }: {
     environmentId: string;
     isActive: boolean;
     isContainerRunning?: boolean;
+    obscured?: boolean;
+    onReveal?: () => void;
     onStartContainer?: (initialPrompt?: string) => void;
     onCreateScript?: (initialPrompt: string) => void;
   }) => (
     <div
       data-testid={`terminal-${environmentId}`}
       data-active={String(isActive)}
+      data-obscured={String(obscured)}
       data-container-running={String(isContainerRunning)}
     >
       {environmentId}
+      <button type="button" onClick={onReveal}>
+        Reveal Home
+      </button>
       <button
         type="button"
         data-testid={`start-${environmentId}`}
@@ -488,6 +496,7 @@ function resetStores({
   useUIStore.setState({
     selectedProjectId,
     selectedEnvironmentId,
+    projectBoardTab: "coordinator",
     recentProjectIds: [],
     sidebarWidth: 280,
     collapsedProjects: [],
@@ -654,6 +663,40 @@ describe("App background processing mounts", () => {
   afterEach(() => {
     cleanup();
     mock.restore();
+  });
+
+  test("board panels obscure a mounted Home and toolbar reveal restores its tabpanel", async () => {
+    const home = { ...makeEnvironment("home", "project-1"), projectHome: true };
+    resetStores({
+      environments: [home],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: home.id,
+    });
+    useProjectStore.setState({
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          localPath: "/checkout",
+          gitUrl: "",
+          addedAt: "",
+          order: 0,
+        },
+      ],
+    });
+    useUIStore.setState({ projectBoardTab: "kanban" });
+    render(<App />);
+    const terminal = screen.getByTestId("terminal-home");
+    const panel = terminal.closest('[role="tabpanel"]');
+    expect(panel?.id).toBe("project-panel-home");
+    expect(panel?.getAttribute("aria-hidden")).toBe("true");
+    expect(terminal.getAttribute("data-active")).toBe("true");
+    expect(terminal.getAttribute("data-obscured")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Home", hidden: true }));
+    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    expect(screen.getByTestId("terminal-home")).toBe(terminal);
+    expect(terminal.getAttribute("data-obscured")).toBe("false");
+    expect(panel?.getAttribute("aria-hidden")).toBe("false");
   });
 
   test("mounts the environment lifecycle service exactly once at the app root", () => {

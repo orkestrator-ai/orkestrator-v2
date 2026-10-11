@@ -126,6 +126,9 @@ export function projectRootFilesTargetId(projectId: string): string {
  */
 const pendingHomeEnsures = new Map<string, Promise<Environment>>();
 export function ensureProjectHomeInStore(projectId: string): Promise<Environment> {
+  if (isProjectHomeDeletionInProgress(projectId)) {
+    return Promise.reject(new Error("The project home is being deleted"));
+  }
   const key = `${projectId}\0${useProjectStore.getState().projects.find((project) => project.id === projectId)?.localPath ?? ""}`;
   const pending = pendingHomeEnsures.get(key);
   if (pending) return pending;
@@ -135,6 +138,29 @@ export function ensureProjectHomeInStore(projectId: string): Promise<Environment
   pendingHomeEnsures.set(key, task);
   return task;
 }
+export function isProjectHomeDeletionInProgress(projectId: string): boolean {
+  const projects = useProjectStore.getState();
+  const environments = useEnvironmentStore.getState();
+  return (
+    projects.deletingProjects.has(projectId) ||
+    environments.environments.some(
+      (environment) =>
+        environment.projectId === projectId &&
+        environment.projectHome &&
+        environments.isDeleting(environment.id),
+    )
+  );
+}
+
+/** Fence new ensures first, then drain previously admitted work before teardown. */
+export async function drainProjectHomeEnsures(projectId: string): Promise<Environment[]> {
+  const tasks = Array.from(pendingHomeEnsures.entries())
+    .filter(([key]) => key.startsWith(`${projectId}\0`))
+    .map(([, task]) => task);
+  const results = await Promise.allSettled(tasks);
+  return results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+}
+
 async function reconcileHomeInStore(projectId: string): Promise<Environment> {
   const configuredPath = useProjectStore
     .getState()
@@ -146,6 +172,9 @@ async function reconcileHomeInStore(projectId: string): Promise<Environment> {
   ) {
     throw new Error("The project checkout changed; try the file action again");
   }
+  // The backend may have finished creation after teardown was fenced. Return
+  // the record to the draining delete path, but never resurrect it in the UI.
+  if (isProjectHomeDeletionInProgress(projectId)) return environment;
   const store = useEnvironmentStore.getState();
   if (store.environments.some((candidate) => candidate.id === environment.id)) {
     store.updateEnvironment(environment.id, environment);

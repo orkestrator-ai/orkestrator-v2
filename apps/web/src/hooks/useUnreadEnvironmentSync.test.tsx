@@ -84,3 +84,13 @@ describe("useUnreadEnvironmentSync", () => {
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork).toBe(false);
   });
 });
+
+test("an obscured home keeps unread work until Home is visible", () => {
+  useEnvironmentStore.setState({ environments: [environment({ projectHome: true })] });
+  useUIStore.setState({ projectBoardTab: "kanban" });
+  renderHook(() => useUnreadEnvironmentSync());
+  expect(setUnread).not.toHaveBeenCalled();
+  expect(useEnvironmentStore.getState().environments[0]?.hasUnreadWork).toBe(true);
+  act(() => useUIStore.getState().setProjectBoardTab("home"));
+  expect(setUnread).toHaveBeenCalledTimes(1);
+});

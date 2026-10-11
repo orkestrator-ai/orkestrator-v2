@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 
 /**
  * Clears an environment's unread badge once this client opens it.
@@ -12,7 +12,7 @@ import { useUIStore } from "@/stores/uiStore";
  * other client the work has been seen.
  */
 export function useUnreadEnvironmentSync(): void {
-  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedEnvironmentId = useVisibleEnvironmentId();
   const environments = useEnvironmentStore((state) => state.environments);
 
   useEffect(() => {

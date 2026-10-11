@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { ProjectHomeActivity } from "./ProjectHomeActivity";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -44,6 +45,7 @@ import { useConfigStore } from "@/stores/configStore";
 interface SortableProjectGroupProps {
   project: Project;
   environments: Environment[];
+  home?: Environment;
   isCollapsed: boolean;
   isSelected: boolean;
   onToggleCollapse: () => void;
@@ -73,6 +75,7 @@ interface SortableProjectGroupProps {
 export function SortableProjectGroup({
   project,
   environments,
+  home,
   isCollapsed,
   isSelected,
   onToggleCollapse,
@@ -126,15 +129,6 @@ export function SortableProjectGroup({
     e.currentTarget.blur();
     onCreateEnvironment();
   };
-
-  // The project home is the checkout itself, so it heads the list.
-  const orderedEnvironments = useMemo(
-    () => [
-      ...environments.filter((environment) => environment.projectHome === true),
-      ...environments.filter((environment) => environment.projectHome !== true),
-    ],
-    [environments],
-  );
 
   // Count running environments
   const runningCount = environments.filter((e) => e.status === "running").length;
@@ -201,6 +195,7 @@ export function SortableProjectGroup({
                   {...listeners}
                   ref={projectTooltipAnchorRef}
                   type="button"
+                  aria-current={isSelected ? "page" : undefined}
                   className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -301,6 +296,8 @@ export function SortableProjectGroup({
               </ContextMenuContent>
             </ContextMenu>
 
+            {home && <ProjectHomeActivity home={home} projectName={project.name} compact />}
+
             {/* Add button - visible on compact layouts and revealed on desktop hover */}
             <Button
               type="button"
@@ -319,12 +316,12 @@ export function SortableProjectGroup({
 
           {/* Environments List */}
           <CollapsibleContent>
-            {orderedEnvironments.length > 0 && (
+            {environments.length > 0 && (
               <SortableContext
-                items={orderedEnvironments.filter((e) => !e.projectHome).map((e) => e.id)}
+                items={environments.map((e) => e.id)}
                 strategy={verticalListSortingStrategy}
               >
-                {orderedEnvironments.map((environment) => (
+                {environments.map((environment) => (
                   <SortableEnvironmentItem
                     key={environment.id}
                     environment={environment}

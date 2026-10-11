@@ -1,3 +1,4 @@
+import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 // Hook for managing environment operations with Electron backend
 import { useCallback, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -867,6 +868,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       const didActivate = activateProjectForEnvironmentCleanup(environmentId);
       setError(null);
       try {
+        if (
+          useEnvironmentStore.getState().getEnvironmentById(environmentId)?.projectHome &&
+          projectId
+        ) {
+          await drainProjectHomeEnsures(projectId);
+        }
         // Delete all sessions for this environment first (cleans up buffer files too)
         await deleteSessionsByEnvironment(environmentId);
 

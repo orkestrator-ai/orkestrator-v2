@@ -235,9 +235,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     filesPanelOpen,
     toggleFilesPanel,
     canToggleFilesPanel,
-    canShowProjectFiles,
-    openProjectHome,
-    projectHomeOpening,
     changes,
     sidebarOpen,
     toggleSidebar,
@@ -298,7 +295,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     selectedProject,
     repoSettingsProject,
     envSettingsEnvironment,
-    isProjectBoardView,
+    isProjectView,
+    hasProjectCheckout,
     isCleanupTargetDeleting,
     isMerging,
     repoName,
@@ -548,6 +546,91 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         <span className={cn(isGrid && "truncate text-xs")}>PR</span>
       </Button>
     </ToolbarTooltipTrigger>
+  );
+
+  /*
+   * The project page's tabs. The desktop toolbar gives them a row of their own
+   * beneath the environment controls, which act on the project home; the grid
+   * (mobile) toolbar keeps them in sequence with its other controls.
+   */
+  const projectNavigation = (
+    <>
+      <SegmentedSelector
+        value={projectBoardTab}
+        onValueChange={openProjectBoardTab}
+        disabled={!selectedProject}
+        semantics={isProjectView ? "tabs" : "buttons"}
+        ariaLabel="Project navigation"
+        className={cn(
+          "max-w-[min(100%,40rem)] overflow-x-auto bg-zinc-900/80",
+          isGrid && "col-span-2 w-full justify-start",
+        )}
+        buttonClassName="shrink-0 px-2 text-xs"
+        options={
+          [
+            ...(hasProjectCheckout
+              ? [
+                  {
+                    value: "home" as const,
+                    label: "Home",
+                    icon: <House className="size-3.5" />,
+                    panelId: "project-panel-home",
+                  },
+                ]
+              : []),
+            {
+              value: "coordinator",
+              label: "Coordinator",
+              icon: <MessagesSquare className="size-3.5" />,
+              panelId: "project-panel-coordinator",
+            },
+            {
+              value: "kanban",
+              label: "Kanban",
+              icon: <Columns3 className="size-3.5" />,
+              panelId: "project-panel-kanban",
+            },
+            {
+              value: "github",
+              label: "GitHub",
+              icon: <Github className="size-3.5" />,
+              panelId: "project-panel-github",
+            },
+            {
+              value: "linear",
+              label: "Linear",
+              icon: <Workflow className="size-3.5" />,
+              panelId: "project-panel-linear",
+            },
+            {
+              value: "features",
+              label: "Features",
+              icon: <ListChecks className="size-3.5" />,
+              panelId: "project-panel-features",
+            },
+          ] satisfies Array<{
+            value: ProjectBoardTab;
+            label: string;
+            icon: ReactNode;
+            panelId: string;
+          }>
+        }
+      />
+      {!isGrid && <div className="min-w-4 flex-1" />}
+      {(isGrid || projectBoardTab === "kanban") && (
+        <Button
+          variant={isGrid ? "ghost" : "outline"}
+          size={isGrid ? "icon" : "sm"}
+          className={cn("gap-1.5", !isGrid && "h-7 shrink-0")}
+          onClick={openProjectNotes}
+          aria-label="Project notes"
+          disabled={!selectedProject}
+        >
+          <StickyNote className="h-3.5 w-3.5" />
+          {isGrid ? <span className="truncate text-xs">Project notes</span> : "Project Notes"}
+        </Button>
+      )}
+    </>
   );
 
   return (
@@ -1320,116 +1403,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             {/* Spacer to push right side content to the end */}
             <div className={cn("min-w-4 flex-1", isGrid && "hidden")} />
 
-            {/* Right side: Board tabs, repo name, and Files toggle */}
+            {/* Right side: Create PR and the Files toggle (the grid adds the project tabs) */}
             <div
               className={cn(
                 isGrid ? "col-span-2 grid grid-cols-2 gap-2" : "flex shrink-0 items-center gap-2",
               )}
             >
-              {isGrid || isProjectBoardView ? (
-                <>
-                  {(isGrid || projectBoardTab === "kanban") && (
-                    <Button
-                      variant={isGrid ? "ghost" : "outline"}
-                      size={isGrid ? "icon" : "sm"}
-                      className="gap-1.5"
-                      onClick={openProjectNotes}
-                      aria-label="Project notes"
-                      disabled={!selectedProject}
-                    >
-                      <StickyNote className="h-3.5 w-3.5" />
-                      {isGrid ? (
-                        <span className="truncate text-xs">Project notes</span>
-                      ) : (
-                        "Project Notes"
-                      )}
-                    </Button>
-                  )}
-                  {canShowProjectFiles && (
-                    <ToolbarTooltipTrigger
-                      tooltip={
-                        <>
-                          <p>Open project home</p>
-                          <p className="text-xs text-muted-foreground">
-                            Review, Multi Review, fix and PR on the project checkout
-                          </p>
-                        </>
-                      }
-                    >
-                      <Button
-                        variant={isGrid ? "ghost" : "outline"}
-                        size={isGrid ? "icon" : "sm"}
-                        className="gap-1.5"
-                        onClick={() => void openProjectHome()}
-                        aria-label="Open project home"
-                        disabled={projectHomeOpening}
-                      >
-                        {projectHomeOpening ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <House className="h-3.5 w-3.5" />
-                        )}
-                        {isGrid ? (
-                          <span className="truncate text-xs">Project home</span>
-                        ) : (
-                          "Project Home"
-                        )}
-                      </Button>
-                    </ToolbarTooltipTrigger>
-                  )}
-                  <SegmentedSelector
-                    value={projectBoardTab}
-                    onValueChange={openProjectBoardTab}
-                    disabled={!selectedProject}
-                    semantics={isProjectBoardView ? "tabs" : "buttons"}
-                    ariaLabel="Project navigation"
-                    className={cn(
-                      "max-w-[min(100%,36rem)] overflow-x-auto bg-zinc-900/80",
-                      isGrid && "col-span-2 w-full justify-start",
-                    )}
-                    buttonClassName="shrink-0 px-2 text-xs"
-                    options={
-                      [
-                        {
-                          value: "coordinator",
-                          label: "Coordinator",
-                          icon: <MessagesSquare className="size-3.5" />,
-                          panelId: "project-panel-coordinator",
-                        },
-                        {
-                          value: "kanban",
-                          label: "Kanban",
-                          icon: <Columns3 className="size-3.5" />,
-                          panelId: "project-panel-kanban",
-                        },
-                        {
-                          value: "github",
-                          label: "GitHub",
-                          icon: <Github className="size-3.5" />,
-                          panelId: "project-panel-github",
-                        },
-                        {
-                          value: "linear",
-                          label: "Linear",
-                          icon: <Workflow className="size-3.5" />,
-                          panelId: "project-panel-linear",
-                        },
-                        {
-                          value: "features",
-                          label: "Features",
-                          icon: <ListChecks className="size-3.5" />,
-                          panelId: "project-panel-features",
-                        },
-                      ] satisfies Array<{
-                        value: ProjectBoardTab;
-                        label: string;
-                        icon: ReactNode;
-                        panelId: string;
-                      }>
-                    }
-                  />
-                </>
-              ) : !isGrid && !selectedEnvironment ? (
+              {isGrid ? (
+                projectNavigation
+              ) : !selectedEnvironment && !isProjectView ? (
                 <span className="whitespace-nowrap text-sm text-muted-foreground">
                   Select an environment to get started
                 </span>
@@ -1481,6 +1463,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             </div>
           </div>
         </div>
+        {!isGrid && isProjectView && (
+          <div
+            data-testid="project-navigation-bar"
+            className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border/80 bg-chrome px-2 md:px-4 [&::-webkit-scrollbar]:hidden"
+            style={{ scrollbarWidth: "none" }}
+          >
+            {projectNavigation}
+          </div>
+        )}
       </ToolbarTooltipsEnabledContext.Provider>
 
       <ReviewLaunchDialog

@@ -9,6 +9,7 @@ test("finds the live home of the requested project", () => {
   const environments = [
     environment({ id: "worker" }),
     environment({ id: "deleting-home", projectHome: true, deletionRequestedAt: "2026-10-10" }),
+    environment({ id: "lifecycle-home", projectHome: true, lifecycleOperation: "deleting" }),
     environment({ id: "other-home", projectId: "project-2", projectHome: true }),
     environment({ id: "home", projectHome: true }),
   ];

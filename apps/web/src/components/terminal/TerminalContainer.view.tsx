@@ -2095,7 +2095,7 @@ export function TerminalContainer({
               node={root}
               containerId={containerId}
               environmentId={environmentId}
-              isActive={isActive}
+              isActive={isActive && !obscured}
               activeDragId={activeDragId}
               dragOverPaneId={dragOverPaneId}
             />

@@ -67,6 +67,8 @@ type MergeOutcome = {
 };
 
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
+const currentDeletingEnvironments = new Set<string>();
+const currentDeletingProjects = new Set<string>();
 const mergeEnvironmentPrMock = mock(
   async (
     _environmentId: string,
@@ -643,6 +645,7 @@ mock.module("@/stores", () => ({
     <T,>(
       selector?: (state: {
         environments: Environment[];
+        deletingEnvironments: Set<string>;
         getEnvironmentById: (environmentId: string) => Environment | undefined;
         updateEnvironment: (environmentId: string, environment: Environment) => void;
         setEnvironmentPR: () => void;
@@ -665,6 +668,7 @@ mock.module("@/stores", () => ({
                 }
               : environment,
           ),
+          deletingEnvironments: currentDeletingEnvironments,
           getEnvironmentById: (environmentId: string) =>
             environmentId === currentEnvironment.id
               ? {
@@ -711,6 +715,7 @@ mock.module("@/stores", () => ({
     <T,>(
       selector?: (state: {
         projects: Project[];
+        deletingProjects: Set<string>;
         getProjectById: (projectId: string) => Project | undefined;
       }) => T,
     ) =>
@@ -719,6 +724,7 @@ mock.module("@/stores", () => ({
           projects: [...currentOtherProjects, selectedProject].filter(
             (project) => !currentDeletedProjectIds.has(project.id),
           ),
+          deletingProjects: currentDeletingProjects,
           getProjectById: (projectId: string) =>
             projectId === selectedProject.id && !currentDeletedProjectIds.has(projectId)
               ? selectedProject
@@ -904,6 +910,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  currentDeletingEnvironments.clear();
+  currentDeletingProjects.clear();
   setLongPressTimingsForTests(15, CLICK_SUPPRESSION_MS);
   cleanup();
   console.error = mock(() => {}) as typeof console.error;
@@ -2550,6 +2558,21 @@ describe("ActionBar toolbar interactions", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Home" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("home");
     expect(selectEnvironmentMock).toHaveBeenCalledWith(projectHomeEnvironment.id);
+  });
+
+  test("Home navigation cannot select a locally deleting home or a tearing-down project", () => {
+    currentEnvironment = projectHomeEnvironment;
+    currentSelectedEnvironmentId = projectHomeEnvironment.id;
+    currentDeletingEnvironments.add(projectHomeEnvironment.id);
+    const view = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("tab", { name: "Home" }));
+    expect(selectEnvironmentMock).toHaveBeenLastCalledWith(null);
+    currentDeletingEnvironments.clear();
+    currentDeletingProjects.add(selectedProject.id);
+    view.rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
+    expect(selectEnvironmentMock).toHaveBeenLastCalledWith(null);
+    currentDeletingProjects.clear();
   });
 
   test("keeps the project home selected when switching board tabs", () => {

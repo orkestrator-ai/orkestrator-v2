@@ -38,6 +38,7 @@ import {
   RotateCw,
   RefreshCw,
 } from "lucide-react";
+import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
@@ -60,7 +61,9 @@ import {
 import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
-import { useUIStore } from "@/stores";
+import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import { useUIStore, useProjectStore, useEnvironmentStore } from "@/stores";
+import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
@@ -76,7 +79,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
+import {
+  EnvironmentItem,
+  resolveEnvironmentAgentActivity,
+} from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
 import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
@@ -413,19 +419,38 @@ export async function deleteProjectAndEnvironments(
   deleteEnvironment: (environmentId: string) => Promise<unknown>,
   removeProject: (projectId: string) => Promise<unknown>,
 ): Promise<void> {
-  const failedNames: string[] = [];
-  for (const environment of environments) {
-    try {
-      await deleteEnvironment(environment.id);
-    } catch (error) {
-      console.error(`Failed to delete environment ${environment.name}:`, error);
-      failedNames.push(environment.name);
+  const projectStore = useProjectStore.getState();
+  projectStore.setDeleting(projectId, true);
+  if (useUIStore.getState().selectedProjectId === projectId) {
+    useUIStore.getState().selectProject(null);
+  }
+  try {
+    const admittedHomes = await drainProjectHomeEnsures(projectId);
+    const currentEnvironments = useEnvironmentStore
+      .getState()
+      .environments.filter((environment) => environment.projectId === projectId);
+    const toDelete = new Map(
+      [...environments, ...currentEnvironments, ...admittedHomes].map((env) => [env.id, env]),
+    );
+    const failedNames: string[] = [];
+    for (const environment of toDelete.values()) {
+      try {
+        await deleteEnvironment(environment.id);
+      } catch (error) {
+        console.error(`Failed to delete environment ${environment.name}:`, error);
+        failedNames.push(environment.name);
+      }
     }
+    if (failedNames.length > 0) {
+      throw new Error(`Failed to delete some environments: ${failedNames.join(", ")}`);
+    }
+    await removeProject(projectId);
+  } finally {
+    if (useUIStore.getState().selectedProjectId === projectId) {
+      useUIStore.getState().selectProject(null);
+    }
+    projectStore.setDeleting(projectId, false);
   }
-  if (failedNames.length > 0) {
-    throw new Error(`Failed to delete some environments: ${failedNames.join(", ")}`);
-  }
-  await removeProject(projectId);
 }
 
 export function HierarchicalSidebar() {
@@ -520,9 +545,22 @@ export function HierarchicalSidebar() {
     [projectTree, collapsedProjectFolders],
   );
   const totalEnvironmentCount = activityEnvironments.length;
-  const waitingEnvironmentCount = useMemo(
-    () => sidebarEnvironments.filter((environment) => environment.hasUnreadWork).length,
-    [sidebarEnvironments],
+  const deletingEnvironments = useEnvironmentStore((state) => state.deletingEnvironments);
+  const waitingEnvironmentCount = useAgentActivityStore(
+    (state) =>
+      allEnvironments.filter(
+        (environment) =>
+          !deletingEnvironments.has(environment.id) &&
+          !environment.deletionRequestedAt &&
+          environment.lifecycleOperation !== "deleting" &&
+          (environment.hasUnreadWork ||
+            (environment.projectHome &&
+              resolveEnvironmentAgentActivity(
+                environment,
+                state.containerStates,
+                state.containerStateUpdatedAt,
+              ) === "waiting")),
+      ).length,
   );
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
@@ -990,6 +1028,13 @@ export function HierarchicalSidebar() {
       key={project.id}
       project={project}
       environments={getProjectEnvironments(project.id)}
+      home={allEnvironments.find(
+        (environment) =>
+          environment.projectId === project.id &&
+          environment.projectHome &&
+          !environment.deletionRequestedAt &&
+          environment.lifecycleOperation !== "deleting",
+      )}
       isCollapsed={collapsedProjects.includes(project.id)}
       isSelected={
         selectedProjectId === project.id && (!selectedEnvironmentId || selectedProjectHomeActive)
@@ -1238,6 +1283,20 @@ export function HierarchicalSidebar() {
                   </Tooltip>
                 </div>
               </div>
+              {sortEnvironmentsByActivity(allEnvironments, projects)
+                .filter(
+                  (environment) =>
+                    environment.projectHome &&
+                    !environment.deletionRequestedAt &&
+                    environment.lifecycleOperation !== "deleting",
+                )
+                .map((home) => (
+                  <ProjectHomeActivity
+                    key={home.id}
+                    home={home}
+                    projectName={projectsById.get(home.projectId)?.name ?? "Unknown project"}
+                  />
+                ))}
               {activityEnvironments.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">
                   No environments yet

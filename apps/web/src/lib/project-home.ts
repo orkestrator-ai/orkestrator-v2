@@ -8,12 +8,15 @@ import type { Environment } from "@/types";
 export function findProjectHomeEnvironment(
   environments: readonly Environment[],
   projectId: string,
+  deletingIds?: ReadonlySet<string>,
 ): Environment | undefined {
   return environments.find(
     (environment) =>
       environment.projectId === projectId &&
       environment.projectHome === true &&
-      !environment.deletionRequestedAt,
+      !deletingIds?.has(environment.id) &&
+      !environment.deletionRequestedAt &&
+      environment.lifecycleOperation !== "deleting",
   );
 }
 

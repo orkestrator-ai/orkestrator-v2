@@ -1,9 +1,18 @@
+import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { KanbanBoard } from "@/components/kanban";
 import { useProjectStore, useUIStore } from "@/stores";
 import { CoordinatorPanel } from "./CoordinatorPanel";
 
-export function ProjectWorkspace({ projectId }: { projectId: string }) {
+export function ProjectWorkspace({
+  projectId,
+  homeError,
+  onRetryHome,
+}: {
+  projectId: string;
+  homeError?: string | null;
+  onRetryHome?: () => void;
+}) {
   const tab = useUIStore((state) => state.projectBoardTab);
   const hasCheckout = useProjectStore(
     (state) => !!state.projects.find((project) => project.id === projectId)?.localPath?.trim(),
@@ -16,7 +25,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         role="tabpanel"
         className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
       >
-        {hasCheckout ? (
+        {hasCheckout && homeError ? (
+          <div role="alert" className="flex flex-col items-center gap-3">
+            <p>Could not open the project home: {homeError}</p>
+            <Button onClick={onRetryHome}>Retry opening Home</Button>
+          </div>
+        ) : hasCheckout ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
             Opening project home…

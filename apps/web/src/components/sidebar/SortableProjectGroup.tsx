@@ -1,3 +1,4 @@
+import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
@@ -44,6 +45,7 @@ import { useConfigStore } from "@/stores/configStore";
 interface SortableProjectGroupProps {
   project: Project;
   environments: Environment[];
+  home?: Environment;
   isCollapsed: boolean;
   isSelected: boolean;
   onToggleCollapse: () => void;
@@ -73,6 +75,7 @@ interface SortableProjectGroupProps {
 export function SortableProjectGroup({
   project,
   environments,
+  home,
   isCollapsed,
   isSelected,
   onToggleCollapse,
@@ -192,6 +195,7 @@ export function SortableProjectGroup({
                   {...listeners}
                   ref={projectTooltipAnchorRef}
                   type="button"
+                  aria-current={isSelected ? "page" : undefined}
                   className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -291,6 +295,8 @@ export function SortableProjectGroup({
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
+
+            {home && <ProjectHomeActivity home={home} projectName={project.name} compact />}
 
             {/* Add button - visible on compact layouts and revealed on desktop hover */}
             <Button

@@ -898,6 +898,59 @@ describe("PaneLeafContainer", () => {
     });
   });
 
+  test("inactive panes retain their agent but release global shortcuts", async () => {
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane-hidden",
+      activeTabId: "hidden-agent",
+      tabs: [
+        {
+          id: "hidden-agent",
+          type: "agent-native",
+          nativeAgentData: { platform: "codex", environmentId: "env-visible" },
+        },
+      ],
+    };
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-visible", {
+        root: pane,
+        activePaneId: pane.id,
+        containerId: "container-visible",
+      }),
+    }));
+    const view = render(
+      <PaneLeafContainer
+        pane={pane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+    const agent = await screen.findByTestId("codex-tab");
+    expect(agent.getAttribute("data-owns-global-shortcuts")).toBe("true");
+    const mounts = nativeAgentMountCount;
+    view.rerender(
+      <PaneLeafContainer
+        pane={pane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive={false}
+      />,
+    );
+    expect(agent.getAttribute("data-owns-global-shortcuts")).toBe("false");
+    expect(nativeAgentMountCount).toBe(mounts);
+    view.rerender(
+      <PaneLeafContainer
+        pane={pane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+    expect(agent.getAttribute("data-owns-global-shortcuts")).toBe("true");
+    expect(nativeAgentMountCount).toBe(mounts);
+  });
+
   test("forwards review-tab state to native chat tabs", async () => {
     const reviewPane: PaneLeaf = {
       kind: "leaf" as const,

@@ -277,7 +277,7 @@ function App() {
   // Opening an environment clears its unread badge for every client.
   useUnreadEnvironmentSync();
   // Selecting a project activates the environment working in its checkout.
-  useProjectHomeActivation();
+  const projectHomeActivation = useProjectHomeActivation();
   // The backend change feed must be attached before the store bindings that
   // consume it, and both before anything that reads a backend snapshot.
   useEffect(
@@ -1120,7 +1120,11 @@ function App() {
                 {selectedEnvironment && (
                   <div
                     {...(isProjectHomeSelected
-                      ? { id: "project-panel-home", role: "tabpanel" }
+                      ? {
+                          id: "project-panel-home",
+                          role: "tabpanel",
+                          "aria-hidden": showProjectBoard,
+                        }
                       : {})}
                     className={cn(
                       "absolute inset-0 z-10 bg-background",
@@ -1160,7 +1164,11 @@ function App() {
                 )}
                 {showProjectBoard && selectedProjectId && (
                   <div className="absolute inset-0 z-20 bg-background">
-                    <ProjectWorkspace projectId={selectedProjectId} />
+                    <ProjectWorkspace
+                      projectId={selectedProjectId}
+                      homeError={projectHomeActivation.error}
+                      onRetryHome={projectHomeActivation.retry}
+                    />
                   </div>
                 )}
               </div>

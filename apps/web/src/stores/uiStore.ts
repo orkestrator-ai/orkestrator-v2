@@ -29,6 +29,8 @@ export type EnvironmentSortMode = "project" | "activity";
 interface UIState {
   // Sidebar state
   selectedProjectId: string | null;
+  /** Explicit project navigation, including reselecting the same row. */
+  projectSelectionRevision: number;
   selectedEnvironmentId: string | null;
   /** Whether the left projects/environments panel is visible. */
   sidebarOpen: boolean;
@@ -99,6 +101,7 @@ export const useUIStore = create<UIState>()(
     (set, get) => ({
       // Initial state
       selectedProjectId: null,
+      projectSelectionRevision: 0,
       selectedEnvironmentId: null,
       sidebarOpen: true,
       recentProjectIds: [],
@@ -116,6 +119,9 @@ export const useUIStore = create<UIState>()(
       selectProject: (projectId) =>
         set((state) => ({
           selectedProjectId: projectId,
+          projectSelectionRevision: state.projectSelectionRevision + 1,
+          projectBoardTab: "coordinator",
+          projectBoardNotesOpen: false,
           selectedEnvironmentId: null,
           selectedEnvironmentIds: [],
           recentProjectIds: projectId
@@ -134,6 +140,7 @@ export const useUIStore = create<UIState>()(
       selectProjectAndEnvironment: (projectId, environmentId) =>
         set((state) => ({
           selectedProjectId: projectId,
+          projectSelectionRevision: state.projectSelectionRevision + 1,
           selectedEnvironmentId: environmentId,
           recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
         })),

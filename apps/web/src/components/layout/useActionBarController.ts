@@ -286,9 +286,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   /** A board panel, rather than environment tabs, fills the main view. */
   const isProjectBoardView =
     isProjectView && (!isProjectHomeSelected || projectBoardTab !== "home");
+  const projectDeleting = useProjectStore((state) =>
+    state.deletingProjects.has(selectedProjectId ?? ""),
+  );
   const projectHomeId = useEnvironmentStore((state) =>
-    selectedProjectId
-      ? (findProjectHomeEnvironment(state.environments, selectedProjectId)?.id ?? null)
+    selectedProjectId && !projectDeleting
+      ? (findProjectHomeEnvironment(
+          state.environments,
+          selectedProjectId,
+          state.deletingEnvironments,
+        )?.id ?? null)
       : null,
   );
   // The project board shows the project's own checkout in the files panel, so

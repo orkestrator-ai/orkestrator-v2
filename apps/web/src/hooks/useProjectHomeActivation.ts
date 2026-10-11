@@ -1,78 +1,121 @@
-import { useEffect, useLayoutEffect } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
-import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
+import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
-/**
- * A project's page runs on its project home, the environment that works
- * directly in the project's checkout. Selecting a project with a checkout
- * activates that home, so the toolbar's environment actions target the
- * checkout while the board tabs stay on screen.
- */
-export function useProjectHomeActivation(): void {
+/** Keep toolbar targeting on Home while board panels can obscure its panes. */
+export function useProjectHomeActivation() {
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const selectionRevision = useUIStore((state) => state.projectSelectionRevision);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const checkoutPath = useProjectStore(
     (state) =>
-      (selectedProjectId
-        ? state.projects.find((project) => project.id === selectedProjectId)?.localPath?.trim()
-        : null) || null,
+      state.projects.find((project) => project.id === selectedProjectId)?.localPath?.trim() || null,
   );
-  const selectedHomeId = useEnvironmentStore((state) => {
-    if (!selectedEnvironmentId) return null;
-    const environment = state.environments.find(
-      (candidate) => candidate.id === selectedEnvironmentId,
-    );
-    return environment?.projectHome === true ? environment.id : null;
-  });
+  const projectDeleting = useProjectStore((state) =>
+    selectedProjectId ? state.deletingProjects.has(selectedProjectId) : false,
+  );
+  const homeDeleting = useEnvironmentStore((state) =>
+    state.environments.some(
+      (environment) =>
+        environment.projectId === selectedProjectId &&
+        environment.projectHome &&
+        (state.deletingEnvironments.has(environment.id) ||
+          environment.deletionRequestedAt ||
+          environment.lifecycleOperation === "deleting"),
+    ),
+  );
+  const selectedHomeId = useEnvironmentStore(
+    (state) =>
+      state.environments.find(
+        (environment) => environment.id === selectedEnvironmentId && environment.projectHome,
+      )?.id ?? null,
+  );
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const reconciled = useRef<string | null>(null);
+  const suppressedSelection = useRef<string | null>(null);
+  const retry = useCallback(() => {
+    suppressedSelection.current = null;
+    setAttempt((value) => value + 1);
+  }, []);
+  const selectionKey = `${selectedProjectId}\0${selectionRevision}`;
+  const key = `${selectionKey}\0${checkoutPath}\0${attempt}`;
 
-  // A layout effect, so a known home replaces the bare board before paint and
-  // the environment controls do not flash out and back in.
   useLayoutEffect(() => {
-    if (!selectedProjectId || selectedEnvironmentId) return;
+    if (!selectedProjectId) return;
+    if (projectDeleting || homeDeleting) {
+      suppressedSelection.current = selectionKey;
+      setFailure({
+        key,
+        message: "Project home cleanup is in progress. Retry after cleanup finishes.",
+      });
+      return;
+    }
+    // Deletion can remove its final signal along with the record. Do not turn
+    // that disappearance into a new ensure until the user navigates again.
+    if (suppressedSelection.current === selectionKey) return;
+    if (selectedEnvironmentId && !selectedHomeId) {
+      reconciled.current = null;
+      return;
+    }
     if (!checkoutPath) {
-      // Without a checkout there is no home to show.
       const ui = useUIStore.getState();
+      if (selectedHomeId) ui.selectEnvironment(null);
       if (ui.projectBoardTab === "home") ui.setProjectBoardTab("coordinator");
+      reconciled.current = null;
       return;
     }
     const known = findProjectHomeEnvironment(
       useEnvironmentStore.getState().environments,
       selectedProjectId,
     );
-    if (known) {
+    if (!selectedEnvironmentId && known) {
+      reconciled.current = null;
       useUIStore.getState().selectEnvironment(known.id);
       return;
     }
+    if (reconciled.current === key) return;
     let cancelled = false;
     void ensureProjectHomeInStore(selectedProjectId)
       .then((home) => {
         const ui = useUIStore.getState();
-        if (cancelled || ui.selectedProjectId !== selectedProjectId || ui.selectedEnvironmentId) {
+        if (
+          cancelled ||
+          ui.selectedProjectId !== selectedProjectId ||
+          isProjectHomeDeletionInProgress(selectedProjectId)
+        )
           return;
+        reconciled.current = key;
+        setFailure(null);
+        if (!ui.selectedEnvironmentId || ui.selectedEnvironmentId === selectedHomeId) {
+          ui.selectEnvironment(home.id);
         }
-        ui.selectEnvironment(home.id);
       })
       .catch((error: unknown) => {
-        if (cancelled) return;
+        if (cancelled || isProjectHomeDeletionInProgress(selectedProjectId)) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setFailure({ key, message });
         toast.error("Could not open the project home", {
-          description: error instanceof Error ? error.message : String(error),
+          description: message,
+          action: { label: "Retry", onClick: retry },
         });
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedProjectId, selectedEnvironmentId, checkoutPath]);
+  }, [
+    selectedProjectId,
+    selectionKey,
+    selectedEnvironmentId,
+    selectedHomeId,
+    checkoutPath,
+    projectDeleting,
+    homeDeleting,
+    key,
+    retry,
+  ]);
 
-  // The checkout can change branch or path outside Orkestrator. Withhold the
-  // previous branch's PR controls while the backend reconciles the home.
-  useEffect(() => {
-    if (!selectedHomeId) return;
-    const store = useEnvironmentStore.getState();
-    const home = store.environments.find((environment) => environment.id === selectedHomeId);
-    if (!home) return;
-    store.updateEnvironment(home.id, { prUrl: null, prState: null, hasMergeConflicts: null });
-    void ensureProjectHomeInStore(home.projectId).catch(() => undefined);
-  }, [selectedHomeId]);
+  return { error: failure?.key === key ? failure.message : null, retry };
 }

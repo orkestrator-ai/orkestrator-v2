@@ -19,7 +19,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -516,6 +516,7 @@ test.beforeAll(async () => {
     repositoryRoot,
     requestedId: "annotation-smoke",
     flavor: "agent-test",
+    credentialSources: ["claude"],
     rendererPort,
     gatewayPort,
     roots: {
@@ -525,6 +526,11 @@ test.beforeAll(async () => {
     },
   });
   const profilePath = await initializeProfile(profile);
+  // Enable only the isolated onboarding read and seed its empty marker. This
+  // fixture copies no host credentials and runs no Claude turns.
+  const isolatedHome = path.join(profile.dataDir, "agent-credentials", "home");
+  await mkdir(isolatedHome, { recursive: true, mode: 0o700 });
+  await writeFile(path.join(isolatedHome, ".claude.json"), "{}", { mode: 0o600 });
   const rendererUrl = `http://127.0.0.1:${rendererPort}`;
   const vite = spawn("bun", ["run", "dev"], {
     cwd: webRoot,
@@ -592,6 +598,92 @@ test.afterAll(async () => {
 
 test.beforeEach(async () => {
   if (stack?.fixture) await resetFixture(stack.fixture);
+});
+
+test("Home native preview hides beneath board panels and returns without losing its tab", async () => {
+  const environment = await invoke<{ projectId: string }>("get_environment", {
+    environmentId: s().environmentId,
+  });
+  const home = await invoke<{ id: string }>("ensure_project_home_environment", {
+    projectId: environment.projectId,
+  });
+  const tabId = "home-visibility-preview";
+  await invoke("save_pane_layout", {
+    environmentId: home.id,
+    expectedRevision: 0,
+    layout: {
+      version: PANE_LAYOUT_VERSION,
+      containerId: null,
+      activePaneId: "home-preview-pane",
+      root: {
+        kind: "leaf",
+        id: "home-preview-pane",
+        activeTabId: tabId,
+        tabs: [
+          {
+            id: tabId,
+            type: "browser",
+            browserData: { url: `${s().fixture.url}${ROUTE_VARIANTS.settings}` },
+          },
+        ],
+      },
+    },
+  });
+  await preview("destroy", TAB_ID);
+  try {
+    const projects = await invoke<Array<{ id: string; name: string }>>("get_projects");
+    const project = projects.find((candidate) => candidate.id === environment.projectId)!;
+    const projectRow = s()
+      .window.getByRole("button", { name: new RegExp(`^${project.name}`) })
+      .first();
+    await expect(projectRow).toBeVisible({ timeout: 30_000 });
+    await projectRow.click();
+    await s().window.getByRole("tab", { name: "Home", exact: true }).click();
+    await expect(s().window.getByRole("textbox", { name: "Browser address" })).toBeVisible();
+    const visiblePreview = () =>
+      s().app.evaluate(({ BrowserWindow }, origin) => {
+        const host = BrowserWindow.getAllWindows()[0];
+        return (
+          host?.contentView.children.some((view) => {
+            const child = view as unknown as {
+              getVisible(): boolean;
+              webContents?: { getURL(): string };
+            };
+            return child.webContents?.getURL().startsWith(origin) && child.getVisible();
+          }) ?? false
+        );
+      }, s().fixture.url);
+    await expect.poll(visiblePreview, { timeout: 30_000 }).toBe(true);
+    for (const board of ["Kanban", "Coordinator"]) {
+      await s().window.getByRole("tab", { name: board, exact: true }).click();
+      await expect.poll(visiblePreview).toBe(false);
+      await s().window.getByRole("tab", { name: "Home", exact: true }).click();
+      await expect.poll(visiblePreview).toBe(true);
+    }
+    await s().window.reload();
+    await waitForApi(s().window);
+    await s().window.evaluate(
+      async ({ projectId, homeId }) => {
+        const modulePath = "/src/stores/uiStore.ts";
+        const { useUIStore } = await import(modulePath);
+        useUIStore.getState().selectProjectAndEnvironment(projectId, homeId);
+        useUIStore.getState().setProjectBoardTab("home");
+      },
+      { projectId: environment.projectId, homeId: home.id },
+    );
+    await expect.poll(visiblePreview, { timeout: 30_000 }).toBe(true);
+    await s().window.getByRole("tab", { name: "Kanban", exact: true }).click();
+    await expect.poll(visiblePreview).toBe(false);
+  } finally {
+    await s().window.evaluate(async () => {
+      const modulePath = "/src/stores/uiStore.ts";
+      const { useUIStore } = await import(modulePath);
+      useUIStore.getState().selectProject(null);
+    });
+    await preview("destroy", tabId).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: home.id });
+    await attachPreview(ROUTE_VARIANTS.settings);
+  }
 });
 
 test("a capture saved without any agent tab survives renderer reload and backend restart", async () => {

@@ -234,3 +234,13 @@ describe("useEscapeToStop", () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 });
+
+test("body Escape cannot stop a hidden agent and resumes when its pane is visible", () => {
+  const onStop = mock(() => {});
+  const view = render(<Harness isActive={false} onStop={onStop} />);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(onStop).not.toHaveBeenCalled();
+  view.rerender(<Harness isActive onStop={onStop} />);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(onStop).toHaveBeenCalledTimes(1);
+});

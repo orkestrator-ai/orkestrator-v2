@@ -5,7 +5,13 @@ import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { mockToastWarning } from "../../mocks/sonner";
-import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
+import {
+  useClaudeOptionsStore,
+  useConfigStore,
+  useUIStore,
+  useEnvironmentStore,
+  useProjectStore,
+} from "@/stores";
 import type { Environment, Project } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import {
@@ -53,6 +59,12 @@ const createdEnvironment: Environment = {
   environmentType: "containerized",
 };
 
+const ensureProjectHomeMock = mock(async (_projectId: string): Promise<Environment> => ({
+  ...createdEnvironment,
+  id: "home",
+  name: "project-home",
+  projectHome: true,
+}));
 const createEnvironmentMock = mock(async () => createdEnvironment);
 const forkEnvironmentMock = mock(async () => ({
   ...createdEnvironment,
@@ -131,6 +143,7 @@ mock.module("@/hooks/useEnvironmentDiffStats", () => ({
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  ensureProjectHomeEnvironment: ensureProjectHomeMock,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
@@ -256,6 +269,9 @@ describe("HierarchicalSidebar", () => {
     reorderProjectsMock.mockClear();
     arrangeProjectsMock.mockClear();
     arrangeProjectsMock.mockImplementation(async () => {});
+    ensureProjectHomeMock.mockClear();
+    useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
+    useProjectStore.setState({ projects: [], deletingProjects: new Set() });
     projectsValue = [project];
     environmentsValue = [];
     projectsLoadingValue = false;
@@ -276,6 +292,7 @@ describe("HierarchicalSidebar", () => {
       pendingNativeLaunches: {},
     });
     useUIStore.setState({
+      projectBoardTab: "coordinator",
       selectedProjectId: null,
       selectedEnvironmentId: null,
       recentProjectIds: [],
@@ -2225,6 +2242,151 @@ describe("HierarchicalSidebar", () => {
     ).toBeNull();
     expect(resolveSidebarReorder("project-1", "project-1", "project", [project], [])).toBeNull();
     expect(resolveSidebarReorder("project-1", "project-2", null, [project], [])).toBeNull();
+  });
+
+  test("project teardown includes a home from the latest store when the sidebar snapshot is stale", async () => {
+    const home = { ...createdEnvironment, id: "new-home", projectHome: true };
+    useEnvironmentStore.setState({ environments: [home] });
+    await deleteProjectAndEnvironments(
+      project.id,
+      [createdEnvironment],
+      deleteEnvironmentMock,
+      removeProjectMock,
+    );
+    expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual([
+      createdEnvironment.id,
+      home.id,
+    ]);
+    expect(removeProjectMock).toHaveBeenCalledWith(project.id);
+  });
+
+  test("project teardown fences activation and deletes a home admitted before teardown", async () => {
+    const { ensureProjectHomeInStore } = await import("@/hooks/useFilesPanel");
+    const { useProjectHomeActivation } = await import("@/hooks/useProjectHomeActivation");
+    const { renderHook } = await import("@testing-library/react");
+    let resolve!: (home: Environment) => void;
+    ensureProjectHomeMock.mockImplementationOnce(
+      () =>
+        new Promise<Environment>((done) => {
+          resolve = done;
+        }),
+    );
+    useProjectStore.setState({ projects: [{ ...project, localPath: "/checkout" }] });
+    useUIStore.setState({
+      selectedProjectId: project.id,
+      selectedEnvironmentId: createdEnvironment.id,
+    });
+    const pending = ensureProjectHomeInStore(project.id);
+    renderHook(() => useProjectHomeActivation());
+    const deleting = deleteProjectAndEnvironments(
+      project.id,
+      [createdEnvironment],
+      deleteEnvironmentMock,
+      removeProjectMock,
+    );
+    expect(useUIStore.getState().selectedProjectId).toBeNull();
+    act(() => useUIStore.getState().selectProject(project.id));
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    await expect(ensureProjectHomeInStore(project.id)).rejects.toThrow("being deleted");
+    const admittedHome = {
+      ...createdEnvironment,
+      id: "home",
+      name: "project-home",
+      projectHome: true,
+    };
+    await act(async () => {
+      resolve(admittedHome);
+      await pending;
+      await deleting;
+    });
+    expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual([
+      createdEnvironment.id,
+      "home",
+    ]);
+    expect(useEnvironmentStore.getState().environments).toEqual([]);
+    expect(removeProjectMock).toHaveBeenCalledTimes(1);
+    expect(useProjectStore.getState().deletingProjects.size).toBe(0);
+  });
+
+  test("hidden homes keep project attention and activity routes without inflating environment rows or search", async () => {
+    const home = {
+      ...createdEnvironment,
+      id: "home",
+      name: "project-home",
+      projectHome: true,
+      hasUnreadWork: true,
+      agentActivityState: "waiting" as const,
+      agentActivityUpdatedAt: new Date(Date.now() - 1000).toISOString(),
+    };
+    environmentsValue = [home, createdEnvironment];
+    useUIStore.setState({
+      selectedProjectId: project.id,
+      selectedEnvironmentId: home.id,
+      projectBoardTab: "home",
+    });
+    const view = render(<HierarchicalSidebar />);
+    expect(screen.queryByText("project-home") === null).toBe(true);
+    const projectButton = screen.getByRole("button", { name: /Project One 1/ });
+    expect(projectButton.getAttribute("aria-current")).toBe("page");
+    fireEvent.click(projectButton);
+    expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+    fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("home");
+    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    act(() => useUIStore.getState().setEnvironmentSortMode("activity"));
+    expect(screen.getByLabelText("1 environment")).toBeTruthy();
+    expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
+    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    environmentsValue = [
+      { ...home, hasUnreadWork: false, agentActivityState: "working" },
+      createdEnvironment,
+    ];
+    view.rerender(<HierarchicalSidebar />);
+    expect(screen.getByRole("button", { name: "Project One Home working" })).toBeTruthy();
+    environmentsValue = [
+      { ...home, hasUnreadWork: false, agentActivityState: "idle" },
+      createdEnvironment,
+    ];
+    view.rerender(<HierarchicalSidebar />);
+    expect(screen.queryByRole("button", { name: /Project One Home/ }) === null).toBe(true);
+    expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
+    environmentsValue = [{ ...home, hasUnreadWork: false }, createdEnvironment];
+    view.rerender(<HierarchicalSidebar />);
+    expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
+  });
+
+  test("search excludes hidden homes and project deletion still includes them", async () => {
+    const home = { ...createdEnvironment, id: "home", name: "project-home", projectHome: true };
+    environmentsValue = [home, createdEnvironment];
+    render(<HierarchicalSidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Search projects and environments" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "project-home" } });
+    expect(screen.queryByRole("option") === null).toBe(true);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Project One 1" }));
+    fireEvent.click(screen.getByText("Delete Project"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
+    await waitFor(() => expect(removeProjectMock).toHaveBeenCalledWith(project.id));
+    expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual([
+      home.id,
+      createdEnvironment.id,
+    ]);
+  });
+
+  test("project row and Open Board reset Home for both same and different projects", () => {
+    projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
+    render(<HierarchicalSidebar />);
+    for (const name of ["Project One", "Project Two"]) {
+      act(() => useUIStore.setState({ projectBoardTab: "home" }));
+      const row = screen.getByRole("button", { name });
+      fireEvent.click(row);
+      expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+      act(() => useUIStore.setState({ projectBoardTab: "home" }));
+      fireEvent.contextMenu(row);
+      fireEvent.click(screen.getByText("Open Board"));
+      expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+    }
   });
 
   test("deletes a project only after every environment succeeds", async () => {

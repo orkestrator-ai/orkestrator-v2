@@ -359,6 +359,120 @@ test.describe("host path browsing", () => {
   });
 });
 
+test("project Home retains background work and unread attention beneath the board", async ({
+  page,
+}) => {
+  // The credential-free fixture exercises navigation and terminals, not login.
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    if (route.request().postDataJSON()?.command === "check_claude_cli") {
+      await route.fulfill({ json: { result: false } });
+    } else await route.continue();
+  });
+  const status = await profileStatus();
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  )!;
+  expect(fixture).toBeTruthy();
+  const home = await invoke<Environment>("ensure_project_home_environment", {
+    projectId: fixture.id,
+  });
+  const layout = await invoke<{ revision: number } | null>("get_pane_layout", {
+    environmentId: home.id,
+  });
+  await invoke("save_pane_layout", {
+    environmentId: home.id,
+    expectedRevision: layout?.revision ?? 0,
+    layout: {
+      version: PANE_LAYOUT_VERSION,
+      containerId: null,
+      activePaneId: "home-pane",
+      root: {
+        kind: "leaf",
+        id: "home-pane",
+        activeTabId: "home-browser",
+        tabs: [{ id: "home-browser", type: "browser", browserData: { url: "" } }],
+      },
+    },
+  });
+  await page.goto(status.browserUrl!);
+  const projectRow = page.getByRole("button", { name: new RegExp(`^${fixture.name}`) }).first();
+  await projectRow.click();
+  await expect(page.getByRole("tab", { name: "Coordinator", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("tab", { name: "Home", exact: true }).click();
+  await expect(page.locator("#project-panel-home")).toBeVisible();
+  const terminal = await invoke<{ sessionId: string }>("create_local_terminal_session", {
+    environmentId: home.id,
+    terminalKey: "home-background-check",
+    cols: 80,
+    rows: 24,
+  });
+  try {
+    await invoke("start_local_terminal_session", { sessionId: terminal.sessionId });
+    await invoke("local_terminal_write", {
+      sessionId: terminal.sessionId,
+      data: "sleep 1; printf 'home-background-finished\\n'\n",
+    });
+    await page.getByRole("tab", { name: "Kanban", exact: true }).click();
+    await expect(page.locator("#project-panel-home")).not.toBeVisible();
+    await expect
+      .poll(async () => {
+        const snapshot = await invoke<{ output: string }>("get_terminal_output_snapshot", {
+          sessionId: terminal.sessionId,
+        });
+        return snapshot.output.split(/\r?\n/).some((line) => line === "home-background-finished");
+      })
+      .toBe(true);
+    await invoke("set_environment_unread", { environmentId: home.id, unread: true });
+    const attention = page.getByRole("button", { name: `${fixture.name} Home needs attention` });
+    await expect(attention).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await invoke<{ hasUnreadWork: boolean }>("get_environment", { environmentId: home.id }))
+            .hasUnreadWork,
+      )
+      .toBe(true);
+    await page.reload();
+    await projectRow.click();
+    await expect(attention).toBeVisible();
+    await attention.click();
+    await expect(page.getByRole("tab", { name: "Home", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect
+      .poll(
+        async () =>
+          (await invoke<{ hasUnreadWork: boolean }>("get_environment", { environmentId: home.id }))
+            .hasUnreadWork,
+      )
+      .toBe(false);
+    await projectRow.click();
+    await expect(page.getByRole("tab", { name: "Coordinator", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    const closeProjects = page
+      .getByRole("button", { name: "Close projects and environments", exact: true })
+      .first();
+    if (await closeProjects.isVisible()) await closeProjects.click();
+    await page.getByRole("button", { name: "Open tools", exact: true }).click();
+    const homeTab = page.getByRole("tab", { name: "Home", exact: true });
+    await expect(homeTab).toBeVisible();
+    await homeTab.focus();
+    await homeTab.press("Enter");
+    await expect(page.locator("#project-panel-home")).toBeVisible();
+  } finally {
+    await invoke("close_local_terminal_session", { sessionId: terminal.sessionId });
+    await invoke("set_environment_unread", { environmentId: home.id, unread: false });
+  }
+});
+
 test("real browser gateway exercises an authoritative local environment", async ({ page }) => {
   const status = await profileStatus();
   expect(status.status).toBe("ready");

@@ -1,3 +1,4 @@
+import type { Environment } from "@/types";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -12,12 +13,15 @@ function isBackendDeletionTombstone(environment: {
  * Leave a tearing-down environment so the project workspace is shown instead
  * of the unavailable-environment error that appears while cleanup runs.
  */
-export function activateProjectForEnvironmentCleanup(environmentId: string): boolean {
+export function activateProjectForEnvironmentCleanup(
+  environmentId: string,
+  previousEnvironment?: Environment,
+): boolean {
   const ui = useUIStore.getState();
   if (ui.selectedEnvironmentId !== environmentId) return false;
 
   const envStore = useEnvironmentStore.getState();
-  const environment = envStore.getEnvironmentById(environmentId);
+  const environment = envStore.getEnvironmentById(environmentId) ?? previousEnvironment;
   // A fresh renderer-local deletion overrides a stale merge-cleanup error so
   // sidebar and bulk-delete can leave the workspace immediately. A backend
   // tombstone that still carries the error stays selected so retry remains
@@ -30,7 +34,7 @@ export function activateProjectForEnvironmentCleanup(environmentId: string): boo
   if (!projectId) return false;
 
   ui.setProjectCollapsed(projectId, false);
-  ui.selectProject(projectId);
+  ui.selectProject(environment?.projectHome ? null : projectId);
   return true;
 }
 
@@ -83,7 +87,7 @@ export function startEnvironmentCleanupSelectionSync(): () => void {
     }
 
     if (previousEnvironment && !environment) {
-      activateProjectForEnvironmentCleanup(selectedEnvironmentId);
+      activateProjectForEnvironmentCleanup(selectedEnvironmentId, previousEnvironment);
       return;
     }
 

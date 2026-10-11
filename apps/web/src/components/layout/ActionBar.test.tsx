@@ -27,6 +27,7 @@ import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment, PrState, Project } from "@/types";
+import type { ProjectBoardTab } from "@/stores";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
@@ -66,6 +67,8 @@ type MergeOutcome = {
 };
 
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
+const currentDeletingEnvironments = new Set<string>();
+const currentDeletingProjects = new Set<string>();
 const mergeEnvironmentPrMock = mock(
   async (
     _environmentId: string,
@@ -241,6 +244,21 @@ const selectedProject: Project = {
   order: 0,
 };
 
+/** The environment working directly in the project's checkout. */
+const projectHomeEnvironment: Environment = {
+  ...selectedEnvironment,
+  id: "project-home-1",
+  name: "project-home",
+  branch: "main",
+  containerId: null,
+  environmentType: "local",
+  worktreePath: "/tmp/repo",
+  projectHome: true,
+  prUrl: null,
+  prState: null,
+  hasMergeConflicts: null,
+};
+
 let currentEnvironment: Environment = selectedEnvironment;
 let currentCheckSummary: PrCheckSummary | null = null;
 let currentUseRealPullRequest = false;
@@ -261,7 +279,7 @@ let currentOtherEnvironments: Environment[] = [];
 let currentOtherProjects: Project[] = [];
 /** Projects removed from the store, to model a deletion while a dialog is open. */
 let currentDeletedProjectIds = new Set<string>();
-let currentProjectBoardTab: "coordinator" | "kanban" | "github" | "linear" | "features" = "kanban";
+let currentProjectBoardTab: ProjectBoardTab = "kanban";
 let currentProjectBoardNotesOpen = false;
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
@@ -627,6 +645,7 @@ mock.module("@/stores", () => ({
     <T,>(
       selector?: (state: {
         environments: Environment[];
+        deletingEnvironments: Set<string>;
         getEnvironmentById: (environmentId: string) => Environment | undefined;
         updateEnvironment: (environmentId: string, environment: Environment) => void;
         setEnvironmentPR: () => void;
@@ -649,6 +668,7 @@ mock.module("@/stores", () => ({
                 }
               : environment,
           ),
+          deletingEnvironments: currentDeletingEnvironments,
           getEnvironmentById: (environmentId: string) =>
             environmentId === currentEnvironment.id
               ? {
@@ -695,6 +715,7 @@ mock.module("@/stores", () => ({
     <T,>(
       selector?: (state: {
         projects: Project[];
+        deletingProjects: Set<string>;
         getProjectById: (projectId: string) => Project | undefined;
       }) => T,
     ) =>
@@ -703,6 +724,7 @@ mock.module("@/stores", () => ({
           projects: [...currentOtherProjects, selectedProject].filter(
             (project) => !currentDeletedProjectIds.has(project.id),
           ),
+          deletingProjects: currentDeletingProjects,
           getProjectById: (projectId: string) =>
             projectId === selectedProject.id && !currentDeletedProjectIds.has(projectId)
               ? selectedProject
@@ -726,10 +748,8 @@ mock.module("@/stores", () => ({
       selectProject: (projectId: string | null) => void;
       selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
       setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
-      projectBoardTab: "coordinator" | "kanban" | "linear" | "github" | "features";
-      setProjectBoardTab: (
-        tab: "coordinator" | "kanban" | "linear" | "github" | "features",
-      ) => void;
+      projectBoardTab: ProjectBoardTab;
+      setProjectBoardTab: (tab: ProjectBoardTab) => void;
       setProjectBoardNotesOpen: (open: boolean) => void;
       sidebarOpen: boolean;
       toggleSidebar: () => void;
@@ -890,6 +910,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  currentDeletingEnvironments.clear();
+  currentDeletingProjects.clear();
   setLongPressTimingsForTests(15, CLICK_SUPPRESSION_MS);
   cleanup();
   console.error = mock(() => {}) as typeof console.error;
@@ -2499,7 +2521,7 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     expect(screen.queryByRole("button", { name: "Show file panel" }) === null).toBe(true);
-    expect(screen.queryByRole("button", { name: "Open project home" }) === null).toBe(true);
+    expect(screen.queryByRole("tab", { name: "Home" }) === null).toBe(true);
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
     expect(openFilesPanelOnAllFilesMock).not.toHaveBeenCalled();
   });
@@ -2515,19 +2537,102 @@ describe("ActionBar toolbar interactions", () => {
     expect(openFilesPanelOnAllFilesMock).not.toHaveBeenCalled();
   });
 
-  test("opens the project home so review and PR sessions can run on the checkout", async () => {
-    currentSelectedEnvironmentId = null;
+  test("runs the environment controls on the project home above the project tabs", () => {
+    currentEnvironment = projectHomeEnvironment;
+    currentSelectedEnvironmentId = projectHomeEnvironment.id;
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open project home" }));
+    const toolbar = document.querySelector("[data-mobile-toolbar]")!;
+    const projectRow = screen.getByTestId("project-navigation-bar");
+    expect(toolbar.contains(screen.getByRole("button", { name: "New native agent tab" }))).toBe(
+      true,
+    );
+    expect(toolbar.contains(screen.getByRole("button", { name: "Code review" }))).toBe(true);
+    expect(projectRow.contains(screen.getByRole("tab", { name: "Home" }))).toBe(true);
+    expect(projectRow.contains(screen.getByRole("tab", { name: "Kanban" }))).toBe(true);
+    expect(projectRow.contains(screen.getByRole("button", { name: "Project notes" }))).toBe(true);
+    expect(
+      toolbar.compareDocumentPosition(projectRow) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
-    await waitFor(() =>
-      expect(selectProjectAndEnvironmentMock).toHaveBeenCalledWith("project-1", "project-home-1"),
+    fireEvent.click(screen.getByRole("tab", { name: "Home" }));
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("home");
+    expect(selectEnvironmentMock).toHaveBeenCalledWith(projectHomeEnvironment.id);
+  });
+
+  test("Home navigation cannot select a locally deleting home or a tearing-down project", () => {
+    currentEnvironment = projectHomeEnvironment;
+    currentSelectedEnvironmentId = projectHomeEnvironment.id;
+    currentDeletingEnvironments.add(projectHomeEnvironment.id);
+    const view = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("tab", { name: "Home" }));
+    expect(selectEnvironmentMock).toHaveBeenLastCalledWith(null);
+    currentDeletingEnvironments.clear();
+    currentDeletingProjects.add(selectedProject.id);
+    view.rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
+    expect(selectEnvironmentMock).toHaveBeenLastCalledWith(null);
+    currentDeletingProjects.clear();
+  });
+
+  test("keeps the project home selected when switching board tabs", () => {
+    currentEnvironment = projectHomeEnvironment;
+    currentSelectedEnvironmentId = projectHomeEnvironment.id;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Coordinator" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
+
+    expect(projectBoardActionLog).toEqual([
+      "tab:coordinator",
+      `environment:${projectHomeEnvironment.id}`,
+      `environment:${projectHomeEnvironment.id}`,
+      "notes:true",
+    ]);
+  });
+
+  test("shows the project home's tabs when a job launches from a board panel", async () => {
+    currentEnvironment = projectHomeEnvironment;
+    currentSelectedEnvironmentId = projectHomeEnvironment.id;
+    currentProjectBoardTab = "kanban";
+    currentWorkspaceReady = true;
+    readLocalFileMock.mockImplementation(async () => ({
+      content: JSON.stringify({ run: ["bun test"] }),
+    }));
+    render(<ActionBar />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
+
+    await waitFor(() => expect(setProjectBoardTabMock).toHaveBeenCalledWith("home"));
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
+      projectHomeEnvironment.id,
+      "terminal-job-run",
+      expect.any(Object),
     );
-    expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
-    expect(addEnvironmentStoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "project-home-1", projectHome: true }),
-    );
+  });
+
+  test("does not switch board tabs when a regular environment launches a job", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementation(async () => ({
+      content: JSON.stringify({ run: ["bun test"] }),
+    }));
+    render(<ActionBar />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
+
+    await waitFor(() => expect(requestPaneTabActivationMock).toHaveBeenCalled());
+    expect(setProjectBoardTabMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("project-navigation-bar") === null).toBe(true);
   });
 
   test("opens a neutral native tab without routing removed provider shortcuts", () => {
@@ -2594,10 +2699,16 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByText("Select an environment to get started")).toBeTruthy();
   });
 
-  test("shows project board tabs in the top bar when no environment is selected", () => {
+  test("shows project board tabs in their own row when no environment is selected", () => {
     currentSelectedEnvironmentId = null;
 
     render(<ActionBar />);
+
+    expect(
+      screen
+        .getByTestId("project-navigation-bar")
+        .contains(screen.getByRole("tab", { name: "Kanban" })),
+    ).toBe(true);
 
     expect(screen.queryByText("repo") === null).toBe(true);
     const notesButton = screen.getByRole("button", { name: "Project notes" });
@@ -2608,7 +2719,7 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
     expect(
-      notesButton.compareDocumentPosition(kanbanTab) & Node.DOCUMENT_POSITION_FOLLOWING,
+      kanbanTab.compareDocumentPosition(notesButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(notesButton);

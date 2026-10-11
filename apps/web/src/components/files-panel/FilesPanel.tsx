@@ -48,7 +48,9 @@ export function FilesPanel() {
           useFilesPanelStore
             .getState()
             .requestFileOpen({ environmentId: home.id, filePath, options });
-          useUIStore.getState().selectProjectAndEnvironment(projectScopeProjectId, home.id);
+          const ui = useUIStore.getState();
+          ui.selectProjectAndEnvironment(projectScopeProjectId, home.id);
+          ui.setProjectBoardTab("home");
         })
         .catch((error: unknown) => {
           toast.error("Could not open the project home", {

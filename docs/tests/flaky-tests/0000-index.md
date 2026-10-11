@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0191 | open | `reconciles container statuses from one labelled docker ps snapshot` | tests/unit/electron/commands-registry-environments-status.test.ts | Five-second timeout under aggregate load; owning file passed alone in 3.4 seconds. | [0191-container-status-snapshot-aggregate-timeout.md](0191-container-status-snapshot-aggregate-timeout.md) |
 | 0190 | open | `reports whether the selected host GitHub CLI credential is available` | tests/unit/electron/commands-registry-tools.test.ts | Five-second root-suite timeout and delayed credential-probe result; owning file passed alone in 0.5 seconds. | [0190-host-github-credential-probe-timeout.md](0190-host-github-credential-probe-timeout.md) |
 | 0189 | open | `LoopedReviewService keyed scheduling > old and new drivers make the same transitions from one persisted fixture` | apps/backend/src/core/looped-review-scheduling.test.ts | Five-second aggregate timeout; owning file passed alone in 5.7 seconds. | [0189-looped-review-scheduling-timeout.md](0189-looped-review-scheduling-timeout.md) |
 | 0188 | open | Local worktree remote-branch collision and configured remote-default-branch cases | tests/unit/electron/commands-registry-environments.test.ts | Five-second Git/worktree timeouts in the aggregate; owning file passed alone in 16.9 seconds. | [0188-environment-worktree-aggregate-timeouts.md](0188-environment-worktree-aggregate-timeouts.md) |

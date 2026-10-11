@@ -142,3 +142,18 @@ describe("useNotificationSoundService", () => {
     expect(primeNotificationSounds).not.toHaveBeenCalled();
   });
 });
+
+test("Home completion sounds while the board obscures it, but not while Home is visible", () => {
+  const home = { ...environment("home", false), projectHome: true };
+  useEnvironmentStore.setState({ environments: [home] });
+  useUIStore.setState({ selectedEnvironmentId: home.id, projectBoardTab: "kanban" });
+  renderHook(() => useNotificationSoundService());
+  act(() => useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: true }));
+  expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+  act(() => {
+    useUIStore.getState().setProjectBoardTab("home");
+    useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: false });
+  });
+  act(() => useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: true }));
+  expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+});

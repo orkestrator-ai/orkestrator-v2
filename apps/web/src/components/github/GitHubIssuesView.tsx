@@ -8,6 +8,7 @@ import {
   useDroppable,
   useSensor,
   useSensors,
+  type Announcements,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -20,6 +21,30 @@ import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssue, GitHubIssueStatus } from "@/types/github";
 import { GITHUB_WORKFLOW_STAGES, GitHubIssueCard, getGitHubStageLabel } from "./GitHubIssueCard";
 import { GitHubIssueDetail } from "./GitHubIssueDetail";
+
+const ISSUE_ANNOUNCEMENTS: Announcements = {
+  onDragStart({ active }) {
+    const issueNumber = active.data.current?.issueNumber;
+    return `Picked up GitHub issue ${issueNumber ?? ""}`;
+  },
+  onDragOver({ active, over }) {
+    const issueNumber = active.data.current?.issueNumber;
+    const status = over?.data.current?.status as GitHubIssueStatus | undefined;
+    return status
+      ? `Issue ${issueNumber ?? ""} is over ${getGitHubStageLabel(status)}`
+      : `Issue ${issueNumber ?? ""} is no longer over a stage`;
+  },
+  onDragEnd({ active, over }) {
+    const issueNumber = active.data.current?.issueNumber;
+    const status = over?.data.current?.status as GitHubIssueStatus | undefined;
+    return status
+      ? `Moved issue ${issueNumber ?? ""} to ${getGitHubStageLabel(status)}`
+      : `Stopped moving issue ${issueNumber ?? ""}`;
+  },
+  onDragCancel({ active }) {
+    return `Cancelled moving issue ${active.data.current?.issueNumber ?? ""}`;
+  },
+};
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -279,31 +304,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
             onDragStart={handleDragStart}
             onDragCancel={() => setActiveIssueNumber(null)}
             onDragEnd={handleDragEnd}
-            accessibility={{
-              announcements: {
-                onDragStart({ active }) {
-                  const issueNumber = active.data.current?.issueNumber;
-                  return `Picked up GitHub issue ${issueNumber ?? ""}`;
-                },
-                onDragOver({ active, over }) {
-                  const issueNumber = active.data.current?.issueNumber;
-                  const status = over?.data.current?.status as GitHubIssueStatus | undefined;
-                  return status
-                    ? `Issue ${issueNumber ?? ""} is over ${getGitHubStageLabel(status)}`
-                    : `Issue ${issueNumber ?? ""} is no longer over a stage`;
-                },
-                onDragEnd({ active, over }) {
-                  const issueNumber = active.data.current?.issueNumber;
-                  const status = over?.data.current?.status as GitHubIssueStatus | undefined;
-                  return status
-                    ? `Moved issue ${issueNumber ?? ""} to ${getGitHubStageLabel(status)}`
-                    : `Stopped moving issue ${issueNumber ?? ""}`;
-                },
-                onDragCancel({ active }) {
-                  return `Cancelled moving issue ${active.data.current?.issueNumber ?? ""}`;
-                },
-              },
-            }}
+            accessibility={{ announcements: ISSUE_ANNOUNCEMENTS }}
           >
             <div className="flex h-full gap-3 sm:gap-4">
               {GITHUB_WORKFLOW_STAGES.map((stage) => (

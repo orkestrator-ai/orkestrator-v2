@@ -24,6 +24,9 @@ export function useEnvironmentDiskUsage(
   const [loading, setLoading] = useState(!options.initial && enabled);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
+  const usageRef = useRef(usage);
+  usageRef.current = usage;
+  const incomingIdentityRef = useRef<string | null>(null);
 
   const load = useCallback(
     async (refresh: boolean) => {
@@ -32,7 +35,8 @@ export function useEnvironmentDiskUsage(
       setError(null);
       try {
         const result = await backend.getEnvironmentDiskUsage(environmentId, refresh);
-        if (request === requestRef.current) setUsage(result);
+        if (request !== requestRef.current) return null;
+        setUsage(result);
         return result;
       } catch (loadError) {
         if (request === requestRef.current) {
@@ -46,13 +50,39 @@ export function useEnvironmentDiskUsage(
     [environmentId],
   );
 
-  const hasInitial = !!options.initial;
+  const initial = options.initial?.environmentId === environmentId ? options.initial : undefined;
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
   useEffect(() => {
-    if (enabled && !hasInitial) void load(false);
+    incomingIdentityRef.current = null;
+    usageRef.current = initialRef.current ?? null;
+    setUsage(usageRef.current);
+    setError(null);
+    setLoading(false);
+    if (enabled && !initialRef.current) void load(false);
     return () => {
       requestRef.current += 1;
     };
-  }, [enabled, hasInitial, load]);
+  }, [enabled, load]);
+
+  useEffect(() => {
+    if (!initial) return;
+    const identity = `${initial.environmentId}:${initial.measuredAt}`;
+    if (incomingIdentityRef.current === identity) return;
+    incomingIdentityRef.current = identity;
+    const current = usageRef.current;
+    if (
+      current?.environmentId === initial.environmentId &&
+      Date.parse(current.measuredAt) > Date.parse(initial.measuredAt)
+    )
+      return;
+    // The overview is authoritative. Retire older requests and explicitly settle
+    // loading when it supplies a newer snapshot, rather than relying on finally.
+    requestRef.current += 1;
+    setUsage(initial);
+    setLoading(false);
+    setError(null);
+  }, [initial]);
 
   return { usage, loading, error, refresh: () => load(true) };
 }
@@ -148,7 +178,10 @@ export function EnvironmentDiskUsageView({
   }
 
   const { primary, dev } = usage;
-  const devWorktreeCount = dev.profiles.reduce((sum, profile) => sum + profile.worktrees.length, 0);
+  const devWorktreeCount = dev.profiles.reduce(
+    (sum, profile) => sum + (profile.worktreeCount ?? profile.worktrees.length),
+    0,
+  );
   const measuredAt = Math.floor(new Date(usage.measuredAt).getTime() / 1000);
 
   return (

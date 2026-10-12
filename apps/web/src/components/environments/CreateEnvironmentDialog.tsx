@@ -838,6 +838,7 @@ export function CreateEnvironmentDialog({
     setIsDraggingAttachments(false);
     buildIntentRef.current = intent;
     setBuildIntent(intent);
+    if (intent === "feature") setWorktreeBaseDir(null);
   }, []);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -1736,7 +1737,7 @@ export function CreateEnvironmentDialog({
                     className="h-9 rounded-lg border border-border/70 bg-input-surface px-3 py-1 shadow-none"
                   />
                   <div className="flex items-center gap-2">
-                    {environmentType === "local" && (
+                    {environmentType === "local" && buildIntent !== "feature" && (
                       <Button
                         type="button"
                         variant="ghost"
@@ -1756,7 +1757,7 @@ export function CreateEnvironmentDialog({
                     <p className="font-mono text-[11px] text-muted-foreground sm:px-1">= branch</p>
                   </div>
                 </div>
-                {environmentType === "local" && worktreeBaseDir && (
+                {environmentType === "local" && buildIntent !== "feature" && worktreeBaseDir && (
                   <div className="mt-2 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground sm:col-start-2 sm:mt-0">
                     <span className="truncate font-mono" title={worktreeBaseDir}>
                       Worktree in {worktreeBaseDir}

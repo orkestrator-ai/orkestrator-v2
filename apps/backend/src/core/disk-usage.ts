@@ -1,3 +1,4 @@
+import { canonicalWorktreePath } from "@orkestrator/protocol/worktree-paths";
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -135,7 +136,7 @@ export function summarizeEntries(entries: DiskUsageItem[], limit = MAX_LISTED_EN
 }
 
 function isSameOrInside(candidate: string, root: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  const relative = path.relative(canonicalWorktreePath(root), canonicalWorktreePath(candidate));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
@@ -183,7 +184,7 @@ export async function findDevProfiles(
 async function measureDevProfile(
   profile: DevProfileManifest,
   probes: DiskUsageProbes,
-): Promise<DevProfileDiskUsage> {
+): Promise<{ usage: DevProfileDiskUsage; worktreeBytes: number | null; roots: DiskUsageItem[] }> {
   const [whole, worktrees] = await Promise.all([
     measureDirectory(profile.profileRoot, probes),
     measureDirectory(profile.worktreeDir, probes),
@@ -193,13 +194,26 @@ async function measureDevProfile(
     whole.bytes === null
       ? null
       : Math.max(0, whole.bytes - (worktreesInside ? (worktrees.bytes ?? 0) : 0));
+  const entries = [...worktrees.entries];
+  if (worktrees.looseFileBytes > 0)
+    entries.push({ label: "Other files", path: null, bytes: worktrees.looseFileBytes });
   return {
-    id: profile.id,
-    profileRoot: profile.profileRoot,
-    worktreeDir: profile.worktreeDir,
-    stateBytes,
-    worktrees: worktrees.entries.slice(0, MAX_DEV_WORKTREES_PER_PROFILE),
-    bytes: stateBytes === null || worktrees.bytes === null ? null : stateBytes + worktrees.bytes,
+    worktreeBytes: worktrees.bytes,
+    roots: [
+      { label: profile.id, path: profile.profileRoot, bytes: whole.bytes },
+      ...(worktreesInside
+        ? []
+        : [{ label: profile.id, path: profile.worktreeDir, bytes: worktrees.bytes }]),
+    ],
+    usage: {
+      id: profile.id,
+      profileRoot: profile.profileRoot,
+      worktreeDir: profile.worktreeDir,
+      stateBytes,
+      worktreeCount: worktrees.entries.length,
+      worktrees: summarizeEntries(entries, MAX_DEV_WORKTREES_PER_PROFILE - 1),
+      bytes: stateBytes === null || worktrees.bytes === null ? null : stateBytes + worktrees.bytes,
+    },
   };
 }
 
@@ -248,13 +262,34 @@ async function measureContainer(
   };
 }
 
+/** Count each measured directory once, even when dev roots overlap the checkout. */
+function outerRoots(roots: DiskUsageItem[]): DiskUsageItem[] {
+  const canonical = roots.map((root) => ({
+    root,
+    path: root.path ? canonicalWorktreePath(root.path) : null,
+  }));
+  return canonical
+    .filter(
+      (entry, index) =>
+        !entry.path ||
+        !canonical.some((other, otherIndex) => {
+          if (otherIndex === index || !other.path) return false;
+          const relative = path.relative(other.path, entry.path!);
+          return relative === ""
+            ? otherIndex < index
+            : !relative.startsWith("..") && !path.isAbsolute(relative);
+        }),
+    )
+    .map((entry) => entry.root);
+}
+
 export async function measureEnvironmentDiskUsage(
   environment: Environment,
   probes: DiskUsageProbes = defaultProbes,
   now: () => Date = () => new Date(),
 ): Promise<EnvironmentDiskUsage> {
   let primary: EnvironmentDiskUsage["primary"];
-  let profiles: DevProfileDiskUsage[] = [];
+  let measuredProfiles: Awaited<ReturnType<typeof measureDevProfile>>[] = [];
   if (environment.environmentType === "containerized") {
     primary = await measureContainer(environment, probes);
   } else if (!environment.worktreePath || !(await pathExists(environment.worktreePath))) {
@@ -266,13 +301,7 @@ export async function measureEnvironmentDiskUsage(
       unavailable: "The worktree has not been created yet",
     };
   } else {
-    const profilesDirectory = probes.profilesDirectory();
-    const [measured, found] = await Promise.all([
-      measureDirectory(environment.worktreePath, probes),
-      profilesDirectory
-        ? findDevProfiles(environment.worktreePath, profilesDirectory)
-        : Promise.resolve([]),
-    ]);
+    const measured = await measureDirectory(environment.worktreePath, probes);
     const items = summarizeEntries(measured.entries);
     if (measured.looseFileBytes > 0) {
       items.push({ label: "Other files", path: null, bytes: measured.looseFileBytes });
@@ -284,25 +313,43 @@ export async function measureEnvironmentDiskUsage(
       items,
       ...(measured.bytes === null ? { unavailable: "The worktree could not be measured" } : {}),
     };
-    profiles = await Promise.all(found.map((profile) => measureDevProfile(profile, probes)));
   }
-  const worktreeBytes = profiles.reduce(
-    (sum, profile) =>
-      sum + profile.worktrees.reduce((inner, worktree) => inner + (worktree.bytes ?? 0), 0),
+  if (environment.environmentType === "local" && environment.worktreePath) {
+    const profilesDirectory = probes.profilesDirectory();
+    const found = profilesDirectory
+      ? await findDevProfiles(environment.worktreePath, profilesDirectory)
+      : [];
+    measuredProfiles = await Promise.all(
+      found.map((profile) => measureDevProfile(profile, probes)),
+    );
+  }
+  const profiles = measuredProfiles.map((profile) => profile.usage);
+  const worktreeBytes = measuredProfiles.reduce(
+    (sum, profile) => sum + (profile.worktreeBytes ?? 0),
     0,
   );
-  const devBytes = profiles.reduce((sum, profile) => sum + (profile.bytes ?? 0), 0);
+  const devRoots = measuredProfiles.flatMap((profile) => profile.roots);
+  const devBytes = outerRoots(devRoots).reduce((sum, root) => sum + (root.bytes ?? 0), 0);
+  const totalRoots = outerRoots([
+    { label: "Primary", path: primary.path, bytes: primary.bytes },
+    ...devRoots,
+  ]);
   return {
     environmentId: environment.id,
     environmentType: environment.environmentType,
     measuredAt: now().toISOString(),
     primary,
     dev: { profiles, worktreeBytes, bytes: devBytes },
-    totalBytes: primary.bytes === null ? null : primary.bytes + devBytes,
+    totalBytes: totalRoots.some((root) => root.bytes === null)
+      ? null
+      : totalRoots.reduce((sum, root) => sum + root.bytes!, 0),
   };
 }
 
-const cache = new Map<string, { at: number; result: Promise<EnvironmentDiskUsage> }>();
+const caches = new WeakMap<
+  DiskUsageProbes,
+  Map<string, { at: number; result: Promise<EnvironmentDiskUsage> }>
+>();
 
 /**
  * Measures one environment, reusing a recent result: walking a worktree with
@@ -311,18 +358,33 @@ const cache = new Map<string, { at: number; result: Promise<EnvironmentDiskUsage
 export async function getEnvironmentDiskUsage(
   environmentId: string,
   context: Pick<CommandContext, "storage">,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; probes?: DiskUsageProbes } = {},
 ): Promise<EnvironmentDiskUsage> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const probes = options.probes ?? defaultProbes;
+  let cache = caches.get(probes);
+  if (!cache) {
+    cache = new Map();
+    caches.set(probes, cache);
+  }
+  const currentCache = cache;
   const cached = cache.get(environmentId);
   if (!options.refresh && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.result;
-  const result = measureEnvironmentDiskUsage(environment);
+  const result = measureEnvironmentDiskUsage(environment, probes);
   cache.set(environmentId, { at: Date.now(), result });
   // A failed walk is not remembered.
-  result.catch(() => {
-    if (cache.get(environmentId)?.result === result) cache.delete(environmentId);
-  });
+  const evict = () => {
+    if (currentCache.get(environmentId)?.result === result) currentCache.delete(environmentId);
+  };
+  void result.then((usage) => {
+    if (
+      usage.totalBytes === null ||
+      usage.primary.unavailable ||
+      usage.dev.profiles.some((profile) => profile.bytes === null)
+    )
+      evict();
+  }, evict);
   for (const [id, entry] of cache) {
     if (Date.now() - entry.at >= CACHE_TTL_MS) cache.delete(id);
   }

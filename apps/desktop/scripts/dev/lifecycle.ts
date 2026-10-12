@@ -7,7 +7,6 @@ import { parseWorktreeLocationSettings } from "@orkestrator/protocol/disk-usage"
 
 import {
   defaultRuntimeProfileRoots,
-  isExternalWorktreeDir,
   resolveRuntimeProfile,
   statusManifestPath,
   type RuntimeProfile,
@@ -153,15 +152,13 @@ export async function configuredDevWorktreeRoot(
  * A profile keeps the worktree folder it was created with: its environments
  * record worktree paths there, so the setting only places new profiles.
  */
-async function profileWorktreeRoot(
+export async function profileWorktreeLocation(
   existing: RuntimeProfile,
   roots: RuntimeProfileRoots | undefined,
-): Promise<string | undefined> {
+): Promise<{ worktreeDir?: string; worktreeRoot?: string }> {
   const stored = await stat(path.join(existing.profileRoot, "profile.json")).catch(() => null);
-  if (stored) {
-    return isExternalWorktreeDir(existing) ? path.dirname(existing.worktreeDir) : undefined;
-  }
-  return configuredDevWorktreeRoot(roots);
+  if (stored) return { worktreeDir: existing.worktreeDir };
+  return { worktreeRoot: await configuredDevWorktreeRoot(roots) };
 }
 
 async function resolveStoredProfile(
@@ -503,7 +500,7 @@ export async function startDevelopment(
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
     roots: dependencies.roots,
-    worktreeRoot: await profileWorktreeRoot(existingProfile, dependencies.roots),
+    ...(await profileWorktreeLocation(existingProfile, dependencies.roots)),
   });
   const profilePath = await initializeProfile(profile);
   await seedAgentTestProfileState(profile, flavor);

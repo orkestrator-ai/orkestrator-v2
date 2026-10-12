@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
+import { startEnvironmentOnce } from "./commands-environment.js";
+import { diffStatsService } from "./commands-runtime-state.js";
+import { prMonitorService } from "./commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
@@ -12,6 +15,8 @@ import { createProject, StorageService } from "./storage.js";
 const roots: string[] = [];
 
 afterEach(async () => {
+  for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
+  prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -40,7 +45,7 @@ async function setup() {
       { projectId: project.id, ...args },
       context,
     ) as Promise<Environment>;
-  return { root, projectPath, storage, create };
+  return { root, projectPath, storage, create, context, commands };
 }
 
 describe("create_environment worktree location", () => {
@@ -73,4 +78,64 @@ describe("create_environment worktree location", () => {
       "absolute",
     );
   });
+});
+
+async function commitFixture(projectPath: string, root: string) {
+  await fs.writeFile(path.join(projectPath, "README.md"), "fixture");
+  await runCommand("git", ["-C", projectPath, "add", "."]);
+  await runCommand("git", [
+    "-C",
+    projectPath,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "-m",
+    "fixture",
+  ]);
+  const origin = path.join(root, "origin.git");
+  await runCommand("git", ["clone", "--bare", projectPath, origin]);
+  await runCommand("git", ["-C", projectPath, "remote", "add", "origin", origin]);
+  await runCommand("git", ["-C", projectPath, "fetch", "origin"]);
+}
+
+test("start uses and persists both explicit and configured roots; generic reads stay within the worktree", async () => {
+  for (const explicit of [false, true]) {
+    const { root, projectPath, storage, create, context, commands } = await setup();
+    await commitFixture(projectPath, root);
+    const selected = path.join(root, "chosen");
+    if (!explicit) await storage.updateWorktreeLocations({ environments: selected });
+    const environment = await create({
+      environmentType: "local",
+      branch: "feature",
+      ...(explicit ? { worktreeBaseDir: selected } : {}),
+    });
+    await storage.updateEnvironment(environment.id, { setupOverride: true });
+    await startEnvironmentOnce(environment.id, context, () => {});
+    const persisted = (await storage.getEnvironment(environment.id))!;
+    expect(persisted.worktreeBaseDir).toBe(selected);
+    expect(path.dirname(persisted.worktreePath!)).toBe(selected);
+    expect(await fs.readFile(path.join(persisted.worktreePath!, "README.md"), "utf8")).toBe(
+      "fixture",
+    );
+    await fs.writeFile(path.join(selected, "sibling.txt"), "private");
+    const read = (filePath: string) => commands.get("read_file_base64")!({ filePath }, context);
+    expect(await read(path.join(persisted.worktreePath!, "README.md"))).toBe(
+      Buffer.from("fixture").toString("base64"),
+    );
+    await expect(read(path.join(selected, "sibling.txt"))).rejects.toThrow();
+  }
+});
+
+test("start rejects a configured default inside its project before creating directories", async () => {
+  const { projectPath, storage, create, context } = await setup();
+  const selected = path.join(projectPath, "nested", "trees");
+  await storage.updateWorktreeLocations({ environments: selected });
+  const environment = await create({ environmentType: "local" });
+  await expect(startEnvironmentOnce(environment.id, context, () => {})).rejects.toThrow(
+    "project checkout",
+  );
+  expect(await fs.stat(path.join(projectPath, "nested")).catch(() => null)).toBeNull();
+  expect((await storage.getEnvironment(environment.id))?.worktreePath).toBeFalsy();
 });

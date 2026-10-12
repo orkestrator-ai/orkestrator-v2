@@ -54,6 +54,8 @@ export interface WorktreeLocationsSnapshot {
     configured: string | null;
     /** The profiles directory; each profile keeps `worktrees/` inside it by default. */
     defaultPath: string;
+    /** Development backends cannot change the production-owned preference. */
+    readOnly?: boolean;
   };
 }
 
@@ -70,6 +72,8 @@ export interface DevProfileDiskUsage {
   worktreeDir: string;
   /** Data, logs, runtime and fixtures: the profile without its worktrees. */
   stateBytes: number | null;
+  /** Number of worktree directories, before the detail-row limit. */
+  worktreeCount?: number;
   worktrees: DiskUsageItem[];
   bytes: number | null;
 }
@@ -93,7 +97,7 @@ export interface EnvironmentDiskUsage {
     worktreeBytes: number;
     bytes: number;
   };
-  /** Primary plus development profiles; null when the primary is unknown. */
+  /** Union of primary and development roots; null when a root is unknown. */
   totalBytes: number | null;
 }
 

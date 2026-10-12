@@ -1,5 +1,13 @@
+import {
+  assertWorktreePathUnlinked,
+  captureWorktreePathIdentity,
+} from "@orkestrator/protocol/worktree-paths";
 import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
-import { getWorktreeBaseDir, resolveEnvironmentWorktreeRoot } from "./worktree-locations.js";
+import {
+  getWorktreeBaseDir,
+  resolveEnvironmentWorktreeRoot,
+  validateWorktreeLocation,
+} from "./worktree-locations.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
   formatContainerLifecycleError,
@@ -1559,8 +1567,14 @@ export async function startEnvironmentOnce(
       const repoConfig = await storage.getRepositoryConfig(project.id);
       // Recorded with the worktree: deletion only removes it from this folder,
       // even after the default location setting has changed.
-      const worktreeBaseDir =
-        environment.worktreeBaseDir ?? (await resolveEnvironmentWorktreeRoot(context));
+      const worktreeBaseDir = validateWorktreeLocation(
+        environment.worktreeBaseDir ?? (await resolveEnvironmentWorktreeRoot(context)),
+        {
+          label: "Environment worktree location",
+          dataDir: storage.getDataDir(),
+          projectPath: project.localPath,
+        },
+      );
       const worktree = await createLocalWorktree(
         project.localPath,
         project.name,
@@ -2169,6 +2183,8 @@ export async function createLocalWorktree(
   worktreeBaseDir?: string,
 ): Promise<{ path: string; branch: string; createdFromCommit: string }> {
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
+  assertWorktreePathUnlinked(baseDir);
+  const recheckBase = captureWorktreePathIdentity(baseDir);
   await fs.mkdir(baseDir, { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
   const requestedBase = baseBranch?.trim() || "main";
@@ -2203,6 +2219,8 @@ export async function createLocalWorktree(
     worktreePath,
     startPoint,
   ];
+  assertWorktreePathUnlinked(worktreePath);
+  recheckBase();
   await runCommand("git", args, { timeoutMs: 120_000 });
 
   try {
@@ -2234,9 +2252,11 @@ export async function removeLocalWorktree(
   projectPath: string,
   worktreePath: string,
 ): Promise<void> {
+  const recheckWorktree = captureWorktreePathIdentity(worktreePath);
   await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
     timeoutMs: 120_000,
   }).catch(async () => {
+    recheckWorktree();
     await fs.rm(worktreePath, { recursive: true, force: true });
     await runCommand("git", ["-C", projectPath, "worktree", "prune"], {
       timeoutMs: 30_000,
@@ -2270,9 +2290,11 @@ export async function cleanupFailedLocalWorktree(
   worktreePath: string,
   branch: string,
 ): Promise<void> {
+  const recheckWorktree = captureWorktreePathIdentity(worktreePath);
   await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
     timeoutMs: 120_000,
   }).catch(async () => {
+    recheckWorktree();
     await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
     await runCommand("git", ["-C", projectPath, "worktree", "prune"], { timeoutMs: 30_000 }).catch(
       () => undefined,

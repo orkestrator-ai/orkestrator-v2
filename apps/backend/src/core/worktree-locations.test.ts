@@ -95,3 +95,61 @@ describe("worktree location settings", () => {
     expect((await service.loadConfig()).global.worktreeLocations).toBeUndefined();
   });
 });
+
+test("rejects aliases to protected roots with existing and nonexistent descendants", async () => {
+  const service = await storage();
+  const root = path.dirname(service.getDataDir());
+  const fixture = await fs.mkdtemp(path.join(root, "ork-aliases-"));
+  directories.push(fixture);
+  const project = path.join(fixture, "project");
+  await fs.mkdir(project);
+  for (const [name, target] of [
+    ["project", project],
+    ["data", service.getDataDir()],
+  ] as const) {
+    const alias = path.join(fixture, `${name}-alias`);
+    await fs.symlink(target, alias);
+    for (const suffix of ["", "new/trailing/folder"]) {
+      expect(() =>
+        validateWorktreeLocation(path.join(alias, suffix), {
+          label: "Environment",
+          dataDir: service.getDataDir(),
+          projectPath: project,
+        }),
+      ).toThrow();
+      expect(() =>
+        validateWorktreeLocation(path.join(alias, suffix), {
+          label: "Dev",
+          dataDir: service.getDataDir(),
+          projectPath: project,
+        }),
+      ).toThrow();
+    }
+  }
+  const ordinary = path.join(fixture, "ordinary");
+  await fs.mkdir(ordinary);
+  await fs.symlink(ordinary, path.join(fixture, "alias"));
+  expect(() =>
+    validateWorktreeLocation(path.join(fixture, "alias", "new"), {
+      label: "Location",
+      dataDir: service.getDataDir(),
+    }),
+  ).toThrow("symlink");
+});
+
+test("rejects the profiles directory as a dev setting before saving", async () => {
+  const service = await storage();
+  const snapshot = await getWorktreeLocations({ storage: service });
+  await expect(
+    updateWorktreeLocations({ dev: snapshot.dev.defaultPath }, { storage: service }),
+  ).rejects.toThrow("profiles directory");
+  expect((await service.loadConfig()).global.worktreeLocations).toBeUndefined();
+});
+
+test("dev setting is read-only only in development-profile backends", async () => {
+  const service = await storage();
+  for (const runtimeFlavor of ["production", "development", "agent-test"] as const) {
+    const value = await getWorktreeLocations({ storage: service, runtimeFlavor });
+    expect(value.dev.readOnly).toBe(runtimeFlavor !== "production");
+  }
+});

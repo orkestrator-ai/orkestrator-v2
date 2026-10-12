@@ -1,3 +1,7 @@
+import {
+  canonicalWorktreePath,
+  assertWorktreePathUnlinked,
+} from "@orkestrator/protocol/worktree-paths";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,7 +17,7 @@ import type { CommandContext } from "./commands-context.js";
 import { APP_SLUG } from "./constants.js";
 import type { AppConfig } from "./models.js";
 
-type LocationContext = Pick<CommandContext, "storage" | "worktreeDir">;
+type LocationContext = Pick<CommandContext, "storage" | "worktreeDir" | "runtimeFlavor">;
 
 /**
  * The backend's startup worktree root: `--worktree-dir`, else the default.
@@ -33,7 +37,7 @@ function defaultWorktreeBaseDir(): string {
 }
 
 function isSameOrInside(candidate: string, root: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  const relative = path.relative(canonicalWorktreePath(root), canonicalWorktreePath(candidate));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
@@ -75,6 +79,7 @@ export function validateWorktreeLocation(
   if (options.projectPath && isSameOrInside(resolved, options.projectPath)) {
     throw new Error(`${options.label} must not be inside the project checkout`);
   }
+  assertWorktreePathUnlinked(resolved);
   return resolved;
 }
 
@@ -113,6 +118,7 @@ export async function getWorktreeLocations(
     dev: {
       configured: configured.dev ?? null,
       defaultPath: profilesDirectory,
+      readOnly: context.runtimeFlavor === "development" || context.runtimeFlavor === "agent-test",
     },
   };
 }
@@ -133,6 +139,17 @@ export async function updateWorktreeLocations(
       continue;
     }
     next[key] = validateWorktreeLocation(value, { label, dataDir });
+    if (
+      key === "dev" &&
+      isSameOrInside(
+        next[key]!,
+        path.join(defaultRuntimeProfileRoots().developmentRoot, "profiles"),
+      )
+    ) {
+      throw new Error(
+        "Dev worktree location must not be inside the development profiles directory",
+      );
+    }
   }
   await context.storage.updateWorktreeLocations(next);
   return getWorktreeLocations(context);

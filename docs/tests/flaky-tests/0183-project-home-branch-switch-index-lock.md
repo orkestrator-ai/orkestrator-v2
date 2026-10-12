@@ -58,3 +58,20 @@ mise run test:logged -- --name project-home-rerun -- \
 
 Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XzVEFK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-12
+
+`mise run test:logged -- --name backend-package-tests -- bun run --cwd apps/backend test:workspace`
+failed the same Git index-lock assertion in 147.02 ms with two Bun workers.
+Backend totals were 5801 passed, 2 failed and 15 skipped across 326 files.
+
+The owning file passed alone (exit 0) in 9.5 seconds:
+
+```bash
+mise run test:logged -- --name project-home-alone -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+```
+
+Failure evidence: `orkestrator-test-run.wS9yy3/backend-package-tests.log.gz`
+in the platform temporary directory. No assertion, timeout or skip was changed.

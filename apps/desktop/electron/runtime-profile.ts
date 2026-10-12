@@ -1,3 +1,7 @@
+import {
+  canonicalWorktreePath,
+  assertWorktreePathUnlinked,
+} from "@orkestrator/protocol/worktree-paths";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -93,11 +97,17 @@ function assertExternalWorktreeDirSafe(
   profileRoot: string,
   productionDataDir: string,
 ): void {
+  assertWorktreePathUnlinked(worktreeDir);
+  if (path.resolve(worktreeDir) === path.resolve(profileRoot)) {
+    throw new Error(
+      "Runtime profile worktree directory must be a strict child of profileRoot or an external folder",
+    );
+  }
   if (isSameOrInside(worktreeDir, profileRoot)) return;
   if (
     path.basename(worktreeDir) !== id ||
     isSameOrInside(profileRoot, worktreeDir) ||
-    isSameOrInside(worktreeDir, productionDataDir) ||
+    isSameOrInside(canonicalWorktreePath(worktreeDir), canonicalWorktreePath(productionDataDir)) ||
     isSameOrInside(productionDataDir, worktreeDir)
   ) {
     throw new Error("Runtime profile worktree directory is not a safe profile-owned folder");
@@ -118,6 +128,8 @@ export function resolveRuntimeProfile(options: {
    * of `worktrees/` inside the profile (the dev worktree location setting).
    */
   worktreeRoot?: string;
+  /** Exact persisted directory, preserved when restarting a profile. */
+  worktreeDir?: string;
 }): RuntimeProfile {
   const repositoryRoot = path.resolve(options.repositoryRoot);
   const roots = options.roots ?? defaultRuntimeProfileRoots();
@@ -125,15 +137,17 @@ export function resolveRuntimeProfile(options: {
   const id = normalizeRuntimeProfileId(requestedId);
   const profileRoot = path.resolve(roots.developmentRoot, "profiles", id);
   assertProfileIsolatedFromProduction(profileRoot, roots.productionDataDir);
-  const worktreeDir = options.worktreeRoot
-    ? path.join(path.resolve(options.worktreeRoot), id)
-    : path.join(profileRoot, "worktrees");
+  const worktreeDir = options.worktreeDir
+    ? path.resolve(options.worktreeDir)
+    : options.worktreeRoot
+      ? path.join(path.resolve(options.worktreeRoot), id)
+      : path.join(profileRoot, "worktrees");
   assertExternalWorktreeDirSafe(worktreeDir, id, profileRoot, roots.productionDataDir);
 
   const dataDir = path.join(profileRoot, "data");
   const flavor = options.flavor ?? "development";
   const displayName = requestedId;
-  return {
+  return parseRuntimeProfile({
     version: 1,
     flavor,
     id,
@@ -154,7 +168,7 @@ export function resolveRuntimeProfile(options: {
     electronTitle: `${PRODUCT_NAME} — DEV [${id}]`,
     credentialSources: [...new Set(options.credentialSources ?? [])],
     agentPlatforms: [...new Set(options.agentPlatforms ?? [])],
-  };
+  });
 }
 
 function isRuntimeFlavor(value: unknown): value is RuntimeFlavor {

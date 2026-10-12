@@ -172,3 +172,27 @@ describe("runtime profiles", () => {
     ).toThrow("production data directory");
   });
 });
+
+test("rejects a worktree root equal to the profiles directory and round-trips accepted roots", () => {
+  expect(() =>
+    resolveRuntimeProfile({
+      repositoryRoot: "/repo/a",
+      requestedId: "qa",
+      roots,
+      worktreeRoot: path.join(roots.developmentRoot, "profiles"),
+    }),
+  ).toThrow("strict child");
+  for (const worktreeRoot of [
+    undefined,
+    "/trees/dev",
+    path.join(roots.developmentRoot, "profiles", "qa", "nested"),
+  ]) {
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: "/repo/a",
+      requestedId: "qa",
+      roots,
+      worktreeRoot,
+    });
+    expect(parseRuntimeProfile(JSON.parse(JSON.stringify(profile)))).toEqual(profile);
+  }
+});

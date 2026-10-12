@@ -182,7 +182,12 @@ function WorktreeLocations() {
       />
       <LocationRow
         label="New dev worktrees"
-        description="Where development profiles started from an environment (mise run dev) keep their worktrees, in a folder named after the profile. Applies to profiles created after the change."
+        description={
+          locations.dev.readOnly
+            ? "Change this setting in the production app. Development profiles read the production app’s dev worktree location."
+            : "Where new development profiles keep their worktrees, in a folder named after the profile. Existing profiles stay where they are."
+        }
+        disabled={locations.dev.readOnly}
         value={current.dev}
         placeholder={`Default · inside each profile in ${locations.dev.defaultPath}`}
         saving={saving}
@@ -210,7 +215,10 @@ function EnvironmentUsageRow({
 }) {
   const usage = measurement?.state === "done" ? measurement.usage : undefined;
   const devCount =
-    usage?.dev.profiles.reduce((sum, profile) => sum + profile.worktrees.length, 0) ?? 0;
+    usage?.dev.profiles.reduce(
+      (sum, profile) => sum + (profile.worktreeCount ?? profile.worktrees.length),
+      0,
+    ) ?? 0;
   return (
     <li>
       <button
@@ -285,38 +293,43 @@ function EnvironmentUsage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const generationRef = useRef(0);
 
-  const measureAll = useCallback(async (list: DiskUsageEnvironmentSummary[], refresh: boolean) => {
-    const generation = ++generationRef.current;
-    setMeasurements(new Map(list.map((item) => [item.environmentId, { state: "pending" }])));
-    const queue = [...list];
-    const worker = async () => {
-      for (let next = queue.shift(); next; next = queue.shift()) {
-        const id = next.environmentId;
-        let result: Measurement;
-        try {
-          result = { state: "done", usage: await backend.getEnvironmentDiskUsage(id, refresh) };
-        } catch (error) {
-          result = {
-            state: "failed",
-            error: error instanceof Error ? error.message : String(error),
-          };
+  const measureAll = useCallback(
+    async (list: DiskUsageEnvironmentSummary[], refresh: boolean, generation: number) => {
+      setMeasurements(new Map(list.map((item) => [item.environmentId, { state: "pending" }])));
+      const queue = [...list];
+      const worker = async () => {
+        for (let next = queue.shift(); next; next = queue.shift()) {
+          const id = next.environmentId;
+          let result: Measurement;
+          try {
+            result = { state: "done", usage: await backend.getEnvironmentDiskUsage(id, refresh) };
+          } catch (error) {
+            result = {
+              state: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+          if (generation !== generationRef.current) return;
+          setMeasurements((current) => new Map(current).set(id, result));
         }
-        if (generation !== generationRef.current) return;
-        setMeasurements((current) => new Map(current).set(id, result));
-      }
-    };
-    await Promise.all(Array.from({ length: MEASURE_CONCURRENCY }, worker));
-  }, []);
+      };
+      await Promise.all(Array.from({ length: MEASURE_CONCURRENCY }, worker));
+    },
+    [],
+  );
 
   const load = useCallback(
     async (refresh: boolean) => {
+      const generation = ++generationRef.current;
       setLoadError(null);
       try {
         const list = await backend.listDiskUsageEnvironments();
+        if (generation !== generationRef.current) return;
         setEnvironments(list);
-        await measureAll(list, refresh);
+        await measureAll(list, refresh, generation);
       } catch (error) {
-        setLoadError(error instanceof Error ? error.message : String(error));
+        if (generation === generationRef.current)
+          setLoadError(error instanceof Error ? error.message : String(error));
       }
     },
     [measureAll],
@@ -359,6 +372,12 @@ function EnvironmentUsage() {
     0,
   );
   const measuring = environments !== null && measured < environments.length;
+  const incomplete = [...measurements.values()].some(
+    (item) =>
+      item.state === "failed" ||
+      (item.state === "done" &&
+        (item.usage.totalBytes === null || !!item.usage.primary.unavailable)),
+  );
 
   return (
     <div className="space-y-4">
@@ -370,7 +389,7 @@ function EnvironmentUsage() {
               ? "Loading environments…"
               : measuring
                 ? `Measured ${measured} of ${environments.length} · ${formatDiskBytes(total)} so far`
-                : `${formatDiskBytes(total)} across ${environments.length} environment${environments.length === 1 ? "" : "s"}, including dev worktrees`}
+                : `${formatDiskBytes(total)}${incomplete ? " measured (some sizes unavailable)" : ""} across ${environments.length} environment${environments.length === 1 ? "" : "s"}, including dev worktrees`}
           </p>
         </div>
         <Button

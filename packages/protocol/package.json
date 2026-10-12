@@ -103,6 +103,7 @@
     "./transcript-budget": "./src/transcript-budget.ts",
     "./transcript-window": "./src/transcript-window.ts",
     "./view-sync": "./src/view-sync.ts",
+    "./worktree-paths": "./src/worktree-paths.ts",
     "./worktree-snapshots": "./src/worktree-snapshots.ts",
     "./workspace-change-probe": "./src/workspace-change-probe.ts",
     "./command-change-journal": "./src/command-change-journal.ts",

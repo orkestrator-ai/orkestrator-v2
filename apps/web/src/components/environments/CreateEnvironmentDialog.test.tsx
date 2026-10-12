@@ -379,3 +379,27 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     );
   });
 });
+
+test("local feature builds hide and clear a previously picked worktree folder", async () => {
+  render(
+    <DockerAvailabilityProvider available>
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={async () => true}
+        projectId="project-1"
+      />
+    </DockerAvailabilityProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Local" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose worktree location" }));
+  await waitFor(() => expect(useHostPathPickerStore.getState().request?.mode).toBe("directory"));
+  act(() => useHostPathPickerStore.getState().settle("/srv/trees"));
+  await waitFor(() => expect(screen.getByText("Worktree in /srv/trees")).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+  expect(screen.queryByRole("button", { name: "Choose worktree location" }) === null).toBe(true);
+  expect(screen.queryByText("Worktree in /srv/trees") === null).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "With a prompt" }));
+  expect(screen.getByRole("button", { name: "Choose worktree location" })).toBeTruthy();
+  expect(screen.queryByText("Worktree in /srv/trees") === null).toBe(true);
+});

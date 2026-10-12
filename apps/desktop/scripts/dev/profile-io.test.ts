@@ -180,7 +180,7 @@ describe("development profile lifecycle primitives", () => {
       path.join(other.worktreeDir, ".orkestrator-dev-worktrees"),
       JSON.stringify({ version: 1, profile: "someone-else" }),
     );
-    await removeProfileState(other, false);
+    await expect(removeProfileState(other, false)).rejects.toThrow("sentinel");
     await expect(access(other.worktreeDir)).resolves.toBeNull();
   });
 
@@ -763,5 +763,57 @@ describe("development profile lifecycle primitives", () => {
         }),
       ),
     ).toEndWith(path.join("runtime", "status.json"));
+  });
+});
+
+describe("external profile initialization", () => {
+  test("refuses unowned and conflicting destinations before writing profile state", async () => {
+    const { root, roots } = await modelCacheFixture();
+    for (const conflicting of [false, true]) {
+      const profile = resolveRuntimeProfile({
+        repositoryRoot: path.join(root, "repo"),
+        roots,
+        requestedId: conflicting ? "conflict" : "unowned",
+        worktreeRoot: path.join(root, "trees"),
+      });
+      await mkdir(profile.worktreeDir, { recursive: true });
+      await writeFile(path.join(profile.worktreeDir, "precious.txt"), "unrelated");
+      if (conflicting)
+        await writeFile(
+          path.join(profile.worktreeDir, ".orkestrator-dev-worktrees"),
+          JSON.stringify({ version: 1, profile: "other" }),
+        );
+      await expect(initializeProfile(profile)).rejects.toThrow("sentinel");
+      await expect(readFile(path.join(profile.worktreeDir, "precious.txt"), "utf8")).resolves.toBe(
+        "unrelated",
+      );
+      await expect(access(path.join(profile.profileRoot, "profile.json"))).rejects.toThrow();
+      await expect(removeProfileState(profile, false)).rejects.toThrow("sentinel");
+      if (conflicting)
+        expect(
+          JSON.parse(
+            await readFile(path.join(profile.worktreeDir, ".orkestrator-dev-worktrees"), "utf8"),
+          ).profile,
+        ).toBe("other");
+    }
+  });
+
+  test("reuses an owned destination and refuses an ancestor replaced by a symlink", async () => {
+    const { root, roots } = await modelCacheFixture();
+    const parent = path.join(root, "trees");
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: path.join(root, "repo"),
+      roots,
+      requestedId: "outside",
+      worktreeRoot: parent,
+    });
+    await initializeProfile(profile);
+    await writeFile(path.join(profile.worktreeDir, "keep"), "owned");
+    await initializeProfile(profile);
+    await rename(parent, `${parent}-original`);
+    await symlink(`${parent}-original`, parent);
+    await expect(initializeProfile(profile)).rejects.toThrow("symlink");
+    await expect(removeProfileState(profile, false)).rejects.toThrow("symlink");
+    expect(await readFile(path.join(profile.worktreeDir, "keep"), "utf8")).toBe("owned");
   });
 });

@@ -1,3 +1,7 @@
+import {
+  assertWorktreePathUnlinked,
+  captureWorktreePathIdentity,
+} from "@orkestrator/protocol/worktree-paths";
 import { spawnSync } from "node:child_process";
 import { constants, type Stats } from "node:fs";
 import {
@@ -55,6 +59,30 @@ export async function atomicWriteJson(
 }
 
 export async function initializeProfile(profile: RuntimeProfile): Promise<string> {
+  parseRuntimeProfile(profile);
+  assertWorktreePathUnlinked(profile.profileRoot);
+  assertWorktreePathUnlinked(profile.worktreeDir);
+  const recheckProfile = captureWorktreePathIdentity(profile.profileRoot);
+  const recheckWorktrees = captureWorktreePathIdentity(profile.worktreeDir);
+  if (isExternalWorktreeDir(profile)) {
+    await mkdir(path.dirname(profile.worktreeDir), { recursive: true, mode: 0o700 });
+    assertWorktreePathUnlinked(profile.worktreeDir);
+    let created = false;
+    try {
+      await mkdir(profile.worktreeDir, { mode: 0o700 });
+      created = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    if (created) {
+      await writeFile(
+        path.join(profile.worktreeDir, DEV_WORKTREES_SENTINEL),
+        JSON.stringify({ version: DEV_PROFILE_FORMAT_VERSION, profile: profile.id }),
+        { mode: 0o600, flag: "wx" },
+      );
+    }
+    await assertExternalWorktreeOwnership(profile);
+  }
   for (const directory of [
     profile.profileRoot,
     profile.dataDir,
@@ -63,21 +91,21 @@ export async function initializeProfile(profile: RuntimeProfile): Promise<string
     profile.logDir,
     profile.fixtureDir,
   ]) {
+    recheckProfile();
+    recheckWorktrees();
+    assertWorktreePathUnlinked(directory);
     await mkdir(directory, { recursive: true, mode: 0o700 });
+    assertWorktreePathUnlinked(directory);
     await chmod(directory, 0o700);
   }
+  recheckProfile();
+  recheckWorktrees();
   const profilePath = path.join(profile.profileRoot, "profile.json");
   await atomicWriteJson(profilePath, profile);
   await atomicWriteJson(path.join(profile.profileRoot, DEV_PROFILE_SENTINEL), {
     version: DEV_PROFILE_FORMAT_VERSION,
     profile: profile.id,
   });
-  if (isExternalWorktreeDir(profile)) {
-    await atomicWriteJson(path.join(profile.worktreeDir, DEV_WORKTREES_SENTINEL), {
-      version: DEV_PROFILE_FORMAT_VERSION,
-      profile: profile.id,
-    });
-  }
   return profilePath;
 }
 
@@ -86,15 +114,32 @@ export async function initializeProfile(profile: RuntimeProfile): Promise<string
  * sentinel still names this profile: the folder sits in a location the user
  * chose, so anything not provably ours is left alone.
  */
-async function removeExternalWorktreeDir(profile: RuntimeProfile): Promise<void> {
+export async function assertExternalWorktreeOwnership(profile: RuntimeProfile): Promise<void> {
+  assertWorktreePathUnlinked(profile.profileRoot);
+  assertWorktreePathUnlinked(profile.worktreeDir);
   if (!isExternalWorktreeDir(profile)) return;
-  const sentinel = await readFile(path.join(profile.worktreeDir, DEV_WORKTREES_SENTINEL), "utf8")
-    .then((text) => JSON.parse(text) as { profile?: unknown })
-    .catch(() => null);
-  if (sentinel?.profile !== profile.id) return;
   const stats = await lstat(profile.worktreeDir).catch(() => null);
-  if (!stats?.isDirectory()) return;
-  await rm(profile.worktreeDir, { recursive: true, force: true });
+  const marker = path.join(profile.worktreeDir, DEV_WORKTREES_SENTINEL);
+  const markerStats = await lstat(marker).catch(() => null);
+  const sentinel = await readFile(marker, "utf8")
+    .then((text) => JSON.parse(text) as { version?: unknown; profile?: unknown })
+    .catch(() => null);
+  if (
+    !stats?.isDirectory() ||
+    !markerStats?.isFile() ||
+    sentinel?.version !== DEV_PROFILE_FORMAT_VERSION ||
+    sentinel.profile !== profile.id
+  ) {
+    throw new Error("External worktree sentinel is missing or does not match the selected profile");
+  }
+}
+
+async function removeExternalWorktreeDir(profile: RuntimeProfile): Promise<void> {
+  const recheck = captureWorktreePathIdentity(profile.worktreeDir);
+  await assertExternalWorktreeOwnership(profile);
+  recheck();
+  if (isExternalWorktreeDir(profile))
+    await rm(profile.worktreeDir, { recursive: true, force: true });
 }
 
 /**
@@ -106,7 +151,9 @@ export async function removeProfileState(
   profile: RuntimeProfile,
   keepToolchains: boolean,
 ): Promise<void> {
+  const recheckProfile = captureWorktreePathIdentity(profile.profileRoot);
   await removeExternalWorktreeDir(profile);
+  recheckProfile();
   if (!keepToolchains) {
     await rm(profile.profileRoot, { recursive: true, force: true });
     return;

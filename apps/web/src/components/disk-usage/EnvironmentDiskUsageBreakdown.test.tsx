@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 
+import * as backend from "@/lib/backend";
 import type { EnvironmentDiskUsage } from "@/lib/backend";
-import { EnvironmentDiskUsageView } from "./EnvironmentDiskUsageBreakdown";
+import { EnvironmentDiskUsageView, useEnvironmentDiskUsage } from "./EnvironmentDiskUsageBreakdown";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mock.restore();
+});
 
 const GB = 1024 ** 3;
 
@@ -91,4 +95,127 @@ describe("EnvironmentDiskUsageView", () => {
     render(<EnvironmentDiskUsageView usage={null} loading error={null} onRefresh={() => {}} />);
     expect(screen.getByText("Measuring disk usage…")).toBeTruthy();
   });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe("disk usage hook reconciliation", () => {
+  test("incoming overview settles loading and prevents a pending older result from replacing it", async () => {
+    const pending = deferred<EnvironmentDiskUsage>();
+    const get = spyOn(backend, "getEnvironmentDiskUsage").mockImplementation(() => pending.promise);
+    const { result, rerender } = renderHook(
+      ({ initial }: { initial?: EnvironmentDiskUsage }) =>
+        useEnvironmentDiskUsage("e1", { initial }),
+      { initialProps: { initial: undefined } as { initial?: EnvironmentDiskUsage } },
+    );
+    expect(result.current.loading).toBe(true);
+    const overview = usage({ measuredAt: "2026-10-12T02:00:00Z", totalBytes: 7 * GB });
+    rerender({ initial: overview });
+    expect(result.current.usage).toBe(overview);
+    expect(result.current.loading).toBe(false);
+    await act(async () => pending.resolve(usage({ totalBytes: GB })));
+    expect(result.current.usage).toBe(overview);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  test("initial skips loading and replacement snapshots update expanded rows", () => {
+    const get = spyOn(backend, "getEnvironmentDiskUsage").mockResolvedValue(usage());
+    const first = usage();
+    const { result, rerender } = renderHook(
+      ({ initial }) => useEnvironmentDiskUsage("e1", { initial }),
+      { initialProps: { initial: first } },
+    );
+    expect(result.current.usage).toBe(first);
+    expect(result.current.loading).toBe(false);
+    const next = usage({ totalBytes: 8 * GB, measuredAt: "2027-01-01T00:00:00Z" });
+    rerender({ initial: next });
+    expect(result.current.usage).toBe(next);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  test("environment changes and newer refresh requests reject stale completion", async () => {
+    const old = deferred<EnvironmentDiskUsage>();
+    const fresh = deferred<EnvironmentDiskUsage>();
+    const get = spyOn(backend, "getEnvironmentDiskUsage").mockImplementation((id) =>
+      id === "e1" ? old.promise : fresh.promise,
+    );
+    const { result, rerender } = renderHook(({ id }) => useEnvironmentDiskUsage(id), {
+      initialProps: { id: "e1" },
+    });
+    rerender({ id: "e2" });
+    await act(async () => old.resolve(usage()));
+    expect(result.current.usage).toBeNull();
+    expect(result.current.loading).toBe(true);
+    const next = usage({ environmentId: "e2" });
+    await act(async () => fresh.resolve(next));
+    expect(result.current.usage).toBe(next);
+    expect(result.current.loading).toBe(false);
+    const earlier = deferred<EnvironmentDiskUsage>();
+    const later = deferred<EnvironmentDiskUsage>();
+    get.mockImplementationOnce(() => earlier.promise).mockImplementationOnce(() => later.promise);
+    let earlyRefresh!: Promise<EnvironmentDiskUsage | null>;
+    let lateRefresh!: Promise<EnvironmentDiskUsage | null>;
+    act(() => {
+      earlyRefresh = result.current.refresh();
+      lateRefresh = result.current.refresh();
+    });
+    const updated = usage({ environmentId: "e2", totalBytes: 9 * GB });
+    await act(async () => {
+      later.resolve(updated);
+      await lateRefresh;
+    });
+    await act(async () => {
+      earlier.resolve(next);
+      expect(await earlyRefresh).toBeNull();
+    });
+    expect(result.current.usage).toBe(updated);
+    expect(result.current.loading).toBe(false);
+  });
+
+  test("disabled hooks load when enabled and recover after refresh errors", async () => {
+    const get = spyOn(backend, "getEnvironmentDiskUsage").mockResolvedValue(usage());
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useEnvironmentDiskUsage("e1", { enabled }),
+      { initialProps: { enabled: false } },
+    );
+    expect(result.current.loading).toBe(false);
+    expect(get).not.toHaveBeenCalled();
+    await act(async () => rerender({ enabled: true }));
+    expect(result.current.usage?.environmentId).toBe("e1");
+    get.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.error).toBe("offline");
+    expect(result.current.loading).toBe(false);
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.error).toBeNull();
+    expect(get).toHaveBeenLastCalledWith("e1", true);
+  });
+});
+
+test("older or identical incoming measurement identities do not overwrite refreshed usage", async () => {
+  const first = usage({ measuredAt: "2026-10-12T01:00:00Z" });
+  const newer = usage({ measuredAt: "2026-10-12T03:00:00Z", totalBytes: 9 * GB });
+  spyOn(backend, "getEnvironmentDiskUsage").mockResolvedValue(newer);
+  const { result, rerender } = renderHook(
+    ({ initial }) => useEnvironmentDiskUsage("e1", { initial }),
+    { initialProps: { initial: first } },
+  );
+  await act(async () => {
+    await result.current.refresh();
+  });
+  rerender({ initial: { ...first } });
+  expect(result.current.usage).toBe(newer);
+  rerender({ initial: usage({ measuredAt: "2026-10-12T02:00:00Z" }) });
+  expect(result.current.usage).toBe(newer);
+  expect(result.current.loading).toBe(false);
 });

@@ -5,11 +5,15 @@ import path from "node:path";
 
 import {
   findDevProfiles,
+  getEnvironmentDiskUsage,
+  listDiskUsageEnvironments,
   measureEnvironmentDiskUsage,
   parseDuOutput,
   summarizeEntries,
   type DiskUsageProbes,
 } from "./disk-usage.js";
+import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import { StorageService, createProject } from "./storage.js";
 import type { Environment } from "./models.js";
 
 const directories: string[] = [];
@@ -196,4 +200,238 @@ describe("measureEnvironmentDiskUsage", () => {
     expect(unknown.primary).toMatchObject({ bytes: null, unavailable: expect.any(String) });
     expect(unknown.totalBytes).toBeNull();
   });
+});
+
+const probesFor = (du: DiskUsageProbes["du"], profiles: string | null = null): DiskUsageProbes => ({
+  du,
+  profilesDirectory: () => profiles,
+  containerSize: async () => null,
+  volumeSizes: async () => null,
+});
+
+test("totals include all 65 worktrees with bounded detail and loose files", async () => {
+  const checkout = await tempDir("ork-disk-many-");
+  const profiles = await tempDir("ork-disk-profiles-");
+  const profileRoot = await writeProfile(profiles, "many", checkout);
+  const trees = path.join(profileRoot, "worktrees");
+  await fs.mkdir(trees);
+  const children = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`tree-${i}`, 1]));
+  const usage = await measureEnvironmentDiskUsage(
+    environment({ worktreePath: checkout }),
+    probesFor(
+      fakeDu({
+        [checkout]: { ".": 10 },
+        [profileRoot]: { ".": 70 },
+        [trees]: { ".": 67, ...children },
+      }),
+      profiles,
+    ),
+  );
+  expect(usage.dev.worktreeBytes).toBe(67 * 1024);
+  expect(usage.totalBytes).toBe(80 * 1024);
+  const details = usage.dev.profiles[0]!.worktrees;
+  expect(details.length).toBeLessThanOrEqual(64);
+  expect(details.reduce((sum, entry) => sum + entry.bytes!, 0)).toBe(67 * 1024);
+  expect(details.at(-1)?.label).toContain("more");
+});
+
+test("overlapping checkout, profile and external dev roots contribute bytes once", async () => {
+  const checkout = await tempDir("ork-disk-overlap-");
+  const profiles = await tempDir("ork-disk-profiles-");
+  const nestedTrees = path.join(checkout, "dev-trees", "qa");
+  const outsideRoot = await writeProfile(profiles, "qa", checkout, nestedTrees);
+  await fs.mkdir(nestedTrees, { recursive: true });
+  const usage = await measureEnvironmentDiskUsage(
+    environment({ worktreePath: checkout }),
+    probesFor(
+      fakeDu({
+        [checkout]: { ".": 100 },
+        [outsideRoot]: { ".": 5 },
+        [nestedTrees]: { ".": 40, tree: 40 },
+      }),
+      profiles,
+    ),
+  );
+  expect(usage.dev.worktreeBytes).toBe(40 * 1024);
+  expect(usage.totalBytes).toBe(105 * 1024);
+  const internalProfiles = path.join(checkout, "profiles");
+  const internalRoot = await writeProfile(internalProfiles, "internal", checkout);
+  await fs.mkdir(path.join(internalRoot, "worktrees"));
+  const allNested = await measureEnvironmentDiskUsage(
+    environment({ worktreePath: checkout }),
+    probesFor(
+      fakeDu({
+        [checkout]: { ".": 100 },
+        [internalRoot]: { ".": 50 },
+        [path.join(internalRoot, "worktrees")]: { ".": 40 },
+      }),
+      internalProfiles,
+    ),
+  );
+  expect(allNested.totalBytes).toBe(100 * 1024);
+});
+
+test("surviving profiles are measured even after their source checkout is gone", async () => {
+  const profiles = await tempDir("ork-disk-survivors-");
+  const missing = path.join(profiles, "gone");
+  const profile = await writeProfile(profiles, "survivor", missing);
+  const trees = path.join(profile, "worktrees");
+  await fs.mkdir(trees);
+  const result = await measureEnvironmentDiskUsage(
+    environment({ worktreePath: missing }),
+    probesFor(
+      fakeDu({
+        [profile]: { ".": 12 },
+        [trees]: { ".": 8, tree: 8 },
+      }),
+      profiles,
+    ),
+  );
+  expect(result.primary.bytes).toBe(0);
+  expect(result.dev.profiles.map((row) => row.id)).toEqual(["survivor"]);
+  expect(result.dev.worktreeBytes).toBe(8 * 1024);
+  expect(result.totalBytes).toBe(12 * 1024);
+});
+
+test("partial du output stays unknown without a root total, and failed walks stay unknown", async () => {
+  const checkout = await tempDir("ork-disk-partial-");
+  for (const du of [
+    async () => `3\t${path.join(checkout, "src")}`,
+    async () => {
+      throw new Error("unreadable");
+    },
+  ]) {
+    const usage = await measureEnvironmentDiskUsage(
+      environment({ worktreePath: checkout }),
+      probesFor(du),
+    );
+    expect(usage.primary.bytes).toBeNull();
+    expect(usage.primary.unavailable).toBeTruthy();
+    expect(usage.totalBytes).toBeNull();
+  }
+});
+
+test("cache reuses, refreshes, and evicts failed or unavailable measurements", async () => {
+  const checkout = await tempDir("ork-disk-cache-");
+  const service = new StorageService(path.join(checkout, "data"));
+  await service.init();
+  const saved = await service.addEnvironment(
+    environment({ id: crypto.randomUUID(), worktreePath: checkout }),
+  );
+  let calls = 0;
+  let failed = false;
+  const probes = probesFor(async () => {
+    calls++;
+    if (failed) throw new Error("walk failed");
+    return `10\t${checkout}`;
+  });
+  const context = { storage: service };
+  const first = await getEnvironmentDiskUsage(saved.id, context, { probes });
+  expect(await getEnvironmentDiskUsage(saved.id, context, { probes })).toBe(first);
+  expect(calls).toBe(1);
+  await getEnvironmentDiskUsage(saved.id, context, { probes, refresh: true });
+  expect(calls).toBe(2);
+  failed = true;
+  expect(
+    (await getEnvironmentDiskUsage(saved.id, context, { probes, refresh: true })).totalBytes,
+  ).toBeNull();
+  failed = false;
+  expect((await getEnvironmentDiskUsage(saved.id, context, { probes })).totalBytes).toBe(10 * 1024);
+  expect(calls).toBe(4);
+  await service.updateEnvironment(saved.id, {
+    environmentType: "containerized",
+    containerId: "c1",
+  });
+  const brokenProbes: DiskUsageProbes = {
+    ...probes,
+    containerSize: async () => {
+      throw new Error("Docker offline");
+    },
+  };
+  await expect(
+    getEnvironmentDiskUsage(saved.id, context, { probes: brokenProbes }),
+  ).rejects.toThrow("Docker offline");
+  brokenProbes.containerSize = async () => 7;
+  expect(
+    (await getEnvironmentDiskUsage(saved.id, context, { probes: brokenProbes })).totalBytes,
+  ).toBe(7);
+});
+
+test("overview projects local, container and home rows and excludes deleted projects", async () => {
+  const root = await tempDir("ork-disk-list-");
+  const service = new StorageService(root);
+  await service.init();
+  const project = await service.addProject(
+    createProject("https://github.com/acme/app.git", "/checkout"),
+  );
+  for (const row of [
+    environment({ id: "local", projectId: project.id, worktreePath: "/custom/tree" }),
+    environment({ id: "container", projectId: project.id, environmentType: "containerized" }),
+    environment({
+      id: "home",
+      projectId: project.id,
+      worktreePath: "/checkout",
+      projectHome: true,
+    }),
+    environment({ id: "orphan", projectId: "gone" }),
+  ])
+    await service.addEnvironment(row);
+  const rows = await listDiskUsageEnvironments({ storage: service });
+  expect(rows).toHaveLength(3);
+  expect(rows.find((row) => row.environmentId === "local")).toMatchObject({
+    location: "/custom/tree",
+    projectName: project.name,
+  });
+  expect(rows.find((row) => row.environmentId === "container")?.location).toBeNull();
+  expect(rows.find((row) => row.environmentId === "home")?.projectHome).toBe(true);
+});
+
+test("container breakdown includes recovery copies and unique active and retained named volumes", async () => {
+  const lifecycle = emptyContainerLifecycle();
+  lifecycle.storage.volumes = [{ role: "workspace", name: "active-workspace" }];
+  lifecycle.retainedStorage = [
+    {
+      storageSetId: "old",
+      workspaceGeneration: 1,
+      retainedAt: new Date().toISOString(),
+      reason: "workspace-reset",
+      volumes: [
+        { role: "workspace", name: "retained-workspace" },
+        { role: "shared", name: "active-workspace" },
+      ],
+    },
+  ];
+  lifecycle.retainedRuntimes = [
+    { containerId: "recovery-container", runtimeGeneration: 1, owner: "test" },
+  ];
+  const env = environment({
+    environmentType: "containerized",
+    containerId: "active-container",
+    containerLifecycle: lifecycle,
+  });
+  const probes: DiskUsageProbes = {
+    ...probesFor(async () => ""),
+    containerSize: async (id) => (id === "active-container" ? 10 : 20),
+    volumeSizes: async () =>
+      new Map([
+        ["active-workspace", 30],
+        ["retained-workspace", 40],
+      ]),
+  };
+  const result = await measureEnvironmentDiskUsage(env, probes);
+  expect(result.primary.items.map((item) => item.bytes)).toEqual([10, 20, 30, 40]);
+  expect(result.primary.items.map((item) => item.label)).toEqual([
+    "Container writable layer",
+    "Recovery copy recovery-con",
+    "Volume active-workspace",
+    "Volume retained-workspace",
+  ]);
+  expect(result.totalBytes).toBe(100);
+  probes.volumeSizes = async () => null;
+  const partial = await measureEnvironmentDiskUsage(env, probes);
+  expect(partial.primary.bytes).toBe(30);
+  expect(partial.primary.items.slice(2).map((item) => item.bytes)).toEqual([null, null]);
+  expect(partial.primary.unavailable).toBeTruthy();
+  probes.containerSize = async () => null;
+  expect((await measureEnvironmentDiskUsage(env, probes)).totalBytes).toBeNull();
 });

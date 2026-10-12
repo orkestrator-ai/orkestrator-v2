@@ -26,6 +26,7 @@ import * as tmux from "./tmux-commands.js";
 import * as pathSafety from "./path-safety.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
+import { parseWorktreeMoveRecord } from "./storage-projects.js";
 
 const roots: string[] = [];
 
@@ -87,6 +88,89 @@ async function setup() {
     return (await storage.getEnvironment(created.id))!;
   };
   return { root, projectPath, storage, context, commands, startLocal };
+}
+
+const gitIdentity = [
+  "-c",
+  "user.name=Test",
+  "-c",
+  "user.email=test@example.invalid",
+  "-c",
+  "protocol.file.allow=always",
+];
+
+async function commitFixtureRepo(repo: string, file: string): Promise<void> {
+  await runCommand("git", ["init", "-q", "-b", "main", repo]);
+  await fs.writeFile(path.join(repo, file), file);
+  await runCommand("git", ["-C", repo, "add", "."]);
+  await runCommand("git", ["-C", repo, ...gitIdentity, "commit", "-qm", file]);
+}
+
+/**
+ * Adds `libs/sub` (which itself nests `nested`) to the project and checks
+ * both out in the environment's worktree, with git dirs under the repository.
+ */
+async function addNestedSubmodules(root: string, projectPath: string, worktree: string) {
+  const nested = path.join(root, "nested-src");
+  const sub = path.join(root, "sub-src");
+  await commitFixtureRepo(nested, "nested.txt");
+  await commitFixtureRepo(sub, "sub.txt");
+  await runCommand("git", ["-C", sub, ...gitIdentity, "submodule", "add", "-q", nested, "nested"]);
+  await runCommand("git", ["-C", sub, ...gitIdentity, "commit", "-qm", "nested"]);
+  await runCommand("git", [
+    "-C",
+    projectPath,
+    ...gitIdentity,
+    "submodule",
+    "add",
+    "-q",
+    sub,
+    "libs/sub",
+  ]);
+  await runCommand("git", ["-C", projectPath, ...gitIdentity, "commit", "-qm", "submodule"]);
+  const { stdout: head } = await runCommand("git", ["-C", projectPath, "rev-parse", "HEAD"]);
+  await runCommand("git", ["-C", worktree, "reset", "-q", "--hard", head.trim()]);
+  await runCommand("git", [
+    "-C",
+    worktree,
+    ...gitIdentity,
+    "submodule",
+    "update",
+    "-q",
+    "--init",
+    "--recursive",
+  ]);
+  await fs.writeFile(path.join(worktree, "libs", "sub", "nested", "local.txt"), "uncommitted");
+}
+
+/** Asserts both submodule checkouts in `worktree` resolve to themselves and are clean but for local work. */
+async function expectSubmodulesLinked(worktree: string): Promise<void> {
+  const real = await fs.realpath(worktree);
+  for (const relative of ["libs/sub", "libs/sub/nested"]) {
+    const { stdout: top } = await runCommand("git", [
+      "-C",
+      path.join(worktree, relative),
+      "rev-parse",
+      "--show-toplevel",
+    ]);
+    expect(top.trim()).toBe(path.join(real, relative));
+  }
+  const { stdout: status } = await runCommand("git", [
+    "-C",
+    worktree,
+    "submodule",
+    "status",
+    "--recursive",
+  ]);
+  expect(status).toContain("libs/sub/nested");
+  expect(status.split("\n").filter((line) => /^[-+U]/.test(line))).toEqual([]);
+  const { stdout: nestedStatus } = await runCommand("git", [
+    "-C",
+    path.join(worktree, "libs", "sub", "nested"),
+    "status",
+    "--porcelain",
+  ]);
+  expect(nestedStatus).toContain("local.txt");
 }
 
 async function registeredWorktrees(projectPath: string): Promise<string[]> {
@@ -186,6 +270,60 @@ describe("move_environment", () => {
       expect(record.cwdHash).toBe(codexCwdHash(to));
     });
   }
+
+  for (const forceCopy of [false, true]) {
+    test(`moves a worktree with nested submodules (${forceCopy ? "copy" : "same disk"})`, async () => {
+      const { root, projectPath, storage, context, startLocal } = await setup();
+      const environment = await startLocal();
+      const from = environment.worktreePath!;
+      await addNestedSubmodules(root, projectPath, from);
+      const destination = path.join(root, "deeper", "elsewhere");
+
+      const moved = await moveEnvironmentTask(environment.id, destination, context, {
+        forceCopy,
+        sessionHomes: isolatedHomes(root),
+      });
+
+      const to = path.join(destination, path.basename(from));
+      expect(moved.worktreePath).toBe(to);
+      expect(moved.lifecycleError).toBeFalsy();
+      expect(moved.worktreeMove).toBeUndefined();
+      expect(await exists(from)).toBe(false);
+      expect(await registeredWorktrees(projectPath)).toContain(to);
+      expect(await registeredWorktrees(projectPath)).not.toContain(from);
+      await expectSubmodulesLinked(to);
+      expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(to);
+    });
+  }
+
+  test("a failed submodule re-link restores the original checkout", async () => {
+    const { root, projectPath, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    await addNestedSubmodules(root, projectPath, from);
+    const run = shell.runCommand;
+    let configWrites = 0;
+    spyOn(shell, "runCommand").mockImplementation(async (command, args, options) => {
+      if (command === "git" && args?.[0] === "config" && args.includes("core.worktree")) {
+        // Fail part-way through re-linking the copy; the rollback re-links the source.
+        if (++configWrites === 2) throw new Error("config write failed");
+      }
+      return run(command, args, options);
+    });
+    const destination = path.join(root, "elsewhere");
+    await expect(
+      moveEnvironmentTask(environment.id, destination, context, {
+        forceCopy: true,
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("config write failed");
+    expect(await fs.readdir(destination)).toEqual([]);
+    const current = (await storage.getEnvironment(environment.id))!;
+    expect(current.worktreePath).toBe(from);
+    expect(current.worktreeMove).toBeUndefined();
+    expect(await registeredWorktrees(projectPath)).toContain(from);
+    await expectSubmodulesLinked(from);
+  });
 
   test("is refused while an agent is working or waiting, leaving the files in place", async () => {
     const { root, storage, context, startLocal } = await setup();
@@ -435,7 +573,7 @@ describe("move failure boundaries", () => {
     expect(await exists(environment.worktreePath!)).toBe(false);
   });
 
-  test("detects EXDEV, cleans a failed copy and refuses submodules before copying", async () => {
+  test("detects EXDEV and cleans a failed copy", async () => {
     const { root, context, startLocal, projectPath } = await setup();
     const environment = await startLocal();
     const run = shell.runCommand;
@@ -457,12 +595,6 @@ describe("move failure boundaries", () => {
     ).rejects.toThrow("copy failed");
     expect(await fs.readdir(destination)).toEqual([]);
     expect(await registeredWorktrees(projectPath)).toContain(environment.worktreePath!);
-    await fs.writeFile(path.join(environment.worktreePath!, ".gitmodules"), "fixture");
-    await expect(
-      moveEnvironmentTask(environment.id, destination, context, {
-        sessionHomes: isolatedHomes(root),
-      }),
-    ).rejects.toThrow("submodules");
     expect(copies).toBe(1);
   });
 
@@ -530,6 +662,82 @@ describe("move failure boundaries", () => {
         ),
       ).toContain('"relocatedCwd"');
   });
+});
+
+test("restart recovery re-links submodules of an adopted or abandoned copy", async () => {
+  const { root, storage, context, startLocal, projectPath } = await setup();
+  const environment = await startLocal();
+  const from = environment.worktreePath!;
+  await addNestedSubmodules(root, projectPath, from);
+  const { stdout: listed } = await runCommand("git", [
+    "-C",
+    from,
+    "submodule",
+    "--quiet",
+    "foreach",
+    "--recursive",
+    'printf "%s|%s\\n" "$displaypath" "$(git rev-parse --absolute-git-dir)"',
+  ]);
+  const submodules = listed
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const [relative, gitDir] = line.split("|");
+      return { path: relative!, gitDir: gitDir! };
+    });
+  expect(submodules.map((entry) => entry.path)).toEqual(["libs/sub", "libs/sub/nested"]);
+
+  // Stopped after the copy was renamed into place, before anything was re-linked.
+  const to = path.join(root, "moved", "deeper", path.basename(from));
+  await fs.mkdir(path.dirname(to), { recursive: true });
+  await fs.cp(from, to, { recursive: true, verbatimSymlinks: true });
+  await storage.updateEnvironment(environment.id, {
+    worktreeMove: { from, to, submodules, phase: "moving", startedAt: new Date().toISOString() },
+    lifecycleOperation: "moving",
+  });
+  // A half re-link left the source's submodule pointing at the copy.
+  await runCommand("git", [
+    "config",
+    "--file",
+    path.join(submodules[0]!.gitDir, "config"),
+    "core.worktree",
+    path.relative(submodules[0]!.gitDir, path.join(await fs.realpath(to), "libs", "sub")),
+  ]);
+  await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+  let recovered = (await storage.getEnvironment(environment.id))!;
+  expect(recovered.worktreePath).toBe(from);
+  expect(recovered.lifecycleError).toContain("left a copy");
+  await expectSubmodulesLinked(from);
+
+  // The same copy, recorded as finished, is adopted with its submodules.
+  await fs.rm(to, { recursive: true, force: true });
+  await fs.cp(from, to, { recursive: true, verbatimSymlinks: true });
+  await storage.updateEnvironment(environment.id, {
+    worktreeMove: { from, to, submodules, phase: "copied", startedAt: new Date().toISOString() },
+    lifecycleOperation: "moving",
+  });
+  await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+  recovered = (await storage.getEnvironment(environment.id))!;
+  expect(recovered.worktreePath).toBe(to);
+  expect(recovered.worktreeMove).toBeUndefined();
+  expect(await exists(from)).toBe(false);
+  expect(await registeredWorktrees(projectPath)).toContain(to);
+  await expectSubmodulesLinked(to);
+});
+
+test("persisted submodule links are confined to the worktree", () => {
+  const base = { from: "/a/one", to: "/b/one", phase: "copied", startedAt: "now" };
+  const submodules = [{ path: "libs/sub", gitDir: "/repo/.git/worktrees/one/modules/libs/sub" }];
+  expect(parseWorktreeMoveRecord({ ...base, submodules }).submodules).toEqual(submodules);
+  expect(parseWorktreeMoveRecord(base).submodules).toBeUndefined();
+  for (const bad of ["../escape", "/abs", "libs//sub", ""]) {
+    expect(() =>
+      parseWorktreeMoveRecord({ ...base, submodules: [{ path: bad, gitDir: "/g" }] }),
+    ).toThrow("submodule path");
+  }
+  expect(() =>
+    parseWorktreeMoveRecord({ ...base, submodules: [{ path: "libs/sub", gitDir: "relative" }] }),
+  ).toThrow("submodule git dir");
 });
 
 test("abandons a final copy without a copied-phase record and repairs the original", async () => {

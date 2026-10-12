@@ -41,7 +41,7 @@ import {
   relocateAgentSessionState,
   type SessionRelocationHomes,
 } from "./environment-move-sessions.js";
-import type { Environment, WorktreeMoveRecord } from "./models.js";
+import type { Environment, WorktreeMoveRecord, WorktreeMoveSubmodule } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
@@ -237,21 +237,19 @@ async function moveEnvironmentOnce(
     recheckDestination();
 
     const viaGit = options.forceCopy
-      ? { moved: false as const, crossDevice: true }
+      ? { moved: false as const }
       : await tryGitWorktreeMove(projectPath, from, to);
     if (viaGit.moved) {
       moved = true;
     } else {
-      if (await pathExists(path.join(from, ".gitmodules"))) {
-        throw new Error(
-          "A worktree with submodules can only be moved within the same disk; choose a folder on the same disk",
-        );
-      }
+      // Submodule checkouts keep their git dirs in the repository; the copy
+      // re-links each one to its new folder.
+      const submodules = await listLinkedSubmodules(from);
       const staging = path.join(
         destinationRoot,
         `.${path.basename(to)}.orkestrator-move-${randomBytes(4).toString("hex")}`,
       );
-      record = { ...record, staging };
+      record = { ...record, staging, ...(submodules.length ? { submodules } : {}) };
       await storage.updateEnvironment(environment.id, { worktreeMove: record });
       let renamed = false;
       try {
@@ -265,10 +263,12 @@ async function moveEnvironmentOnce(
         await runCommand("git", ["-C", projectPath, "worktree", "repair", to], {
           timeoutMs: GIT_TIMEOUT_MS,
         });
+        await relinkSubmodules(to, submodules);
       } catch (error) {
         await removeInside(destinationRoot, staging).catch(() => undefined);
         if (renamed) await removeInside(destinationRoot, to).catch(() => undefined);
         await repairWorktree(projectPath, from);
+        await relinkSubmodules(from, submodules).catch(() => undefined);
         throw error;
       }
       record = { ...record, staging: undefined, phase: "copied", removeSource: true };
@@ -357,7 +357,7 @@ async function tryGitWorktreeMove(
   projectPath: string,
   from: string,
   to: string,
-): Promise<{ moved: true } | { moved: false; crossDevice: true }> {
+): Promise<{ moved: boolean }> {
   try {
     await runCommand("git", ["-C", projectPath, "worktree", "move", from, to], {
       timeoutMs: GIT_TIMEOUT_MS,
@@ -365,9 +365,72 @@ async function tryGitWorktreeMove(
     return { moved: true };
   } catch (error) {
     const message = errorMessage(error);
-    // Git only renames; another disk needs a copy.
-    if (/cross-device|EXDEV/i.test(message)) return { moved: false, crossDevice: true };
+    // Git only renames, and never a worktree with submodules; both need a copy.
+    if (/cross-device|EXDEV|containing submodules/i.test(message)) return { moved: false };
     throw new Error(`git could not move the worktree: ${message}`);
+  }
+}
+
+/**
+ * Populated submodules (recursively) whose git dir lives outside the worktree.
+ * Their `.git` file and `core.worktree` hold paths relative to the checkout,
+ * which a copy to another folder breaks. Embedded `.git` directories travel
+ * with the copy and are left out.
+ */
+async function listLinkedSubmodules(worktree: string): Promise<WorktreeMoveSubmodule[]> {
+  if (!(await pathExists(path.join(worktree, ".gitmodules")))) return [];
+  const { stdout } = await runCommand(
+    "git",
+    [
+      "-C",
+      worktree,
+      "submodule",
+      "--quiet",
+      "foreach",
+      "--recursive",
+      `printf '%s\\0%s\\0' "$displaypath" "$(git rev-parse --absolute-git-dir)"`,
+    ],
+    { timeoutMs: GIT_TIMEOUT_MS },
+  );
+  const fields = stdout.split("\0");
+  const root = canonicalWorktreePath(worktree);
+  const submodules: WorktreeMoveSubmodule[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const relative = fields[index]!;
+    const gitDir = fields[index + 1]!;
+    if (!relative || !path.isAbsolute(gitDir) || isSameOrInside(gitDir, root)) continue;
+    if (!confinedRelative(root, path.join(root, relative))) continue;
+    submodules.push({ path: relative, gitDir });
+  }
+  return submodules;
+}
+
+/** Points each submodule's `.git` file and git dir at its checkout inside `worktree`. */
+async function relinkSubmodules(
+  worktree: string,
+  submodules: readonly WorktreeMoveSubmodule[] | undefined,
+): Promise<void> {
+  if (!submodules?.length) return;
+  const root = canonicalWorktreePath(worktree);
+  for (const submodule of submodules) {
+    const checkout = path.join(root, submodule.path);
+    if (!confinedRelative(root, checkout)) continue;
+    if (!(await pathExists(checkout)) || !(await pathExists(submodule.gitDir))) continue;
+    await fs.writeFile(
+      path.join(checkout, ".git"),
+      `gitdir: ${path.relative(checkout, submodule.gitDir)}\n`,
+    );
+    await runCommand(
+      "git",
+      [
+        "config",
+        "--file",
+        path.join(submodule.gitDir, "config"),
+        "core.worktree",
+        path.relative(submodule.gitDir, checkout),
+      ],
+      { timeoutMs: GIT_TIMEOUT_MS },
+    );
   }
 }
 
@@ -494,6 +557,7 @@ export async function recoverInterruptedEnvironmentMove(
         await runCommand("git", ["-C", projectPath, "worktree", "repair", record.to], {
           timeoutMs: GIT_TIMEOUT_MS,
         });
+      await relinkSubmodules(record.to, record.submodules);
     }
     await commitMove(storage, environment.id, committedRecord, destinationRoot);
     await completeCommittedMove(environment, committedRecord, { storage }, sessionHomes);
@@ -504,7 +568,10 @@ export async function recoverInterruptedEnvironmentMove(
   }
   if (record.staging) await removeInside(destinationRoot, record.staging).catch(() => undefined);
   // A copy may have been repaired just before the backend stopped.
-  if (fromExists) await repairWorktree(projectPath, record.from);
+  if (fromExists) {
+    await repairWorktree(projectPath, record.from);
+    await relinkSubmodules(record.from, record.submodules).catch(() => undefined);
+  }
   await storage.updateEnvironment(environment.id, {
     worktreeMove: null,
     lifecycleOperation: null,

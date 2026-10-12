@@ -147,6 +147,27 @@ export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
   if (value.removeSource !== undefined && typeof value.removeSource !== "boolean") {
     throw new Error("Invalid worktree move source cleanup flag");
   }
+  let submodules: WorktreeMoveRecord["submodules"];
+  if (value.submodules !== undefined) {
+    if (!Array.isArray(value.submodules) || value.submodules.length > 10_000) {
+      throw new Error("Invalid worktree move submodules");
+    }
+    submodules = value.submodules.map((entry: unknown) => {
+      const relative = isRecord(entry) ? entry.path : undefined;
+      if (
+        !isRecord(entry) ||
+        typeof relative !== "string" ||
+        !relative ||
+        path.isAbsolute(relative) ||
+        relative.length > 4096 ||
+        relative.includes("\0") ||
+        relative.split(/[\\/]/).some((segment) => segment === "" || segment === "..")
+      ) {
+        throw new Error("Invalid worktree move submodule path");
+      }
+      return { path: relative, gitDir: absolute("submodule git dir", entry.gitDir) };
+    });
+  }
   return {
     from: absolute("source", value.from),
     to: absolute("destination", value.to),
@@ -156,6 +177,7 @@ export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
       : { fromCanonical: absolute("canonical source", value.fromCanonical) }),
     ...(value.fromRoot === undefined ? {} : { fromRoot: absolute("source root", value.fromRoot) }),
     ...(value.removeSource === undefined ? {} : { removeSource: value.removeSource === true }),
+    ...(submodules ? { submodules } : {}),
     phase: value.phase,
     startedAt: value.startedAt,
   };

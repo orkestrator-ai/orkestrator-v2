@@ -64,7 +64,18 @@ export interface WorktreeMoveRecord {
   fromCanonical?: string;
   fromRoot?: string;
   removeSource?: boolean;
+  /**
+   * Submodules whose git dir lives outside the worktree (under the
+   * repository's `.git/worktrees/<name>/modules`). A copy re-links each one.
+   */
+  submodules?: WorktreeMoveSubmodule[];
   startedAt: string;
+}
+export interface WorktreeMoveSubmodule {
+  /** Path relative to the worktree root. */
+  path: string;
+  /** Absolute git dir of the submodule checkout. */
+  gitDir: string;
 }
 export type EnvironmentSetupPhase = "pending" | "running" | "ready" | "failed";
 export type PortProtocol = "tcp" | "udp";

@@ -142,7 +142,15 @@ export function recordBackgroundTaskLaunch(
     (!LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) || parked !== undefined);
   // The finished run's parked snapshot must not describe this one.
   const previous = restarted
-    ? { ...stored, startedAt: Date.now(), endedAt: undefined, error: undefined }
+    ? {
+        ...stored,
+        startedAt: Date.now(),
+        endedAt: undefined,
+        error: undefined,
+        summary: undefined,
+        outputFile: undefined,
+        usage: undefined,
+      }
     : stored;
   const status = restarted ? "running" : (previous?.status ?? "running");
   const nextTasks = { ...session.backgroundTasks };
@@ -165,6 +173,9 @@ export function recordBackgroundTaskLaunch(
       startedAt: previous?.startedAt ?? Date.now(),
       endedAt: previous?.endedAt,
       error: previous?.error,
+      summary: previous?.summary,
+      outputFile: previous?.outputFile,
+      usage: previous?.usage,
     },
   });
   const task = session.backgroundTasks[launch.id]!;

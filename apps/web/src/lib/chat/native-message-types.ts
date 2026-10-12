@@ -6,6 +6,7 @@
  * not on Claude/OpenCode/Codex SDK payloads.
  */
 
+import type { NativeAgentBackgroundTaskUsage } from "@orkestrator/protocol/native-agent";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -54,6 +55,13 @@ export interface NativeBackgroundTask {
    * recorded position", leaving the card in its launch row.
    */
   settledAt?: string;
+  /** Why the task failed or was stopped, when the backend recorded a reason. */
+  error?: string;
+  /** The provider's one-line report from the task's terminal edge. */
+  summary?: string;
+  /** Path of the task's full output in its environment's filesystem. */
+  outputFile?: string;
+  usage?: NativeAgentBackgroundTaskUsage;
 }
 
 /**

@@ -961,6 +961,50 @@ describe("HTTP bridge provider", () => {
     ]);
   });
 
+  test("carries how a task ended and where its output went", async () => {
+    /*
+     * A card whose launch row is not loaded has only the snapshot to read, so
+     * without these it can say a task failed but never why. A path is passed
+     * whole or not at all, and usage only when every count is readable.
+     */
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "idle",
+        backgroundTasks: {
+          failed: {
+            status: "failed",
+            error: "  exit code 1  ",
+            summary: 'Background command "Check" failed with exit code 1',
+            outputFile: "/tmp/claude/tasks/failed.output",
+            usage: { totalTokens: 0, toolUses: 0, durationMs: 1_500 },
+          },
+          malformed: {
+            status: "completed",
+            error: 42,
+            summary: "   ",
+            outputFile: "/tmp/out\nput",
+            usage: { totalTokens: 10, toolUses: "1", durationMs: 5 },
+          },
+        },
+      });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+
+    expect(snapshot.backgroundTasks).toEqual([
+      {
+        id: "failed",
+        status: "failed",
+        error: "exit code 1",
+        summary: 'Background command "Check" failed with exit code 1',
+        outputFile: "/tmp/claude/tasks/failed.output",
+        usage: { totalTokens: 0, toolUses: 0, durationMs: 1_500 },
+      },
+      { id: "malformed", status: "completed" },
+    ]);
+  });
+
   test("reads the ACP snapshot as a small status plus a bounded transcript", async () => {
     /*
      * The whole-session route returned composer, runtime and the entire

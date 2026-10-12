@@ -228,6 +228,8 @@ import {
   buildMessageParts,
   memoryRecallPart,
   parseMessageContent,
+  persistedBackgroundTaskMessage,
+  persistedTaskUsage,
   provisionalBackgroundTaskId,
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
@@ -1949,6 +1951,10 @@ export async function sendPrompt(
           summary?: string;
           /** Only on `task_notification`; the terminal edge of a task. */
           status?: "completed" | "failed" | "stopped";
+          /** Only on `task_notification`; where the CLI wrote the full output. */
+          output_file?: unknown;
+          /** On `task_progress` and `task_notification`. */
+          usage?: unknown;
           /** Only on `background_tasks_changed`; the full live set. */
           tasks?: Array<{
             task_id?: string;
@@ -2027,6 +2033,9 @@ export async function sendPrompt(
                 startedAt: Date.now(),
                 endedAt: undefined,
                 error: undefined,
+                summary: undefined,
+                outputFile: undefined,
+                usage: undefined,
               }
             : stored;
           const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
@@ -2049,6 +2058,13 @@ export async function sendPrompt(
             startedAt: previous?.startedAt ?? Date.now(),
             endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
             error: taskMessage.patch?.error ?? previous?.error,
+            summary: previous?.summary,
+            outputFile: previous?.outputFile,
+            // Terminal usage wins over an older progress frame delivered late.
+            usage:
+              previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) && previous.usage
+                ? previous.usage
+                : (persistedTaskUsage(taskMessage.usage) ?? previous?.usage),
           };
           inheritBackgroundTaskHookRun(previous, task);
           session.backgroundTasks = boundBackgroundTaskHistory({
@@ -2065,10 +2081,13 @@ export async function sendPrompt(
           closeQueryControlIfUnused(session, correlated.owner);
           emitBackgroundTasks();
         } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
+          const notification = persistedBackgroundTaskMessage({ message: taskMessage });
+          // Invalid terminal statuses are not completion evidence, live or on replay.
+          if (!notification) return;
           // A same-id wake can happen while usage settlement holds the JSONL
           // consumer. This frame may belong to the preceding run; only the
           // current run's stop hook can retire its live control.
-          if (isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id])) {
+          if (isHookRunningBackgroundTask(session.backgroundTasks?.[notification.task_id])) {
             return;
           }
           // A task notification can re-enter the root agent loop after an
@@ -2080,31 +2099,34 @@ export async function sendPrompt(
           receivedResult = false;
           // The terminal edge. Without it nothing ever leaves `running`, so
           // `GET /session/:id` reported a finished task as live indefinitely.
-          const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
+          const correlated = takeProvisionalBackgroundTask(session, notification.tool_use_id);
           // A level signal that preceded this edge has already removed the task
           // from the live set; its parked snapshot is the only remaining source
           // of the original description and start time.
-          const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
+          const parked = takeSettlingBackgroundTask(session, notification.task_id);
           const previous =
-            session.backgroundTasks?.[taskMessage.task_id] ?? parked?.task ?? correlated.task;
+            session.backgroundTasks?.[notification.task_id] ?? parked?.task ?? correlated.task;
           const terminalStatus: BackgroundTaskSnapshot["status"] =
-            taskMessage.status === "failed"
+            notification.status === "failed"
               ? "failed"
-              : taskMessage.status === "stopped"
+              : notification.status === "stopped"
                 ? "killed"
                 : "completed";
           const task: BackgroundTaskSnapshot = {
-            id: taskMessage.task_id,
-            toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
-            description: previous?.description ?? taskMessage.description ?? taskMessage.summary,
+            id: notification.task_id,
+            toolUseId: notification.tool_use_id ?? previous?.toolUseId,
+            description: previous?.description ?? notification.description ?? notification.summary,
             status: terminalStatus,
             isBackgrounded: previous?.isBackgrounded,
             startedAt: previous?.startedAt ?? Date.now(),
             endedAt: Date.now(),
             error:
               terminalStatus === "failed"
-                ? (taskMessage.summary ?? previous?.error)
+                ? (notification.summary ?? previous?.error)
                 : previous?.error,
+            summary: notification.summary ?? previous?.summary,
+            outputFile: notification.output_file ?? previous?.outputFile,
+            usage: notification.usage ?? previous?.usage,
           };
           session.backgroundTasks = boundBackgroundTaskHistory({
             ...session.backgroundTasks,
@@ -2182,6 +2204,7 @@ export async function sendPrompt(
                 : "running",
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
+              ...(previous?.usage ? { usage: previous.usage } : {}),
             };
             inheritBackgroundTaskHookRun(previous, replacement[id]!);
             // An id already owned by another live control keeps that owner:

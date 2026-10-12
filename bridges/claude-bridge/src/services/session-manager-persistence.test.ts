@@ -788,6 +788,7 @@ describe("hydratePersistedSessionMessages", () => {
           task_id: "task-1",
           tool_use_id: "tool-agent-1",
           description: "Reviewing",
+          usage: { total_tokens: 1_200, tool_uses: 3, duration_ms: 60_000 },
           timestamp: "2026-07-28T10:01:00.000Z",
         },
         parent_tool_use_id: null,
@@ -802,6 +803,7 @@ describe("hydratePersistedSessionMessages", () => {
           task_id: "task-1",
           status: "failed",
           summary: "Review failed",
+          output_file: "/tmp/claude/tasks/task-1.output",
           timestamp: "2026-07-28T10:02:00.000Z",
         },
         parent_tool_use_id: null,
@@ -816,6 +818,10 @@ describe("hydratePersistedSessionMessages", () => {
       description: "Reviewing",
       status: "failed",
       error: "Review failed",
+      summary: "Review failed",
+      outputFile: "/tmp/claude/tasks/task-1.output",
+      // The terminal edge reported no usage, so the last progress report stands.
+      usage: { totalTokens: 1_200, toolUses: 3, durationMs: 60_000 },
       startedAt: Date.parse("2026-07-28T10:00:00.000Z"),
       endedAt: Date.parse("2026-07-28T10:02:00.000Z"),
     });

@@ -91,6 +91,19 @@ export interface ClaudeBackgroundTask {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  summary?: string;
+  outputFile?: string;
+  usage?: { totalTokens: number; toolUses: number; durationMs: number };
+}
+
+function isOptionalBackgroundTaskUsage(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) &&
+    [value.totalTokens, value.toolUses, value.durationMs].every(
+      (count) => typeof count === "number" && Number.isFinite(count) && count >= 0,
+    )
+  );
 }
 
 const CLAUDE_BACKGROUND_TASK_STATUSES = new Set<ClaudeBackgroundTask["status"]>([
@@ -333,8 +346,19 @@ export function parseClaudeBackgroundTasks(
       droppedTasks?.push(taskId);
       continue;
     }
-    const { id, toolUseId, description, status, isBackgrounded, startedAt, endedAt, error } =
-      taskValue;
+    const {
+      id,
+      toolUseId,
+      description,
+      status,
+      isBackgrounded,
+      startedAt,
+      endedAt,
+      error,
+      summary,
+      outputFile,
+      usage,
+    } = taskValue;
     if (
       typeof id !== "string" ||
       id.length === 0 ||
@@ -346,7 +370,10 @@ export function parseClaudeBackgroundTasks(
       (isBackgrounded !== undefined && typeof isBackgrounded !== "boolean") ||
       !isOptionalFiniteNumber(startedAt) ||
       !isOptionalFiniteNumber(endedAt) ||
-      !isOptionalString(error)
+      !isOptionalString(error) ||
+      !isOptionalString(summary) ||
+      !isOptionalString(outputFile) ||
+      !isOptionalBackgroundTaskUsage(usage)
     ) {
       droppedTasks?.push(taskId);
       continue;

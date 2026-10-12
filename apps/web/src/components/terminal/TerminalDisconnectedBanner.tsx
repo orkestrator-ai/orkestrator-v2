@@ -25,7 +25,7 @@ export function TerminalDisconnectedBanner({
     <div
       role="status"
       aria-live="polite"
-      className="absolute top-2 left-2 z-20 flex max-w-[min(36rem,calc(100%-1rem))] items-start gap-2 rounded-md border border-red-500/40 bg-red-950/90 px-2.5 py-1.5 text-xs text-red-100 shadow-md backdrop-blur-sm"
+      className="absolute top-2 left-2 z-30 flex max-w-[min(36rem,calc(100%-1rem))] items-start gap-2 rounded-md border border-red-500/40 bg-red-950/90 px-2.5 py-1.5 text-xs text-red-100 shadow-md backdrop-blur-sm"
     >
       <PlugZap className="mt-px h-3.5 w-3.5 shrink-0 text-red-300" aria-hidden="true" />
       <span className="min-w-0 flex-1">{message}</span>

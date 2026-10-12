@@ -1,0 +1,23 @@
+# container firewall policy > firewall uses stored domains and tolerates a repeated GitHub bootstrap range
+
+- **ID:** 0192
+- **Status:** open
+- **Date observed:** 2026-10-12
+- **Owning file:** `tests/unit/firewall-policy.test.ts:269`
+- **Original command:** `PATH="/opt/homebrew/opt/bash/bin:/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/opt/findutils/libexec/gnubin:/opt/homebrew/opt/gnu-tar/libexec/gnubin:/opt/homebrew/opt/grep/libexec/gnubin:/opt/homebrew/opt/gnu-sed/libexec/gnubin:/opt/homebrew/bin:$PATH" mise run test:logged -- --name shell-fixtures -- bun test ./tests/unit/migrate-copy.test.ts ./tests/unit/firewall-policy.test.ts ./tests/unit/firewall-refresh.test.ts ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures`
+- **Worker configuration:** one isolated Bun worker; the repository suite and browser suite were also running on this host.
+- **Failure:** `expect(result.exitCode).toBe(0)` received `null`, followed by Bun's five-second test timeout at 5003.69 ms and `killed 1 dangling process`.
+- **Suite counts:** 48 total, 47 passed, 1 failed; 35.50 seconds.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.esofJy/shell-fixtures.log.gz`
+- **Isolated rerun:** the same `PATH` prefix with `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed in 13.2 seconds.
+- **Hypothesis:** this shell-fixture case exceeded its outer five-second budget while other validation commands were running. The owning file passed with the same GNU tool selection on its isolated rerun. Concurrent load is a possible contributor, but the root cause has not been established. The terminal-toolbar change does not modify the firewall or its fixtures.
+
+## Recurrence during merge validation (2026-10-12)
+
+- **Original command:** the GNU-tool `PATH` prefix above with `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** three isolated root-suite workers; workspace and bridge groups ran concurrently under the aggregate runner.
+- **Failures:** the stored-domains/bootstrap-range case again received `null` instead of exit code `0` at line 269 and timed out after 5003.27 ms. The related `policy 2 narrows host access to named ports and records what it applied` case received the same result at line 332 and timed out after 5002.96 ms.
+- **Root-suite counts:** 5,035 total, 5,009 passed, 24 skipped, 2 failed; 207.53 seconds.
+- **Isolated rerun:** the same GNU-tool `PATH` prefix with `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed in 8.3 seconds.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.zbwgoU/root-and-agent-support-tests.log.gz`.
+- **Hypothesis:** both shell-fixture cases exhausted their outer five-second deadline during aggregate validation. Their owning file passed alone; the root cause remains unconfirmed. The merge resolution changes only flake documentation.

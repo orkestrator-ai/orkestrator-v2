@@ -555,8 +555,10 @@ describe("plan approval flow", () => {
     const call = await nextQueryCall();
 
     expect(call.options.permissionMode).toBe("plan");
-    // Real plan mode does not need allowDangerouslySkipPermissions
-    expect(call.options.allowDangerouslySkipPermissions).toBeFalsy();
+    // Plan mode is what runs. The session's policy allows bypass, so the CLI
+    // is also permitted to switch into it: a later turn written into this same
+    // process (one kept alive by background work) may ask for build mode.
+    expect(call.options.allowDangerouslySkipPermissions).toBe(true);
 
     call.finish();
     await promptPromise;

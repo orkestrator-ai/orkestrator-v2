@@ -4,6 +4,34 @@
 session surface. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
 [`AGENTS.md`](../../AGENTS.md) also apply.
 
+## One CLI per session
+
+A session is one conversation, and only one Claude CLI may run its root agent
+loop. `session-manager-runtime.ts` owns that process (`session.claudeRuntime`):
+its input stream, the single consumer of its frames, and which turn each frame
+belongs to. Two CLIs resumed from the same rollout each answer their own task
+notifications as the coordinator — duplicated agents, interleaved edits, two
+writers on one `.jsonl`. When touching the prompt path:
+
+- **Never start a query for a session whose runtime is open.** A turn that ends
+  while its CLI still owns background work releases the foreground but leaves
+  the process running; the next prompt is written into it (`submitClaudeTurn`).
+  A new process starts only when there is none, or after a draining one has
+  exited (`retireDrainingClaudeRuntime`). Probes that never run the model
+  (`maxTurns: 0` rewind, catalogue reads) are not turns.
+- **The newest turn owns the root conversation.** Root frames, results, hooks
+  and continuations go to `runtime.latestTurn`; only a subagent's frames go to
+  the turn whose row holds its call (`routeClaudeFrame`). A superseded turn
+  never closes input, releases retention or arms the continuation watchdog —
+  the newer turn may be waiting on all three.
+- **Launch-only settings are refused, not ignored.** Output schema, execution
+  policy, agent and settings sources cannot change on a live CLI. A prompt
+  that changes them while the runtime is open is a 409 before anything is
+  journaled (`assertClaudeRuntimeAccepts`, checked by the route and again by
+  `sendPrompt`); one that leaves agent or settings sources unsaid inherits the
+  running values. Model, mode, effort, thinking, fast mode and Ultracode are
+  restated on the live process every time it is joined.
+
 ## Session catalogue and transport
 
 When touching the session catalogue (`session-manager-catalog.ts`):

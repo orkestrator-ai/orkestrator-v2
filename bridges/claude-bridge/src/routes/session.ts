@@ -47,6 +47,7 @@ import {
   configureClaudeSession,
   gracefulInterruptClaudeSession,
   refreshClaudeContextUsage,
+  assertClaudeRuntimeAccepts,
 } from "../services/session-manager.js";
 import {
   AGENT_INTERACTION_LIMITS,
@@ -774,6 +775,15 @@ session.post("/:id/prompt", async (c) => {
       await answerIdleSteerPrompt(sessionData, prompt, requestId);
       return c.json({ status: "accepted", requestId, local: true });
     }
+    // Refused before anything is journaled: a prompt the session's running CLI
+    // cannot take must not be accepted and then dropped by a background send.
+    assertClaudeRuntimeAccepts(sessionData, {
+      ...(typeof readOnly === "boolean" ? { readOnly } : {}),
+      agent,
+      includeLocalSettings,
+      outputSchema,
+      ...(agentMcp ? { agentMcp } : {}),
+    });
     if (requestId && outputSchema === undefined) {
       const dispatchState = await claimPromptDispatch(id, requestId, () => {
         let resolveStarted: (() => void) | undefined;

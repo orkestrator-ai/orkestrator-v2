@@ -112,6 +112,7 @@ const mockSteerClaudeSession = mock(async () => "applied" as const);
 const mockAnswerIdleSteerPrompt = mock(async () => "There is no active Claude turn to steer.");
 const mockReadClaudeSteerDispatch = mock(() => "dispatched" as const);
 const mockConfigureClaudeSession = mock(async () => undefined);
+const mockAssertClaudeRuntimeAccepts = mock((_session: unknown, _options: unknown) => {});
 const mockRefreshClaudeContextUsage = mock(async () => ({
   usedTokens: 25,
   totalTokens: 100,
@@ -222,6 +223,7 @@ mock.module("../services/session-manager.js", () => ({
   readClaudeSteerDispatch: mockReadClaudeSteerDispatch,
   configureClaudeSession: mockConfigureClaudeSession,
   refreshClaudeContextUsage: mockRefreshClaudeContextUsage,
+  assertClaudeRuntimeAccepts: mockAssertClaudeRuntimeAccepts,
 }));
 
 /**
@@ -312,6 +314,8 @@ describe("session routes", () => {
     mockGetSessionMessages.mockClear();
     mockSendPrompt.mockReset();
     mockSendPrompt.mockImplementation(successfulPromptStart);
+    mockAssertClaudeRuntimeAccepts.mockReset();
+    mockAssertClaudeRuntimeAccepts.mockImplementation(() => {});
     mockConfigureClaudeSession.mockReset();
     mockConfigureClaudeSession.mockImplementation(async () => undefined);
     mockAbortSession.mockClear();
@@ -888,6 +892,40 @@ describe("session routes", () => {
       const res = await jsonRequest("POST", "/session/s-1/prompt", { prompt: "Hello" });
       expect(res.status).toBe(409);
       expect(await jsonBody(res)).toEqual({ error: "Session is being deleted" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("refuses a prompt the session's running CLI cannot take, before journaling it", async () => {
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "idle" as const,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
+      mockAssertClaudeRuntimeAccepts.mockImplementationOnce(() => {
+        throw refusal("conflict", "Claude is still running background work in this session");
+      });
+      mockClaimPromptDispatch.mockClear();
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Review it",
+        requestId: "review-1",
+        agent: "reviewer",
+      });
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({
+        error: "Claude is still running background work in this session",
+      });
+      expect(mockAssertClaudeRuntimeAccepts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "s-1" }),
+        expect.objectContaining({ agent: "reviewer" }),
+      );
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 

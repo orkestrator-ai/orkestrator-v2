@@ -552,6 +552,11 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
       skip("query-control");
       continue;
     }
+    // The session's CLI is still running; its turns append to `messages`.
+    if (session.claudeRuntime) {
+      skip("claude-runtime");
+      continue;
+    }
     if (session.backgroundTaskControls && session.backgroundTaskControls.size > 0) {
       skip("background-task-controls");
       continue;
@@ -909,13 +914,17 @@ export async function rewindSessionFiles(
         "The selected Claude message is not a persisted checkpoint",
       );
     }
-    // Prefer the handle a live session already holds. Spawning a second CLI
+    // Prefer the handle a live session already holds — including the CLI an
+    // idle session keeps running for background work. Spawning a second CLI
     // against the same rollout only to ask it to rewind is both slower and a
     // write to the transcript this operation is indexed against.
-    const liveRewind = session.queryControl?.rewindFiles;
+    const liveControl =
+      session.queryControl ??
+      (session.claudeRuntime?.state === "open" ? session.claudeRuntime.control : undefined);
+    const liveRewind = liveControl?.rewindFiles;
     let result: unknown;
     if (typeof liveRewind === "function") {
-      result = await liveRewind.call(session.queryControl, persistedMessageId, { dryRun });
+      result = await liveRewind.call(liveControl, persistedMessageId, { dryRun });
     } else {
       result = await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
     }
@@ -1375,6 +1384,31 @@ export interface HeldSdkPrompt {
   prompt: AsyncIterable<SDKUserMessage>;
   close: () => void;
   push: (message: SDKUserMessage) => boolean;
+}
+
+/**
+ * A prompt as the input messages written to a CLI that is already running.
+ *
+ * `promptUuid` goes on the first message, exactly as `holdSdkPromptOpen`
+ * stamps a prompt that starts a process, so results name it either way.
+ */
+export async function sdkPromptMessages(
+  sdkPrompt: string | AsyncIterable<SDKUserMessage>,
+  promptUuid: string,
+): Promise<SDKUserMessage[]> {
+  const messages: SDKUserMessage[] = [];
+  if (typeof sdkPrompt === "string") {
+    messages.push({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: sdkPrompt }] },
+      parent_tool_use_id: null,
+    });
+  } else {
+    for await (const message of sdkPrompt) messages.push(message);
+  }
+  const [first, ...rest] = messages;
+  if (!first) return [];
+  return [first.uuid ? first : { ...first, uuid: promptUuid as SDKUserMessage["uuid"] }, ...rest];
 }
 
 /**

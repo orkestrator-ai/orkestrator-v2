@@ -16,6 +16,32 @@ mise run disk:report -- --json
 The report is read-only. It needs no root access, so Docker's own directory is
 measured through `docker system df` rather than walked.
 
+In the app, **Settings > Disk usage** lists every environment's size: its
+worktree (largest top-level entries) or its container (writable layer,
+recovery copies and storage volumes; the shared image is not counted), plus
+the dev worktrees of development profiles started from that checkout. A
+profile belongs to an environment when its `profile.json` `repositoryRoot` is
+the environment's worktree. The same breakdown is under the environment's own
+settings, in General. Sizes are allocated bytes from `du -x`, kept for five
+minutes unless refreshed.
+
+## Where new worktrees go
+
+| Worktree | Default | Changed by |
+| --- | --- | --- |
+| Local environment | `~/orkestrator-v2/workspaces/<project>-<branch>` | The folder button next to the name when creating a local environment; otherwise Settings > Disk usage > New environment worktrees |
+| Dev profile | `<profile>/worktrees/` | Settings > Disk usage > New dev worktrees, as `<folder>/<profile id>` |
+
+A backend started with `--worktree-dir` or `ORKESTRATOR_WORKTREE_DIR` (dev
+profiles, tests) always uses that directory. Each environment records the
+folder its worktree was created in (`worktreeBaseDir`), and deletion only
+removes the worktree from inside that folder, so changing the setting never
+moves or orphans existing environments. A dev profile keeps the folder it was
+created with; the setting places new profiles, read from the production
+`config.json` when `dev`/`dev:test` creates one. A folder outside the profile
+carries a `.orkestrator-dev-worktrees` sentinel and is removed with the
+profile only while that sentinel names it.
+
 ## What prunes itself
 
 | Location | Pruned by | When |

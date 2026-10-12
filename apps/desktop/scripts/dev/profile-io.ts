@@ -21,7 +21,9 @@ import process from "node:process";
 import {
   DEV_PROFILE_FORMAT_VERSION,
   DEV_PROFILE_SENTINEL,
+  DEV_WORKTREES_SENTINEL,
   assertSafeProfileResetTarget,
+  isExternalWorktreeDir,
   defaultRuntimeProfileRoots,
   parseRuntimeProfile,
   parseRuntimeStatusManifest,
@@ -70,7 +72,29 @@ export async function initializeProfile(profile: RuntimeProfile): Promise<string
     version: DEV_PROFILE_FORMAT_VERSION,
     profile: profile.id,
   });
+  if (isExternalWorktreeDir(profile)) {
+    await atomicWriteJson(path.join(profile.worktreeDir, DEV_WORKTREES_SENTINEL), {
+      version: DEV_PROFILE_FORMAT_VERSION,
+      profile: profile.id,
+    });
+  }
   return profilePath;
+}
+
+/**
+ * Deletes a worktree folder kept outside the profile, only while its
+ * sentinel still names this profile: the folder sits in a location the user
+ * chose, so anything not provably ours is left alone.
+ */
+async function removeExternalWorktreeDir(profile: RuntimeProfile): Promise<void> {
+  if (!isExternalWorktreeDir(profile)) return;
+  const sentinel = await readFile(path.join(profile.worktreeDir, DEV_WORKTREES_SENTINEL), "utf8")
+    .then((text) => JSON.parse(text) as { profile?: unknown })
+    .catch(() => null);
+  if (sentinel?.profile !== profile.id) return;
+  const stats = await lstat(profile.worktreeDir).catch(() => null);
+  if (!stats?.isDirectory()) return;
+  await rm(profile.worktreeDir, { recursive: true, force: true });
 }
 
 /**
@@ -82,6 +106,7 @@ export async function removeProfileState(
   profile: RuntimeProfile,
   keepToolchains: boolean,
 ): Promise<void> {
+  await removeExternalWorktreeDir(profile);
   if (!keepToolchains) {
     await rm(profile.profileRoot, { recursive: true, force: true });
     return;

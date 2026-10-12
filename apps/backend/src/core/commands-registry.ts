@@ -37,6 +37,7 @@ import { registerEnvironmentCommands } from "./commands-registry-environments.js
 import { registerGitHubCommands } from "./commands-registry-github.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
+import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
 import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
 import { registerWorkflowResultCommands } from "./commands-registry-workflow-results.js";
 import { registerLinearCommands } from "./commands-registry-linear.js";
@@ -294,6 +295,7 @@ export function createCommandRegistry(
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);
+  registerDiskUsageCommands(register);
   registerAgentAccountCommands(register, dependencies);
   registerWorkflowResultCommands(register);
   registerTeardownCommands(register, dependencies);

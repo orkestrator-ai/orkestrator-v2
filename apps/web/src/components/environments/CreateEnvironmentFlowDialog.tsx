@@ -46,6 +46,8 @@ export interface CreateEnvironmentFlowOperations {
     portMappings?: PortMapping[],
     environmentType?: EnvironmentType,
     namingPrompt?: string,
+    buildPipelineId?: string,
+    worktreeBaseDir?: string,
   ) => Promise<Environment>;
   updateEnvironment: (environmentId: string, updates: Partial<Environment>) => void;
   startEnvironment: (
@@ -97,6 +99,8 @@ export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
       !options.environmentName.trim() && initialPromptForNaming
         ? initialPromptForNaming
         : undefined,
+    worktreeBaseDir:
+      options.environmentType === "local" ? options.worktreeBaseDir || undefined : undefined,
   };
 }
 
@@ -272,6 +276,8 @@ export function CreateEnvironmentFlowDialog({
         request.portMappings,
         request.environmentType,
         request.namingPrompt,
+        // Only a chosen folder adds arguments; otherwise the call is unchanged.
+        ...(request.worktreeBaseDir ? ([undefined, request.worktreeBaseDir] as const) : []),
       );
 
       const agentSettings = resolveEnvironmentAgentSettings(options);

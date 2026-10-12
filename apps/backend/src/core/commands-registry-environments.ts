@@ -83,6 +83,7 @@ import type { CommandContext } from "./commands-context.js";
 import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
 import { ensureProjectHomeEnvironment, readCheckoutBranch } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-service.js";
+import { validateWorktreeLocation } from "./worktree-locations.js";
 
 /**
  * A validated environment tier, or `undefined` when it expresses no opinion.
@@ -203,6 +204,7 @@ export function registerEnvironmentCommands(
         controlRequestFingerprint,
         delegationBaseBranch,
         delegationBaseCommit,
+        worktreeBaseDir,
       },
       context,
     ) => {
@@ -239,6 +241,17 @@ export function registerEnvironmentCommands(
       if (requestedEnvironmentType === "local" && !project.localPath) {
         throw new Error("Project has no local path - cannot create a local worktree");
       }
+      let chosenWorktreeBaseDir: string | undefined;
+      if (worktreeBaseDir !== undefined && worktreeBaseDir !== null) {
+        if (requestedEnvironmentType !== "local") {
+          throw new Error("Only a local environment can choose its worktree location");
+        }
+        chosenWorktreeBaseDir = validateWorktreeLocation(worktreeBaseDir, {
+          label: "Worktree location",
+          dataDir: storage.getDataDir(),
+          projectPath: project.localPath,
+        });
+      }
       const repoConfig = await storage.getRepositoryConfig(project.id);
       const explicitName = asOptionalString(name)?.trim();
       const initialPromptText = asOptionalString(initialPrompt);
@@ -273,6 +286,7 @@ export function registerEnvironmentCommands(
         remoteUrl: project.gitUrl,
       });
       env.controlRequestId = externalRequestId || undefined;
+      if (chosenWorktreeBaseDir) env.worktreeBaseDir = chosenWorktreeBaseDir;
       if (requestFingerprint) env.controlRequestFingerprint = requestFingerprint;
       if (delegationBaseBranch !== undefined || delegationBaseCommit !== undefined) {
         const baseBranch = asOptionalString(delegationBaseBranch)?.trim();

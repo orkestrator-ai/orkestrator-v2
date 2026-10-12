@@ -537,6 +537,10 @@ export abstract class StorageConfig extends StorageProjects {
         config.global.containerResourceLimits !== undefined
       )
         validated.containerResourceLimits = config.global.containerResourceLimits;
+      // Written only by `updateWorktreeLocations`; the settings form never sends it.
+      if (config.global.worktreeLocations !== undefined)
+        validated.worktreeLocations = config.global.worktreeLocations;
+      else delete validated.worktreeLocations;
       config.global = options.preserveCredentials
         ? {
             ...validated,
@@ -550,6 +554,24 @@ export abstract class StorageConfig extends StorageProjects {
               : {}),
           }
         : validated;
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Replace where new worktrees are created; paths are validated by the caller. */
+  async updateWorktreeLocations(
+    locations: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      const next = {
+        ...(locations.environments ? { environments: locations.environments } : {}),
+        ...(locations.dev ? { dev: locations.dev } : {}),
+      };
+      if (Object.keys(next).length > 0) config.global.worktreeLocations = next;
+      else delete config.global.worktreeLocations;
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

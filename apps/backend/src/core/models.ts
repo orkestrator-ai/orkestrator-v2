@@ -295,6 +295,12 @@ export interface Environment {
   environmentType: EnvironmentType;
   worktreePath?: string;
   /**
+   * The folder the worktree was created in. Chosen when the environment is
+   * created, or recorded from the default when the worktree is made; deletion
+   * removes the worktree only from inside it.
+   */
+  worktreeBaseDir?: string;
+  /**
    * Marks the project home: a local environment whose `worktreePath` is the
    * project's own checkout. Never a disposable workspace — see
    * `project-home-environment.ts` for the paths that must honour it.
@@ -885,6 +891,12 @@ export interface AppConfig {
      * `disabled`). `ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it.
      */
     webAnnotations?: import("@orkestrator/protocol/web-annotations").WebAnnotationRolloutSettings;
+    /**
+     * Where new environment and development-profile worktrees are created.
+     * Written only by `update_worktree_locations`, so a settings-form save
+     * never clears it.
+     */
+    worktreeLocations?: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings;
   };
   repositories: Record<string, RepositoryConfig>;
 }

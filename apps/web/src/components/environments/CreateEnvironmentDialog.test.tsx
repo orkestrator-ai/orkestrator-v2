@@ -5,6 +5,7 @@ import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext
 import { useConfigStore } from "@/stores/configStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 
 const baseConfig = useConfigStore.getState().config;
@@ -237,6 +238,34 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(header?.className).toContain("bg-background");
     expect(overlay?.className).toContain("bg-black/75");
     expect(overlay?.className).toContain("backdrop-blur-md");
+  });
+
+  test("creates a local environment in a folder picked next to its name", async () => {
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={onCreate}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Containerized" }));
+    expect(screen.queryByRole("button", { name: "Choose worktree location" }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose worktree location" }));
+    await waitFor(() => expect(useHostPathPickerStore.getState().request?.mode).toBe("directory"));
+    act(() => useHostPathPickerStore.getState().settle("/srv/trees"));
+    await waitFor(() => expect(screen.getByText("Worktree in /srv/trees")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ environmentType: "local", worktreeBaseDir: "/srv/trees" }),
+    );
   });
 
   test("keeps disabled environment-type explanations visible and associated", () => {

@@ -146,6 +146,44 @@ describe("development profile lifecycle primitives", () => {
     });
   });
 
+  test("removes a worktree folder kept outside the profile only while it is the profile's", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-profile-trees-"));
+    directories.push(root);
+    const roots = {
+      developmentRoot: path.join(root, "dev"),
+      productionDataDir: path.join(root, "production"),
+      homeDir: root,
+    };
+    const resolve = (requestedId: string) =>
+      resolveRuntimeProfile({
+        repositoryRoot: path.join(root, "repo"),
+        requestedId,
+        roots,
+        worktreeRoot: path.join(root, "trees"),
+      });
+    const owned = resolve("qa");
+    await initializeProfile(owned);
+    await mkdir(path.join(owned.worktreeDir, "app-feature"), { recursive: true });
+
+    await removeProfileState(owned, false);
+    expect(
+      await access(owned.worktreeDir).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+
+    // A folder whose sentinel names another profile is left alone.
+    const other = resolve("other");
+    await initializeProfile(other);
+    await writeFile(
+      path.join(other.worktreeDir, ".orkestrator-dev-worktrees"),
+      JSON.stringify({ version: 1, profile: "someone-else" }),
+    );
+    await removeProfileState(other, false);
+    await expect(access(other.worktreeDir)).resolves.toBeNull();
+  });
+
   test("full profile reset unlinks legacy Keychain state without touching the host", async () => {
     const { root, profile } = await modelCacheFixture();
     const hostKeychains = path.join(root, "host-keychains");

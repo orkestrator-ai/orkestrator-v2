@@ -73,6 +73,37 @@ export function assertProfileIsolatedFromProduction(
   }
 }
 
+/** Marks a worktree folder outside its profile, so removal can tell it is the profile's. */
+export const DEV_WORKTREES_SENTINEL = ".orkestrator-dev-worktrees";
+
+export function isExternalWorktreeDir(
+  profile: Pick<RuntimeProfile, "worktreeDir" | "profileRoot">,
+) {
+  return !isSameOrInside(profile.worktreeDir, profile.profileRoot);
+}
+
+/**
+ * A worktree folder outside the profile is deleted with the profile, so it
+ * must be a folder of its own named after the profile, and never contain the
+ * profile or production data.
+ */
+function assertExternalWorktreeDirSafe(
+  worktreeDir: string,
+  id: string,
+  profileRoot: string,
+  productionDataDir: string,
+): void {
+  if (isSameOrInside(worktreeDir, profileRoot)) return;
+  if (
+    path.basename(worktreeDir) !== id ||
+    isSameOrInside(profileRoot, worktreeDir) ||
+    isSameOrInside(worktreeDir, productionDataDir) ||
+    isSameOrInside(productionDataDir, worktreeDir)
+  ) {
+    throw new Error("Runtime profile worktree directory is not a safe profile-owned folder");
+  }
+}
+
 export function resolveRuntimeProfile(options: {
   repositoryRoot: string;
   flavor?: Exclude<RuntimeFlavor, "production">;
@@ -82,6 +113,11 @@ export function resolveRuntimeProfile(options: {
   roots?: RuntimeProfileRoots;
   credentialSources?: RuntimeProfile["credentialSources"];
   agentPlatforms?: RuntimeProfile["agentPlatforms"];
+  /**
+   * A folder to keep this profile's worktrees in, as `<root>/<id>`, instead
+   * of `worktrees/` inside the profile (the dev worktree location setting).
+   */
+  worktreeRoot?: string;
 }): RuntimeProfile {
   const repositoryRoot = path.resolve(options.repositoryRoot);
   const roots = options.roots ?? defaultRuntimeProfileRoots();
@@ -89,6 +125,10 @@ export function resolveRuntimeProfile(options: {
   const id = normalizeRuntimeProfileId(requestedId);
   const profileRoot = path.resolve(roots.developmentRoot, "profiles", id);
   assertProfileIsolatedFromProduction(profileRoot, roots.productionDataDir);
+  const worktreeDir = options.worktreeRoot
+    ? path.join(path.resolve(options.worktreeRoot), id)
+    : path.join(profileRoot, "worktrees");
+  assertExternalWorktreeDirSafe(worktreeDir, id, profileRoot, roots.productionDataDir);
 
   const dataDir = path.join(profileRoot, "data");
   const flavor = options.flavor ?? "development";
@@ -102,7 +142,7 @@ export function resolveRuntimeProfile(options: {
     profileRoot,
     dataDir,
     runtimeDir: path.join(profileRoot, "runtime"),
-    worktreeDir: path.join(profileRoot, "worktrees"),
+    worktreeDir,
     logDir: path.join(profileRoot, "logs"),
     fixtureDir: path.join(profileRoot, "fixtures"),
     dockerOwner: shortHash(dataDir, 16),
@@ -190,10 +230,16 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     defaultRuntimeProfileRoots().productionDataDir,
   );
   const expectedRoot = path.resolve(parsed.profileRoot);
+  assertExternalWorktreeDirSafe(
+    path.resolve(parsed.worktreeDir),
+    parsed.id,
+    expectedRoot,
+    defaultRuntimeProfileRoots().productionDataDir,
+  );
   for (const child of [
     parsed.dataDir,
     parsed.runtimeDir,
-    parsed.worktreeDir,
+    ...(isExternalWorktreeDir(parsed) ? [] : [parsed.worktreeDir]),
     parsed.logDir,
     parsed.fixtureDir,
   ]) {

@@ -4,6 +4,7 @@ import {
   assertProfileIsolatedFromProduction,
   assertSafeProfileResetTarget,
   defaultRuntimeProfileRoots,
+  isExternalWorktreeDir,
   normalizeRuntimeProfileId,
   parseRuntimeProfile,
   resolveRuntimeProfile,
@@ -55,6 +56,47 @@ describe("runtime profiles", () => {
     expect(first.dockerImage).toBe(second.dockerImage);
     expect(first.dockerImage).not.toBe(otherWorkspace.dockerImage);
     expect(first.dataDir.startsWith(first.profileRoot)).toBe(true);
+  });
+
+  test("keeps worktrees in a chosen folder named after the profile", () => {
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: "/repo/a",
+      requestedId: "one",
+      roots,
+      worktreeRoot: "/trees/dev",
+    });
+    expect(profile.worktreeDir).toBe(path.join("/trees/dev", "one"));
+    expect(isExternalWorktreeDir(profile)).toBe(true);
+    expect(parseRuntimeProfile(JSON.parse(JSON.stringify(profile))).worktreeDir).toBe(
+      profile.worktreeDir,
+    );
+    expect(isExternalWorktreeDir(resolveRuntimeProfile({ repositoryRoot: "/repo/a", roots }))).toBe(
+      false,
+    );
+  });
+
+  test("refuses an outside worktree folder that is not the profile's own", () => {
+    const profile = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "one", roots });
+    expect(() => parseRuntimeProfile({ ...profile, worktreeDir: "/trees/shared" })).toThrow(
+      "safe profile-owned folder",
+    );
+    expect(() =>
+      resolveRuntimeProfile({
+        repositoryRoot: "/repo/a",
+        requestedId: "one",
+        roots,
+        worktreeRoot: roots.productionDataDir,
+      }),
+    ).toThrow("safe profile-owned folder");
+    // A folder holding the profile itself would be deleted with its worktrees.
+    expect(() =>
+      resolveRuntimeProfile({
+        repositoryRoot: "/repo/a",
+        requestedId: "profiles",
+        roots,
+        worktreeRoot: roots.developmentRoot,
+      }),
+    ).toThrow("safe profile-owned folder");
   });
 
   test("refuses production nesting and unsafe reset targets", () => {

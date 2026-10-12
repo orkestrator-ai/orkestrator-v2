@@ -1,4 +1,5 @@
 import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
+import { getWorktreeBaseDir, resolveEnvironmentWorktreeRoot } from "./worktree-locations.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
   formatContainerLifecycleError,
@@ -55,11 +56,9 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
   fs,
-  os,
   isIP,
   path,
   spawnPty,
-  APP_SLUG,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_OWNER,
@@ -459,18 +458,7 @@ export async function syncStoredEnvironmentStatus(
   }
 }
 
-export function getWorktreeBaseDir(context?: Pick<CommandContext, "worktreeDir">): string {
-  return context?.worktreeDir ?? defaultWorktreeBaseDir();
-}
-
-// `ORKESTRATOR_WORKTREE_DIR` is what the backend reads into `worktreeDir` at
-// startup, so a caller without a context resolves the same root. The test
-// preloads also point it at a temporary directory, which keeps a test that
-// omits `worktreeDir` out of the user's real workspaces.
-function defaultWorktreeBaseDir(): string {
-  const configured = process.env.ORKESTRATOR_WORKTREE_DIR?.trim();
-  return configured ? path.resolve(configured) : path.join(os.homedir(), APP_SLUG, "workspaces");
-}
+export { getWorktreeBaseDir };
 
 export async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {
   const configPath = path.join(worktreePath, ORKESTRATOR_PROJECT_CONFIG);
@@ -1569,13 +1557,17 @@ export async function startEnvironmentOnce(
       if (!project?.localPath)
         throw new Error("Project has no local path - cannot create a local worktree");
       const repoConfig = await storage.getRepositoryConfig(project.id);
+      // Recorded with the worktree: deletion only removes it from this folder,
+      // even after the default location setting has changed.
+      const worktreeBaseDir =
+        environment.worktreeBaseDir ?? (await resolveEnvironmentWorktreeRoot(context));
       const worktree = await createLocalWorktree(
         project.localPath,
         project.name,
         environment.branch,
         environment.delegationBaseCommit ?? repoConfig.defaultBranch,
         repoConfig.filesToCopy,
-        getWorktreeBaseDir(context),
+        worktreeBaseDir,
       );
       unpersistedWorktree = {
         projectPath: project.localPath,
@@ -1584,6 +1576,7 @@ export async function startEnvironmentOnce(
       };
       const updated = await storage.updateEnvironment(environment.id, {
         worktreePath: worktree.path,
+        worktreeBaseDir,
         branch: worktree.branch,
         createdFromCommit: worktree.createdFromCommit,
         status: "running",

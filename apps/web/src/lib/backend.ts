@@ -11,3 +11,4 @@ export * from "./backend/coordinator";
 export * from "./backend/previews";
 export * from "./backend/mcp-management";
 export * from "./backend/agent-accounts";
+export * from "./backend/disk-usage";

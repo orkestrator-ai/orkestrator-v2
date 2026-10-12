@@ -1820,6 +1820,9 @@ describe("background task reducer", () => {
       expect(abortSession(created.id)).toBe(true);
       delete queryControlOverrides.getContextUsage;
       const secondPrompt = sendPrompt(created.id, "restart immediately");
+      await expect(nextQueryCall(30)).rejects.toThrow();
+      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+      await firstPrompt;
       const secondCall = await nextQueryCall();
 
       const hooks = firstCall.options.hooks as Record<
@@ -1844,9 +1847,6 @@ describe("background task reducer", () => {
         expect(created.queryControl).toBeDefined();
         expect(created.status).toBe("running");
       };
-      await verifyStaleHooks();
-      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
-      await firstPrompt;
       await verifyStaleHooks();
 
       expect(getSession(created.id)?.status).toBe("running");

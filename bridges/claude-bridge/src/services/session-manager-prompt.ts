@@ -213,7 +213,6 @@ import {
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
-import { isClosedTransportError } from "./session-manager-catalog.js";
 import {
   cleanupPendingInteractions,
   forgetPromptDispatch,
@@ -252,6 +251,9 @@ import {
 import {
   applyClaudeLiveSettings,
   assertClaudeRuntimeAccepts,
+  assertClaudeRuntimeStaticAccepts,
+  claudeLaunchResourceProfile,
+  effectiveClaudeContext1m,
   claudeLaunchedProfile,
   claudeLiveSettings,
   createClaudeRuntime,
@@ -404,15 +406,6 @@ const CONVERSATION_RESET_CAUSES: Record<string, string> = {
   fresh_session: "Started a fresh session to implement the approved plan.",
   onboarding: "Conversation restarted by onboarding.",
 };
-
-function supportsClaudeContext1m(model: string | undefined): boolean {
-  const selected = model?.trim();
-  // The SDK catalogue's `default` entry, and an omitted model on backend-owned
-  // startup turns, both resolve to the provider's recommended Opus model. They
-  // must not disable an explicitly requested session default merely because
-  // the alias is not itself named "opus".
-  return !selected || selected === "default" || /opus|sonnet/i.test(selected);
-}
 
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
   informational: "info",
@@ -631,7 +624,8 @@ export async function sendPrompt(
   }
   // Before anything is claimed: a prompt the session's running CLI cannot take
   // is refused outright, never accepted and then dropped.
-  assertClaudeRuntimeAccepts(session, options);
+  assertClaudeRuntimeStaticAccepts(session, options);
+  const runtimeBeforeStartup = session.claudeRuntime;
   const statusBeforeStartup = session.status;
   const turnStartedAtBeforeStartup = session.turnStartedAt;
   const abortControllerBeforeStartup = session.abortController;
@@ -1052,7 +1046,12 @@ export async function sendPrompt(
      * turn never closes it, because a newer turn is using it.
      */
     const closeTurnInput = () => {
-      if (!runtime || runtime.latestTurn !== thisTurn) return;
+      if (
+        !runtime ||
+        runtime.latestTurn !== thisTurn ||
+        session.latestTurnGeneration !== turnGeneration
+      )
+        return;
       if (queryIteratorControl) session.queryControlDraining = queryIteratorControl;
       drainClaudeRuntime(runtime);
     };
@@ -1204,6 +1203,10 @@ export async function sendPrompt(
       if (retainedContinuationTimer) clearTimeout(retainedContinuationTimer);
       retainedContinuationTimer = setTimeout(() => {
         retainedContinuationTimer = null;
+        if (session.latestTurnGeneration !== turnGeneration) {
+          armContinuationWatchdog();
+          return;
+        }
         if (hasLiveTaskOwnedByThisQuery() || hasBackgroundTaskCandidateOwnedByThisQuery()) {
           // Another task this query owns is still running, which is its own
           // reason to hold stdin open — closing it here would kill that task.
@@ -1287,7 +1290,7 @@ export async function sendPrompt(
       // turn once this one is superseded. Its subagents' frames still reach it,
       // but releasing the process's retention from here would let it be closed
       // under a newer turn that is waiting for a continuation.
-      if (superseded) return;
+      if (superseded || session.latestTurnGeneration !== turnGeneration) return;
       if (!receivedResult || settlingResult) return;
       if (inheritedContinuation) {
         // The turn this one replaced was waiting for the continuation a task
@@ -3106,33 +3109,91 @@ export async function sendPrompt(
     const running = openClaudeRuntime(session);
     if (running) {
       // Launch-only settings may have changed while this turn was preparing.
-      assertClaudeRuntimeAccepts(session, options);
+      await assertClaudeRuntimeAccepts(
+        session,
+        options,
+        claudeLaunchResourceProfile(plugins, queryEnvironment),
+      );
       // Held from here so the process is not closed as unused while the
       // settings below are applied.
       session.queryControl = running.control;
       queryIteratorControl = running.control;
       try {
         await applyClaudeLiveSettings(running, liveSettings);
-        if (running.mcpServers !== mcpServersKey && running.control.setMcpServers) {
-          await running.control.setMcpServers(mcpServers);
-          running.mcpServers = mcpServersKey;
-          recordMcpConfigRevision();
+        if (running.mcpServers !== mcpServersKey) {
+          if (!running.control.setMcpServers) {
+            throw sessionOperationError(
+              "conflict",
+              "Claude MCP configuration cannot be updated on this runtime",
+            );
+          }
+          // A partial update invalidates the previous identity too. Retrying
+          // either configuration must actually restate it on the CLI.
+          running.mcpServers = "";
+          const result = await running.control.setMcpServers(mcpServers).catch(() => {
+            throw sessionOperationError(
+              "conflict",
+              "Claude MCP configuration could not be applied; retry the prompt",
+            );
+          });
+          if (
+            !result ||
+            typeof result !== "object" ||
+            !("errors" in result) ||
+            !result.errors ||
+            typeof result.errors !== "object" ||
+            Array.isArray(result.errors) ||
+            Object.keys(result.errors).length > 0
+          ) {
+            throw sessionOperationError(
+              "conflict",
+              "Claude MCP configuration could not be applied; retry the prompt",
+            );
+          }
         }
+        // Required injected servers can disconnect even without a config change.
+        if (mcpServers[AGENT_MCP_SERVER_NAME]) {
+          const statuses = await running.control.mcpServerStatus?.().catch(() => {
+            running.mcpServers = "";
+            throw sessionOperationError(
+              "conflict",
+              "Claude required MCP server could not be confirmed; retry the prompt",
+            );
+          });
+          const required = [
+            AGENT_MCP_SERVER_NAME,
+            ...(options?.agentMcp?.design ? ["orkestrator-design"] : []),
+          ];
+          if (
+            !required.every((name) =>
+              statuses?.some((server) => server.name === name && server.status === "connected"),
+            )
+          ) {
+            running.mcpServers = "";
+            throw sessionOperationError(
+              "conflict",
+              "Claude required MCP server is not connected; retry the prompt",
+            );
+          }
+        }
+        running.mcpServers = mcpServersKey;
+        recordMcpConfigRevision();
         const messages = await sdkPromptMessages(sdkPrompt, promptUuid);
         runtime = running;
         if (!submitClaudeTurn(running, thisTurn, messages)) {
-          throw new Error("Query closed before response received");
+          throw sessionOperationError(
+            "conflict",
+            "Claude runtime could not accept prompt input; retry after it has stopped",
+          );
         }
       } catch (error) {
         runtime = undefined;
         if (session.queryControl === running.control) session.queryControl = undefined;
         queryIteratorControl = undefined;
-        // Holding the control above suppressed any close a settling task asked
-        // for meanwhile; let the process go now if nothing else holds it.
-        closeQueryControlIfUnused(session, running.control);
-        // A process that ended while this turn was joining it is replaced
-        // below. Anything else is this turn's failure, before any input.
-        if (running.state === "open" && !isClosedTransportError(error)) throw error;
+        // A setup failure never authorizes killing or replacing shared work.
+        // Leave the previous turn and retention intact, and restore foreground
+        // ownership in the startup failure handler below.
+        throw error;
       }
     }
 
@@ -3143,6 +3204,8 @@ export async function sendPrompt(
       // A previous CLI that is still exiting must be gone before another one
       // opens the same rollout.
       await retireDrainingClaudeRuntime(session);
+      if (abortController.signal.aborted || session.deleting || sessions.get(sessionId) !== session)
+        return;
       const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
       let launched: ClaudeRuntime | undefined;
       // Hooks and callbacks fire on the runtime's behalf for whichever turn
@@ -3201,7 +3264,7 @@ export async function sendPrompt(
                     display: "summarized",
                   }
                 : { type: "adaptive", display: "summarized" },
-          ...(options?.parameterValues?.context1m === true && supportsClaudeContext1m(options.model)
+          ...(effectiveClaudeContext1m(options)
             ? { betas: ["context-1m-2025-08-07" as const] }
             : {}),
           ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
@@ -3368,7 +3431,10 @@ export async function sendPrompt(
         abortController,
         toolTracker: stream.toolTracker,
         activeTaskIds: stream.activeTaskIds,
-        launch: claudeLaunchedProfile(session, options),
+        launch: {
+          ...claudeLaunchedProfile(session, options),
+          ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+        },
         mcpServers: mcpServersKey,
         firstTurn: thisTurn,
       });
@@ -3565,6 +3631,25 @@ export async function sendPrompt(
     // still running background work and may yet need to reclaim it.
     if (!queryStarted && session.latestTurnGeneration === turnGeneration) {
       session.latestTurnGeneration = latestTurnGenerationBeforeStartup;
+    }
+    if (
+      !queryStarted &&
+      runtimeBeforeStartup &&
+      !abortController.signal.aborted &&
+      !session.deleting
+    ) {
+      session.status = statusBeforeStartup;
+      session.turnStartedAt = turnStartedAtBeforeStartup;
+      session.abortController = abortControllerBeforeStartup;
+      session.error = errorBeforeStartup;
+      session.inProgressUsage = inProgressUsageBeforeStartup;
+      session.inProgressUsageGeneration = inProgressUsageGenerationBeforeStartup;
+      const index = session.messages.indexOf(userMessage);
+      if (index >= 0) {
+        session.messages.splice(index, 1);
+        markTranscriptChanged(session);
+      }
+      throw error;
     }
     if (abortController.signal.aborted) {
       recordInterruptedStructuredOutputIfCurrent();

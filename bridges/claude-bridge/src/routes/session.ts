@@ -777,11 +777,15 @@ session.post("/:id/prompt", async (c) => {
     }
     // Refused before anything is journaled: a prompt the session's running CLI
     // cannot take must not be accepted and then dropped by a background send.
-    assertClaudeRuntimeAccepts(sessionData, {
+    await assertClaudeRuntimeAccepts(sessionData, {
       ...(typeof readOnly === "boolean" ? { readOnly } : {}),
       agent,
       includeLocalSettings,
       outputSchema,
+      model,
+      permissionMode,
+      promptSuggestions,
+      parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
     });
     if (requestId && outputSchema === undefined) {

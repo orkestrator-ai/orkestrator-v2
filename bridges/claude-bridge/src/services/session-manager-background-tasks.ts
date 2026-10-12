@@ -455,7 +455,12 @@ export function takeQueryControls(
   // The session's CLI, including while it is idle between turns running
   // background work that no other collection names.
   if (session.claudeRuntime && session.claudeRuntime.state !== "ended") {
-    controls.add(session.claudeRuntime.control);
+    const runtime = session.claudeRuntime;
+    runtime.state = "draining";
+    runtime.input.close();
+    runtime.abortController.abort();
+    session.queryControlDraining = runtime.control;
+    controls.add(runtime.control);
   }
   for (const control of session.backgroundTaskControls?.values() ?? []) {
     controls.add(control);

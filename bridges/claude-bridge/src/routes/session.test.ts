@@ -895,7 +895,15 @@ describe("session routes", () => {
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
-    test("refuses a prompt the session's running CLI cannot take, before journaling it", async () => {
+    test.each([
+      { agent: "reviewer" },
+      { parameterValues: { context1m: true } },
+      { parameterValues: { context1m: false } },
+      { promptSuggestions: true },
+      { promptSuggestions: false },
+      { parameterValues: { thinking: "adaptive" } },
+      { permissionMode: "bypassPermissions" },
+    ])("awaits launch compatibility before journaling %j", async (options) => {
       mockGetSession.mockImplementationOnce((id: string) =>
         id === "s-1"
           ? {
@@ -907,7 +915,8 @@ describe("session routes", () => {
             }
           : undefined,
       );
-      mockAssertClaudeRuntimeAccepts.mockImplementationOnce(() => {
+      mockAssertClaudeRuntimeAccepts.mockImplementationOnce(async () => {
+        await Promise.resolve();
         throw refusal("conflict", "Claude is still running background work in this session");
       });
       mockClaimPromptDispatch.mockClear();
@@ -915,7 +924,7 @@ describe("session routes", () => {
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Review it",
         requestId: "review-1",
-        agent: "reviewer",
+        ...options,
       });
       expect(res.status).toBe(409);
       expect(await jsonBody(res)).toEqual({
@@ -923,7 +932,7 @@ describe("session routes", () => {
       });
       expect(mockAssertClaudeRuntimeAccepts).toHaveBeenLastCalledWith(
         expect.objectContaining({ id: "s-1" }),
-        expect.objectContaining({ agent: "reviewer" }),
+        expect.objectContaining(options),
       );
       expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
       expect(mockSendPrompt).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { openClaudeRuntime, retireDrainingClaudeRuntime } from "./session-manager-runtime.js";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
@@ -9,37 +10,13 @@ import type {
   ContentBlockParam,
 } from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
-  ModelInfo,
   SessionState,
   NormalizedMessage,
   NormalizedPart,
-  ToolDiffMetadata,
-  QuestionInfo,
-  QuestionRequest,
-  PlanApprovalRequest,
   PromptOptions,
-  SessionInitData,
-  McpServerRuntimeStatus,
-  PluginRuntimeStatus,
-  SdkMessageBase,
-  SdkCompactBoundaryMessage,
-  SdkResultMessage,
-  SdkSystemMessage,
-  TaskListSnapshot,
-  MessagePatchEventData,
-  SessionUsageSnapshot,
   BackgroundTaskSnapshot,
-  SessionRateLimitWindow,
-  StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
-import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import {
-  structuredOutputFailure,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
+import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import {
@@ -48,20 +25,11 @@ import {
   readSessionPreferences,
   sessionPreferencesUnavailable,
   steerJournalMapFromPreferences,
-  updateSessionPreferences,
   type SessionPreferences,
 } from "./session-preferences.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
-import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { getMcpRuntimeConfig } from "./mcp-config.js";
-import { getPluginsForSdk } from "./plugin-config.js";
-import type { McpToolMetadata } from "../types/mcp.js";
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, existsSync, type Stats } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
+import { constants, type Stats } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
@@ -69,9 +37,6 @@ import {
   deleteCommandChangeJournal,
   overlayCommandChanges,
 } from "./command-changes.js";
-import * as core from "./session-manager-core.js";
-import * as lifecycle from "./session-manager-lifecycle.js";
-import * as messageParts from "./session-manager-messages.js";
 import {
   IDLE_TRANSCRIPT_EVICTION_MS,
   IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS,
@@ -97,11 +62,6 @@ import {
 } from "./session-manager-lifecycle.js";
 import { normalizePersistedSessionMessages } from "./session-manager-messages.js";
 import { releaseQueryControls } from "./session-manager-background-tasks.js";
-type OrderedPartEntry = messageParts.OrderedPartEntry;
-type BackgroundTaskSystemMessage = messageParts.BackgroundTaskSystemMessage;
-type BackgroundTaskLaunch = messageParts.BackgroundTaskLaunch;
-type CorrelatedBashToolResult = messageParts.CorrelatedBashToolResult;
-type BashToolResultOutcome = messageParts.BashToolResultOutcome;
 
 function localTranscriptFromPreferences(
   entries: NonNullable<SessionPreferences["localTranscript"]>,
@@ -919,13 +879,16 @@ export async function rewindSessionFiles(
     // against the same rollout only to ask it to rewind is both slower and a
     // write to the transcript this operation is indexed against.
     const liveControl =
-      session.queryControl ??
-      (session.claudeRuntime?.state === "open" ? session.claudeRuntime.control : undefined);
+      openClaudeRuntime(session)?.control ??
+      (!session.claudeRuntime && session.queryControl !== session.queryControlDraining
+        ? session.queryControl
+        : undefined);
     const liveRewind = liveControl?.rewindFiles;
     let result: unknown;
     if (typeof liveRewind === "function") {
       result = await liveRewind.call(liveControl, persistedMessageId, { dryRun });
     } else {
+      await retireDrainingClaudeRuntime(session);
       result = await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
     }
     if (

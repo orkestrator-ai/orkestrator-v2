@@ -12,6 +12,9 @@
 // its frames. Turns are what `sendPrompt` creates: each one handles the frames
 // routed to it, and the newest one owns the root conversation.
 
+import { createHash } from "node:crypto";
+import { getPluginsForSdk } from "./plugin-config.js";
+import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import type {
   CanUseTool,
   HookCallback,
@@ -85,6 +88,12 @@ export interface ClaudeLiveSettings {
  * that does not say inherits whatever the running process has.
  */
 export interface ClaudeLaunchProfile {
+  context1m: boolean;
+  promptSuggestions: boolean;
+  thinking: string;
+  bypassCapable: boolean;
+  plugins?: string;
+  credentials?: string;
   cwd: string;
   /**
    * The turn's execution policy, which fixes the tool allow/deny lists, the
@@ -110,6 +119,15 @@ export function claudeLaunchProfile(
 ): ClaudeLaunchProfile {
   const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
   return {
+    context1m: effectiveClaudeContext1m(options),
+    promptSuggestions: options?.promptSuggestions === true,
+    thinking:
+      typeof options?.parameterValues?.thinking === "string"
+        ? options.parameterValues.thinking
+        : "adaptive",
+    bypassCapable:
+      options?.permissionMode === "bypassPermissions" ||
+      (policy?.approvals !== "ask" && policy?.approvals !== "deny"),
     cwd: claudeWorkspaceCwd(),
     boundary: JSON.stringify({
       policy: policy ?? null,
@@ -123,6 +141,32 @@ export function claudeLaunchProfile(
       options?.includeLocalSettings === undefined
         ? undefined
         : JSON.stringify(claudeSettingSources(policy, options.includeLocalSettings)),
+  };
+}
+
+/** The effective beta is a launch option even when the requested model changes. */
+export function effectiveClaudeContext1m(options: PromptOptions | undefined): boolean {
+  const model = options?.model?.trim();
+  return (
+    options?.parameterValues?.context1m === true &&
+    (!model || model === "default" || /opus|sonnet/i.test(model))
+  );
+}
+
+/** Hash only managed credential fields; never retain their values in the profile. */
+export function claudeLaunchResourceProfile(
+  plugins: readonly { path: string }[],
+  environment: NodeJS.ProcessEnv,
+): Pick<ClaudeLaunchProfile, "plugins" | "credentials"> {
+  const digest = (value: unknown) =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return {
+    plugins: digest(plugins.map((plugin) => plugin.path)),
+    credentials: digest([
+      environment.GH_TOKEN ?? null,
+      environment.GITHUB_TOKEN ?? null,
+      environment.GITHUB_PERSONAL_ACCESS_TOKEN ?? null,
+    ]),
   };
 }
 
@@ -151,18 +195,45 @@ export function claudeLaunchedProfile(
  * prompt that changes them waits until the background work the running process
  * owns has finished, or the user stops it.
  */
-export function assertClaudeRuntimeAccepts(
+export function assertClaudeRuntimeStaticAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
 ): void {
   const runtime = openClaudeRuntime(session);
   if (!runtime) return;
   const conflict = claudeLaunchConflict(runtime.launch, claudeLaunchProfile(session, options));
-  if (!conflict) return;
-  throw sessionOperationError(
-    "conflict",
-    `Claude is still running background work in this session, so a prompt that changes its ${conflict} cannot start until that work finishes or is stopped`,
-  );
+  if (conflict)
+    throw sessionOperationError(
+      "conflict",
+      `Claude is still running background work in this session, so a prompt that changes its ${conflict} cannot start until that work finishes or is stopped`,
+    );
+}
+
+export async function assertClaudeRuntimeAccepts(
+  session: SessionState,
+  options: PromptOptions | undefined,
+  resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials">,
+): Promise<void> {
+  const runtime = openClaudeRuntime(session);
+  if (!runtime) return;
+  const request = claudeLaunchProfile(session, options);
+  const refuse = (conflict: string | undefined) => {
+    if (conflict)
+      throw sessionOperationError(
+        "conflict",
+        `Claude is still running background work in this session, so a prompt that changes its ${conflict} cannot start until that work finishes or is stopped`,
+      );
+  };
+  refuse(claudeLaunchConflict(runtime.launch, request));
+  if (!resources) {
+    const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
+    const [plugins, environment] = await Promise.all([
+      getPluginsForSdk(request.cwd, policy?.projectResources !== false),
+      runtimeEnvironmentForAgentQuery(),
+    ]);
+    resources = claudeLaunchResourceProfile(plugins, environment);
+  }
+  refuse(claudeLaunchConflict(runtime.launch, { ...request, ...resources }));
 }
 
 export interface ClaudeRuntime {
@@ -180,7 +251,7 @@ export interface ClaudeRuntime {
   /** Turns whose `sendPrompt` is still waiting on this runtime. */
   readonly waitingTurns: Set<ClaudeRuntimeTurn>;
   readonly launch: ClaudeLaunchProfile;
-  /** JSON of the inline MCP servers the CLI has; changed live with `setMcpServers`. */
+  /** Digest of applied inline MCP servers; empty means a failed update must retry. */
   mcpServers: string;
   /** The newest turn: it owns the root conversation. */
   latestTurn: ClaudeRuntimeTurn;
@@ -248,13 +319,21 @@ export function openClaudeRuntime(session: SessionState): ClaudeRuntime | undefi
 /**
  * Why `request` cannot run on `runtime`, or undefined when it can.
  *
- * Only launch-only settings are compared; model, mode, effort, thinking, fast
- * mode and Ultracode are changed on the live process instead.
+ * Thinking resets and bypass mode are limited by launch capabilities; other
+ * live settings are restated on the existing process.
  */
 export function claudeLaunchConflict(
   runtime: ClaudeLaunchProfile,
   request: ClaudeLaunchProfile,
 ): string | undefined {
+  if (runtime.context1m !== request.context1m) return "1M context setting";
+  if (runtime.promptSuggestions !== request.promptSuggestions) return "prompt suggestions";
+  if (request.thinking === "adaptive" && runtime.thinking !== "adaptive")
+    return "adaptive thinking";
+  if (request.bypassCapable && !runtime.bypassCapable) return "bypass permission capability";
+  if (request.plugins !== undefined && runtime.plugins !== request.plugins) return "plugins";
+  if (request.credentials !== undefined && runtime.credentials !== request.credentials)
+    return "managed credentials";
   if (runtime.cwd !== request.cwd) return "working directory";
   if (runtime.boundary !== request.boundary) return "execution policy";
   if (runtime.outputSchema !== request.outputSchema) return "structured output";
@@ -310,11 +389,11 @@ export function submitClaudeTurn(
   turn: ClaudeRuntimeTurn,
   messages: readonly SDKUserMessage[],
 ): boolean {
-  // An abort closes input without changing `state`; the process is ending.
+  // A teardown fence or aborted signal excludes a process that is ending.
   if (runtime.state !== "open" || runtime.abortController.signal.aborted) return false;
   // Written before ownership moves, so input that turns out to be closed (the
   // SDK stops reading when its process dies) leaves this runtime untouched for
-  // the caller to replace. Nothing can answer before this function returns.
+  // caller to refuse safely. Nothing can answer before this function returns.
   for (const message of messages) {
     if (!runtime.input.push(message)) return false;
   }
@@ -347,24 +426,33 @@ export async function retireDrainingClaudeRuntime(
 ): Promise<void> {
   const runtime = session.claudeRuntime;
   if (!runtime || runtime.state === "ended") return;
-  // Aborting is what kills the process; there is nothing left to wait for.
-  if (runtime.abortController.signal.aborted) return;
   if (runtime.state === "open") drainClaudeRuntime(runtime);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const exited = await Promise.race([
-    runtime.ended.then(() => true),
-    new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), waitMs);
-    }),
-  ]);
-  if (timer) clearTimeout(timer);
-  if (!exited) {
+  const waitForEnd = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await runtime.control.close?.();
-    } catch {
-      // A close that throws has nothing left to stop.
+      return await Promise.race([
+        runtime.ended.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), waitMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
+  };
+  if (await waitForEnd()) return;
+  // close may throw, reject or never settle. Only the consumer's ended signal
+  // proves that this writer is gone; observe close failures without awaiting it.
+  try {
+    Promise.resolve(runtime.control.close?.()).catch(() => {});
+  } catch {
+    /* still fenced */
   }
+  if (await waitForEnd()) return;
+  throw sessionOperationError(
+    "conflict",
+    "Claude runtime termination is still pending; retry once it has stopped",
+  );
 }
 
 /** The live settings a turn asks for. */
@@ -398,6 +486,9 @@ export async function applyClaudeLiveSettings(
   runtime: ClaudeRuntime,
   next: ClaudeLiveSettings,
 ): Promise<void> {
+  if (next.thinking === "adaptive" && runtime.launch.thinking !== "adaptive") {
+    throw sessionOperationError("conflict", "Adaptive thinking requires a new Claude runtime");
+  }
   const control: ClaudeQueryControl = runtime.control;
   await control.setModel?.(next.model);
   await control.setPermissionMode?.(next.permissionMode);

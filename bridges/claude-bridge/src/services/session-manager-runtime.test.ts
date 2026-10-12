@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
+  releaseWithBackgroundWork,
   abortSession,
   captureEvents,
   createSession,
@@ -34,51 +35,6 @@ type QueryCall = Awaited<ReturnType<typeof nextQueryCall>>;
  * Start a turn that leaves `taskId` running and release it, returning the
  * running CLI and an iterator over its input.
  */
-async function releaseWithBackgroundWork(name: string, taskId = "agent-bg") {
-  const session = createSession(name);
-  track(session.id);
-  const firstPrompt = sendPrompt(session.id, "delegate");
-  const call = await nextQueryCall();
-  const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-  expect((await input.next()).done).toBe(false);
-  call.push({
-    type: "assistant",
-    message: {
-      id: "msg-first",
-      model: "claude-sonnet-4-6",
-      content: [
-        {
-          type: "tool_use",
-          id: "agent-call",
-          name: "Agent",
-          input: { description: "Survey", run_in_background: true },
-        },
-      ],
-    },
-    parent_tool_use_id: null,
-  });
-  call.push({
-    type: "user",
-    message: {
-      role: "user",
-      content: [
-        { type: "tool_result", tool_use_id: "agent-call", content: "Async agent launched" },
-      ],
-    },
-    parent_tool_use_id: null,
-  });
-  call.push({
-    type: "system",
-    subtype: "task_started",
-    task_id: taskId,
-    tool_use_id: "agent-call",
-    description: "Survey",
-  });
-  call.push({ type: "result", subtype: "success" });
-  await waitFor(() => session.status === "idle");
-  expect(session.claudeRuntime?.state).toBe("open");
-  return { session, call, input, firstPrompt };
-}
 
 async function expectNoSecondProcess(): Promise<void> {
   await expect(nextQueryCall(50)).rejects.toThrow();
@@ -476,6 +432,10 @@ describe("runtime routing", () => {
 
   test("compares only what a running CLI cannot change", () => {
     const launched: ClaudeLaunchProfile = {
+      context1m: false,
+      promptSuggestions: false,
+      thinking: "adaptive",
+      bypassCapable: true,
       cwd: "/work",
       boundary: '{"policy":null}',
       outputSchema: null,

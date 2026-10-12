@@ -25,12 +25,20 @@ writers on one `.jsonl`. When touching the prompt path:
   never closes input, releases retention or arms the continuation watchdog —
   the newer turn may be waiting on all three.
 - **Launch-only settings are refused, not ignored.** Output schema, execution
-  policy, agent and settings sources cannot change on a live CLI. A prompt
-  that changes them while the runtime is open is a 409 before anything is
+  policy, agent, settings sources, effective context beta, prompt suggestions,
+  plugins and managed credentials cannot change on a live CLI. Adaptive thinking
+  can only reset a runtime launched in adaptive mode; bypass mode requires the
+  launch capability. A prompt that changes them while the runtime is open is a 409 before anything is
   journaled (`assertClaudeRuntimeAccepts`, checked by the route and again by
   `sendPrompt`); one that leaves agent or settings sources unsaid inherits the
   running values. Model, mode, effort, thinking, fast mode and Ultracode are
-  restated on the live process every time it is joined.
+  restated on the live process every time it is joined, within those launch
+  constraints. An abort or close request fences the runtime immediately but
+  does not prove termination: replacement and transient rewind wait for
+  `runtime.ended`, with a bounded retryable conflict when it cannot be confirmed.
+  A failed live MCP update remains pending and is retried, never recorded as
+  applied. During join setup, the session generation fences the old turn's
+  input-close and retention paths until submission transfers runtime ownership.
 
 ## Session catalogue and transport
 

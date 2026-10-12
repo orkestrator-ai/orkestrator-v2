@@ -267,9 +267,10 @@ export function SharedNativeAgentController({
         ? claudeNativeParameterValues({
             claudeThinkingMode: configured.claudeThinkingMode,
             claudeContext1m: configured.claudeContext1m,
+            claudeChrome: configured.claudeChrome,
           })
         : undefined,
-    [configured.claudeContext1m, configured.claudeThinkingMode, platform],
+    [configured.claudeChrome, configured.claudeContext1m, configured.claudeThinkingMode, platform],
   );
   // Coordinator runtimes deliberately have no Environment record: they run
   // against the project's checkout under their own read-only lifecycle. The

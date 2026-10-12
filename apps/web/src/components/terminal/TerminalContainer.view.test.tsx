@@ -404,7 +404,9 @@ mock.module("@/lib/backend", () => ({
 }));
 
 mock.module("@/components/pane-layout", () => ({
-  PaneTree: () => null,
+  PaneTree: ({ isActive }: { isActive: boolean }) => (
+    <output data-testid="pane-tree-active">{String(isActive)}</output>
+  ),
 }));
 
 mock.module("@/components/ui/context-menu", () => ({
@@ -5470,6 +5472,79 @@ describe("TerminalContainer", () => {
     await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("1"));
     act(() => screen.getByRole("button", { name: "Add tab through context" }).click());
     await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("2"));
+  });
+
+  test("an obscured container reveals itself for context tabs and ignores close requests", async () => {
+    const onReveal = mock(() => {});
+    function ObscuredHarness() {
+      const { createTab, selectTab, createFileTab, closeActiveTab, tabCount } =
+        useTerminalContext();
+      return (
+        <div>
+          <button type="button" onClick={() => selectTab?.(0)}>
+            Select obscured tab
+          </button>
+          <button type="button" onClick={() => createFileTab?.("src/App.tsx")}>
+            Open obscured file
+          </button>
+          <output data-testid="obscured-tab-count">{tabCount}</output>
+          <button type="button" onClick={() => createTab?.("plain")}>
+            Add tab while obscured
+          </button>
+          <button type="button" onClick={() => closeActiveTab?.()}>
+            Close tab while obscured
+          </button>
+        </div>
+      );
+    }
+
+    const view = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+          obscured
+          onReveal={onReveal}
+        />
+        <ObscuredHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("obscured-tab-count").textContent).toBe("1"));
+    act(() => screen.getByRole("button", { name: "Close tab while obscured" }).click());
+    fireEvent.keyDown(window, { key: "w", metaKey: true });
+    expect(onReveal).not.toHaveBeenCalled();
+
+    act(() => screen.getByRole("button", { name: "Add tab while obscured" }).click());
+    await waitFor(() => expect(screen.getByTestId("obscured-tab-count").textContent).toBe("2"));
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("pane-tree-active").textContent).toBe("false");
+    act(() => screen.getByRole("button", { name: "Select obscured tab" }).click());
+    act(() => screen.getByRole("button", { name: "Open obscured file" }).click());
+    expect(onReveal).toHaveBeenCalledTimes(3);
+    const menuClose = listenMock.mock.calls.find(([event]) => event === "menu-close-tab")?.[1] as
+      | (() => void)
+      | undefined;
+    expect(menuClose).toBeDefined();
+    const count = usePaneLayoutStore.getState().getAllTabs("env-visible").length;
+    act(() => menuClose?.());
+    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(count);
+    view.rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+          onReveal={onReveal}
+        />
+        <ObscuredHarness />
+      </TerminalProvider>,
+    );
+    expect(screen.getByTestId("pane-tree-active").textContent).toBe("true");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(count);
   });
 
   test("normalizes an absolute container path before creating a file tab", async () => {

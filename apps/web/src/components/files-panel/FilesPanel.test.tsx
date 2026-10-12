@@ -69,6 +69,7 @@ test("two board file opens wait for home creation and retain their order", async
     } as Environment),
   );
   await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("home-1"));
+  expect(useUIStore.getState().projectBoardTab).toBe("home");
   expect(useFilesPanelStore.getState().pendingFileOpens.map((request) => request.filePath)).toEqual(
     ["first.txt", "second.txt"],
   );

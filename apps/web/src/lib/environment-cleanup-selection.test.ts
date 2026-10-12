@@ -374,3 +374,17 @@ describe("startEnvironmentCleanupSelectionSync", () => {
     }
   });
 });
+
+test("a removed Home snapshot leaves the project before activation can recreate it", () => {
+  const home = makeEnvironment({ projectHome: true });
+  useEnvironmentStore.setState({ environments: [home] });
+  useUIStore.setState({ selectedProjectId: home.projectId, selectedEnvironmentId: home.id });
+  const stop = startEnvironmentCleanupSelectionSync();
+  try {
+    useEnvironmentStore.getState().removeEnvironment(home.id);
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(useUIStore.getState().selectedProjectId).toBeNull();
+  } finally {
+    stop();
+  }
+});

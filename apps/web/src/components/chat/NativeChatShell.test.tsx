@@ -2,7 +2,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { createRef } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+import type {
+  NativeAgentActivityPart,
+  NativeMessage,
+  NativeMessagePart,
+} from "@/lib/chat/native-message-types";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
@@ -313,6 +317,157 @@ describe("NativeChatShell", () => {
       "true",
     );
   });
+
+  test.each(["subagent", "task-group", "background-task"] as const)(
+    "keeps %s disclosures and task-specific stops through cross-launch membership changes",
+    async (kind) => {
+      const worker = (id: string, label: string, settledAt?: string): NativeAgentActivityPart => {
+        const backgroundTask = {
+          id: `bg-${id}`,
+          description: label,
+          status: settledAt ? ("completed" as const) : ("running" as const),
+          ...(settledAt ? { settledAt } : {}),
+        };
+        return kind === "subagent"
+          ? {
+              type: "subagent",
+              content: label,
+              subagentId: id,
+              subagentName: label,
+              subagentPrompt: `Details for ${label}`,
+              toolState: settledAt ? "success" : "pending",
+              backgroundTask,
+            }
+          : {
+              type: "task-group",
+              content: label,
+              task: {
+                type: "tool-invocation",
+                content: label,
+                toolName: kind === "background-task" ? "BackgroundTask" : "Agent",
+                ...(kind === "background-task" ? {} : { toolUseId: id }),
+                sourceMessageId: `provider-launch-${id}`,
+                toolArgs: { name: label, prompt: `Details for ${label}` },
+                toolState: "success",
+                agentState: settledAt ? "finished" : "active",
+                backgroundTask,
+              },
+              childTools: [],
+            };
+      };
+      const transcript = (firstSettled?: string, secondSettled?: string, append = false) => [
+        {
+          id: "first-launch",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-07-28T12:00:00.000Z",
+          parts: [
+            { type: "text" as const, content: "Delegating" },
+            worker("first", "Reviewer", firstSettled),
+          ],
+        },
+        {
+          id: "second-launch",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-07-28T12:01:00.000Z",
+          parts: [worker("second", "Tester", secondSettled)],
+        },
+        ...(append
+          ? [
+              {
+                id: "later-transcript",
+                role: "assistant" as const,
+                content: "",
+                createdAt: "2026-07-28T12:03:00.000Z",
+                parts: [{ type: "text" as const, content: "Still working" }],
+              },
+            ]
+          : []),
+      ];
+      const props = { ...shellProps(), agentExpansionScope: `cross-launch-${kind}` };
+      const stopBackgroundTask = mock(async () => false);
+      const content = (
+        messages: NativeMessage[],
+        isActive = true,
+        expansionScope = props.agentExpansionScope,
+      ) => (
+        <NativeChatShell
+          {...props}
+          isActive={isActive}
+          agentExpansionScope={expansionScope}
+          messages={pinNativeAgentParts(messages)}
+          stopBackgroundTask={stopBackgroundTask}
+        />
+      );
+      const view = render(content(transcript()));
+      fireEvent.click(screen.getByRole("button", { name: /^(agent|task).*tester/i }));
+      const expectExpanded = (label: string) => {
+        expect(
+          screen
+            .getByRole("button", { name: new RegExp(`^(agent|task).*${label}`, "i") })
+            .getAttribute("aria-expanded"),
+        ).toBe("true");
+        const trigger = screen.getByRole("button", {
+          name: new RegExp(`^(agent|task).*${label}`, "i"),
+        });
+        const body = document.getElementById(trigger.getAttribute("aria-controls")!);
+        expect(body).toBeTruthy();
+        expect(within(body!).getByText(`Details for ${label}`)).toBeTruthy();
+      };
+      const stop = async (label: string, id: string) => {
+        if (kind === "subagent") return;
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: `Stop ${label}` }));
+        });
+        expect(stopBackgroundTask).toHaveBeenLastCalledWith(id);
+      };
+      expectExpanded("Tester");
+      await stop("Reviewer", "bg-first");
+      await stop("Tester", "bg-second");
+
+      // An earlier launch finishes while the later child is being read.
+      const firstSettled = "2026-07-28T12:02:00.000Z";
+      view.rerender(content(transcript(firstSettled)));
+      expectExpanded("Tester");
+      expect(screen.queryByRole("button", { name: "Stop Reviewer" }) === null).toBe(true);
+      await stop("Tester", "bg-second");
+      fireEvent.click(screen.getByRole("button", { name: /^(agent|task).*reviewer/i }));
+      expectExpanded("Reviewer");
+
+      // New parent output separates the settled card from the running row.
+      view.rerender(content(transcript(firstSettled, undefined, true)));
+      expectExpanded("Reviewer");
+      expectExpanded("Tester");
+      expect(screen.queryByRole("button", { name: "Stop Reviewer" }) === null).toBe(true);
+      await stop("Tester", "bg-second");
+
+      // A delayed authoritative terminal edge joins the cards again, under a
+      // settled row id rather than active-agents. Both disclosures survive.
+      const finished = transcript(firstSettled, "2026-07-28T12:02:30.000Z", true);
+      view.rerender(content(finished, false));
+      expectExpanded("Reviewer");
+      expectExpanded("Tester");
+      expect(screen.queryAllByRole("button", { name: /^Stop / })).toHaveLength(0);
+      expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+
+      view.unmount();
+      const remounted = render(content(finished));
+      expectExpanded("Reviewer");
+      expectExpanded("Tester");
+      expect(screen.queryAllByRole("button", { name: /^Stop / })).toHaveLength(0);
+
+      remounted.unmount();
+      render(content(finished, true, `other-transcript-${kind}`));
+      for (const label of ["Reviewer", "Tester"]) {
+        expect(
+          screen
+            .getByRole("button", { name: new RegExp(`^(agent|task).*${label}`, "i") })
+            .getAttribute("aria-expanded"),
+        ).toBe("false");
+      }
+    },
+  );
 
   test("remeasures pinned clearance when the viewport changes", () => {
     render(<NativeChatShell {...shellProps()} pinnedAccessory={<div>Plan details</div>} />);

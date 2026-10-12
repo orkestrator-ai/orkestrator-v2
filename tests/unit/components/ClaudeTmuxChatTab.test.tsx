@@ -3503,7 +3503,7 @@ Running 1 Explore agent...
     expect((lastVirtuosoProps?.data ?? []).map((message: any) => message.id)).toEqual([
       "assistant-agent",
       "assistant-agent:text-block:2",
-      "assistant-agent:text-block:1:active-agents",
+      "active-agents",
     ]);
 
     act(() => {

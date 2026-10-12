@@ -96,8 +96,14 @@ export function TerminalContainer({
   className,
   onStartContainer,
   onCreateScript,
+  obscured = false,
+  onReveal,
 }: TerminalContainerProps) {
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
+  const obscuredRef = useRef(obscured);
+  obscuredRef.current = obscured;
+  const onRevealRef = useRef(onReveal);
+  onRevealRef.current = onReveal;
 
   // Track currently dragged tab ID for cross-pane visual feedback
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -1755,7 +1761,7 @@ export function TerminalContainer({
       const echoesRendererClose = rendererClosedTabPendingEchoRef.current;
       rendererClosedTabPendingEchoRef.current = false;
       menuOwnsCloseTabRef.current = true;
-      if (echoesRendererClose) return;
+      if (echoesRendererClose || obscuredRef.current) return;
       void handleCloseActiveTab();
     });
     return () => {
@@ -1783,7 +1789,7 @@ export function TerminalContainer({
       // Prevent the browser's own close-tab default even once the native menu
       // has taken ownership; losing the whole window is worse than a no-op.
       event.preventDefault();
-      if (menuOwnsCloseTabRef.current) return;
+      if (menuOwnsCloseTabRef.current || obscuredRef.current) return;
       rendererClosedTabPendingEchoRef.current = true;
       void handleCloseActiveTab();
     };
@@ -1806,17 +1812,50 @@ export function TerminalContainer({
     }
   }, [hasAppliedClaudeOptions, claudeOptions, environmentId, clearOptions]);
 
+  // Tabs created or selected through the context come from the toolbar,
+  // shortcuts or the files panel; show them even when this container is covered.
+  const revealIfObscured = useCallback(() => {
+    if (obscuredRef.current) onRevealRef.current?.();
+  }, []);
+  const createTabFromContext = useCallback(
+    (type: CreatableTabType, options?: CreateTabOptions): boolean => {
+      const created = handleCreateTab(type, options);
+      if (created) revealIfObscured();
+      return created;
+    },
+    [handleCreateTab, revealIfObscured],
+  );
+  const selectTabFromContext = useCallback(
+    (index: number) => {
+      handleSelectTab(index);
+      const activePane = getActivePane(environmentId);
+      if (activePane && index >= 0 && index < activePane.tabs.length) revealIfObscured();
+    },
+    [environmentId, getActivePane, handleSelectTab, revealIfObscured],
+  );
+  const createFileTabFromContext = useCallback(
+    (filePath: string, options?: CreateFileTabOptions) => {
+      handleCreateFileTab(filePath, options);
+      revealIfObscured();
+    },
+    [handleCreateFileTab, revealIfObscured],
+  );
+  const closeActiveTabFromContext = useCallback(() => {
+    if (obscuredRef.current) return;
+    return handleCloseActiveTab();
+  }, [handleCloseActiveTab]);
+
   // Register tab functions with context
   useEffect(() => {
     if (!isActive) return;
 
     if (isEnvironmentRunning && (containerId || isLocalEnvironmentReady)) {
-      setCreateTab(handleCreateTab);
-      setSelectTab(handleSelectTab);
-      setCloseActiveTab(handleCloseActiveTab);
+      setCreateTab(createTabFromContext);
+      setSelectTab(selectTabFromContext);
+      setCloseActiveTab(closeActiveTabFromContext);
       const allTabs = getAllTabs(environmentId);
       setTabCount(allTabs.length);
-      setCreateFileTab(handleCreateFileTab);
+      setCreateFileTab(createFileTabFromContext);
       setOpenFilePaths(getOpenFilePaths(environmentId));
     } else {
       setCreateTab(null);
@@ -1840,10 +1879,10 @@ export function TerminalContainer({
     isEnvironmentRunning,
     containerId,
     isLocalEnvironmentReady,
-    handleCreateTab,
-    handleCreateFileTab,
-    handleSelectTab,
-    handleCloseActiveTab,
+    createTabFromContext,
+    createFileTabFromContext,
+    selectTabFromContext,
+    closeActiveTabFromContext,
     getAllTabs,
     getOpenFilePaths,
     setCreateTab,
@@ -2056,7 +2095,7 @@ export function TerminalContainer({
               node={root}
               containerId={containerId}
               environmentId={environmentId}
-              isActive={isActive}
+              isActive={isActive && !obscured}
               activeDragId={activeDragId}
               dragOverPaneId={dragOverPaneId}
             />

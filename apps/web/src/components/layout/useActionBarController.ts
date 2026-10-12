@@ -13,6 +13,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   useUIStore,
+  type ProjectBoardTab,
   useEnvironmentStore,
   useProjectStore,
   useConfigStore,
@@ -59,7 +60,7 @@ import {
   requestPaneTabActivation,
 } from "@/lib/pane-layout-authoritative";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
-import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
+import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
@@ -127,7 +128,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const selectProject = useUIStore((state) => state.selectProject);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectEnvironment = useUIStore((state) => state.selectEnvironment);
-  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
   const setProjectBoardNotesOpen = useUIStore((state) => state.setProjectBoardNotesOpen);
@@ -278,62 +278,86 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setEnvSettingsEnvironmentId(null);
     }
   }, [envSettingsEnvironment, envSettingsEnvironmentId]);
-  const isProjectBoardView = !!selectedProject && !selectedEnvironment;
+  // A project's page runs on its project home, the environment that works
+  // directly in the checkout: the toolbar's environment controls target it
+  // while the project tabs choose between its own tabs and the board panels.
+  const isProjectHomeSelected = selectedEnvironment?.projectHome === true;
+  const isProjectView = !!selectedProject && (!selectedEnvironment || isProjectHomeSelected);
+  /** A board panel, rather than environment tabs, fills the main view. */
+  const isProjectBoardView =
+    isProjectView && (!isProjectHomeSelected || projectBoardTab !== "home");
+  const projectDeleting = useProjectStore((state) =>
+    state.deletingProjects.has(selectedProjectId ?? ""),
+  );
+  const projectHomeId = useEnvironmentStore((state) =>
+    selectedProjectId && !projectDeleting
+      ? (findProjectHomeEnvironment(
+          state.environments,
+          selectedProjectId,
+          state.deletingEnvironments,
+        )?.id ?? null)
+      : null,
+  );
   // The project board shows the project's own checkout in the files panel, so
   // the toggle stays available whenever the project has one configured.
   const hasProjectCheckout = !!selectedProject?.localPath?.trim();
-  const canShowProjectFiles = isProjectBoardView && hasProjectCheckout;
-  const canToggleFilesPanel = !!selectedEnvironment || canShowProjectFiles;
+  const canToggleFilesPanel = !!selectedEnvironment || (isProjectView && hasProjectCheckout);
   const toggleFilesPanel = useCallback(() => {
     // Nothing is being changed on the project board, so the checkout opens on
     // its file tree rather than an empty change list.
-    if (!filesPanelOpen && !selectedEnvironment && canShowProjectFiles) {
+    if (!filesPanelOpen && isProjectBoardView && hasProjectCheckout) {
       openFilesPanelOnAllFiles();
       return;
     }
     toggleFilesPanelStore();
   }, [
     filesPanelOpen,
-    selectedEnvironment,
-    canShowProjectFiles,
+    isProjectBoardView,
+    hasProjectCheckout,
     openFilesPanelOnAllFiles,
     toggleFilesPanelStore,
   ]);
 
-  // Review, Multi Review, fix and PR sessions run in an environment. The
-  // project home is the environment that works directly in the checkout.
-  const [projectHomeOpening, setProjectHomeOpening] = useState(false);
-  const openProjectHome = useCallback(async () => {
-    if (!selectedProject || !hasProjectCheckout) return;
-    setProjectHomeOpening(true);
-    try {
-      const home = await ensureProjectHomeInStore(selectedProject.id);
-      selectProjectAndEnvironment(selectedProject.id, home.id);
-    } catch (error) {
-      toast.error("Could not open the project home", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setProjectHomeOpening(false);
-    }
-  }, [selectedProject, hasProjectCheckout, selectProjectAndEnvironment]);
+  // Jobs launched from the board run in the project home, whose tabs the
+  // board covers. Bring them forward so the launched tab is visible.
+  const projectHomeRevealRef = useRef<{ homeId: string | null; tab: ProjectBoardTab }>({
+    homeId: null,
+    tab: projectBoardTab,
+  });
+  projectHomeRevealRef.current = {
+    homeId: isProjectHomeSelected ? (selectedEnvironmentId ?? null) : null,
+    tab: projectBoardTab,
+  };
+  const activateLaunchedTab = useCallback(
+    (
+      environmentId: string,
+      tabId: string,
+      request: ReturnType<typeof beginPaneTabActivationRequest>,
+    ) => {
+      requestPaneTabActivation(environmentId, tabId, request);
+      const { homeId, tab } = projectHomeRevealRef.current;
+      if (homeId === environmentId && tab !== "home") setProjectBoardTab("home");
+    },
+    [setProjectBoardTab],
+  );
 
   const openProjectBoardTab = useCallback(
     (tab: typeof projectBoardTab) => {
       if (!selectedProjectId) return;
       setProjectBoardTab(tab);
-      selectEnvironment(null);
+      selectEnvironment(projectHomeId);
     },
-    [selectEnvironment, selectedProjectId, setProjectBoardTab],
+    [projectHomeId, selectEnvironment, selectedProjectId, setProjectBoardTab],
   );
 
   const openProjectNotes = useCallback(() => {
     if (!selectedProjectId) return;
     if (projectBoardTab !== "kanban") setProjectBoardTab("kanban");
-    selectEnvironment(null);
+    selectEnvironment(projectHomeId);
     setProjectBoardNotesOpen(true);
   }, [
     projectBoardTab,
+    projectHomeId,
     selectEnvironment,
     selectedProjectId,
     setProjectBoardNotesOpen,
@@ -1301,13 +1325,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         title: "Run Commands",
         activateTab: true,
       });
-      requestPaneTabActivation(environmentId, result.tabId, activationRequest);
+      activateLaunchedTab(environmentId, result.tabId, activationRequest);
     } catch (error) {
       toast.error("Could not run commands", {
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [runCommands, selectedEnvironmentId, tabCount]);
+  }, [activateLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
 
   const handleCreateScript = useCallback(
     (
@@ -1354,7 +1378,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         })
         .then((result) => {
-          requestPaneTabActivation(environmentId, result.tabId, activationRequest);
+          activateLaunchedTab(environmentId, result.tabId, activationRequest);
           if (result.status !== "rejected") return true;
           toast.error("Could not start script creation", {
             description: result.error || "The agent rejected the request.",
@@ -1369,6 +1393,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
     },
     [
+      activateLaunchedTab,
       actionDefaultFor,
       isRunning,
       isLocalEnvironment,
@@ -1702,7 +1727,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
-        requestPaneTabActivation(operationEnvironmentId, result.tabId, activationRequest);
+        activateLaunchedTab(operationEnvironmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
           releaseCreatePrLaunch(operationEnvironmentId);
           toast.error("Could not start pull request creation", {
@@ -1727,6 +1752,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      activateLaunchedTab,
       actionDefaultFor,
       bindCreatePrLaunchTab,
       config.repositories,
@@ -1881,7 +1907,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             : {}),
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         });
-        requestPaneTabActivation(environmentId, result.tabId, activationRequest);
+        activateLaunchedTab(environmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
           throw new Error(result.error || "The agent rejected the request.");
         }
@@ -1892,6 +1918,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      activateLaunchedTab,
       actionDefaultFor,
       isRunning,
       preferredFastModesByPlatform,
@@ -1982,7 +2009,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
-        requestPaneTabActivation(operationEnvironmentId, result.tabId, activationRequest);
+        activateLaunchedTab(operationEnvironmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
           return fail(result.error || "The conflict-resolution agent rejected the prompt.");
         }
@@ -2010,6 +2037,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      activateLaunchedTab,
       actionDefaultFor,
       config.repositories,
       preferredFastModesByPlatform,
@@ -2292,9 +2320,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     filesPanelOpen,
     toggleFilesPanel,
     canToggleFilesPanel,
-    canShowProjectFiles,
-    openProjectHome,
-    projectHomeOpening,
     changes,
     sidebarOpen,
     toggleSidebar,
@@ -2377,7 +2402,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedProject,
     repoSettingsProject,
     envSettingsEnvironment,
-    isProjectBoardView,
+    isProjectView,
+    hasProjectCheckout,
     isCleanupTargetDeleting,
     isMerging,
     repoName,

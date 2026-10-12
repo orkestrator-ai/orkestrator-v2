@@ -19,12 +19,18 @@ const withoutFolder = (collapsed: string[], folder: string): string[] =>
 const addRecentProject = (recentProjectIds: string[], projectId: string): string[] =>
   [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(0, RECENT_PROJECT_LIMIT);
 
-export type ProjectBoardTab = "coordinator" | "kanban" | "github" | "linear" | "features";
+/**
+ * The panel a project's page shows. `home` is the project home's own tabs;
+ * the rest are the project board.
+ */
+export type ProjectBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
 export type EnvironmentSortMode = "project" | "activity";
 
 interface UIState {
   // Sidebar state
   selectedProjectId: string | null;
+  /** Explicit project navigation, including reselecting the same row. */
+  projectSelectionRevision: number;
   selectedEnvironmentId: string | null;
   /** Whether the left projects/environments panel is visible. */
   sidebarOpen: boolean;
@@ -95,6 +101,7 @@ export const useUIStore = create<UIState>()(
     (set, get) => ({
       // Initial state
       selectedProjectId: null,
+      projectSelectionRevision: 0,
       selectedEnvironmentId: null,
       sidebarOpen: true,
       recentProjectIds: [],
@@ -112,6 +119,9 @@ export const useUIStore = create<UIState>()(
       selectProject: (projectId) =>
         set((state) => ({
           selectedProjectId: projectId,
+          projectSelectionRevision: state.projectSelectionRevision + 1,
+          projectBoardTab: "coordinator",
+          projectBoardNotesOpen: false,
           selectedEnvironmentId: null,
           selectedEnvironmentIds: [],
           recentProjectIds: projectId
@@ -130,6 +140,7 @@ export const useUIStore = create<UIState>()(
       selectProjectAndEnvironment: (projectId, environmentId) =>
         set((state) => ({
           selectedProjectId: projectId,
+          projectSelectionRevision: state.projectSelectionRevision + 1,
           selectedEnvironmentId: environmentId,
           recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
         })),

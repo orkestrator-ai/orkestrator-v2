@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
   playConfiguredNotificationSound,
   primeNotificationSounds,
@@ -15,7 +15,7 @@ import {
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
-  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedEnvironmentId = useVisibleEnvironmentId();
   const agentStoppedSoundEnabled = useConfigStore(
     (state) =>
       normalizeNotificationSoundSettings(state.config.global.notificationSounds).agentStopped,

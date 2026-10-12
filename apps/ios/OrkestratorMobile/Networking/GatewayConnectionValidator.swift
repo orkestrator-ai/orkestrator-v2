@@ -93,8 +93,10 @@ struct GatewayConnectionValidator: GatewayConnectionValidating, Sendable {
             case .timedOut:
                 throw ConnectionValidationError.timedOut
             case .serverCertificateUntrusted, .serverCertificateHasBadDate,
-                 .serverCertificateHasUnknownRoot, .secureConnectionFailed:
+                 .serverCertificateHasUnknownRoot:
                 throw ConnectionValidationError.untrustedConnection
+            case .secureConnectionFailed:
+                throw ConnectionValidationError.secureConnectionFailed
             default:
                 throw ConnectionValidationError.unreachable
             }
@@ -128,6 +130,7 @@ enum ConnectionValidationError: LocalizedError {
     case cookieTooLarge
     case timedOut
     case untrustedConnection
+    case secureConnectionFailed
     case unreachable
     case rejectedToken
     case originRejected
@@ -145,6 +148,7 @@ enum ConnectionValidationError: LocalizedError {
         case .cookieTooLarge: return "The gateway token is too large for the secure web session."
         case .timedOut: return "The remote machine did not respond within 10 seconds."
         case .untrustedConnection: return "The server’s HTTPS certificate could not be trusted."
+        case .secureConnectionFailed: return "A secure connection could not be established. Check that Tailscale is connected and Tailscale DNS is enabled on this device."
         case .unreachable: return "The remote machine could not be reached. Check Tailscale and the HTTPS address."
         case .rejectedToken: return "The gateway token was rejected."
         case .originRejected: return "The remote machine refused this connection. Check its web access settings."

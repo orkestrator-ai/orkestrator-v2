@@ -233,6 +233,18 @@ describe("AgentPlatformPane Claude SDK defaults", () => {
     });
   });
 
+  test("stores and inherits the Claude in Chrome choice", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<ClaudeSettingsHarness onChange={onChange} />);
+
+    const chrome = screen.getByRole("radiogroup", { name: "Claude in Chrome" });
+    fireEvent.click(within(chrome).getByRole("radio", { name: "On" }));
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.claudeChrome).toBe(true);
+
+    fireEvent.click(within(chrome).getByRole("radio", { name: "Provider default — Off" }));
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.claudeChrome).toBeUndefined();
+  });
+
   test("labels and restores inherited Claude SDK defaults", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<InheritedClaudeSettingsHarness onChange={onChange} />);

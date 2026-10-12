@@ -27,3 +27,15 @@ temporary-file rename failure may be teardown fallout after the earlier cases
 miss those deadlines, but that relationship has not been established. Keep the
 case open until the ordering and lifetime of Agent Mail's background writes are
 made deterministic or repeated aggregate evidence identifies a narrower cause.
+
+## Recurrence on 2026-10-11
+
+The directory-convergence case timed out at 5001.72 ms during
+`mise run test:logged -- --name final-suite -- mise run test`, using the testing
+guide's macOS GNU-tool PATH. The workspace group used two slots and the backend
+runner used `--parallel=1`; root, bridge, and protocol groups also ran on the
+host. The owning file passed unchanged in 2.1 seconds with
+`mise run test:logged -- --name agent-mail-final-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-mail-service.test.ts --parallel=1 --only-failures`.
+Aggregate evidence is in
+`/tmp/orkestrator-test-run.w2YALW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No test was skipped or loosened.

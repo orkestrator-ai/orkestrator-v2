@@ -199,6 +199,21 @@ function rekeyCodexSession(value: unknown, from: string, to: string): unknown {
   };
 }
 
+function sameCodexSessionIdentity(target: unknown, source: unknown): boolean {
+  const a = asRecord(target);
+  const b = asRecord(source);
+  return (
+    !!a &&
+    !!b &&
+    typeof a.bridgeSessionId === "string" &&
+    typeof a.threadId === "string" &&
+    a.bridgeSessionId === b.bridgeSessionId &&
+    a.threadId === b.threadId &&
+    a.cwdHash === b.cwdHash &&
+    asRecord(a.config)?.cwd === asRecord(b.config)?.cwd
+  );
+}
+
 async function writePrivateJson(file: string, value: unknown): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
@@ -234,8 +249,11 @@ function mergeMigrationRows(target: unknown[], source: unknown[], key: string): 
   for (const value of [...target, ...source]) {
     const id = asRecord(value)?.[key];
     if (typeof id !== "string") throw new Error("Invalid Codex migration record identity");
-    if (rows.has(id) && JSON.stringify(rows.get(id)) !== JSON.stringify(value))
-      throw new Error("Conflicting Codex migration record identity");
+    if (rows.has(id)) {
+      if (key === "bridgeSessionId" && sameCodexSessionIdentity(rows.get(id), value)) continue;
+      if (JSON.stringify(rows.get(id)) !== JSON.stringify(value))
+        throw new Error("Conflicting Codex migration record identity");
+    }
     rows.set(id, value);
   }
   return Array.from(rows.values());
@@ -296,7 +314,7 @@ export async function relocateCodexBridgeState(
     const target = path.join(recordsTarget, name);
     const value = rekeyCodexSession(await readMigrationJson(file), from, to);
     if (await pathExists(target)) {
-      if (JSON.stringify(await readMigrationJson(target)) !== JSON.stringify(value)) {
+      if (!sameCodexSessionIdentity(await readMigrationJson(target), value)) {
         throw new Error("Conflicting Codex session records during relocation");
       }
     } else {
@@ -352,8 +370,9 @@ export async function relocateCursorAgents(
   let raw: string;
   try {
     raw = await fs.readFile(file, "utf8");
-  } catch {
-    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
   }
   let changed = false;
   const lines = raw.split("\n").map((line) => {

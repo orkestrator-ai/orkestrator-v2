@@ -3,7 +3,7 @@ import { DispatchJournal } from "../../../../bridges/codex-bridge/src/sessions/d
 import { StorageService } from "./storage.js";
 import { hostClaudeJsonPath, hostCodexHome } from "./agent-accounts-homes.js";
 import osHome from "node:os";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -250,4 +250,61 @@ test("discovers per-account Codex homes and the host Claude JSON path", async ()
   expect(hostClaudeJsonPath({}, osHome.homedir())).toBe(
     path.join(osHome.homedir(), ".claude.json"),
   );
+});
+
+test("Codex retry preserves destination updates after source unlink failed", async () => {
+  const home = await tempRoot();
+  const sourceStore = new BridgeSessionStore({ codexHome: home, cwd: FROM });
+  const session = {
+    bridgeSessionId: "retry",
+    threadId: "thread-retry",
+    cwdHash: codexCwdHash(FROM),
+    config: { mode: "build" as const, cwd: FROM },
+    lastAccessed: new Date().toISOString(),
+  };
+  await sourceStore.upsert(session);
+  const remove = fs.rm.bind(fs);
+  const unlink = spyOn(fs, "rm").mockImplementation(async (file, options) => {
+    if (String(file).includes(`bridge-sessions-${codexCwdHash(FROM)}/`))
+      throw Object.assign(new Error("unlink failed"), { code: "EIO" });
+    return remove(file, options);
+  });
+  try {
+    await expect(relocateCodexBridgeState(FROM, TO, home)).rejects.toThrow("unlink failed");
+  } finally {
+    unlink.mockRestore();
+  }
+  const destination = new BridgeSessionStore({ codexHome: home, cwd: TO });
+  const rows = await destination.load();
+  const updated = {
+    ...rows[0]!,
+    lastAccessed: new Date(Date.now() + 1_000).toISOString(),
+    config: { ...rows[0]!.config, model: "updated-model" },
+  };
+  await destination.upsert(updated);
+  await relocateCodexBridgeState(FROM, TO, home);
+  expect(await destination.load()).toEqual([updated]);
+  expect(await fs.readdir(path.join(home, "orkestrator-bridge"))).not.toContain(
+    `bridge-sessions-${codexCwdHash(FROM)}`,
+  );
+});
+
+test("Cursor read errors are retryable failures and missing stores are harmless", async () => {
+  const root = await tempRoot();
+  const file = path.join(root, "cursor-sdk", "agents.ndjson");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify({ agentId: "a1", cwd: FROM }) + "\n");
+  const read = spyOn(fs, "readFile").mockRejectedValueOnce(
+    Object.assign(new Error("read failed"), { code: "EIO" }),
+  );
+  try {
+    await expect(relocateCursorAgents([FROM], TO, root)).rejects.toThrow("read failed");
+  } finally {
+    read.mockRestore();
+  }
+  await relocateCursorAgents([FROM], TO, root);
+  expect(JSON.parse(await fs.readFile(file, "utf8")).cwd).toBe(TO);
+  await expect(
+    relocateCursorAgents([FROM], TO, path.join(root, "missing")),
+  ).resolves.toBeUndefined();
 });

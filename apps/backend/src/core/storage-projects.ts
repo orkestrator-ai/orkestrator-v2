@@ -147,6 +147,17 @@ export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
   if (value.removeSource !== undefined && typeof value.removeSource !== "boolean") {
     throw new Error("Invalid worktree move source cleanup flag");
   }
+  if (value.sourceCleaned !== undefined && typeof value.sourceCleaned !== "boolean")
+    throw new Error("Invalid worktree move cleanup completion");
+  if (
+    value.sourceIdentity !== undefined &&
+    (!isRecord(value.sourceIdentity) ||
+      !Number.isSafeInteger(value.sourceIdentity.dev) ||
+      !Number.isSafeInteger(value.sourceIdentity.ino) ||
+      (value.sourceIdentity.dev as number) < 0 ||
+      (value.sourceIdentity.ino as number) < 0)
+  )
+    throw new Error("Invalid worktree move source identity");
   let submodules: WorktreeMoveRecord["submodules"];
   if (value.submodules !== undefined) {
     if (!Array.isArray(value.submodules) || value.submodules.length > 10_000) {
@@ -177,6 +188,10 @@ export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
       : { fromCanonical: absolute("canonical source", value.fromCanonical) }),
     ...(value.fromRoot === undefined ? {} : { fromRoot: absolute("source root", value.fromRoot) }),
     ...(value.removeSource === undefined ? {} : { removeSource: value.removeSource === true }),
+    ...(value.sourceIdentity === undefined
+      ? {}
+      : { sourceIdentity: value.sourceIdentity as { dev: number; ino: number } }),
+    ...(value.sourceCleaned === undefined ? {} : { sourceCleaned: value.sourceCleaned === true }),
     ...(submodules ? { submodules } : {}),
     phase: value.phase,
     startedAt: value.startedAt,

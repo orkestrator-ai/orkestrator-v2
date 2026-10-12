@@ -53,12 +53,13 @@ ignored files. The project home cannot be moved.
 - On the same disk this is `git worktree move` (a rename). Across disks the
   worktree is copied to a staging folder next to the destination, renamed into
   place, `git worktree repair` points the repository at it, and only then is
-  the old folder removed. A worktree with submodules can only be moved on the
-  same disk.
+  the old folder removed. Worktrees with submodules use this copy path even
+  on the same disk; nested submodule Git links are repaired at the destination.
 - The move is refused while an agent in the environment is working or waiting
   for input, while setup runs, and while another lifecycle operation (delete,
-  merge, rebuild) is in progress. While it runs, prompts and new terminals
-  for the environment are refused; its terminals, Claude tmux sessions and
+  merge, rebuild) is in progress. An admitted file write or worker start must
+  finish before a move can begin. While it runs, file mutations, new exec and
+  validation workers, prompts and new terminals are refused; its terminals, Claude tmux sessions and
   local agent bridges are stopped first and start again on demand in the new
   folder.
 - Agents key their saved conversations by folder, so that state moves too,
@@ -79,7 +80,13 @@ ignored files. The project home cannot be moved.
   destination is committed, it stays authoritative even if later bookkeeping
   fails. The move record remains until conversation relocation and old-copy
   cleanup finish. Partial completion names affected providers in settings and
-  retries on the next backend start; a new move is refused until it settles.
+  retries on the next backend start; edits, agent work and another move are
+  refused until it settles. A rejected path commit restores the original
+  worktree when storage confirms that it still owns the source. Ambiguous
+  failures keep the environment fenced for recovery. Cleanup records the
+  original source directory identity and its completion, so retries preserve
+  unrelated directories subsequently created at the old pathname. Legacy
+  journals without source identity retain an existing source for manual cleanup.
 
 ## What prunes itself
 

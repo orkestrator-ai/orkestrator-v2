@@ -1169,3 +1169,32 @@ test("move admission refuses a prompt waiting for session creation or send ackno
     );
   }
 });
+
+test("move refuses an acknowledged turn before persisted activity catches up", async () => {
+  const stub = createProviderStub("codex", { activity: async () => "working" });
+  await withService(
+    { prefix: "ork-move-acknowledged-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      await service.dispatchPrompt({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab",
+        prompt: "fixture",
+        requestId: "acknowledged",
+      });
+      expect((await storage.getEnvironment("env-1"))?.agentActivityState ?? "idle").toBe("idle");
+      expect((await storage.listNativeAgentSessions())[0]?.pendingDispatch).toBeUndefined();
+      expect(beginEnvironmentMove("env-1")).toBe(true);
+      try {
+        await expect(service.assertEnvironmentIdleForMove("env-1")).rejects.toThrow(
+          "agent is running",
+        );
+      } finally {
+        endEnvironmentMove("env-1");
+      }
+      expect(stub.activity).toHaveBeenCalledWith("provider-session");
+      expect(stub.dispose).not.toHaveBeenCalled();
+      expect(stub.abort).not.toHaveBeenCalled();
+    },
+  );
+});

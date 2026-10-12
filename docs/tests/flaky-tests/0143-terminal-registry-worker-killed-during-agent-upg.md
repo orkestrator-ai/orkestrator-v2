@@ -44,3 +44,12 @@
   hypothesis: the owner passes alone, while the aggregate run killed its
   fixture and then timed out at the outer test deadline. It does not identify
   which process terminated the fixture.
+
+## Move-fix validation recurrence — 2026-10-12
+
+- **Original command:** `mise run test:logged -- --name move-full-suite -- mise run test` with the testing guide GNU-tool PATH; standard 2/3/2/1 group slots. The isolated browser suite ran concurrently.
+- **Failure:** `includes untracked container files only when working-tree changes are requested` timed out after 5002.43 ms; the worker did not crash in this recurrence.
+- **Suite counts:** Root/support group: 4,997 passed, 24 skipped, 18 failed and 6 errors across 253 files; backend: 5,860 passed, 15 skipped, 2 failed. The compatibility writer regression and move fixture index contention were corrected separately.
+- **Isolated rerun:** `mise run test:logged -- --name move-terminal-isolated -- bun test ./tests/unit/electron/commands-registry-terminal.test.ts --parallel=1 --only-failures` passed, exit 0, in 39.5 seconds.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.DTErJR/` (compressed group logs).
+- **Hypothesis:** subprocess deadlines under concurrent host load remain plausible; the isolated pass does not establish a root cause. No timeout, assertion or skip was changed.

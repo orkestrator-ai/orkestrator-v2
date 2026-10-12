@@ -41,9 +41,9 @@ function joinPath(folder: string, name: string): string {
 
 /** Why the environment cannot be moved right now, or null when it can. */
 export function environmentMoveBlockedReason(environment: Environment): string | null {
-  if (environment.worktreeMove?.phase === "committed")
-    return "Move completion is pending; recovery will retry on restart.";
   if (environment.lifecycleOperation === "moving") return "This environment is being moved.";
+  if (environment.worktreeMove)
+    return "Move recovery is pending. Restart Orkestrator to retry recovery.";
   if (environment.lifecycleOperation === "deleting" || environment.deletionRequestedAt) {
     return "This environment is being deleted.";
   }

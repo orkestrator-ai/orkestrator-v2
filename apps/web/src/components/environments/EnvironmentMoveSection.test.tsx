@@ -169,3 +169,19 @@ test("a partial backend move updates the usable path and shows a warning", async
     description: moved.lifecycleError,
   });
 });
+
+for (const phase of ["moving", "copied"] as const) {
+  test(`retained ${phase} journal disables moving and explains restart recovery`, () => {
+    const pending = environment({
+      worktreeMove: {
+        from: "/trees/app-feature",
+        to: "/disk/app-feature",
+        phase,
+        startedAt: "now",
+      },
+    });
+    render(<EnvironmentMoveSection environment={pending} onUpdate={() => undefined} />);
+    expect(screen.getByRole("button", { name: "Move…" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("status").textContent).toContain("Restart Orkestrator");
+  });
+}

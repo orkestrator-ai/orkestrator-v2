@@ -14,3 +14,12 @@
 - **Hypothesis:** the fixture credential probe returned no token near its two-second deadline under aggregate load. Its owning file passed in isolation; the exact stalled operation remains unknown.
 
 No assertion, timeout or skip was changed.
+
+## Move-fix validation recurrence — 2026-10-12
+
+- **Original command:** `mise run test:logged -- --name move-full-suite -- mise run test` with the testing guide GNU-tool PATH; standard 2/3/2/1 group slots. The isolated browser suite ran concurrently.
+- **Failure:** The same fake-token/undefined assertion recurred at 2023.37 ms.
+- **Suite counts:** Root/support group: 4,997 passed, 24 skipped, 18 failed and 6 errors across 253 files; backend: 5,860 passed, 15 skipped, 2 failed. The compatibility writer regression and move fixture index contention were corrected separately.
+- **Isolated rerun:** `mise run test:logged -- --name move-gh-reader-isolated -- bun test ./bridges/claude-bridge/src/services/runtime-env.test.ts --parallel=1 --only-failures` passed, exit 0, in 3.6 seconds.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.DTErJR/` (compressed group logs).
+- **Hypothesis:** subprocess deadlines under concurrent host load remain plausible; the isolated pass does not establish a root cause. No timeout, assertion or skip was changed.

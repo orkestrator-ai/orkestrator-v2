@@ -592,7 +592,7 @@ process.stdin.on("end", () => {
 
 const PINNED_CWD_REMOVE_DIRECTORY_HELPER = String.raw`
 const fs = require("node:fs");
-const [relativePath, expectedDev, expectedIno] = process.argv.slice(1);
+const [relativePath, expectedDev, expectedIno, childDev, childIno] = process.argv.slice(1);
 const root = fs.statSync(".");
 if (String(root.dev) !== expectedDev || String(root.ino) !== expectedIno) process.exit(73);
 const segments = relativePath.split("/"), target = segments.pop();
@@ -605,6 +605,7 @@ for (const segment of segments) {
 }
 let final; try { final = fs.lstatSync(target); } catch { process.exit(0); }
 if (final.isSymbolicLink() || !final.isDirectory()) process.exit(0);
+if (childDev && (String(final.dev) !== childDev || String(final.ino) !== childIno)) process.exit(73);
 fs.rmSync(target, { recursive: true, force: true });
 `;
 
@@ -679,6 +680,7 @@ async function writeFromPinnedRoot(
 export async function removeConfinedDirectory(
   rootPath: string,
   relativePath: string,
+  expectedIdentity?: { dev: number; ino: number },
 ): Promise<void> {
   const target = validateRelativeFilePath(relativePath, "directory path");
   const canonicalRoot = await fs.realpath(rootPath);
@@ -693,6 +695,8 @@ export async function removeConfinedDirectory(
         target,
         String(rootStats.dev),
         String(rootStats.ino),
+        expectedIdentity ? String(expectedIdentity.dev) : "",
+        expectedIdentity ? String(expectedIdentity.ino) : "",
       ],
       { cwd: canonicalRoot, stdio: ["ignore", "ignore", "ignore"] },
     );

@@ -64,6 +64,8 @@ export interface WorktreeMoveRecord {
   fromCanonical?: string;
   fromRoot?: string;
   removeSource?: boolean;
+  sourceIdentity?: { dev: number; ino: number };
+  sourceCleaned?: boolean;
   /**
    * Submodules whose git dir lives outside the worktree (under the
    * repository's `.git/worktrees/<name>/modules`). A copy re-links each one.

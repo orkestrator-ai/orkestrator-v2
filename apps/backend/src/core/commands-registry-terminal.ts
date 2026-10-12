@@ -1,7 +1,12 @@
+import { canonicalWorktreePath } from "@orkestrator/protocol/worktree-paths";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
-import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
+import {
+  assertEnvironmentNotMoving,
+  beginEnvironmentMutation,
+  beginWorktreeMutation,
+} from "./environment-replacement-fence.js";
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
@@ -146,14 +151,21 @@ async function withLocalFileMutation<T>(
   environmentId: string,
   action: (environment: Environment) => Promise<T>,
 ): Promise<T> {
-  const stored = await context.storage.getEnvironment(environmentId);
-  const release = stored?.projectHome
-    ? context.projectGit?.beginCoordinatorTurn(stored.projectId)
-    : undefined;
+  const releaseMutation = beginEnvironmentMutation(environmentId);
+  let release: (() => void) | undefined;
   try {
+    const stored = await context.storage.getEnvironment(environmentId);
+    if (stored?.worktreeMove)
+      throw new Error(
+        "Move recovery is pending. Restart Orkestrator before editing this environment.",
+      );
+    release = stored?.projectHome
+      ? context.projectGit?.beginCoordinatorTurn(stored.projectId)
+      : undefined;
     return await action(await requireLocalMutationEnvironment(context.storage, environmentId));
   } finally {
     release?.();
+    releaseMutation();
   }
 }
 
@@ -900,13 +912,29 @@ export function registerTerminalCommands(
       environment.worktreePath!,
     ]);
   });
-  register("write_local_file", ({ worktreePath, filePath, base64Data }) =>
-    writeFileBase64(
-      asString(worktreePath, "worktreePath"),
-      asString(filePath, "filePath"),
-      asString(base64Data, "base64Data"),
-    ),
-  );
+  register("write_local_file", async ({ worktreePath, filePath, base64Data }, context) => {
+    const root = asString(worktreePath, "worktreePath");
+    const release = beginWorktreeMutation(root);
+    try {
+      const canonical = canonicalWorktreePath(root);
+      const environments = (await context.storage.loadEnvironments?.()) ?? [];
+      const environment = environments.find(
+        (candidate) =>
+          candidate.worktreePath && canonicalWorktreePath(candidate.worktreePath) === canonical,
+      );
+      const write = () =>
+        writeFileBase64(root, asString(filePath, "filePath"), asString(base64Data, "base64Data"));
+      // Coordinator worktrees and compatibility callers use the raw-path API.
+      if (!environment) return await write();
+      return await withLocalFileMutation(context, environment.id, async (current) => {
+        if (canonicalWorktreePath(current.worktreePath!) !== canonical)
+          throw new Error("The worktree moved; refresh before saving");
+        return write();
+      });
+    } finally {
+      release();
+    }
+  });
   register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const id = asString(environmentId, "environmentId");
     return withLocalFileMutation(context, id, async (environment) => {

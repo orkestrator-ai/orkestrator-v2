@@ -1,3 +1,4 @@
+import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -941,6 +942,7 @@ export async function startLocalServerUnlocked(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
+  assertEnvironmentNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
   const cursorCredentials =
     kind === "cursor" ? await resolveCursorHostCredentialMaterial(context) : undefined;

@@ -228,6 +228,9 @@ import {
   buildMessageParts,
   memoryRecallPart,
   parseMessageContent,
+  persistedTaskPath,
+  persistedTaskText,
+  persistedTaskUsage,
   provisionalBackgroundTaskId,
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
@@ -1949,6 +1952,10 @@ export async function sendPrompt(
           summary?: string;
           /** Only on `task_notification`; the terminal edge of a task. */
           status?: "completed" | "failed" | "stopped";
+          /** Only on `task_notification`; where the CLI wrote the full output. */
+          output_file?: unknown;
+          /** On `task_progress` and `task_notification`. */
+          usage?: unknown;
           /** Only on `background_tasks_changed`; the full live set. */
           tasks?: Array<{
             task_id?: string;
@@ -2027,6 +2034,9 @@ export async function sendPrompt(
                 startedAt: Date.now(),
                 endedAt: undefined,
                 error: undefined,
+                summary: undefined,
+                outputFile: undefined,
+                usage: undefined,
               }
             : stored;
           const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
@@ -2049,6 +2059,9 @@ export async function sendPrompt(
             startedAt: previous?.startedAt ?? Date.now(),
             endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
             error: taskMessage.patch?.error ?? previous?.error,
+            summary: previous?.summary,
+            outputFile: previous?.outputFile,
+            usage: persistedTaskUsage(taskMessage.usage) ?? previous?.usage,
           };
           inheritBackgroundTaskHookRun(previous, task);
           session.backgroundTasks = boundBackgroundTaskHistory({
@@ -2105,6 +2118,9 @@ export async function sendPrompt(
               terminalStatus === "failed"
                 ? (taskMessage.summary ?? previous?.error)
                 : previous?.error,
+            summary: persistedTaskText(taskMessage.summary) ?? previous?.summary,
+            outputFile: persistedTaskPath(taskMessage.output_file) ?? previous?.outputFile,
+            usage: persistedTaskUsage(taskMessage.usage) ?? previous?.usage,
           };
           session.backgroundTasks = boundBackgroundTaskHistory({
             ...session.backgroundTasks,
@@ -2182,6 +2198,7 @@ export async function sendPrompt(
                 : "running",
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
+              ...(previous?.usage ? { usage: previous.usage } : {}),
             };
             inheritBackgroundTaskHookRun(previous, replacement[id]!);
             // An id already owned by another live control keeps that owner:

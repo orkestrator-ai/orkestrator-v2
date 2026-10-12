@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
@@ -23,6 +23,7 @@ import { createPeerMailNativeMessage } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { buildDesignAgentPrompt } from "@/components/design/design-launch";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { invoke } from "@/lib/native/backend";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -3547,6 +3548,93 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("2m 5s")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Stop Run validation" }) === null).toBe(true);
+  });
+
+  test("explains a task with no launch row from its own record", async () => {
+    /*
+     * A card synthesised from the snapshot has no command or launch output, so
+     * it used to have nothing to expand: the reader could see a task failed
+     * but never why. The record's own report is what it can show.
+     */
+    const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+    invokeMock.mockClear();
+    const outputFile = "/tmp/claude/tasks/task-1.output";
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <BackgroundTaskCard
+          task={{
+            id: "task-1",
+            description: "Run VoiceOver check",
+            status: "failed",
+            error: "Command failed with exit code 1",
+            summary: 'Background command "Run VoiceOver check" failed with exit code 1',
+            outputFile,
+            usage: { totalTokens: 0, toolUses: 0, durationMs: 35_000 },
+          }}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      );
+    }
+    render(<Harness />);
+
+    // The collapsed row leads with the failure.
+    expect(screen.getByText("Command failed with exit code 1")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Task Run VoiceOver check/ }));
+
+    expect(screen.getByText("Error")).toBeTruthy();
+    expect(
+      screen.getByText('Background command "Run VoiceOver check" failed with exit code 1'),
+    ).toBeTruthy();
+    expect(screen.getByText(outputFile)).toBeTruthy();
+    // A shell task reports zero counts, which would only be noise.
+    expect(screen.queryByText("Tool uses")).toBeNull();
+    expect(screen.queryByText("Tokens")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal output file" }));
+    expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", { path: outputFile });
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy output file path" }));
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(outputFile));
+  });
+
+  test("shows a summary that only repeats the failure once", () => {
+    render(
+      <BackgroundTaskCard
+        task={{
+          id: "task-1",
+          description: "Build",
+          status: "failed",
+          error: "exit code 2",
+          summary: "exit code 2",
+          usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 },
+        }}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+
+    // Once in the collapsed row, once in the body — never a second "Summary".
+    expect(screen.getAllByText("exit code 2")).toHaveLength(2);
+    expect(screen.queryByText("Summary")).toBeNull();
+    expect(screen.getByText("Tool uses")).toBeTruthy();
+    expect(screen.getByText("7")).toBeTruthy();
+  });
+
+  test("leaves a task with nothing to add unexpandable", () => {
+    render(
+      <BackgroundTaskCard
+        task={{ id: "task-1", description: "Build", status: "completed", summary: "Build" }}
+        open={false}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    expect((screen.getByRole("button", { name: /Task Build/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   test("shows the same live timer below the stop control on background Agent cards", () => {

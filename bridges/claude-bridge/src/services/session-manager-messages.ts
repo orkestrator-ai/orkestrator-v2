@@ -9,6 +9,7 @@ import type {
   ToolDiffMetadata,
   TaskListSnapshot,
   BackgroundTaskSnapshot,
+  BackgroundTaskUsage,
 } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
@@ -933,6 +934,10 @@ export interface BackgroundTaskSystemMessage {
   description?: string;
   summary?: string;
   status?: "completed" | "failed" | "stopped";
+  /** Only on `task_notification`. */
+  output_file?: string;
+  /** On `task_progress` and `task_notification`; already validated. */
+  usage?: BackgroundTaskUsage;
   patch?: {
     status?: BackgroundTaskSnapshot["status"];
     description?: string;
@@ -944,7 +949,41 @@ export interface BackgroundTaskSystemMessage {
 
 export const MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH = 512;
 export const MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH = 4_096;
+export const MAX_PERSISTED_BACKGROUND_TASK_PATH_LENGTH = 4_096;
 export const MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * A task's output path, exactly as the CLI reported it.
+ *
+ * Unlike {@link persistedTaskText} nothing is stripped: a path with a control
+ * character removed names a different file, so such a path is dropped whole.
+ */
+export function persistedTaskPath(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_PERSISTED_BACKGROUND_TASK_PATH_LENGTH ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+/** SDK task usage (`total_tokens`, `tool_uses`, `duration_ms`), or nothing. */
+export function persistedTaskUsage(value: unknown): BackgroundTaskUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const count = (field: unknown): number | undefined =>
+    typeof field === "number" && Number.isFinite(field) && field >= 0 ? field : undefined;
+  const totalTokens = count(usage.total_tokens);
+  const toolUses = count(usage.tool_uses);
+  const durationMs = count(usage.duration_ms);
+  if (totalTokens === undefined || toolUses === undefined || durationMs === undefined) {
+    return undefined;
+  }
+  return { totalTokens, toolUses, durationMs };
+}
 
 export function persistedTaskIdentifier(value: unknown): string | undefined {
   if (
@@ -1388,6 +1427,8 @@ export function persistedBackgroundTaskMessage(raw: {
       description: persistedTaskText(message.description),
       summary: persistedTaskText(message.summary),
       status: notificationStatus,
+      output_file: persistedTaskPath(message.output_file),
+      usage: persistedTaskUsage(message.usage),
       ...(hasPatch
         ? {
             patch: {
@@ -1457,6 +1498,9 @@ export function reducePersistedBackgroundTaskMessage(
         startedAt,
         endedAt,
         error: terminalStatus === "failed" ? (message.summary ?? previous?.error) : previous?.error,
+        summary: message.summary ?? previous?.summary,
+        outputFile: message.output_file ?? previous?.outputFile,
+        usage: message.usage ?? previous?.usage,
       },
     });
   }
@@ -1484,6 +1528,9 @@ export function reducePersistedBackgroundTaskMessage(
       startedAt,
       endedAt: patchedEndTime ?? previous?.endedAt,
       error: message.patch?.error ?? previous?.error,
+      summary: previous?.summary,
+      outputFile: previous?.outputFile,
+      usage: message.usage ?? previous?.usage,
     },
   });
 }

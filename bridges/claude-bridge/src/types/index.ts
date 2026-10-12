@@ -869,6 +869,18 @@ export interface BackgroundTaskSnapshot {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  /** The one-line report the SDK's terminal `task_notification` carried. */
+  summary?: string;
+  /** Where the CLI wrote the task's full output, from `task_notification`. */
+  outputFile?: string;
+  /** Latest usage the SDK reported for the task (progress or terminal edge). */
+  usage?: BackgroundTaskUsage;
+}
+
+export interface BackgroundTaskUsage {
+  totalTokens: number;
+  toolUses: number;
+  durationMs: number;
 }
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */

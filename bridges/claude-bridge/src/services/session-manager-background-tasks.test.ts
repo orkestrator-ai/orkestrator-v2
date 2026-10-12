@@ -3845,6 +3845,69 @@ describe("background task reducer", () => {
     });
   });
 
+  test("keeps the report, output file and usage a task's edges carried", async () => {
+    // These are what a card shows for a task whose launch row is not loaded:
+    // without them the snapshot can say a task failed but never why.
+    const { session } = await runPromptWithMessages([
+      { type: "system", subtype: "task_started", task_id: "task-1", description: "Run tests" },
+      {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-1",
+        description: "Run tests",
+        usage: { total_tokens: 900, tool_uses: 2, duration_ms: 4_000 },
+      },
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        summary: 'Background command "Run tests" completed (exit code 0)',
+        output_file: "/tmp/claude/tasks/task-1.output",
+        usage: { total_tokens: 1_500, tool_uses: 4, duration_ms: 9_000 },
+      },
+    ]);
+
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({
+      status: "completed",
+      description: "Run tests",
+      summary: 'Background command "Run tests" completed (exit code 0)',
+      outputFile: "/tmp/claude/tasks/task-1.output",
+      usage: { totalTokens: 1_500, toolUses: 4, durationMs: 9_000 },
+    });
+    expect(session.backgroundTasks?.["task-1"]?.error).toBeUndefined();
+  });
+
+  test("drops an output path it cannot pass on intact and usage it cannot read", async () => {
+    // Stripping a control character from a path names a different file, so
+    // the path is withheld whole rather than repaired.
+    const { session } = await runPromptWithMessages([
+      {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-1",
+        description: "Build",
+        usage: { total_tokens: 10, tool_uses: 1, duration_ms: 100 },
+      },
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        summary: "done",
+        output_file: "/tmp/out\nput",
+        usage: { total_tokens: -1, tool_uses: 1, duration_ms: 100 },
+      },
+    ]);
+
+    expect(session.backgroundTasks?.["task-1"]?.outputFile).toBeUndefined();
+    expect(session.backgroundTasks?.["task-1"]?.usage).toEqual({
+      totalTokens: 10,
+      toolUses: 1,
+      durationMs: 100,
+    });
+  });
+
   for (const { status, expected } of terminalCases) {
     for (const edgeFirst of [false, true]) {
       test(`${status} remains ${expected} when the level ${

@@ -3,6 +3,7 @@ import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
   NativeAgentState,
+  NativeBackgroundTask,
   NativeBackgroundTaskStatus,
   NativeFilePart,
   NativeMessage,
@@ -883,7 +884,13 @@ function sameBackgroundTask(
     left?.description === right?.description &&
     left?.status === right?.status &&
     left?.startedAt === right?.startedAt &&
-    left?.settledAt === right?.settledAt
+    left?.settledAt === right?.settledAt &&
+    left?.error === right?.error &&
+    left?.summary === right?.summary &&
+    left?.outputFile === right?.outputFile &&
+    left?.usage?.totalTokens === right?.usage?.totalTokens &&
+    left?.usage?.toolUses === right?.usage?.toolUses &&
+    left?.usage?.durationMs === right?.usage?.durationMs
   );
 }
 
@@ -902,6 +909,22 @@ function settledAtField(settledAt: string | undefined): { settledAt?: string } {
 
 function startedAtField(startedAt: string | undefined): { startedAt?: string } {
   return startedAt ? { startedAt } : {};
+}
+
+type BackgroundTaskDetails = Pick<
+  NativeBackgroundTask,
+  "error" | "summary" | "outputFile" | "usage"
+>;
+
+/** What the task's record says beyond its lifecycle, carrying only fields it has. */
+function backgroundTaskDetails(task: BackgroundTaskDetails | undefined): BackgroundTaskDetails {
+  if (!task) return {};
+  return {
+    ...(task.error ? { error: task.error } : {}),
+    ...(task.summary ? { summary: task.summary } : {}),
+    ...(task.outputFile ? { outputFile: task.outputFile } : {}),
+    ...(task.usage ? { usage: task.usage } : {}),
+  };
 }
 
 function backgroundTaskStartedAt(
@@ -968,6 +991,10 @@ export interface ClaudeBackgroundTaskState {
   endedAt?: number;
   /** Terminal edge as the projection carries it; see `settledAt` there. */
   settledAt?: string;
+  error?: string;
+  summary?: string;
+  outputFile?: string;
+  usage?: NativeBackgroundTask["usage"];
 }
 
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
@@ -988,7 +1015,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
    */
   const launchesByTaskId = new Map<
     string,
-    {
+    BackgroundTaskDetails & {
       id: string;
       description?: string;
       status?: ClaudeBackgroundTask["status"];
@@ -1015,6 +1042,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
         status: authoritative?.status,
         startedAt: backgroundTaskStartedAt(authoritative) ?? part.createdAt,
         settledAt: backgroundTaskSettledAt(authoritative),
+        ...backgroundTaskDetails(authoritative),
       });
     }
   }
@@ -1053,6 +1081,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
           status: authoritativeLaunch.status,
           ...startedAtField(backgroundTaskStartedAt(authoritativeLaunch) ?? part.createdAt),
           ...settledAtField(backgroundTaskSettledAt(authoritativeLaunch)),
+          ...backgroundTaskDetails(authoritativeLaunch),
         };
       } else if (isAgentTool && agentState === undefined) {
         /*
@@ -1082,6 +1111,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             status: launch.status,
             ...startedAtField(backgroundTaskStartedAt(launch) ?? part.createdAt),
             ...settledAtField(backgroundTaskSettledAt(launch)),
+            ...backgroundTaskDetails(launch),
           };
           /*
            * The launch row's own result says the command was *accepted*, so it
@@ -1109,6 +1139,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             status: task.status,
             ...startedAtField(backgroundTaskStartedAt(task)),
             ...settledAtField(backgroundTaskSettledAt(task)),
+            ...backgroundTaskDetails(task),
           };
         }
       }
@@ -1186,6 +1217,10 @@ export interface BackgroundTaskSnapshot {
   startedAt?: string;
   /** Backend-recorded terminal edge; see `NativeBackgroundTask.settledAt`. */
   settledAt?: string;
+  error?: string;
+  summary?: string;
+  outputFile?: string;
+  usage?: NativeBackgroundTask["usage"];
 }
 
 function backgroundTaskAgentStateFromStatus(status: NativeBackgroundTaskStatus): NativeAgentState {
@@ -1243,6 +1278,7 @@ function createBackgroundTaskMessage(
             ...(task.description ? { description: task.description } : {}),
             ...(task.startedAt ? { startedAt: task.startedAt } : {}),
             ...(task.settledAt ? { settledAt: task.settledAt } : {}),
+            ...backgroundTaskDetails(task),
           },
         },
         childTools: [],

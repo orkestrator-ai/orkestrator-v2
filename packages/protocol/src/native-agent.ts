@@ -1263,6 +1263,25 @@ export interface NativeAgentBackgroundTaskSummary {
    * live, and for one whose terminal edge predates this field.
    */
   settledAt?: string;
+  /** Why a failed or killed task ended, as the provider or bridge reported it. */
+  error?: string;
+  /** The provider's one-line report from the task's terminal edge. */
+  summary?: string;
+  /**
+   * Where the provider wrote the task's full output, on the backend host.
+   *
+   * A path, not content: the file lives outside the workspace, so the renderer
+   * can point at it but not read it through the workspace file tools.
+   */
+  outputFile?: string;
+  /** Latest usage the provider reported for the task. */
+  usage?: NativeAgentBackgroundTaskUsage;
+}
+
+export interface NativeAgentBackgroundTaskUsage {
+  totalTokens: number;
+  toolUses: number;
+  durationMs: number;
 }
 
 export const BACKGROUND_TASK_ID_MAX_LENGTH = 512;

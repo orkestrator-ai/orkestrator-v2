@@ -1,10 +1,14 @@
 import { Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { ChevronRight, Layers, Loader2, Square } from "lucide-react";
+import { Check, ChevronRight, Copy, FolderOpen, Layers, Loader2, Square } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { revealInFileManager } from "@/lib/backend";
+import { formatTokenCount } from "@/lib/context-usage";
+import { writeText } from "@/lib/native/clipboard";
 import { parseBackendTurnStartedAt } from "@/lib/session-timer";
 import { formatAgentDurationMs, formatNativeAgentElapsed } from "@/lib/chat/native-agent-duration";
 import { getToolDisplayName, getToolTitleDisplayName } from "@/lib/tool-names";
@@ -425,6 +429,106 @@ function backgroundTaskLabel(task: NativeBackgroundTask): string {
   return task.description?.trim() || `Background task ${task.id}`;
 }
 
+interface BackgroundTaskOutcomeLine {
+  label: "Error" | "Summary";
+  text: string;
+}
+
+/**
+ * How the task ended, in the provider's words.
+ *
+ * A failed task's error is usually its terminal summary verbatim, and a
+ * summary that only repeats the header says nothing, so each line is shown at
+ * most once.
+ */
+function backgroundTaskOutcome(task: NativeBackgroundTask): BackgroundTaskOutcomeLine[] {
+  const lines: BackgroundTaskOutcomeLine[] = [];
+  const error = task.error?.trim();
+  const summary = task.summary?.trim();
+  if (error) lines.push({ label: "Error", text: error });
+  if (summary && summary !== error && summary !== task.description?.trim()) {
+    lines.push({ label: "Summary", text: summary });
+  }
+  return lines;
+}
+
+/** Usage worth a row: a shell task reports zeros, which would only be noise. */
+function backgroundTaskUsageEntries(
+  task: NativeBackgroundTask,
+): Array<{ label: string; value: string }> {
+  const usage = task.usage;
+  if (!usage) return [];
+  return [
+    ...(usage.toolUses > 0 ? [{ label: "Tool uses", value: String(usage.toolUses) }] : []),
+    ...(usage.totalTokens > 0
+      ? [{ label: "Tokens", value: formatTokenCount(usage.totalTokens) }]
+      : []),
+  ];
+}
+
+function BackgroundTaskOutputFile({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timeoutId = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timeoutId);
+  }, [copied]);
+
+  const reveal = useCallback(() => {
+    void revealInFileManager(path).catch((error) => {
+      toast.error("Could not reveal the output file", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [path]);
+  const copy = useCallback(async () => {
+    try {
+      await writeText(path);
+      setCopied(true);
+    } catch {
+      toast.error("Could not copy the output file path");
+    }
+  }, [path]);
+
+  return (
+    <div className="mb-3 border-l border-border/30 pl-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        Output file
+      </div>
+      <div className="flex min-w-0 items-center gap-1">
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground/90"
+          title={path}
+        >
+          {path}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="h-6 w-6 shrink-0 p-0 text-muted-foreground/70 hover:text-foreground"
+          onClick={reveal}
+          aria-label="Reveal output file"
+          title="Reveal in file manager"
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="h-6 w-6 shrink-0 p-0 text-muted-foreground/70 hover:text-foreground"
+          onClick={() => void copy()}
+          aria-label={copied ? "Copied output file path" : "Copy output file path"}
+          title={copied ? "Copied" : "Copy path"}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function StopBackgroundTaskButton({
   task,
   onStop,
@@ -540,10 +644,22 @@ export function BackgroundTaskCard({
     task.id,
   );
   const description = task.description?.trim();
+  const outcome = backgroundTaskOutcome(task);
+  const usageEntries = backgroundTaskUsageEntries(task);
   // The header already carries the description, so the collapsed second line is
-  // for what it does not say: the command actually running.
+  // for what it does not say: the command actually running, or — when no launch
+  // row supplied one — how the task ended.
   const preview = command && command !== description ? command : undefined;
-  const hasBody = Boolean(command || result || resultPending);
+  const outcomePreview = preview ? undefined : outcome[0];
+  const hasPreview = Boolean(preview || outcomePreview);
+  const hasBody = Boolean(
+    command ||
+    result ||
+    resultPending ||
+    outcome.length > 0 ||
+    task.outputFile ||
+    usageEntries.length > 0,
+  );
 
   // The failure belongs to the attempt, not the task: a later status change
   // means the question the message answered is no longer being asked.
@@ -561,7 +677,7 @@ export function BackgroundTaskCard({
         <CollapsibleTrigger
           className={cn(
             "flex min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-            preview ? "items-start" : "items-center",
+            hasPreview ? "items-start" : "items-center",
             hasBody ? "cursor-pointer hover:bg-white/[0.025]" : "cursor-default",
           )}
           disabled={!hasBody}
@@ -588,12 +704,23 @@ export function BackgroundTaskCard({
               <div className="mt-1 truncate font-mono text-xs text-muted-foreground/80">
                 {preview}
               </div>
+            ) : outcomePreview ? (
+              <div
+                className={cn(
+                  "mt-1 truncate text-xs",
+                  outcomePreview.label === "Error"
+                    ? "text-destructive/90"
+                    : "text-muted-foreground/80",
+                )}
+              >
+                {outcomePreview.text}
+              </div>
             ) : null}
           </div>
           <ChevronRight
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-              preview && "mt-1",
+              hasPreview && "mt-1",
               open && hasBody && "rotate-90",
               !hasBody && "opacity-0",
             )}
@@ -632,7 +759,23 @@ export function BackgroundTaskCard({
               </pre>
             </div>
           ) : null}
-          <AgentMetaRows entries={[{ label: "Task ID", value: task.id }]} />
+          {outcome.map((line) => (
+            <div key={line.label} className="mb-3 border-l border-border/30 pl-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                {line.label}
+              </div>
+              <pre
+                className={cn(
+                  "max-h-40 overflow-auto whitespace-pre-wrap break-words font-sans text-xs",
+                  line.label === "Error" ? "text-destructive/90" : "text-muted-foreground/90",
+                )}
+              >
+                {line.text}
+              </pre>
+            </div>
+          ))}
+          <AgentMetaRows entries={[{ label: "Task ID", value: task.id }, ...usageEntries]} />
+          {task.outputFile ? <BackgroundTaskOutputFile path={task.outputFile} /> : null}
           <AgentResultBlock result={result} />
         </div>
       </CollapsibleContent>

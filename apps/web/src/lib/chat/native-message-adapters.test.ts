@@ -106,6 +106,31 @@ describe("Claude activity in the shared native transcript", () => {
     ],
   });
 
+  test("re-decorates a launch row when its task's report arrives", () => {
+    // The terminal report lands after the status flips, so a row already
+    // decorated as completed must still pick it up rather than be kept as-is.
+    const completed = {
+      id: "bg-dev",
+      toolUseId: "bash-1",
+      description: "Run the dev server",
+      status: "completed" as const,
+    };
+    const [first] = applyClaudeBackgroundTaskStates([backgroundLaunch()], { "bg-dev": completed });
+    const [second] = applyClaudeBackgroundTaskStates([first!], {
+      "bg-dev": {
+        ...completed,
+        summary: 'Background command "Run the dev server" completed (exit code 0)',
+        outputFile: "/tmp/claude/tasks/bg-dev.output",
+      },
+    });
+
+    expect(second).not.toBe(first);
+    expect(second?.parts[0]?.backgroundTask).toMatchObject({
+      summary: 'Background command "Run the dev server" completed (exit code 0)',
+      outputFile: "/tmp/claude/tasks/bg-dev.output",
+    });
+  });
+
   test("promotes a running background task into a stoppable task card", () => {
     const [decorated] = applyClaudeBackgroundTaskStates([backgroundLaunch()], {
       "bg-dev": {
@@ -322,6 +347,24 @@ describe("Claude activity in the shared native transcript", () => {
         "2026-08-16T10:05:00.000Z",
       );
       expect(rows[0]?.createdAt).toBe("2026-08-16T10:05:00.000Z");
+    });
+
+    test("carries the task's report onto a row the transcript cannot show", () => {
+      // The synthesised card has no command or launch output of its own, so
+      // the record's report is the only thing it can expand to.
+      const details = {
+        error: "exit code 1",
+        summary: 'Background command "Watch the server" failed with exit code 1',
+        outputFile: "/tmp/claude/tasks/orphan-task.output",
+        usage: { totalTokens: 0, toolUses: 0, durationMs: 2_000 },
+      };
+      const rows = rowlessBackgroundTaskMessages(
+        [{ ...watchTask, status: "failed", settledAt: "2026-08-16T10:05:00.000Z", ...details }],
+        transcript,
+      );
+
+      const part = rows[0]?.parts[0];
+      expect(part?.type === "task-group" && part.task.backgroundTask).toMatchObject(details);
     });
 
     test("ignores a task that settled before the loaded transcript begins", () => {

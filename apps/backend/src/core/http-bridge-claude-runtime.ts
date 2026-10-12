@@ -1,6 +1,7 @@
 import {
   normalizeNativeAgentTurnActivity,
   type NativeAgentBackgroundTaskSummary,
+  type NativeAgentBackgroundTaskUsage,
   type NativeAgentTurnActivity,
 } from "@orkestrator/protocol/native-agent";
 import { asRecord } from "./agent-provider-runtime.js";
@@ -42,6 +43,40 @@ function settledAtFromEndedAt(endedAt: unknown, status: unknown): { settledAt?: 
   return settledAt ? { settledAt } : {};
 }
 
+const BACKGROUND_TASK_TEXT_MAX_LENGTH = 4_096;
+const BACKGROUND_TASK_PATH_MAX_LENGTH = 4_096;
+
+function textField<K extends "error" | "summary">(
+  key: K,
+  value: unknown,
+): Partial<Record<K, string>> {
+  if (typeof value !== "string") return {};
+  const text = value.trim().slice(0, BACKGROUND_TASK_TEXT_MAX_LENGTH);
+  return text ? ({ [key]: text } as Partial<Record<K, string>>) : {};
+}
+
+/** A path is passed whole or not at all: a truncated path names another file. */
+function outputFileField(value: unknown): { outputFile?: string } {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= BACKGROUND_TASK_PATH_MAX_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+    ? { outputFile: value }
+    : {};
+}
+
+function usageField(value: unknown): { usage?: NativeAgentBackgroundTaskUsage } {
+  const usage = asRecord(value);
+  if (!usage) return {};
+  const count = (field: unknown): number | undefined =>
+    typeof field === "number" && Number.isFinite(field) && field >= 0 ? field : undefined;
+  const totalTokens = count(usage.totalTokens);
+  const toolUses = count(usage.toolUses);
+  const durationMs = count(usage.durationMs);
+  if (totalTokens === undefined || toolUses === undefined || durationMs === undefined) return {};
+  return { usage: { totalTokens, toolUses, durationMs } };
+}
+
 export function normalizeClaudeBackgroundTasks(
   value: unknown,
 ): NativeAgentBackgroundTaskSummary[] | undefined {
@@ -65,6 +100,10 @@ export function normalizeClaudeBackgroundTasks(
             : {}),
           ...startedAtField(task.startedAt),
           ...settledAtFromEndedAt(task.endedAt, task.status),
+          ...textField("error", task.error),
+          ...textField("summary", task.summary),
+          ...outputFileField(task.outputFile),
+          ...usageField(task.usage),
         },
       ];
     });

@@ -105,7 +105,11 @@ export function assertEnvironmentMovable(environment: Environment): void {
   if (!environment.worktreePath) {
     throw new Error("This environment has no worktree yet; start it before moving it");
   }
-  if (environment.lifecycleOperation || mergingEnvironments.has(environment.id)) {
+  if (
+    environment.worktreeMove ||
+    environment.lifecycleOperation ||
+    mergingEnvironments.has(environment.id)
+  ) {
     throw new Error("Another operation is running for this environment");
   }
   if (isEnvironmentBeingReplaced(environment.id)) {
@@ -135,8 +139,12 @@ export function moveEnvironmentTask(
   if (isLocalServerShutdownRequested()) {
     return Promise.reject(new Error("Backend is shutting down; environments cannot be moved"));
   }
-  if (!beginEnvironmentMove(environmentId)) {
-    return Promise.reject(new Error("This environment is already being moved"));
+  try {
+    if (!beginEnvironmentMove(environmentId)) {
+      return Promise.reject(new Error("This environment is already being moved"));
+    }
+  } catch (error) {
+    return Promise.reject(error);
   }
   invalidateEnvironmentStartDedupe(environmentId);
   try {
@@ -161,6 +169,12 @@ async function moveEnvironmentOnce(
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   assertEnvironmentMovable(environment);
+  const sessions = await storage.listNativeAgentSessions();
+  if (
+    sessions.some((session) => session.environmentId === environmentId && session.pendingDispatch)
+  ) {
+    throw new Error("An agent submission is unresolved; settle it before moving this environment");
+  }
   const project = await storage.getProject(environment.projectId);
   const projectPath = project?.localPath?.trim();
   if (!projectPath || !(await pathExists(projectPath))) {
@@ -193,7 +207,14 @@ async function moveEnvironmentOnce(
     : getWorktreeBaseDir(context);
 
   const startedAt = new Date().toISOString();
-  let record: WorktreeMoveRecord = { from, to, phase: "moving", startedAt };
+  let record: WorktreeMoveRecord = {
+    from,
+    to,
+    fromCanonical: fromResolved,
+    fromRoot,
+    phase: "moving",
+    startedAt,
+  };
   await storage.updateEnvironment(environment.id, {
     lifecycleOperation: "moving",
     lifecycleOperationStartedAt: startedAt,
@@ -201,6 +222,8 @@ async function moveEnvironmentOnce(
   });
 
   let moved = false;
+  let committed = false;
+  let commitAttempted = false;
   try {
     await quiesceLocalEnvironment(environment, context, options);
     // The prompt fence has been held since the move was admitted, so a turn
@@ -248,42 +271,50 @@ async function moveEnvironmentOnce(
         await repairWorktree(projectPath, from);
         throw error;
       }
-      record = { from, to, phase: "copied", startedAt };
-      await storage.updateEnvironment(environment.id, { worktreeMove: record });
+      record = { ...record, staging: undefined, phase: "copied", removeSource: true };
       moved = true;
+      await storage.updateEnvironment(environment.id, { worktreeMove: record });
     }
 
-    const updated = await finishMove(storage, environment.id, record, destinationRoot);
-    if (!viaGit.moved) await removeOldWorktree(fromRoot, from, projectPath);
-    // Still inside the bridge queue: no agent can start before its
-    // conversations know about the new folder.
-    await relocateAgentSessionState(
-      [from, fromResolved],
-      to,
-      options.sessionHomes ?? (await defaultSessionRelocationHomes(environment.id, context)),
-    );
-    await afterMove(updated, context);
-    return updated;
+    record = { ...record, phase: "committed" };
+    commitAttempted = true;
+    await commitMove(storage, environment.id, record, destinationRoot);
+    committed = true;
+    return await completeCommittedMove(environment, record, context, options.sessionHomes);
   } catch (error) {
-    if (moved && record.phase === "moving") {
-      // `git worktree move` succeeded but the record could not follow it: put
-      // the folder back where the record says it is.
-      await runCommand("git", ["-C", projectPath, "worktree", "move", to, from], {
-        timeoutMs: GIT_TIMEOUT_MS,
-      }).catch(() => undefined);
+    // A storage write can publish before its notification rejects. Re-read
+    // authority before deciding whether any filesystem rollback is allowed.
+    const authoritative =
+      commitAttempted && !committed
+        ? await storage.getEnvironment(environment.id).catch(() => null)
+        : null;
+    if (authoritative?.worktreePath === to) committed = true;
+    const rollbackAllowed = !commitAttempted || authoritative?.worktreePath === from;
+    // A path commit is irreversible here: provider state may already have moved.
+    // Retain the journal for startup to retry all idempotent completion stages.
+    if (committed) {
+      return storage.updateEnvironment(environment.id, {
+        lifecycleOperation: null,
+        lifecycleOperationStartedAt: null,
+        lifecycleError: `Environment moved; completion will retry on restart: ${errorMessage(error)}`,
+      });
     }
-    const stillCopied = record.phase === "copied" && (await pathExists(to));
+    let rolledBack = !moved;
+    if (moved && !record.removeSource && rollbackAllowed) {
+      rolledBack = await runCommand("git", ["-C", projectPath, "worktree", "move", to, from], {
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).then(
+        () => true,
+        () => false,
+      );
+    }
     await storage
       .updateEnvironment(environment.id, {
         lifecycleOperation: null,
         lifecycleOperationStartedAt: null,
-        worktreeMove: null,
-        ...(stillCopied
-          ? {
-              worktreePath: to,
-              worktreeBaseDir: destinationRoot,
-            }
-          : {}),
+        worktreeMove: rolledBack
+          ? null
+          : { ...record, phase: record.removeSource ? "copied" : "moving" },
         lifecycleError: `Moving the environment failed: ${errorMessage(error)}`,
       })
       .catch(() => undefined);
@@ -311,9 +342,7 @@ async function quiesceLocalEnvironment(
   }
   // Restores `.claude/settings.local.json` from the tmux-mode backup while the
   // worktree is still where the backup recorded it.
-  await cleanupEnvironmentTmux(environment.id, context).catch((error: unknown) => {
-    console.warn("[backend] claude-tmux cleanup failed before environment move:", error);
-  });
+  await cleanupEnvironmentTmux(environment.id, context, { requireStopped: true });
   context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   await stopLocalServersForEnvironmentUnlocked(environment.id, context);
   options.invalidateDiscovery?.(environment.id);
@@ -350,7 +379,7 @@ async function repairWorktree(projectPath: string | null, worktreePath: string):
   }).catch(() => undefined);
 }
 
-async function finishMove(
+async function commitMove(
   storage: StorageService,
   environmentId: string,
   record: WorktreeMoveRecord,
@@ -359,6 +388,39 @@ async function finishMove(
   return storage.updateEnvironment(environmentId, {
     worktreePath: record.to,
     worktreeBaseDir: destinationRoot,
+    worktreeMove: record,
+    lifecycleError: null,
+  });
+}
+
+/** Idempotent completion shared by the live move and restart recovery. */
+async function completeCommittedMove(
+  environment: Environment,
+  record: WorktreeMoveRecord,
+  context: Pick<CommandContext, "storage"> & Partial<CommandContext>,
+  sessionHomes?: SessionRelocationHomes,
+): Promise<Environment> {
+  const failures = await relocateAgentSessionState(
+    [record.from, record.fromCanonical ?? canonicalWorktreePath(record.from)],
+    record.to,
+    sessionHomes ?? (await defaultSessionRelocationHomes(environment.id, context)),
+  );
+  if (!failures.length && record.removeSource)
+    await removeOldWorktree(
+      record.fromRoot!,
+      record.from,
+      (await context.storage.getProject(environment.projectId))?.localPath ?? null,
+    );
+  await context.storage.clearBackendTerminalSessionIds?.(environment.id);
+  if (context.emit) await afterMove(context as CommandContext);
+  if (failures.length) {
+    return context.storage.updateEnvironment(environment.id, {
+      lifecycleOperation: null,
+      lifecycleOperationStartedAt: null,
+      lifecycleError: `Environment moved, but ${failures.join(", ")} conversations could not be relocated. Recovery will retry on restart.`,
+    });
+  }
+  return context.storage.updateEnvironment(environment.id, {
     worktreeMove: null,
     lifecycleOperation: null,
     lifecycleOperationStartedAt: null,
@@ -366,9 +428,8 @@ async function finishMove(
   });
 }
 
-async function afterMove(environment: Environment, context: CommandContext): Promise<void> {
+async function afterMove(context: CommandContext): Promise<void> {
   // Terminal panes still name sessions that were closed in the old folder.
-  await context.storage.clearBackendTerminalSessionIds?.(environment.id);
   await syncDiffStatsTracking(context);
   await syncPrMonitorTracking(context);
 }
@@ -379,14 +440,7 @@ async function removeOldWorktree(
   from: string,
   projectPath: string | null,
 ): Promise<void> {
-  try {
-    await removeInside(fromRoot, from);
-  } catch (error) {
-    console.warn(
-      "[backend] the moved environment's previous folder could not be removed:",
-      errorMessage(error),
-    );
-  }
+  await removeInside(fromRoot, from);
   if (projectPath) {
     await runCommand("git", ["-C", projectPath, "worktree", "prune"], {
       timeoutMs: 30_000,
@@ -425,23 +479,28 @@ export async function recoverInterruptedEnvironmentMove(
   ]);
   const project = await storage.getProject(environment.projectId).catch(() => null);
   const projectPath = project?.localPath?.trim() || null;
-  const adopt = toExists && (record.phase === "copied" || !fromExists);
+  const adopt =
+    toExists && (record.phase === "committed" || record.phase === "copied" || !fromExists);
   if (adopt) {
-    if (record.phase === "copied") await repairWorktree(projectPath, record.to);
-    await finishMove(storage, environment.id, record, destinationRoot);
-    // Recovery runs before any bridge starts, as the move itself would have.
-    await relocateAgentSessionState(
-      [record.from],
-      record.to,
-      sessionHomes ?? (await defaultSessionRelocationHomes(environment.id, { storage })),
-    );
-    if (record.phase === "copied" && fromExists) {
-      const fromRoot = environment.worktreeBaseDir
-        ? path.resolve(environment.worktreeBaseDir)
-        : worktreeRoot;
-      await removeOldWorktree(fromRoot, record.from, projectPath);
+    const committedRecord: WorktreeMoveRecord = {
+      ...record,
+      fromCanonical: record.fromCanonical ?? canonicalWorktreePath(record.from),
+      fromRoot: record.fromRoot ?? environment.worktreeBaseDir ?? worktreeRoot,
+      removeSource: record.removeSource ?? record.phase === "copied",
+      phase: "committed",
+    };
+    if (committedRecord.removeSource) {
+      if (projectPath)
+        await runCommand("git", ["-C", projectPath, "worktree", "repair", record.to], {
+          timeoutMs: GIT_TIMEOUT_MS,
+        });
     }
+    await commitMove(storage, environment.id, committedRecord, destinationRoot);
+    await completeCommittedMove(environment, committedRecord, { storage }, sessionHomes);
     return;
+  }
+  if (record.phase === "committed") {
+    throw new Error("The committed move destination is unavailable; recovery retained for retry");
   }
   if (record.staging) await removeInside(destinationRoot, record.staging).catch(() => undefined);
   // A copy may have been repaired just before the backend stopped.
@@ -469,7 +528,14 @@ export async function recoverInterruptedEnvironmentMoves(
       context.storage,
       getWorktreeBaseDir(context),
       options.sessionHomes,
-    ).catch((error: unknown) => {
+    ).catch(async (error: unknown) => {
+      await context.storage
+        .updateEnvironment(environment.id, {
+          lifecycleOperation: null,
+          lifecycleOperationStartedAt: null,
+          lifecycleError: "Move recovery could not finish; it will retry on restart.",
+        })
+        .catch(() => undefined);
       console.warn(
         `[backend] interrupted move recovery failed for ${environment.id}:`,
         errorMessage(error),

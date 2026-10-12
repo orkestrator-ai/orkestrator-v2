@@ -138,16 +138,24 @@ export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
     }
     return candidate;
   };
-  if (value.phase !== "moving" && value.phase !== "copied") {
+  if (value.phase !== "moving" && value.phase !== "copied" && value.phase !== "committed") {
     throw new Error("Invalid worktree move phase");
   }
   if (typeof value.startedAt !== "string" || value.startedAt.length > 64) {
     throw new Error("Invalid worktree move start time");
   }
+  if (value.removeSource !== undefined && typeof value.removeSource !== "boolean") {
+    throw new Error("Invalid worktree move source cleanup flag");
+  }
   return {
     from: absolute("source", value.from),
     to: absolute("destination", value.to),
     ...(value.staging === undefined ? {} : { staging: absolute("staging path", value.staging) }),
+    ...(value.fromCanonical === undefined
+      ? {}
+      : { fromCanonical: absolute("canonical source", value.fromCanonical) }),
+    ...(value.fromRoot === undefined ? {} : { fromRoot: absolute("source root", value.fromRoot) }),
+    ...(value.removeSource === undefined ? {} : { removeSource: value.removeSource === true }),
     phase: value.phase,
     startedAt: value.startedAt,
   };

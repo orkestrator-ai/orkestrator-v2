@@ -20,6 +20,21 @@ export function isEnvironmentBeingReplaced(environmentId: string): boolean {
  * agent in the old folder nor race the activity check that admitted the move.
  */
 const movingEnvironments = new Set<string>();
+const pendingAgentWork = new Map<string, number>();
+
+/** Synchronous admission, held through setup and dispatch acknowledgement. */
+export function beginEnvironmentAgentWork(environmentId: string): () => void {
+  assertEnvironmentAcceptsAgentWork(environmentId);
+  pendingAgentWork.set(environmentId, (pendingAgentWork.get(environmentId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = (pendingAgentWork.get(environmentId) ?? 1) - 1;
+    if (remaining) pendingAgentWork.set(environmentId, remaining);
+    else pendingAgentWork.delete(environmentId);
+  };
+}
 
 export function isEnvironmentBeingMoved(environmentId: string): boolean {
   return movingEnvironments.has(environmentId);
@@ -28,6 +43,11 @@ export function isEnvironmentBeingMoved(environmentId: string): boolean {
 /** Reserves the move fence; false when a move of this environment is already admitted. */
 export function beginEnvironmentMove(environmentId: string): boolean {
   if (movingEnvironments.has(environmentId)) return false;
+  if (pendingAgentWork.has(environmentId)) {
+    throw new Error(
+      "An agent submission is still in progress; wait for it to finish before moving",
+    );
+  }
   movingEnvironments.add(environmentId);
   return true;
 }

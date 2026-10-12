@@ -1,3 +1,4 @@
+import { beginEnvironmentMove, endEnvironmentMove } from "./environment-replacement-fence.js";
 import { describe, expect, mock, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
@@ -1114,4 +1115,57 @@ describe("NativeAgentService", () => {
       );
     });
   });
+});
+
+test("move admission refuses a prompt waiting for session creation or send acknowledgement", async () => {
+  for (const stage of ["create", "send"]) {
+    let entered!: () => void;
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stub = createProviderStub("codex", {
+      createSession: async () => {
+        if (stage === "create") {
+          entered();
+          await gate;
+        }
+        return "provider-session";
+      },
+      send: async () => {
+        if (stage === "send") {
+          entered();
+          await gate;
+        }
+      },
+    });
+    await withService(
+      { prefix: "ork-move-prompt-race-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const sending = service.dispatchPrompt({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: "tab",
+          prompt: "fixture",
+          requestId: `request-${stage}`,
+        });
+        try {
+          await paused;
+          expect((await storage.getEnvironment("env-1"))?.agentActivityState ?? "idle").toBe(
+            "idle",
+          );
+          expect(() => beginEnvironmentMove("env-1")).toThrow("submission is still in progress");
+          expect(stub.dispose).not.toHaveBeenCalled();
+        } finally {
+          release();
+          await sending;
+        }
+        expect(beginEnvironmentMove("env-1")).toBe(true);
+        endEnvironmentMove("env-1");
+      },
+    );
+  }
 });

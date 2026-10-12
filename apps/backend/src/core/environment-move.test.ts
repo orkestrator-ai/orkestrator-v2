@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,11 +21,17 @@ import {
 } from "./environment-replacement-fence.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
+import * as shell from "./shell.js";
+import * as tmux from "./tmux-commands.js";
+import * as pathSafety from "./path-safety.js";
+import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
+  mock.restore();
+  setLocalServerShutdownRequested(false);
   for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
   prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -334,4 +340,262 @@ describe("interrupted move recovery", () => {
     expect(await exists(staging)).toBe(false);
     expect(await exists(to)).toBe(true);
   });
+});
+
+describe("move failure boundaries", () => {
+  for (const forceCopy of [false, true]) {
+    test(`keeps committed destination after bookkeeping failure (${forceCopy})`, async () => {
+      const { root, storage, context, startLocal, projectPath } = await setup();
+      const environment = await startLocal();
+      spyOn(storage, "clearBackendTerminalSessionIds").mockRejectedValueOnce(
+        new Error("bookkeeping failed"),
+      );
+      const result = await moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+        forceCopy,
+        sessionHomes: isolatedHomes(root),
+      });
+      expect(result.lifecycleError).toContain("completion will retry");
+      expect(result.worktreeMove?.phase).toBe("committed");
+      expect(await exists(result.worktreePath!)).toBe(true);
+      expect(await registeredWorktrees(projectPath)).toContain(result.worktreePath!);
+      await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+      const recovered = (await storage.getEnvironment(environment.id))!;
+      expect(recovered.worktreePath).toBe(result.worktreePath);
+      expect(recovered.worktreeMove).toBeUndefined();
+      expect(await exists(environment.worktreePath!)).toBe(false);
+    });
+  }
+
+  test("a rejected commit rolls back the rename without losing its source", async () => {
+    const { root, storage, context, startLocal, projectPath } = await setup();
+    const environment = await startLocal();
+    const update = storage.updateEnvironment.bind(storage);
+    spyOn(storage, "updateEnvironment").mockImplementation(async (id, changes) => {
+      if ((changes.worktreeMove as { phase?: string } | undefined)?.phase === "committed")
+        throw new Error("commit rejected");
+      return update(id, changes);
+    });
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("commit rejected");
+    expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(
+      environment.worktreePath,
+    );
+    expect(await registeredWorktrees(projectPath)).toContain(environment.worktreePath!);
+    expect(await exists(environment.worktreePath!)).toBe(true);
+  });
+
+  test("refuses transfer when tmux termination is incomplete", async () => {
+    const { root, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    spyOn(tmux, "cleanupEnvironmentTmux").mockRejectedValue(new Error("cleanup incomplete"));
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("cleanup incomplete");
+    expect(await exists(environment.worktreePath!)).toBe(true);
+    expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(
+      environment.worktreePath,
+    );
+    expect(await exists(path.join(root, "moved"))).toBe(false);
+  });
+
+  test("reports provider failure and retries migration and source cleanup after restart", async () => {
+    const { root, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const homes = isolatedHomes(root);
+    const source = path.join(
+      homes.codexHomes[0]!,
+      "orkestrator-bridge",
+      `bridge-sessions-${codexCwdHash(environment.worktreePath!)}`,
+    );
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "broken.json"), "invalid");
+    const moved = await moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+      forceCopy: true,
+      sessionHomes: homes,
+    });
+    expect(moved.lifecycleError).toContain("Codex");
+    expect(moved.worktreeMove?.phase).toBe("committed");
+    expect(await exists(environment.worktreePath!)).toBe(true);
+    await fs.writeFile(
+      path.join(source, "broken.json"),
+      JSON.stringify({ cwdHash: codexCwdHash(environment.worktreePath!) }),
+    );
+    const restarted = new StorageService(storage.getDataDir());
+    await restarted.init();
+    await recoverInterruptedEnvironmentMoves(
+      { ...context, storage: restarted },
+      { sessionHomes: homes },
+    );
+    expect((await restarted.getEnvironment(environment.id))?.worktreeMove).toBeUndefined();
+    expect(await exists(environment.worktreePath!)).toBe(false);
+  });
+
+  test("detects EXDEV, cleans a failed copy and refuses submodules before copying", async () => {
+    const { root, context, startLocal, projectPath } = await setup();
+    const environment = await startLocal();
+    const run = shell.runCommand;
+    let copies = 0;
+    spyOn(shell, "runCommand").mockImplementation(async (command, args, options) => {
+      if (command === "git" && args?.includes("move")) throw new Error("EXDEV cross-device link");
+      if (command === "cp") {
+        copies++;
+        await fs.mkdir(args![2]!, { recursive: true });
+        throw new Error("copy failed");
+      }
+      return run(command, args, options);
+    });
+    const destination = path.join(root, "elsewhere");
+    await expect(
+      moveEnvironmentTask(environment.id, destination, context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("copy failed");
+    expect(await fs.readdir(destination)).toEqual([]);
+    expect(await registeredWorktrees(projectPath)).toContain(environment.worktreePath!);
+    await fs.writeFile(path.join(environment.worktreePath!, ".gitmodules"), "fixture");
+    await expect(
+      moveEnvironmentTask(environment.id, destination, context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("submodules");
+    expect(copies).toBe(1);
+  });
+
+  test("refuses project home, running setup and backend shutdown", async () => {
+    const { root, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const home = { ...environment, id: `${environment.id}-home`, projectHome: true };
+    await storage.addEnvironment(home);
+    await expect(moveEnvironmentTask(home.id, path.join(root, "moved"), context)).rejects.toThrow(
+      "project home",
+    );
+    await storage.updateEnvironment(environment.id, { setupPhase: "running" });
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
+    ).rejects.toThrow("setup is still running");
+    setLocalServerShutdownRequested(true);
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
+    ).rejects.toThrow("shutting down");
+  });
+
+  test("recovers a copied move, both source spellings, and interruption during recovery", async () => {
+    const { root, storage, context, startLocal, projectPath } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    const alias = path.join(root, "alias");
+    await fs.symlink(path.dirname(from), alias);
+    const spelledFrom = path.join(alias, path.basename(from));
+    const to = path.join(root, "moved", path.basename(from));
+    await fs.mkdir(path.dirname(to), { recursive: true });
+    await fs.cp(from, to, { recursive: true });
+    const homes = isolatedHomes(root);
+    for (const [i, source] of [from, spelledFrom].entries()) {
+      const transcripts = path.join(homes.claudeConfigDir, "projects", claudeProjectSlug(source));
+      await fs.mkdir(transcripts, { recursive: true });
+      await fs.writeFile(path.join(transcripts, `session-${i}.jsonl`), "{}\n");
+    }
+    await storage.updateEnvironment(environment.id, {
+      worktreeMove: {
+        from: spelledFrom,
+        fromCanonical: from,
+        fromRoot: alias,
+        to,
+        phase: "copied",
+        startedAt: new Date().toISOString(),
+      },
+      lifecycleOperation: "moving",
+    });
+    spyOn(storage, "clearBackendTerminalSessionIds").mockRejectedValueOnce(
+      new Error("restart interrupted"),
+    );
+    await recoverInterruptedEnvironmentMoves(context, { sessionHomes: homes });
+    const interrupted = (await storage.getEnvironment(environment.id))!;
+    expect(interrupted.worktreeMove?.phase).toBe("committed");
+    expect(interrupted.worktreePath).toBe(to);
+    await recoverInterruptedEnvironmentMoves(context, { sessionHomes: homes });
+    expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeUndefined();
+    expect(await exists(from)).toBe(false);
+    expect(await registeredWorktrees(projectPath)).toContain(to);
+    for (const i of [0, 1])
+      expect(
+        await fs.readFile(
+          path.join(homes.claudeConfigDir, "projects", claudeProjectSlug(to), `session-${i}.jsonl`),
+          "utf8",
+        ),
+      ).toContain('"relocatedCwd"');
+  });
+});
+
+test("abandons a final copy without a copied-phase record and repairs the original", async () => {
+  const { root, storage, context, startLocal, projectPath } = await setup();
+  const environment = await startLocal();
+  const from = environment.worktreePath!;
+  const to = path.join(root, "moved", path.basename(from));
+  await fs.mkdir(path.dirname(to), { recursive: true });
+  await fs.cp(from, to, { recursive: true });
+  await runCommand("git", ["-C", projectPath, "worktree", "repair", to]);
+  await storage.updateEnvironment(environment.id, {
+    worktreeMove: { from, to, phase: "moving", startedAt: new Date().toISOString() },
+    lifecycleOperation: "moving",
+  });
+  await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+  const recovered = (await storage.getEnvironment(environment.id))!;
+  expect(recovered.worktreePath).toBe(from);
+  expect(recovered.worktreeMove).toBeUndefined();
+  expect(recovered.lifecycleError).toContain("left a copy");
+  expect(await registeredWorktrees(projectPath)).toContain(from);
+  expect(await exists(to)).toBe(true);
+});
+
+test("source cleanup failure retains a committed copy for restart retry", async () => {
+  const { root, storage, context, startLocal } = await setup();
+  const environment = await startLocal();
+  const removal = spyOn(pathSafety, "removeConfinedDirectory").mockRejectedValueOnce(
+    new Error("source cleanup failed"),
+  );
+  const moved = await moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+    forceCopy: true,
+    sessionHomes: isolatedHomes(root),
+  });
+  expect(moved.lifecycleError).toContain("source cleanup failed");
+  expect(moved.worktreeMove?.phase).toBe("committed");
+  expect(await exists(environment.worktreePath!)).toBe(true);
+  removal.mockRestore();
+  await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+  expect(await exists(environment.worktreePath!)).toBe(false);
+  expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeUndefined();
+});
+
+test("a storage rejection after publishing the path never rolls it back", async () => {
+  const { root, storage, context, startLocal, projectPath } = await setup();
+  const environment = await startLocal();
+  const update = storage.updateEnvironment.bind(storage);
+  let rejected = false;
+  spyOn(storage, "updateEnvironment").mockImplementation(async (id, changes) => {
+    const result = await update(id, changes);
+    if (
+      !rejected &&
+      (changes.worktreeMove as { phase?: string } | undefined)?.phase === "committed"
+    ) {
+      rejected = true;
+      throw new Error("notification rejected after commit");
+    }
+    return result;
+  });
+  const moved = await moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+    sessionHomes: isolatedHomes(root),
+  });
+  expect(moved.lifecycleError).toContain("notification rejected after commit");
+  expect(moved.worktreeMove?.phase).toBe("committed");
+  expect(await exists(moved.worktreePath!)).toBe(true);
+  expect(await exists(environment.worktreePath!)).toBe(false);
+  expect(await registeredWorktrees(projectPath)).toContain(moved.worktreePath!);
+  await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+  expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeUndefined();
 });

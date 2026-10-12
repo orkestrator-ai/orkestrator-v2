@@ -81,7 +81,10 @@ export async function relocateAgentSessionState(
   await attempt("Claude", async () => {
     for (const from of sources) {
       await relocateClaudeTranscripts(from, to, homes.claudeConfigDir);
-      await copyClaudeProjectEntry(homes.claudeJsonPath, from, to);
+      if (await pathExists(homes.claudeJsonPath)) {
+        const copied = await copyClaudeProjectEntry(homes.claudeJsonPath, from, to);
+        if (!copied) throw new Error("Claude configuration is busy; relocation must retry");
+      }
     }
   });
   await attempt("Codex", async () => {
@@ -139,14 +142,17 @@ export async function relocateClaudeTranscripts(
   for (const entry of await fs.readdir(source)) {
     const destination = path.join(target, entry);
     if (await pathExists(destination)) continue;
-    await fs.rename(path.join(source, entry), destination);
+    const sourceFile = path.join(source, entry);
+    // Persist the relocation marker before publication so a crash cannot leave
+    // an unmarked transcript at the destination that a retry would skip.
     if (entry.endsWith(".jsonl")) {
-      await appendJsonLine(destination, {
+      await appendJsonLine(sourceFile, {
         type: "relocated",
         sessionId: entry.slice(0, -".jsonl".length),
         relocatedCwd: to,
       });
     }
+    await fs.rename(sourceFile, destination);
   }
   await fs.rmdir(source).catch(() => undefined);
 }
@@ -203,6 +209,38 @@ async function writePrivateJson(file: string, value: unknown): Promise<void> {
   }
 }
 
+async function readMigrationJson(file: string): Promise<unknown> {
+  const handle = await fs.open(file, "r");
+  try {
+    const limit = 1024 * 1024;
+    if ((await handle.stat()).size > limit)
+      throw new Error("Codex migration file exceeds byte limit");
+    const buffer = Buffer.alloc(limit + 1);
+    let size = 0;
+    while (size <= limit) {
+      const read = await handle.read(buffer, size, buffer.length - size, size);
+      if (!read.bytesRead) break;
+      size += read.bytesRead;
+    }
+    if (size > limit) throw new Error("Codex migration file exceeds byte limit");
+    return JSON.parse(buffer.subarray(0, size).toString("utf8"));
+  } finally {
+    await handle.close();
+  }
+}
+
+function mergeMigrationRows(target: unknown[], source: unknown[], key: string): unknown[] {
+  const rows = new Map<string, unknown>();
+  for (const value of [...target, ...source]) {
+    const id = asRecord(value)?.[key];
+    if (typeof id !== "string") throw new Error("Invalid Codex migration record identity");
+    if (rows.has(id) && JSON.stringify(rows.get(id)) !== JSON.stringify(value))
+      throw new Error("Conflicting Codex migration record identity");
+    rows.set(id, value);
+  }
+  return Array.from(rows.values());
+}
+
 /**
  * The Codex bridge keeps its session registry and dispatch journal under a
  * hash of its working directory, and each record repeats that hash. Without
@@ -221,38 +259,79 @@ export async function relocateCodexBridgeState(
 
   const legacy = path.join(directory, `bridge-sessions-${oldHash}.json`);
   const legacyTarget = path.join(directory, `bridge-sessions-${newHash}.json`);
-  if ((await pathExists(legacy)) && !(await pathExists(legacyTarget))) {
-    const parsed = asRecord(JSON.parse(await fs.readFile(legacy, "utf8")));
-    if (parsed && Array.isArray(parsed.sessions)) {
-      await writePrivateJson(legacyTarget, {
-        ...parsed,
-        sessions: parsed.sessions.map((session) => rekeyCodexSession(session, from, to)),
-      });
-      await fs.rm(legacy, { force: true });
+  if (await pathExists(legacy)) {
+    const parsed = asRecord(await readMigrationJson(legacy));
+    const target = (await pathExists(legacyTarget))
+      ? asRecord(await readMigrationJson(legacyTarget))
+      : null;
+    if (!parsed || !Array.isArray(parsed.sessions) || (target && !Array.isArray(target.sessions))) {
+      throw new Error("Invalid Codex session registry during relocation");
     }
+    const sessions = mergeMigrationRows(
+      (target?.sessions as unknown[]) ?? [],
+      parsed.sessions.map((session) => rekeyCodexSession(session, from, to)),
+      "bridgeSessionId",
+    );
+    await writePrivateJson(legacyTarget, { ...parsed, ...target, sessions });
+    await fs.rm(legacy);
   }
 
   const records = path.join(directory, `bridge-sessions-${oldHash}`);
   const recordsTarget = path.join(directory, `bridge-sessions-${newHash}`);
-  if ((await pathExists(records)) && !(await pathExists(recordsTarget))) {
-    await fs.rename(records, recordsTarget);
-    for (const name of await fs.readdir(recordsTarget)) {
-      if (!name.endsWith(".json")) continue;
-      const file = path.join(recordsTarget, name);
-      try {
-        const value = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
-        const rekeyed = rekeyCodexSession(value, from, to);
-        if (rekeyed !== value) await writePrivateJson(file, rekeyed);
-      } catch {
-        // An unreadable record is skipped by the bridge too.
-      }
-    }
+  await fs.mkdir(recordsTarget, { recursive: true, mode: 0o700 });
+  // Also re-key records published by the previous rename-based implementation.
+  for (const name of await fs.readdir(recordsTarget)) {
+    if (!name.endsWith(".json")) continue;
+    const file = path.join(recordsTarget, name);
+    const value = await readMigrationJson(file);
+    const rekeyed = rekeyCodexSession(value, from, to);
+    if (rekeyed !== value) await writePrivateJson(file, rekeyed);
   }
+  for (const name of await fs.readdir(records).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  })) {
+    if (!name.endsWith(".json")) continue;
+    const file = path.join(records, name);
+    const target = path.join(recordsTarget, name);
+    const value = rekeyCodexSession(await readMigrationJson(file), from, to);
+    if (await pathExists(target)) {
+      if (JSON.stringify(await readMigrationJson(target)) !== JSON.stringify(value)) {
+        throw new Error("Conflicting Codex session records during relocation");
+      }
+    } else {
+      await writePrivateJson(target, value);
+    }
+    await fs.rm(file);
+  }
+  await fs.rmdir(records).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+  });
 
   const journal = path.join(directory, `dispatch-journal-${oldHash}.json`);
   const journalTarget = path.join(directory, `dispatch-journal-${newHash}.json`);
-  if ((await pathExists(journal)) && !(await pathExists(journalTarget))) {
-    await fs.rename(journal, journalTarget);
+  if (await pathExists(journal)) {
+    if (!(await pathExists(journalTarget))) await fs.rename(journal, journalTarget);
+    else {
+      const source = asRecord(await readMigrationJson(journal));
+      const target = asRecord(await readMigrationJson(journalTarget));
+      if (
+        source?.version !== 1 ||
+        target?.version !== 1 ||
+        !Array.isArray(source.records) ||
+        !Array.isArray(target.records)
+      ) {
+        throw new Error("Invalid Codex dispatch journal during relocation");
+      }
+      const records = mergeMigrationRows(target.records, source.records, "requestId");
+      if (records.length > 500)
+        throw new Error("Codex dispatch journal relocation exceeds record limit");
+      const merged = { ...target, records };
+      if (Buffer.byteLength(JSON.stringify(merged)) > 1024 * 1024)
+        throw new Error("Codex dispatch journal relocation exceeds byte limit");
+      await writePrivateJson(journalTarget, merged);
+      await fs.rm(journal);
+    }
   }
 }
 

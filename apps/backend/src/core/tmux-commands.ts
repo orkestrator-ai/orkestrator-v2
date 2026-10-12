@@ -1,3 +1,7 @@
+import {
+  assertEnvironmentNotMoving,
+  beginEnvironmentAgentWork,
+} from "./environment-replacement-fence.js";
 import * as shared from "./tmux-shared.js";
 import * as hooks from "./tmux-hooks.js";
 import * as interactive from "./tmux-interactive.js";
@@ -115,6 +119,7 @@ export type CommandsTmuxLayerTypes = [
 export async function cleanupEnvironmentTmux(
   environmentId: string,
   context: CommandContext,
+  options: { requireStopped?: boolean } = {},
 ): Promise<void> {
   await tmuxManager.installLock(environmentId).runExclusive(async () => {
     detachInteractiveTerminalsForEnvironment(environmentId);
@@ -137,6 +142,7 @@ export async function cleanupEnvironmentTmux(
     try {
       backend = await resolveBackend(environmentId, context);
     } catch (error) {
+      if (options.requireStopped || !cleanupComplete) throw error;
       console.debug("[tmux] skipping environment tmux cleanup", error);
       return;
     }
@@ -184,7 +190,7 @@ export async function cleanupEnvironmentTmux(
 }
 
 export function registerTmuxBackendCommands(
-  register: RegisterCommand,
+  registerCommand: RegisterCommand,
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
     prepareEnvironmentFirstPrompt?: (
@@ -194,6 +200,29 @@ export function registerTmuxBackendCommands(
     ) => Promise<void>;
   } = {},
 ): void {
+  const workCommands = new Set([
+    "claude_tmux_create_interactive_terminal",
+    "claude_tmux_start",
+    "claude_tmux_submit",
+    "claude_tmux_submit_queued",
+    "claude_tmux_send_text",
+    "claude_tmux_send_keys",
+    "claude_tmux_answer_selection_prompt",
+    "claude_tmux_switch_model",
+    "claude_tmux_switch_effort",
+    "claude_tmux_switch_fast_mode",
+    "claude_tmux_switch_plan_mode",
+  ]);
+  const register: RegisterCommand = (name, handler) =>
+    registerCommand(name, async (args, context) => {
+      if (!workCommands.has(name)) return handler(args, context);
+      const release = beginEnvironmentAgentWork(asString(args.environmentId, "environmentId"));
+      try {
+        return await handler(args, context);
+      } finally {
+        release();
+      }
+    });
   // Tests inject a manager so the polling commands can be exercised without a
   // Docker daemon; production keeps the single process-wide instance.
   const claudeStatePolls = options.claudeStatePolls ?? defaultClaudeStatePolls;
@@ -236,6 +265,7 @@ export function registerTmuxBackendCommands(
         }
       }
       return tmuxManager.installLock(envId).runExclusive(async () => {
+        assertEnvironmentNotMoving(envId);
         const environment = await context.storage.getEnvironment(envId);
         if (!environment || environment.deletionRequestedAt) {
           throw new Error(`environment ${envId} is being deleted`);
@@ -377,6 +407,7 @@ export function registerTmuxBackendCommands(
     // teardown. Deletion writes its tombstone before taking this same lock, so
     // a queued dispatch can never type into a pane after deletion has begun.
     await tmuxManager.installLock(envId).runExclusive(async () => {
+      assertEnvironmentNotMoving(envId);
       const environment = await context.storage.getEnvironment(envId);
       if (!environment || environment.deletionRequestedAt) {
         throw new Error(`environment ${envId} is being deleted`);
@@ -545,6 +576,7 @@ export function registerTmuxBackendCommands(
       const tab = asString(tabId, "tabId");
       const session = requireSession(envId, tab);
       if (!(await session.tmuxAlive())) throw new Error("tmux session not running");
+      assertEnvironmentNotMoving(envId);
       const environment = await context.storage.getEnvironment(envId);
       if (environment?.environmentType !== "local" && !environmentContainerId(environment)) {
         throw new Error("container environment has no container id");

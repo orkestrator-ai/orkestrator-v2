@@ -148,7 +148,10 @@ import {
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { assertEnvironmentAcceptsAgentWork } from "./environment-replacement-fence.js";
+import {
+  assertEnvironmentAcceptsAgentWork,
+  beginEnvironmentAgentWork,
+} from "./environment-replacement-fence.js";
 import {
   MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
   nativeAgentObservationGroupKey,
@@ -714,12 +717,17 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     persistAmbiguousDispatch = false,
     mailInject = false,
   ): Promise<PersistedNativeAgentSession> {
-    return this.withSessionMutationFence(input, () =>
-      this.dispatchPromptUnderFence(input, prepare, persistAmbiguousDispatch, mailInject),
-    );
+    const releaseAgentWork = beginEnvironmentAgentWork(input.environmentId);
+    try {
+      return await this.withSessionMutationFence(input, () =>
+        this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject),
+      );
+    } finally {
+      releaseAgentWork();
+    }
   }
 
-  private async dispatchPromptUnderFence(
+  private async dispatchAdmittedPrompt(
     input: DispatchNativeAgentPromptInput,
     prepare:
       | ((

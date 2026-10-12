@@ -1,3 +1,8 @@
+import { BridgeSessionStore } from "../../../../bridges/codex-bridge/src/sessions/persistence.js";
+import { DispatchJournal } from "../../../../bridges/codex-bridge/src/sessions/dispatch-journal.js";
+import { StorageService } from "./storage.js";
+import { hostClaudeJsonPath, hostCodexHome } from "./agent-accounts-homes.js";
+import osHome from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -5,6 +10,7 @@ import path from "node:path";
 
 import {
   claudeProjectSlug,
+  defaultSessionRelocationHomes,
   codexCwdHash,
   relocateAgentSessionState,
   relocateClaudeTranscripts,
@@ -127,16 +133,78 @@ describe("Codex", () => {
     expect(remaining.some((name) => name.includes(oldHash))).toBe(false);
   });
 
-  test("leaves an existing destination store alone", async () => {
+  test("merges destination records and retries previously published old hashes through persistence", async () => {
     const home = await tempRoot();
+    const store = new BridgeSessionStore({ codexHome: home, cwd: FROM });
     const directory = path.join(home, "orkestrator-bridge");
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, `dispatch-journal-${codexCwdHash(FROM)}.json`), "old");
-    await fs.writeFile(path.join(directory, `dispatch-journal-${codexCwdHash(TO)}.json`), "new");
+    const source = path.join(directory, `bridge-sessions-${codexCwdHash(FROM)}`);
+    const target = path.join(directory, `bridge-sessions-${codexCwdHash(TO)}`);
+    const make = (id: string, cwd: string) => ({
+      bridgeSessionId: id,
+      threadId: `thread-${id}`,
+      cwdHash: codexCwdHash(cwd),
+      config: { mode: "build" as const, cwd },
+      lastAccessed: new Date().toISOString(),
+    });
+    await store.upsert(make("source", FROM));
+    const targetStore = new BridgeSessionStore({ codexHome: home, cwd: TO });
+    await targetStore.upsert(make("destination", TO));
+    // Simulates the old directory-rename implementation crashing before rekey.
+    await fs.writeFile(
+      path.join(target, "interrupted.json"),
+      JSON.stringify(make("interrupted", FROM)),
+    );
+    const oldJournal = new DispatchJournal({ codexHome: home, cwd: FROM });
+    const newJournal = new DispatchJournal({ codexHome: home, cwd: TO });
+    await oldJournal.load();
+    await newJournal.load();
+    await oldJournal.markPrepared({
+      requestId: "old-request",
+      bridgeSessionId: "source",
+      threadId: "thread-source",
+    });
+    await newJournal.markPrepared({
+      requestId: "new-request",
+      bridgeSessionId: "destination",
+      threadId: "thread-destination",
+    });
     await relocateCodexBridgeState(FROM, TO, home);
+    await relocateCodexBridgeState(FROM, TO, home);
+    const loaded = await targetStore.load();
+    expect(loaded.map((row) => row.bridgeSessionId).sort()).toEqual([
+      "destination",
+      "interrupted",
+      "source",
+    ]);
+    expect(loaded.every((row) => row.config.cwd === TO)).toBe(true);
     expect(
-      await fs.readFile(path.join(directory, `dispatch-journal-${codexCwdHash(TO)}.json`), "utf8"),
-    ).toBe("new");
+      await fs.stat(source).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    const journal = new DispatchJournal({ codexHome: home, cwd: TO });
+    await journal.load();
+    expect(journal.classify("old-request").action).toBe("reconcile");
+    expect(journal.classify("new-request").action).toBe("reconcile");
+  });
+
+  test("keeps conflicting dispatch evidence and reports a migration failure", async () => {
+    const home = await tempRoot();
+    for (const [cwd, id] of [
+      [FROM, "source"],
+      [TO, "destination"],
+    ]) {
+      const journal = new DispatchJournal({ codexHome: home, cwd: cwd! });
+      await journal.load();
+      await journal.markPrepared({ requestId: "same", bridgeSessionId: id!, threadId: id! });
+    }
+    await expect(relocateCodexBridgeState(FROM, TO, home)).rejects.toThrow("Conflicting");
+    for (const cwd of [FROM, TO]) {
+      const journal = new DispatchJournal({ codexHome: home, cwd });
+      await journal.load();
+      expect(journal.classify("same").action).toBe("reconcile");
+    }
   });
 });
 
@@ -163,4 +231,23 @@ describe("Cursor", () => {
       { agentId: "a2", cwd: "/elsewhere", status: "idle" } as never,
     ]);
   });
+});
+
+test("discovers per-account Codex homes and the host Claude JSON path", async () => {
+  const root = await tempRoot();
+  const storage = new StorageService(path.join(root, "data"));
+  await storage.init();
+  const accounts = path.join(storage.agentAccountsDirectory(), "codex");
+  await fs.mkdir(path.join(accounts, "account-one"), { recursive: true });
+  await fs.mkdir(path.join(accounts, "account-two"));
+  await fs.writeFile(path.join(accounts, "not-an-account"), "fixture");
+  const homes = await defaultSessionRelocationHomes("env", { storage });
+  expect(homes.codexHomes).toContain(path.join(accounts, "account-one"));
+  expect(homes.codexHomes).toContain(path.join(accounts, "account-two"));
+  expect(homes.codexHomes).not.toContain(path.join(accounts, "not-an-account"));
+  expect(homes.codexHomes).toContain(hostCodexHome());
+  expect(homes.claudeJsonPath).toBe(hostClaudeJsonPath());
+  expect(hostClaudeJsonPath({}, osHome.homedir())).toBe(
+    path.join(osHome.homedir(), ".claude.json"),
+  );
 });

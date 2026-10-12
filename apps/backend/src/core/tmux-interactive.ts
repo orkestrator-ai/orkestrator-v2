@@ -1,3 +1,4 @@
+import { beginEnvironmentAgentWork } from "./environment-replacement-fence.js";
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
@@ -148,18 +149,28 @@ export class InteractiveTmuxTerminalManager {
 
   async start(id: string, context: CommandContext): Promise<void> {
     const terminal = this.require(id);
-    terminal.context = context;
-    await this.changeGeometry(terminal, terminal.cols, terminal.rows);
-    await this.emitSnapshot(terminal, context, true);
-    this.schedule(terminal);
+    const release = beginEnvironmentAgentWork(terminal.tmux.environmentId);
+    try {
+      terminal.context = context;
+      await this.changeGeometry(terminal, terminal.cols, terminal.rows);
+      await this.emitSnapshot(terminal, context, true);
+      this.schedule(terminal);
+    } finally {
+      release();
+    }
   }
 
   async write(id: string, data: string): Promise<void> {
     const terminal = this.require(id);
-    // Input is about to produce output, so undo any backoff before it lands.
-    terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
-    if (terminal.timer !== undefined) this.schedule(terminal);
-    await terminal.tmux.writeInteractive(data);
+    const release = beginEnvironmentAgentWork(terminal.tmux.environmentId);
+    try {
+      // Input is about to produce output, so undo any backoff before it lands.
+      terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
+      if (terminal.timer !== undefined) this.schedule(terminal);
+      await terminal.tmux.writeInteractive(data);
+    } finally {
+      release();
+    }
   }
 
   async resize(id: string, cols: number, rows: number): Promise<void> {

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as backend from "@/lib/backend";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import type { Environment } from "@/types";
-import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import { EnvironmentMoveSection, environmentMoveBlockedReason } from "./EnvironmentMoveSection";
 
 const environment = (overrides: Partial<Environment> = {}): Environment =>
@@ -100,4 +100,72 @@ test("explains every blocked state", () => {
     "deleted",
   );
   expect(environmentMoveBlockedReason(environment({ status: "creating" }))).toContain("starting");
+});
+
+test("rehydrates moving controls and partial-success warnings after an inactive update", async () => {
+  const onUpdate = mock(() => undefined);
+  const rendered = render(
+    <EnvironmentMoveSection environment={environment()} onUpdate={onUpdate} />,
+  );
+  rendered.rerender(
+    <EnvironmentMoveSection
+      environment={environment({ lifecycleOperation: "moving" })}
+      onUpdate={onUpdate}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Move…" })).toHaveProperty("disabled", true);
+  expect(screen.getByRole("status").textContent).toContain("being moved");
+  cleanup();
+  render(
+    <EnvironmentMoveSection
+      environment={environment({
+        worktreePath: "/disk/app-feature",
+        worktreeMove: {
+          from: "/trees/app-feature",
+          to: "/disk/app-feature",
+          phase: "committed",
+          startedAt: new Date().toISOString(),
+        },
+        lifecycleError: "Environment moved, but Codex conversations could not be relocated.",
+      })}
+      onUpdate={onUpdate}
+    />,
+  );
+  expect(
+    (screen.getByRole("textbox", { name: "Destination folder" }) as HTMLInputElement).value,
+  ).toBe("/disk");
+  expect(screen.getByRole("alert").textContent).toContain("Codex");
+  expect(screen.getByRole("button", { name: "Move…" })).toHaveProperty("disabled", true);
+});
+
+test("a partial backend move updates the usable path and shows a warning", async () => {
+  const moved = environment({
+    worktreePath: "/disk/app-feature",
+    worktreeMove: {
+      from: "/trees/app-feature",
+      to: "/disk/app-feature",
+      phase: "committed",
+      startedAt: new Date().toISOString(),
+    },
+    lifecycleError: "Environment moved, but Claude conversations could not be relocated.",
+  });
+  spyOn(backend, "moveEnvironment").mockResolvedValue(moved);
+  const onUpdate = mock(() => undefined);
+  render(<EnvironmentMoveSection environment={environment()} onUpdate={onUpdate} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "Destination folder" }), {
+    target: { value: "/disk" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Move…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move" }));
+  await waitFor(() =>
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: moved.worktreePath,
+        lifecycleError: moved.lifecycleError,
+      }),
+    ),
+  );
+  expect(mockToastWarning).toHaveBeenCalledWith("Environment moved with a warning", {
+    description: moved.lifecycleError,
+  });
 });

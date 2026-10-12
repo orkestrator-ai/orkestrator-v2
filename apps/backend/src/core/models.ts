@@ -52,14 +52,18 @@ export type EnvironmentLifecycleOperation = "deleting" | "merging" | "moving";
 /**
  * Durable progress of an environment move. `moving`: the worktree may still
  * be at `from` (git renames it atomically; a copy to another disk goes to
- * `staging` first). `copied`: the copy is complete at `to` and the
- * repository points at it; only the record and the old folder remain.
+ * `staging` first). `copied`: the copy is complete at `to` and Git points
+ * at it. `committed`: storage also points at `to`; provider relocation and
+ * source cleanup remain retryable, and filesystem rollback is forbidden.
  */
 export interface WorktreeMoveRecord {
   from: string;
   to: string;
   staging?: string;
-  phase: "moving" | "copied";
+  phase: "moving" | "copied" | "committed";
+  fromCanonical?: string;
+  fromRoot?: string;
+  removeSource?: boolean;
   startedAt: string;
 }
 export type EnvironmentSetupPhase = "pending" | "running" | "ready" | "failed";

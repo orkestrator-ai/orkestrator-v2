@@ -62,3 +62,21 @@ Evidence: `/tmp/orkestrator-test-run.8uQSSt/bridges.log.gz` and
 preceded both undefined-state errors, suggesting a cascading fixture failure;
 the underlying timeout cause remains unproven. Assertions and timeouts were
 left unchanged.
+
+## Recurrence on 2026-10-12
+
+The environment-move fix validation reproduced `authentication > reports an authenticated credential as ready` under
+`mise run test:logged -- --name move-full-suite -- mise run test`, with the GNU
+tool PATH documented in the testing guide. Group allocations were 2/3/2/1.
+Cursor package: 667 passed, 1 failed and 1 error across 38 files; failure duration 5596.47 ms.
+
+The owning file passed alone, exit 0, in 3.8 seconds:
+
+```bash
+mise run test:logged -- --name isolate-cursor-http -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.tUZZDC/summary.json`
+and its compressed group logs. Status remains open; the isolated pass confirms
+recurrence but does not establish a root cause. No assertion, timeout or skip
+was changed.

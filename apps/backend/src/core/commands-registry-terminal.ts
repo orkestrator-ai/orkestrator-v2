@@ -660,6 +660,7 @@ export function registerTerminalCommands(
       const environment = await storage.getEnvironment(resolvedEnvironmentId);
       assertEnvironmentNotDeleting(resolvedEnvironmentId);
       assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
+      assertEnvironmentNotMoving(resolvedEnvironmentId);
       const stableKey = stableTerminalKey(
         "local",
         resolvedEnvironmentId,
@@ -736,6 +737,16 @@ export function registerTerminalCommands(
       stripInheritedAgentCredentials(launchEnvironment);
     }
     await resumeTerminalHistory(id);
+    const launchTarget = await storage.getEnvironment(environmentId);
+    assertEnvironmentNotDeleting(environmentId);
+    assertEnvironmentNotMoving(environmentId);
+    assertEnvironmentDeletionNotRequested(launchTarget, environmentId);
+    if (
+      launchTarget?.worktreePath !== currentEnvironment.worktreePath ||
+      terminalSessionConfigs.get(id) !== storedConfig
+    ) {
+      throw new Error("Local terminal session or worktree is no longer available");
+    }
     const alreadyRunning = terminalProcesses.has(id);
     const terminalProcess = spawnTerminalProcess(
       id,

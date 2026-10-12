@@ -144,7 +144,10 @@ export interface Environment {
     from: string;
     to: string;
     staging?: string;
-    phase: "moving" | "copied";
+    phase: "moving" | "copied" | "committed";
+    fromCanonical?: string;
+    fromRoot?: string;
+    removeSource?: boolean;
     startedAt: string;
   };
   /**

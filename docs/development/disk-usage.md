@@ -75,7 +75,11 @@ ignored files. The project home cannot be moved.
   deletion removes the worktree from there.
 - Progress is recorded on the environment (`worktreeMove`). If Orkestrator
   stops mid-move, the next start adopts a move that completed and otherwise
-  leaves the worktree where it was and removes the unfinished copy.
+  leaves the worktree where it was and removes the unfinished copy. Once the
+  destination is committed, it stays authoritative even if later bookkeeping
+  fails. The move record remains until conversation relocation and old-copy
+  cleanup finish. Partial completion names affected providers in settings and
+  retries on the next backend start; a new move is refused until it settles.
 
 ## What prunes itself
 

@@ -41,6 +41,8 @@ function joinPath(folder: string, name: string): string {
 
 /** Why the environment cannot be moved right now, or null when it can. */
 export function environmentMoveBlockedReason(environment: Environment): string | null {
+  if (environment.worktreeMove?.phase === "committed")
+    return "Move completion is pending; recovery will retry on restart.";
   if (environment.lifecycleOperation === "moving") return "This environment is being moved.";
   if (environment.lifecycleOperation === "deleting" || environment.deletionRequestedAt) {
     return "This environment is being deleted.";
@@ -108,7 +110,9 @@ export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMov
         lifecycleError: updated.lifecycleError ?? null,
       });
       setShowConfirm(false);
-      toast.success("Environment moved", { description: updated.worktreePath });
+      if (updated.lifecycleError)
+        toast.warning("Environment moved with a warning", { description: updated.lifecycleError });
+      else toast.success("Environment moved", { description: updated.worktreePath });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -166,6 +170,11 @@ export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMov
       {blockedReason ? (
         <p className="text-xs text-muted-foreground" role="status">
           {blockedReason}
+        </p>
+      ) : null}
+      {environment.worktreeMove?.phase === "committed" && environment.lifecycleError ? (
+        <p className="text-sm" role="alert">
+          {environment.lifecycleError}
         </p>
       ) : null}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

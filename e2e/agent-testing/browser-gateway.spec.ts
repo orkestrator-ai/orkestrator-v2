@@ -2,6 +2,7 @@ import {
   newReviewValidationRun,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
+import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -1699,5 +1700,107 @@ test("review validation queues across worktrees and runs while its environment i
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }
+  }
+});
+
+test("local environment move survives inactive navigation and reload", async ({ page }) => {
+  const status = await profileStatus();
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  )!;
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(path.dirname(status.testProject!), "move-qa-")),
+  );
+  const environments: Environment[] = [];
+  const accountHome = path.join(
+    status.dataDir!,
+    "agent-accounts",
+    "codex",
+    `move-fixture-${Date.now()}`,
+  );
+  try {
+    for (const label of ["move-source", "move-other"]) {
+      const environment = await invoke<Environment>("create_environment", {
+        projectId: fixture.id,
+        name: `${label}-${Date.now()}`,
+        environmentType: "local",
+        networkAccessMode: "restricted",
+      });
+      environments.push(environment);
+      await invoke("start_environment", { environmentId: environment.id });
+    }
+    const [source, other] = environments;
+    const original = (await invoke<Environment>("get_environment", { environmentId: source!.id }))
+      .worktreePath!;
+    await fs.writeFile(path.join(original, "move-preserved.txt"), "uncommitted fixture");
+    const openSettings = async () => {
+      const expand = page.getByRole("button", {
+        name: `Expand project ${fixture.name}`,
+        exact: true,
+      });
+      const entry = page.getByText(source!.name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+      await expect(page.getByRole("textbox", { name: "Destination folder" })).toBeVisible();
+    };
+    await page.reload();
+    await openSettings();
+    const destination = path.join(root, "first");
+    await page.getByRole("textbox", { name: "Destination folder" }).fill(destination);
+    await page.getByRole("button", { name: "Move…", exact: true }).click();
+    await page.getByRole("button", { name: "Move", exact: true }).click();
+    const firstPath = path.join(destination, path.basename(original));
+    await expect
+      .poll(
+        async () =>
+          (await invoke<Environment>("get_environment", { environmentId: source!.id }))
+            .worktreePath,
+      )
+      .toBe(firstPath);
+    await expect(page.getByRole("textbox", { name: "Destination folder" })).toHaveValue(
+      destination,
+    );
+    await page.getByRole("textbox", { name: "Destination folder" }).fill(path.join(root, "third"));
+    await expect(page.getByRole("button", { name: "Move…", exact: true })).toBeEnabled();
+    await page.keyboard.press("Escape");
+    // A corrupt record in this disposable profile's own account home forces
+    // a real provider migration failure without involving any host credentials.
+    const records = path.join(
+      accountHome,
+      "orkestrator-bridge",
+      `bridge-sessions-${createHash("sha256").update(firstPath).digest("hex").slice(0, 16)}`,
+    );
+    await fs.mkdir(records, { recursive: true });
+    await fs.writeFile(path.join(records, "corrupt.json"), "invalid fixture");
+    await page.getByText(other!.name, { exact: true }).first().click();
+    const nextDestination = path.join(root, "second");
+    const moving = invoke<Environment>("move_environment", {
+      environmentId: source!.id,
+      destinationDir: nextDestination,
+    });
+    await page.reload();
+    const moved = await moving;
+    expect(moved.worktreePath).toBe(path.join(nextDestination, path.basename(original)));
+    expect(await fs.readFile(path.join(moved.worktreePath!, "move-preserved.txt"), "utf8")).toBe(
+      "uncommitted fixture",
+    );
+    await openSettings();
+    await expect(page.getByRole("textbox", { name: "Destination folder" })).toHaveValue(
+      nextDestination,
+    );
+    await expect(page.getByRole("button", { name: "Move…", exact: true })).toBeDisabled();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Codex conversations could not be relocated" }),
+    ).toBeVisible();
+    await page.getByRole("textbox", { name: "Destination folder" }).fill(path.join(root, "third"));
+    await expect(page.getByRole("button", { name: "Move…", exact: true })).toBeDisabled();
+  } finally {
+    for (const environment of environments)
+      await invoke("delete_environment", { environmentId: environment.id });
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(accountHome, { recursive: true, force: true });
   }
 });

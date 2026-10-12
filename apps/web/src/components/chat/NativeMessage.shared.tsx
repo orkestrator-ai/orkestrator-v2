@@ -48,6 +48,7 @@ export interface NativeMessageProps {
 }
 
 export const MessageExpansionScopeContext = createContext("native-message");
+export const AgentExpansionScopeContext = createContext("native-message");
 export const AgentPlatformContext = createContext<AgentPlatform | undefined>(undefined);
 /**
  * Durable Multi Review report a Fix tab pins above its opening prompt.
@@ -191,18 +192,30 @@ export function useDeferredToolResult(
 }
 
 export function getAgentExpansionKey(part: NativeAgentActivityPart, partKey: string): string {
+  const backgroundTask =
+    part.type === "task-group" ? part.task.backgroundTask : part.backgroundTask;
+  const backgroundKey = backgroundTask ? `background-task:id:${backgroundTask.id}` : undefined;
+
   if (part.type === "task-group") {
     const durableId = part.task.toolUseId?.trim() || part.task.subagentId?.trim();
-    return durableId ? `task:id:${durableId}` : `task:part:${partKey}`;
+    return durableId ? `task:id:${durableId}` : (backgroundKey ?? `task:part:${partKey}`);
   }
 
   const durableId = part.subagentId?.trim() || part.toolUseId?.trim();
-  return durableId ? `subagent:id:${durableId}` : `subagent:part:${partKey}`;
+  return durableId ? `subagent:id:${durableId}` : (backgroundKey ?? `subagent:part:${partKey}`);
 }
 
 export function useAgentExpansion(part: NativeAgentActivityPart, partKey: string) {
-  const expansionScope = useContext(MessageExpansionScopeContext);
+  const messageScope = useContext(MessageExpansionScopeContext);
+  const transcriptScope = useContext(AgentExpansionScopeContext);
   const expansionKey = getAgentExpansionKey(part, partKey);
+  // Pinning and coalescing change the host row. A durable child still belongs
+  // to its original launch message, within this transcript's isolated scope.
+  const sourceMessageId =
+    part.sourceMessageId ?? (part.type === "task-group" ? part.task.sourceMessageId : undefined);
+  const expansionScope = sourceMessageId
+    ? JSON.stringify([transcriptScope, sourceMessageId])
+    : messageScope;
   // Active agents live in a virtualized row that can be unmounted while Claude
   // streams or while the reader scrolls. Persist the user's explicit toggle in
   // the same bounded store used by thinking/JSON disclosures so those routine

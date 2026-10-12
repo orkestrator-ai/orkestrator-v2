@@ -3267,6 +3267,13 @@ export async function sendPrompt(
           ...(effectiveClaudeContext1m(options)
             ? { betas: ["context-1m-2025-08-07" as const] }
             : {}),
+          // Explicit flags override ambient CLAUDE_CODE_ENABLE_CFC. Chrome is
+          // opt-in, and a coordinator's read-only boundary always excludes
+          // driving the user's signed-in browser.
+          extraArgs:
+            options?.parameterValues?.chrome === true && !coordinatorReadOnly
+              ? { chrome: null }
+              : { "no-chrome": null },
           ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
             ? { maxBudgetUsd: options.maxBudgetUsd }
             : {}),

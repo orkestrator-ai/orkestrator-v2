@@ -23,3 +23,13 @@ The assertion samples queue accounting 300 ms after pausing a real WebSocket
 reader. The isolated pass establishes intermittent behavior. Scheduling or
 transport buffering may affect the sampled queue, but the observed failure does
 not establish a root cause. No assertion, timeout or skip was changed.
+
+## Recurrence during merge validation (2026-10-12)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the GNU-tool `PATH` prefix from the testing guide.
+- **Worker configuration:** aggregate groups used 2/3/2/1 slots; backend had one isolated Bun worker alongside the web package.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `648578` after the stopped-reader delay (308.88 ms), at line 279.
+- **Suite counts:** backend package: 5,789 total, 5,773 passed, 15 skipped, 1 failed.
+- **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed in 0.7 seconds.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.zbwgoU/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Hypothesis:** this repeats the existing intermittent queue-sampling failure. The isolated pass does not establish its root cause; the merge resolution changes only flake documentation.

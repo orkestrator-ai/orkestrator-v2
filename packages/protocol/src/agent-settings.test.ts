@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS, type AgentPlatform } from "./agent-platforms.js";
 import {
+  claudeNativeParameterValues,
   DEFAULT_CLAUDE_NATIVE_BACKEND,
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -113,6 +114,28 @@ describe("resolveAgentPlatformSettings", () => {
     ).toMatchObject({
       claudeThinkingMode: "disabled",
       claudeContext1m: false,
+    });
+  });
+
+  test("resolves Claude in Chrome through the tiers, including an explicit false", () => {
+    const global = platformTier("claude", { claudeChrome: true });
+    const environment = platformTier("claude", { claudeChrome: false });
+
+    expect(resolveAgentPlatformSettings({ global }, "claude").claudeChrome).toBe(true);
+    expect(resolveAgentPlatformSettings({ environment, global }, "claude").claudeChrome).toBe(
+      false,
+    );
+  });
+
+  test("sends the chrome parameter only when Claude in Chrome is on", () => {
+    expect(claudeNativeParameterValues({ claudeChrome: true })).toEqual({
+      thinking: "adaptive",
+      context1m: false,
+      chrome: true,
+    });
+    expect(claudeNativeParameterValues({ claudeChrome: false })).toEqual({
+      thinking: "adaptive",
+      context1m: false,
     });
   });
 
@@ -331,14 +354,15 @@ describe("normalizeAgentSettings", () => {
   test("keeps valid Claude SDK defaults and drops them from other platforms", () => {
     const normalized = normalizeAgentSettings({
       platforms: {
-        claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
-        codex: { claudeThinkingMode: "adaptive", claudeContext1m: true },
+        claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true, claudeChrome: true },
+        codex: { claudeThinkingMode: "adaptive", claudeContext1m: true, claudeChrome: true },
       },
     });
 
     expect(normalized.platforms?.claude).toEqual({
       claudeThinkingMode: "budget-16384",
       claudeContext1m: true,
+      claudeChrome: true,
     });
     expect(normalized.platforms?.codex).toBeUndefined();
   });

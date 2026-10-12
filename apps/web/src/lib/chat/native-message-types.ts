@@ -59,7 +59,7 @@ export interface NativeBackgroundTask {
   error?: string;
   /** The provider's one-line report from the task's terminal edge. */
   summary?: string;
-  /** Path of the task's full output on the backend host. */
+  /** Path of the task's full output in its environment's filesystem. */
   outputFile?: string;
   usage?: NativeAgentBackgroundTaskUsage;
 }

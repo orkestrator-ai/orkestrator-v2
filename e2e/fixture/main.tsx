@@ -1,3 +1,4 @@
+import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
@@ -1660,6 +1661,8 @@ function fixtureForPath() {
     return <WorkspaceBarHeightFixture />;
   }
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
+  if (window.location.pathname === "/background-task-outcome")
+    return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;

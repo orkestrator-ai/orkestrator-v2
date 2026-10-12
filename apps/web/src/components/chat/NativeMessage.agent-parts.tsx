@@ -466,7 +466,7 @@ function backgroundTaskUsageEntries(
   ];
 }
 
-function BackgroundTaskOutputFile({ path }: { path: string }) {
+function BackgroundTaskOutputFile({ path, containerId }: { path: string; containerId?: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -502,17 +502,19 @@ function BackgroundTaskOutputFile({ path }: { path: string }) {
         >
           {path}
         </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="h-6 w-6 shrink-0 p-0 text-muted-foreground/70 hover:text-foreground"
-          onClick={reveal}
-          aria-label="Reveal output file"
-          title="Reveal in file manager"
-        >
-          <FolderOpen className="h-3.5 w-3.5" />
-        </Button>
+        {!containerId ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="h-6 w-6 shrink-0 p-0 text-muted-foreground/70 hover:text-foreground"
+            onClick={reveal}
+            aria-label="Reveal output file"
+            title="Reveal in file manager"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="ghost"
@@ -526,6 +528,41 @@ function BackgroundTaskOutputFile({ path }: { path: string }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Snapshot outcome details shared by synthesized tasks and loaded Agent launches. */
+function BackgroundTaskDetails({
+  task,
+  containerId,
+}: {
+  task: NativeBackgroundTask;
+  containerId?: string;
+}) {
+  return (
+    <>
+      {backgroundTaskOutcome(task).map((line) => (
+        <div key={line.label} className="mb-3 border-l border-border/30 pl-3">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+            {line.label}
+          </div>
+          <pre
+            className={cn(
+              "max-h-40 overflow-auto whitespace-pre-wrap break-words font-sans text-xs",
+              line.label === "Error" ? "text-destructive/90" : "text-muted-foreground/90",
+            )}
+          >
+            {line.text}
+          </pre>
+        </div>
+      ))}
+      <AgentMetaRows
+        entries={[{ label: "Task ID", value: task.id }, ...backgroundTaskUsageEntries(task)]}
+      />
+      {task.outputFile ? (
+        <BackgroundTaskOutputFile path={task.outputFile} containerId={containerId} />
+      ) : null}
+    </>
   );
 }
 
@@ -607,6 +644,7 @@ function StopBackgroundTaskButton({
  */
 export function BackgroundTaskCard({
   task,
+  containerId,
   launchStartedAt,
   command,
   result,
@@ -617,6 +655,7 @@ export function BackgroundTaskCard({
   embedded = false,
 }: {
   task: NativeBackgroundTask;
+  containerId?: string;
   /** Transcript launch clock used when an older snapshot has no `startedAt`. */
   launchStartedAt?: string;
   /** The command or prompt that launched the task, shown collapsed. */
@@ -759,23 +798,7 @@ export function BackgroundTaskCard({
               </pre>
             </div>
           ) : null}
-          {outcome.map((line) => (
-            <div key={line.label} className="mb-3 border-l border-border/30 pl-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                {line.label}
-              </div>
-              <pre
-                className={cn(
-                  "max-h-40 overflow-auto whitespace-pre-wrap break-words font-sans text-xs",
-                  line.label === "Error" ? "text-destructive/90" : "text-muted-foreground/90",
-                )}
-              >
-                {line.text}
-              </pre>
-            </div>
-          ))}
-          <AgentMetaRows entries={[{ label: "Task ID", value: task.id }, ...usageEntries]} />
-          {task.outputFile ? <BackgroundTaskOutputFile path={task.outputFile} /> : null}
+          <BackgroundTaskDetails task={task} containerId={containerId} />
           <AgentResultBlock result={result} />
         </div>
       </CollapsibleContent>
@@ -1089,6 +1112,7 @@ export function TaskGroupPart({
     return (
       <BackgroundTaskCard
         task={standaloneBackgroundTask}
+        containerId={containerId}
         launchStartedAt={part.task.createdAt ?? part.createdAt}
         command={stringToolArg(part.task.toolArgs, "command") ?? prompt}
         result={result}
@@ -1192,6 +1216,9 @@ export function TaskGroupPart({
             </div>
           ) : null}
           <AgentMetaRows entries={metaEntries} />
+          {backgroundAgentTask ? (
+            <BackgroundTaskDetails task={backgroundAgentTask} containerId={containerId} />
+          ) : null}
           <AgentResultBlock result={result} />
           <div className="space-y-1">
             {part.childTools.map((child, index) => (

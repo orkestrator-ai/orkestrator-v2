@@ -1474,7 +1474,27 @@ export function reducePersistedBackgroundTaskMessage(
   message: BackgroundTaskSystemMessage,
   timestamp: number,
 ): Record<string, BackgroundTaskSnapshot> {
-  const previous = tasks?.[message.task_id];
+  const stored = tasks?.[message.task_id];
+  // A new launch under a finished task's id starts a fresh run, just as in
+  // the live iterator. Late progress from the old run must not revive it.
+  const resumedRun =
+    message.subtype === "task_started" &&
+    stored !== undefined &&
+    !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
+    message.tool_use_id !== undefined &&
+    message.tool_use_id !== stored.toolUseId;
+  const previous = resumedRun
+    ? {
+        ...stored,
+        status: "running" as const,
+        startedAt: timestamp,
+        endedAt: undefined,
+        error: undefined,
+        summary: undefined,
+        outputFile: undefined,
+        usage: undefined,
+      }
+    : stored;
   if (message.subtype === "task_notification") {
     if (!message.status) return tasks ?? {};
     const startedAt = previous?.startedAt ?? timestamp;
@@ -1530,7 +1550,11 @@ export function reducePersistedBackgroundTaskMessage(
       error: message.patch?.error ?? previous?.error,
       summary: previous?.summary,
       outputFile: previous?.outputFile,
-      usage: message.usage ?? previous?.usage,
+      // A terminal report is authoritative over delayed progress for that run.
+      usage:
+        previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) && previous.usage
+          ? previous.usage
+          : (message.usage ?? previous?.usage),
     },
   });
 }

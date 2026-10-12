@@ -914,6 +914,9 @@ describe("claude-client", () => {
         startedAt: 100,
         endedAt: 200,
         error: "command failed",
+        summary: "Build failed",
+        outputFile: "/tmp/tasks/build.output",
+        usage: { totalTokens: 1_200, toolUses: 3, durationMs: 4_000 },
       };
       const dropped: string[] = [];
       expect(
@@ -926,6 +929,29 @@ describe("claude-client", () => {
         ),
       ).toEqual({ build: complete });
       expect(dropped).toEqual(["primitive"]);
+    });
+
+    test("drops tasks with malformed outcome or usage fields", () => {
+      const fields = [
+        { summary: 42 },
+        { outputFile: false },
+        { usage: null },
+        { usage: {} },
+        { usage: { totalTokens: -1, toolUses: 1, durationMs: 1 } },
+        { usage: { totalTokens: 1, toolUses: Number.NaN, durationMs: 1 } },
+        { usage: { totalTokens: 1, toolUses: 1, durationMs: Number.POSITIVE_INFINITY } },
+        { usage: { totalTokens: "1", toolUses: 1, durationMs: 1 } },
+      ];
+      for (const field of fields) {
+        const dropped: string[] = [];
+        expect(
+          parseClaudeBackgroundTasks(
+            { build: { id: "build", status: "failed", ...field } },
+            dropped,
+          ),
+        ).toEqual({});
+        expect(dropped).toEqual(["build"]);
+      }
     });
 
     test("rejects each malformed optional background-task field", () => {

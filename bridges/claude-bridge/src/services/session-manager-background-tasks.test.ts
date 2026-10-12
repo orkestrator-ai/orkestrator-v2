@@ -1,4 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import {
+  normalizePersistedSessionMessages,
+  persistedBackgroundTaskMessage,
+  reducePersistedBackgroundTaskMessage,
+} from "./session-manager-messages.js";
 import type { BackgroundTaskSnapshot } from "../types/index.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
@@ -20,6 +25,26 @@ import {
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
+
+function replayTaskFrames(frames: unknown[], processGone = true) {
+  if (!processGone) {
+    let tasks: Record<string, BackgroundTaskSnapshot> | undefined;
+    for (const frame of frames) {
+      const message = persistedBackgroundTaskMessage({ message: frame });
+      if (message) tasks = reducePersistedBackgroundTaskMessage(tasks, message, Date.now());
+    }
+    return tasks;
+  }
+  return normalizePersistedSessionMessages(
+    frames.map((message, index) => ({
+      type: "system" as const,
+      uuid: `task-frame-${index}`,
+      session_id: "replay-task-session",
+      parent_tool_use_id: null,
+      message,
+    })),
+  ).backgroundTasks;
+}
 
 describe("background task reducer", () => {
   test("projects SDK task and subagent hooks through the existing background-task snapshot", async () => {
@@ -1132,9 +1157,12 @@ describe("background task reducer", () => {
       task_id: "agent-dl",
       tool_use_id: "agent-dl-call",
       status: "completed",
+      summary: "Prior run complete",
+      output_file: "/tmp/prior.output",
+      usage: { total_tokens: 900, tool_uses: 2, duration_ms: 4_000 },
     });
     pushSuccessfulContinuationResult(call);
-    await waitFor(() => created.backgroundTasks?.["agent-dl"]?.status === "completed");
+    await waitFor(() => created.backgroundTasks?.["agent-dl"]?.summary === "Prior run complete");
 
     // The Bash finishes and wakes the subagent under the same ids.
     level(["agent-dl"]);
@@ -1164,6 +1192,9 @@ describe("background task reducer", () => {
       toolUseId: "agent-dl-call",
     });
     expect(created.backgroundTasks?.["agent-dl"]?.endedAt).toBeUndefined();
+    expect(created.backgroundTasks?.["agent-dl"]?.summary).toBeUndefined();
+    expect(created.backgroundTasks?.["agent-dl"]?.outputFile).toBeUndefined();
+    expect(created.backgroundTasks?.["agent-dl"]?.usage).toBeUndefined();
 
     // The Bash notification's own continuation must not close the CLI under
     // the woken agent.
@@ -3876,6 +3907,168 @@ describe("background task reducer", () => {
       usage: { totalTokens: 1_500, toolUses: 4, durationMs: 9_000 },
     });
     expect(session.backgroundTasks?.["task-1"]?.error).toBeUndefined();
+  });
+
+  test("keeps progress usage when the live task membership is replaced", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-1",
+          usage: { total_tokens: 900, tool_uses: 2, duration_ms: 4_000 },
+        },
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-1", description: "Replacement" }],
+        },
+      ],
+      (state) => state.backgroundTasks?.["task-1"]?.description === "Replacement",
+    );
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({
+      status: "running",
+      usage: { totalTokens: 900, toolUses: 2, durationMs: 4_000 },
+    });
+    await finish();
+  });
+
+  test("terminal usage wins over delayed progress live and on replay", async () => {
+    const frames = [
+      { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "launch-1" },
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        usage: { total_tokens: 1_500, tool_uses: 4, duration_ms: 9_000 },
+      },
+      {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-1",
+        usage: { total_tokens: 900, tool_uses: 2, duration_ms: 4_000 },
+      },
+    ];
+    const { session } = await runPromptWithMessages(frames);
+    for (const tasks of [session.backgroundTasks, replayTaskFrames(frames)]) {
+      expect(tasks?.["task-1"]).toMatchObject({
+        status: "completed",
+        usage: { totalTokens: 1_500, toolUses: 4, durationMs: 9_000 },
+      });
+    }
+  });
+
+  test("clears prior-run outcomes on a same-id SDK restart live and on replay", async () => {
+    const frames = [
+      { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "launch-1" },
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "failed",
+        summary: "Old failure",
+        output_file: "/tmp/old.output",
+        usage: { total_tokens: 900, tool_uses: 2, duration_ms: 4_000 },
+      },
+      {
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-1",
+        tool_use_id: "launch-2",
+        description: "New run",
+      },
+    ];
+    const { session, finish } = await inspectDuringTurn(
+      frames,
+      (state) => state.backgroundTasks?.["task-1"]?.toolUseId === "launch-2",
+    );
+    for (const tasks of [session.backgroundTasks, replayTaskFrames(frames, false)]) {
+      expect(tasks?.["task-1"]).toMatchObject({
+        status: "running",
+        toolUseId: "launch-2",
+        description: "New run",
+      });
+      for (const field of ["summary", "outputFile", "usage", "error", "endedAt"] as const) {
+        expect(tasks?.["task-1"]?.[field]).toBeUndefined();
+      }
+    }
+    await finish();
+    const nextFrames = [
+      ...frames,
+      {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-1",
+        usage: { total_tokens: 10, tool_uses: 1, duration_ms: 100 },
+      },
+      { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed" },
+    ];
+    const next = await runPromptWithMessages(nextFrames);
+    for (const tasks of [next.session.backgroundTasks, replayTaskFrames(nextFrames)]) {
+      expect(tasks?.["task-1"]).toMatchObject({
+        status: "completed",
+        usage: { totalTokens: 10, toolUses: 1, durationMs: 100 },
+      });
+      expect(tasks?.["task-1"]?.summary).toBeUndefined();
+      expect(tasks?.["task-1"]?.outputFile).toBeUndefined();
+      expect(tasks?.["task-1"]?.error).toBeUndefined();
+    }
+  });
+
+  for (const status of [undefined, "succeeded", "", 42]) {
+    test(`ignores malformed live terminal status ${String(status)} consistently with hydration`, async () => {
+      const frames = [
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-1",
+          description: "Still running",
+        },
+        {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-1",
+          status,
+          summary: "Invalid completion",
+        },
+        { type: "system", subtype: "task_notification", task_id: "unknown-task", status },
+        {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-1",
+          description: "After invalid edge",
+        },
+      ];
+      const { session, finish } = await inspectDuringTurn(
+        frames,
+        (state) => state.backgroundTasks?.["task-1"]?.description === "After invalid edge",
+      );
+      const replay = replayTaskFrames(frames);
+      expect(session.backgroundTasks?.["task-1"]?.status).toBe("running");
+      expect(replay?.["task-1"]?.status).toBe("killed");
+      expect(session.backgroundTasks?.["unknown-task"]).toBeUndefined();
+      expect(replay?.["unknown-task"]).toBeUndefined();
+      await finish();
+      expect(session.backgroundTasks?.["task-1"]?.status).toBe(replay?.["task-1"]?.status);
+    });
+  }
+
+  test("sanitizes a failed live summary and error just like replay", async () => {
+    const frames = [
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "failed",
+        summary: `\u0000${"a".repeat(5_000)}`,
+      },
+    ];
+    const { session } = await runPromptWithMessages(frames);
+    for (const tasks of [session.backgroundTasks, replayTaskFrames(frames)]) {
+      expect(tasks?.["task-1"]?.summary).toBe("a".repeat(4_096));
+      expect(tasks?.["task-1"]?.error).toBe(tasks?.["task-1"]?.summary);
+    }
   });
 
   test("drops an output path it cannot pass on intact and usage it cannot read", async () => {

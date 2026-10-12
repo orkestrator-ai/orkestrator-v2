@@ -3590,8 +3590,8 @@ describe("NativeMessage task list rendering", () => {
     ).toBeTruthy();
     expect(screen.getByText(outputFile)).toBeTruthy();
     // A shell task reports zero counts, which would only be noise.
-    expect(screen.queryByText("Tool uses")).toBeNull();
-    expect(screen.queryByText("Tokens")).toBeNull();
+    expect(screen.queryByText("Tool uses") === null).toBe(true);
+    expect(screen.queryByText("Tokens") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Reveal output file" }));
     expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", { path: outputFile });
@@ -3599,6 +3599,62 @@ describe("NativeMessage task list rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy output file path" }));
     await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(outputFile));
   });
+
+  for (const toolName of ["Agent", "Task", "Bash"]) {
+    test(`${toolName} keeps outcome details when its synthesized row is replaced by a loaded launch`, async () => {
+      const task = {
+        id: "outcome-task",
+        description: "Review validation",
+        status: "failed" as const,
+        settledAt: "2026-03-21T10:02:00.000Z",
+        error: "Validation failed",
+        summary: "Two checks failed",
+        outputFile: "/tmp/tasks/shared.output",
+        usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 },
+      };
+      const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+      invokeMock.mockClear();
+      const rows = rowlessBackgroundTaskMessages([task], [makeMessage([])]);
+      const view = render(<NativeMessage platform="claude" message={rows[0]!} />);
+      fireEvent.click(screen.getByRole("button", { name: /Task Review validation/ }));
+      expect(screen.getByText("Two checks failed")).toBeTruthy();
+      const loaded = makeMessage([
+        makeAgentTaskGroupPart({
+          task: {
+            toolName,
+            toolTitle: toolName,
+            toolState: "success",
+            toolUseId: "loaded-launch",
+            toolArgs: { description: task.description, run_in_background: true },
+            backgroundTask: task,
+          },
+        }),
+      ]);
+      // Re-enter through the same NativeMessage route with the actual launch loaded.
+      view.rerender(<NativeMessage platform="claude" message={loaded} />);
+      const row = screen.getByRole("button", {
+        name: new RegExp(`${toolName === "Bash" ? "Task" : "Agent"} Review validation`),
+      });
+      if (screen.queryByText("Summary") === null) fireEvent.click(row);
+      expect(screen.getByText("Error")).toBeTruthy();
+      expect(screen.getByText("Two checks failed")).toBeTruthy();
+      expect(screen.getByText("Tool uses")).toBeTruthy();
+      expect(screen.getByText("7")).toBeTruthy();
+      expect(screen.getByText("Tokens")).toBeTruthy();
+      expect(screen.getByText(task.outputFile)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Reveal output file" }));
+      expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", { path: task.outputFile });
+      invokeMock.mockClear();
+      // Identical path, different filesystem: container output is copyable only.
+      view.rerender(<NativeMessage platform="claude" containerId="container-1" message={loaded} />);
+      expect(screen.queryByRole("button", { name: "Reveal output file" }) === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Copy output file path" }));
+      await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(task.outputFile));
+      expect(invokeMock).not.toHaveBeenCalledWith("reveal_in_file_manager", {
+        path: task.outputFile,
+      });
+    });
+  }
 
   test("shows a summary that only repeats the failure once", () => {
     render(
@@ -3618,9 +3674,28 @@ describe("NativeMessage task list rendering", () => {
 
     // Once in the collapsed row, once in the body — never a second "Summary".
     expect(screen.getAllByText("exit code 2")).toHaveLength(2);
-    expect(screen.queryByText("Summary")).toBeNull();
+    expect(screen.queryByText("Summary") === null).toBe(true);
     expect(screen.getByText("Tool uses")).toBeTruthy();
     expect(screen.getByText("7")).toBeTruthy();
+  });
+
+  test("omits a repeated description from the expanded outcome body", () => {
+    render(
+      <BackgroundTaskCard
+        task={{
+          id: "repeat-task",
+          description: "Build",
+          status: "completed",
+          summary: " Build ",
+          usage: { totalTokens: 100, toolUses: 1, durationMs: 100 },
+        }}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.getAllByText("Build")).toHaveLength(1);
+    expect(screen.queryByText("Summary") === null).toBe(true);
+    expect(screen.getByText("Tool uses")).toBeTruthy();
   });
 
   test("leaves a task with nothing to add unexpandable", () => {

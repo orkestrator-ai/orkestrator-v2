@@ -139,6 +139,71 @@ describe("Pi bridge runtime vendoring", () => {
     }
   });
 
+  test("stages packages linked from Bun's global store", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-global-store-test-"));
+    const sourceModules = path.join(root, "source", "node_modules");
+    const store = path.join(sourceModules, ".bun");
+    // `install.globalStore` links project entries into this directory, adding a
+    // content-hash suffix to each entry name.
+    const links = path.join(root, "home", ".bun", "install", "cache", "links");
+    const stagedModules = path.join(root, "staged", "node_modules");
+    const hash = "0123456789abcdef";
+
+    const writePackage = async (directory: string, name: string, dependencies = {}) => {
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        path.join(directory, "package.json"),
+        JSON.stringify({ name, version: "1.0.0", dependencies }),
+      );
+    };
+    const link = async (target: string, linkPath: string) => {
+      await mkdir(path.dirname(linkPath), { recursive: true });
+      await symlink(path.relative(path.dirname(linkPath), target), linkPath, "dir");
+    };
+
+    try {
+      // A global entry depends on a global sibling.
+      const sharedPackage = path.join(links, `shared@1.0.0-${hash}`, "node_modules", "shared");
+      const globalPackage = path.join(links, `global@1.0.0-${hash}`, "node_modules", "global");
+      await writePackage(sharedPackage, "shared");
+      await writePackage(globalPackage, "global", { shared: "1.0.0" });
+      await link(sharedPackage, path.join(links, `global@1.0.0-${hash}`, "node_modules", "shared"));
+      // A local (for example patched) entry depends on that sibling through
+      // the project store's unsuffixed name.
+      const localPackage = path.join(store, "local@1.0.0", "node_modules", "local");
+      await writePackage(localPackage, "local", { shared: "1.0.0" });
+      await link(
+        path.join(store, "shared@1.0.0", "node_modules", "shared"),
+        path.join(store, "local@1.0.0", "node_modules", "shared"),
+      );
+      await symlink(path.join(links, `shared@1.0.0-${hash}`), path.join(store, "shared@1.0.0"));
+      await symlink(path.join(links, `global@1.0.0-${hash}`), path.join(store, "global@1.0.0"));
+      await link(
+        path.join(store, "global@1.0.0", "node_modules", "global"),
+        path.join(sourceModules, "global"),
+      );
+      await link(localPackage, path.join(sourceModules, "local"));
+
+      const result = await stageRuntimeClosure({
+        packageRoot: path.join(root, "source"),
+        destination: stagedModules,
+        entryPackages: ["global", "local"],
+      });
+      expect(result.packageCount).toBe(3);
+
+      await rm(path.join(root, "source"), { recursive: true, force: true });
+      await rm(path.join(root, "home"), { recursive: true, force: true });
+      const requireFromStage = createRequire(path.join(root, "staged", "probe.cjs"));
+      for (const entry of ["global", "local"]) {
+        const manifest = requireFromStage.resolve(`${entry}/package.json`);
+        const shared = createRequire(manifest).resolve("shared/package.json");
+        expect(JSON.parse(await readFile(shared, "utf8")).name).toBe("shared");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("links undeclared runtime roots inside every staged entry store", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-cross-root-test-"));
     const sourceModules = path.join(root, "source", "node_modules");

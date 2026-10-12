@@ -61,24 +61,43 @@ type BunStorePackage = {
   packageRoot: string;
   storeKey: string;
   storeRoot: string;
+  /**
+   * The name a project-local `.bun` entry uses for this instance when it lives
+   * in Bun's global store, whose directories carry an extra content-hash suffix.
+   */
+  localAlias?: string;
 };
 
+/**
+ * With `install.globalStore` enabled, `node_modules/.bun/<key>` is a link to
+ * `~/.bun/install/cache/links/<key>-<hash>`. Entries there keep the same
+ * shape and link to their siblings relatively, so either store can be staged.
+ */
+const GLOBAL_STORE_MARKER = `${path.sep}install${path.sep}cache${path.sep}links${path.sep}`;
+const GLOBAL_STORE_HASH_SUFFIX = /-[0-9a-f]{16}$/;
+
 function bunStorePackage(resolvedPackage: string): BunStorePackage {
-  const marker = `${path.sep}node_modules${path.sep}.bun${path.sep}`;
-  const markerIndex = resolvedPackage.lastIndexOf(marker);
-  if (markerIndex === -1) {
+  const localMarker = `${path.sep}node_modules${path.sep}.bun${path.sep}`;
+  const localIndex = resolvedPackage.lastIndexOf(localMarker);
+  const globalIndex = resolvedPackage.lastIndexOf(GLOBAL_STORE_MARKER);
+  if (localIndex === -1 && globalIndex === -1) {
     throw new Error(
       `Pi bridge vendoring requires Bun's isolated node_modules layout: ${resolvedPackage}`,
     );
   }
-  const storeKeyStart = markerIndex + marker.length;
+  const global = globalIndex > localIndex;
+  const storeKeyStart = global
+    ? globalIndex + GLOBAL_STORE_MARKER.length
+    : localIndex + localMarker.length;
   const storeKeyEnd = resolvedPackage.indexOf(path.sep, storeKeyStart);
   if (storeKeyEnd === -1) throw new Error(`Invalid Bun store path: ${resolvedPackage}`);
   const storeKey = resolvedPackage.slice(storeKeyStart, storeKeyEnd);
+  const localAlias = global ? storeKey.replace(GLOBAL_STORE_HASH_SUFFIX, "") : undefined;
   return {
     packageRoot: resolvedPackage,
     storeKey,
     storeRoot: resolvedPackage.slice(0, storeKeyEnd),
+    ...(localAlias && localAlias !== storeKey ? { localAlias } : {}),
   };
 }
 
@@ -121,6 +140,19 @@ export async function stageRuntimeClosure(options: {
       dereference: false,
       verbatimSymlinks: true,
     });
+  }
+
+  // A project-local store entry links to its siblings by their local names,
+  // which for a globally stored sibling omit the hash suffix. Keep those
+  // relative links resolvable in a mixed store.
+  for (const instance of packages.values()) {
+    if (!instance.localAlias) continue;
+    const aliasPath = path.join(options.destination, ".bun", instance.localAlias);
+    const exists = await lstat(aliasPath).then(
+      () => true,
+      () => false,
+    );
+    if (!exists) await symlink(instance.storeKey, aliasPath, "dir");
   }
 
   const entries = new Map<string, BunStorePackage>();

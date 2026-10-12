@@ -22,8 +22,10 @@ import type {
   SDKSystemMessage,
   SDKToolProgressMessage,
   SDKToolUseSummaryMessage,
+  SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { createHash } from "node:crypto";
 import type {
   SessionState,
   NormalizedMessage,
@@ -33,7 +35,6 @@ import type {
   QuestionRequest,
   PlanApprovalRequest,
   PromptOptions,
-  SessionInitData,
   McpServerRuntimeStatus,
   SdkMessageBase,
   SdkResultMessage,
@@ -245,7 +246,26 @@ import {
   getMessageTextFromParts,
   holdSdkPromptOpen,
   readPersistedSessionMessagesOnce,
+  sdkPromptMessages,
 } from "./session-manager-persistence.js";
+import {
+  applyClaudeLiveSettings,
+  assertClaudeRuntimeAccepts,
+  assertClaudeRuntimeStaticAccepts,
+  claudeLaunchResourceProfile,
+  effectiveClaudeContext1m,
+  claudeLaunchedProfile,
+  claudeLiveSettings,
+  createClaudeRuntime,
+  drainClaudeRuntime,
+  openClaudeRuntime,
+  recordClaudeToolOwner,
+  retireDrainingClaudeRuntime,
+  routeClaudeFrame,
+  submitClaudeTurn,
+  type ClaudeRuntime,
+  type ClaudeRuntimeTurn,
+} from "./session-manager-runtime.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   inheritBackgroundTaskHookRun,
@@ -387,15 +407,6 @@ const CONVERSATION_RESET_CAUSES: Record<string, string> = {
   onboarding: "Conversation restarted by onboarding.",
 };
 
-function supportsClaudeContext1m(model: string | undefined): boolean {
-  const selected = model?.trim();
-  // The SDK catalogue's `default` entry, and an omitted model on backend-owned
-  // startup turns, both resolve to the provider's recommended Opus model. They
-  // must not disable an explicitly requested session default merely because
-  // the alias is not itself named "opus".
-  return !selected || selected === "default" || /opus|sonnet/i.test(selected);
-}
-
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
   informational: "info",
   notification: "info",
@@ -475,6 +486,93 @@ function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "plan
   };
 }
 
+/** Ids of the tool calls an assistant message makes. */
+function toolUseIdsFromAssistantMessage(message: unknown): string[] {
+  const content = (message as { message?: { content?: unknown } }).message?.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => {
+    const { type, id } = (block ?? {}) as { type?: unknown; id?: unknown };
+    return (type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use") &&
+      typeof id === "string" &&
+      id
+      ? [id]
+      : [];
+  });
+}
+
+/**
+ * The single consumer of a runtime's frames, for the life of its process.
+ *
+ * Each frame goes to the turn it belongs to (`routeClaudeFrame`). A turn whose
+ * handler throws ends the process — leaving the loop is the SDK's
+ * `transport.close()` — and that turn's `sendPrompt` reports the error.
+ */
+async function consumeClaudeRuntime(
+  runtime: ClaudeRuntime,
+  frames: AsyncIterable<SDKMessage>,
+  markEnded: () => void,
+): Promise<void> {
+  let failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined;
+  try {
+    for await (const message of frames) {
+      if (runtime.abortController.signal.aborted) break;
+      const turn = routeClaudeFrame(runtime, message);
+      try {
+        await turn.handleMessage(message);
+      } catch (error) {
+        failure = { turn, error };
+        break;
+      }
+    }
+  } catch (error) {
+    failure = { turn: runtime.latestTurn, error };
+  } finally {
+    endClaudeRuntime(runtime, failure);
+    markEnded();
+  }
+}
+
+/**
+ * Settle everything a finished process owned and release its turns.
+ *
+ * The consumer ends either exhausted or through an abrupt exit, which invokes
+ * `return()`, i.e. the SDK's `cleanup()` → `transport.close()`. So the handle
+ * is dead either way: nothing more can arrive on it and `stopTask` would answer
+ * a stop request with a transport error. Settle what it owned instead of
+ * retaining a handle that can only fail, and never leave a task at `running`.
+ */
+function endClaudeRuntime(
+  runtime: ClaudeRuntime,
+  failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined,
+): void {
+  runtime.state = "ended";
+  const { session, control } = runtime;
+  if (session.claudeRuntime === runtime) session.claudeRuntime = undefined;
+  // Dropping the retention is what lets the close below actually run.
+  forgetRetainedQueryControl(session, control);
+  removeBackgroundTaskCandidatesOwnedBy(session, control);
+  // The handle is dead, so no edge can still arrive to claim these.
+  forgetSettlingBackgroundTasksOwnedBy(session, control);
+  const settled = settleTasksOwnedByClosedControl(
+    session,
+    control,
+    "The Claude session that owned this task ended before it reported a result",
+  );
+  if (session.queryControl === control) session.queryControl = undefined;
+  if (session.queryControlDraining === control) session.queryControlDraining = undefined;
+  closeQueryControlIfUnused(session, control);
+  if (settled) emitBackgroundTaskSnapshot(session);
+  // A turn that failed after it stopped waiting still ended the process; the
+  // turn the user is waiting on is the one that has to say so.
+  const failedTurn =
+    failure && (runtime.waitingTurns.has(failure.turn) ? failure.turn : runtime.latestTurn);
+  const turns = Array.from(runtime.waitingTurns);
+  runtime.waitingTurns.clear();
+  for (const turn of turns) {
+    turn.runtimeEnded(turn === failedTurn && failure ? { error: failure.error } : undefined);
+  }
+}
+
 /**
  * Send a prompt to a session and process the response
  */
@@ -524,6 +622,10 @@ export async function sendPrompt(
   if (session.rewindInProgress) {
     throw sessionOperationError("conflict", "Session is restoring files from a checkpoint");
   }
+  // Before anything is claimed: a prompt the session's running CLI cannot take
+  // is refused outright, never accepted and then dropped.
+  assertClaudeRuntimeStaticAccepts(session, options);
+  const runtimeBeforeStartup = session.claudeRuntime;
   const statusBeforeStartup = session.status;
   const turnStartedAtBeforeStartup = session.turnStartedAt;
   const abortControllerBeforeStartup = session.abortController;
@@ -721,6 +823,28 @@ export async function sendPrompt(
   };
   abortController.signal.addEventListener("abort", observeAbort, { once: true });
   let queryIteratorControl: SessionState["queryControl"];
+  // The CLI this turn runs on: the session's running one when it is still
+  // alive, otherwise one this turn launches. Never a second one.
+  let runtime: ClaudeRuntime | undefined;
+  // This turn as its runtime sees it. Assigned once the handlers exist.
+  let thisTurn: ClaudeRuntimeTurn | undefined;
+  // Settled when this turn stops waiting on its runtime: superseded by a newer
+  // turn, or the process ended. Rejected with the error a frame raised.
+  let resolveTurnEnded!: () => void;
+  let rejectTurnEnded!: (error: unknown) => void;
+  const turnEnded = new Promise<void>((resolve, reject) => {
+    resolveTurnEnded = resolve;
+    rejectTurnEnded = reject;
+  });
+  // The process can fail before this turn reaches its `await` (while agent
+  // discovery is in flight, say). The await below still observes the error;
+  // this only keeps an early rejection from being reported as unhandled.
+  turnEnded.catch(() => {});
+  // Set when a newer turn took over the root conversation.
+  let superseded = false;
+  // A continuation the superseded turn was still waiting for when this turn
+  // took over; see `inheritContinuation`.
+  let inheritedContinuation = false;
   let structuredUsageRefresh: StructuredUsageRefreshCoordinator | undefined;
   let queryStarted = false;
   let queryEnded = false;
@@ -731,16 +855,23 @@ export async function sendPrompt(
   // Armed while a released turn is waiting for the continuation a background
   // task notification triggers, so the `finally` can always disarm it.
   let retainedContinuationTimer: ReturnType<typeof setTimeout> | null = null;
+  // A turn written into a running CLI shares its tool tracker, so reports for
+  // tools an earlier turn started still find their rows.
+  const runningRuntime = openClaudeRuntime(session);
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
   const stream = createPromptStreamState(session, sessionId, {
     flushIntervalMs: STREAM_EVENT_COALESCE_MS,
     maxBlockIndex: MAX_STREAM_CONTENT_BLOCK_INDEX,
+    ...(runningRuntime
+      ? { toolTracker: runningRuntime.toolTracker, activeTaskIds: runningRuntime.activeTaskIds }
+      : {}),
   });
-  session.splitAssistantAfterSteer = () => {
+  const splitAssistantAfterSteer = () => {
     stream.beginPostSteerScope();
   };
+  session.splitAssistantAfterSteer = splitAssistantAfterSteer;
   const streamUsage = new ClaudeStreamUsageAccumulator();
   const advanceBaselineForInterruptedStream = () => {
     const baseline = session.claudeUsageBaseline;
@@ -885,17 +1016,18 @@ export async function sendPrompt(
     // Names this prompt on every result that answers it; see
     // `resultAnswersOtherInput`.
     const promptUuid = crypto.randomUUID();
-    const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
     // Client uuids of the steers pushed into this turn: every one, and those no
     // result has named yet. See `resultSupersededBySteer`.
     const steerUuids = new Set<string>();
     const unansweredSteerUuids = new Set<string>();
     let latestSteerUuid: string | undefined;
     const pushSteerInput = (message: SDKUserMessage): boolean | "capacity-exceeded" => {
+      // Only the turn that owns the root conversation can be steered.
+      if (!runtime || runtime.latestTurn !== thisTurn) return false;
       // Bound all steers for this query, not just the unacknowledged ones:
       // merged prompt batches and tool-round fold-ins share the result cap.
       if (steerUuids.size >= MAX_RESULT_INPUT_UUIDS - 1) return "capacity-exceeded";
-      const pushed = heldSdkPrompt.push(message);
+      const pushed = runtime.input.push(message);
       if (pushed && typeof message.uuid === "string" && message.uuid) {
         latestSteerUuid = message.uuid;
         steerUuids.add(message.uuid);
@@ -909,10 +1041,19 @@ export async function sendPrompt(
      * request issued in between races the exit and comes back as
      * "Query closed before response received". Wrapping the close in one place
      * means a future close site cannot forget to mark it.
+     *
+     * The input belongs to the session's CLI, not to this turn: a superseded
+     * turn never closes it, because a newer turn is using it.
      */
     const closeTurnInput = () => {
+      if (
+        !runtime ||
+        runtime.latestTurn !== thisTurn ||
+        session.latestTurnGeneration !== turnGeneration
+      )
+        return;
       if (queryIteratorControl) session.queryControlDraining = queryIteratorControl;
-      heldSdkPrompt.close();
+      drainClaudeRuntime(runtime);
     };
     closeSdkInput = closeTurnInput;
     let receivedResult = false;
@@ -1062,6 +1203,10 @@ export async function sendPrompt(
       if (retainedContinuationTimer) clearTimeout(retainedContinuationTimer);
       retainedContinuationTimer = setTimeout(() => {
         retainedContinuationTimer = null;
+        if (session.latestTurnGeneration !== turnGeneration) {
+          armContinuationWatchdog();
+          return;
+        }
         if (hasLiveTaskOwnedByThisQuery() || hasBackgroundTaskCandidateOwnedByThisQuery()) {
           // Another task this query owns is still running, which is its own
           // reason to hold stdin open — closing it here would kill that task.
@@ -1101,10 +1246,11 @@ export async function sendPrompt(
         ) ||
         sessions.get(sessionId) !== session ||
         session.deleting ||
-        // Releasing lets a follow-up turn start, so more than one turn can be
-        // mid-flight. Only the newest may publish `running` and take abort
-        // ownership; an older one doing so would point stop at the wrong CLI
-        // and lock the newer turn out of its own reclaim.
+        // Releasing lets a follow-up turn join this CLI, and the newest turn
+        // owns the root conversation. Only it may publish `running` and take
+        // abort ownership; an older one doing so would point stop at a turn
+        // the user has moved on from and lock the newer turn out of its own
+        // reclaim.
         session.latestTurnGeneration !== turnGeneration ||
         session.status !== "idle" ||
         session.abortController !== undefined
@@ -1140,13 +1286,31 @@ export async function sendPrompt(
       });
     };
     const finishTurnInputIfSettled = () => {
+      // Input, retention and the continuation watchdog belong to the newest
+      // turn once this one is superseded. Its subagents' frames still reach it,
+      // but releasing the process's retention from here would let it be closed
+      // under a newer turn that is waiting for a continuation.
+      if (superseded || session.latestTurnGeneration !== turnGeneration) return;
       if (!receivedResult || settlingResult) return;
+      if (inheritedContinuation) {
+        // The turn this one replaced was waiting for the continuation a task
+        // notification owes, and nothing has answered it yet. Closing input now
+        // lands EOF before the CLI runs it; release instead and wait for it
+        // under the same bounded watchdog the replaced turn was using.
+        inheritedContinuation = false;
+        receivedResult = false;
+        setCompletionBlockedByBackgroundTasks(false);
+        releaseCompletedTurnToBackgroundTasks(hasLiveTaskOwnedByThisQuery());
+        waitForContinuationAfterNotification();
+        return;
+      }
       const hasLiveTask = hasLiveTaskOwnedByThisQuery();
       if (hasLiveTask || hasBackgroundTaskCandidateOwnedByThisQuery()) {
         // The model turn is complete, but its CLI process owns work that must
         // survive the response boundary. Publish idle so a follow-up turn can
-        // start, retain this query through backgroundTaskControls, and keep its
-        // input open until the last task owned by this process settles.
+        // start — written into this same process — retain this query through
+        // backgroundTaskControls, and keep its input open until the last task
+        // owned by this process settles.
         setCompletionBlockedByBackgroundTasks(false);
         releaseCompletedTurnToBackgroundTasks(hasLiveTask);
         return;
@@ -1160,11 +1324,11 @@ export async function sendPrompt(
     /**
      * A result reached this turn after it lost the foreground without being
      * stopped: it was released to background work and the continuation
-     * produced no root assistant record to reclaim it, or a follow-up turn
-     * took over. The CLI behind it may still be running agents this turn
-     * started, so the loop keeps draining and task state decides whether input
-     * closes. Leaving the loop instead closes the query — the iterator's
-     * `return()` is the SDK's `transport.close()` — and kills those agents.
+     * produced no root assistant record to reclaim it. The CLI behind it may
+     * still be running agents, so the consumer keeps draining and task state
+     * decides whether input closes. Ending the consumer instead closes the
+     * query — the iterator's `return()` is the SDK's `transport.close()` — and
+     * kills those agents.
      */
     const settleResultWithoutOwnership = () => {
       // A later notification then waits for its continuation under the bounded
@@ -1173,7 +1337,6 @@ export async function sendPrompt(
       finishTurnInputIfSettled();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
-    session.finishTurnInputIfSettled = finishTurnInputIfSettled;
 
     const queryEnvironment = await runtimeEnvironmentForAgentQuery();
     // Hook callbacks run on the SDK's hook path, not on the JSONL message
@@ -1219,10 +1382,10 @@ export async function sendPrompt(
     };
     const recordBackgroundTaskHook: HookCallback = async (hookInput) => {
       if (
-        // Not gated on the turn generation: a released query keeps running the
-        // agents it started after a follow-up turn takes the foreground, and
-        // their lifecycle is recorded against this query's own control, exactly
-        // as its stream-side task messages are.
+        // Not gated on the turn generation: the session's CLI keeps running
+        // agents an earlier turn started after a follow-up takes the
+        // foreground, and their lifecycle is recorded against the CLI's
+        // control, exactly as its stream-side task messages are.
         sessions.get(sessionId) !== session ||
         session.deleting ||
         abortController.signal.aborted ||
@@ -1316,504 +1479,272 @@ export async function sendPrompt(
         stream.currentAssistantMessage,
       );
     };
-    const commandChangeHook = commandChangeHooks(applyCommandChanges);
-    const queryIterator = query({
-      prompt: heldSdkPrompt.prompt,
-      options: {
-        cwd,
-        ...claudeExecutableOptions(),
-        // The SDK replaces (rather than merges) the CLI environment when this
-        // option is present. The snapshot therefore carries every ordinary
-        // bridge variable plus the latest managed GitHub credential.
-        env: queryEnvironment,
-        model: options?.model,
-        title: session.title,
-        agent: options?.agent,
-        ...(options?.outputSchema
-          ? {
-              outputFormat: {
-                type: "json_schema" as const,
-                schema: options.outputSchema,
-              },
-            }
-          : {}),
-        permissionMode,
-        ...(permissionMode === "plan" ? { planModeInstructions: PLAN_MODE_INSTRUCTIONS } : {}),
-        // Required when using bypassPermissions mode
-        ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
-        // Use effort level to control thinking depth (replaces maxThinkingTokens)
-        ...(effortLevel && { effort: effortLevel }),
-        // Opus 4.7 defaults adaptive thinking display to "omitted" (signature only,
-        // redacted text). Opt back into "summarized" so thinking content renders in the UI.
-        thinking:
-          options?.parameterValues?.thinking === "disabled"
-            ? { type: "disabled" }
-            : typeof options?.parameterValues?.thinking === "string" &&
-                options.parameterValues.thinking.startsWith("budget-")
-              ? {
-                  type: "enabled",
-                  budgetTokens: Number(options.parameterValues.thinking.slice("budget-".length)),
-                  display: "summarized",
-                }
-              : { type: "adaptive", display: "summarized" },
-        ...(options?.parameterValues?.context1m === true && supportsClaudeContext1m(options.model)
-          ? { betas: ["context-1m-2025-08-07" as const] }
-          : {}),
-        // Explicit flags override ambient CLAUDE_CODE_ENABLE_CFC. Chrome is
-        // opt-in, and a coordinator's read-only boundary always excludes
-        // driving the user's signed-in browser.
-        extraArgs:
-          options?.parameterValues?.chrome === true && !coordinatorReadOnly
-            ? { chrome: null }
-            : { "no-chrome": null },
-        ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
-          ? { maxBudgetUsd: options.maxBudgetUsd }
-          : {}),
-        includePartialMessages: true,
-        // Preserve the full nested transcript. Every forwarded subagent block
-        // carries parent_tool_use_id and is rendered inside its Agent card.
-        forwardSubagentText: true,
-        allowedTools,
-        ...(disallowedTools?.length ? { disallowedTools } : {}),
-        ...(coordinatorReadOnly && policy
-          ? { sandbox: claudeReadOnlySandbox(policy) }
-          : policy?.sandbox === "provider"
-            ? {
-                sandbox: {
-                  enabled: true,
-                  autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
-                  network: { allowLocalBinding: policy.networkAccess === "full" },
-                },
-              }
-            : {}),
-        abortController,
-        // A deterministic UUID makes the bridge id recoverable from the SDK's
-        // persisted session store after a bridge restart.
-        ...(session.sdkSessionId
-          ? { resume: session.sdkSessionId }
-          : {
-              sessionId: sdkSessionIdFromBridgeId(session.id) ?? crypto.randomUUID(),
-            }),
-        enableFileCheckpointing: true,
-        promptSuggestions: options?.promptSuggestions === true,
-        agentProgressSummaries: true,
-        perTaskStopAffordance: true,
-        // Use Claude Code system prompt with additional instructions
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append: [
-            "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
-            // Since Claude Code 2.1.285 an Agent SDK session stops a background
-            // shell command at its `timeout` (30 minutes by default, 2 hours at
-            // most), so a dev server Claude starts here does not outlive that.
-            "Background shell commands in this session are stopped when they reach their timeout (30 minutes by default, 2 hours at most). For a dev server or watcher that must keep running longer, tell the user to start it in an Orkestrator terminal tab instead of running it yourself.",
-          ].join("\n\n"),
-        },
-        // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
-        // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
-        // A coordinator loads nothing: user settings can declare their own
-        // hooks and MCP servers, both of which run programs this boundary is
-        // supposed to exclude.
-        settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
-        // Fast mode (priority service tier) and Ultracode are Claude Code
-        // flag-layer settings, so the user can opt into each per prompt. The
-        // CLI keeps neither across processes, and each turn is its own query.
-        ...((fastMode || ultracode) && {
-          settings: {
-            ...(fastMode && { fastMode: true }),
-            ...(ultracode && { ultracode: true }),
-          },
-        }),
-        // Also pass MCP servers explicitly for any project-local .mcp.json overrides.
-        // The CLI (2.1.280) also loads the servers of every enabled settings
-        // source itself — `user` reads `$CLAUDE_CONFIG_DIR/.claude.json` (else
-        // `~/.claude.json`), `project` reads `.mcp.json`, `local` reads
-        // `projects[cwd]` — and an inline entry wins over a same-named native
-        // one. `strictMcpConfig` is deliberately NOT set: it would also drop
-        // every plugin-provided MCP server. The coordinator boundary instead
-        // rests on `settingSources: []` plus an inline set of `none` scope.
-        mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
-        // Load plugins from user config
-        plugins: pluginCount > 0 ? plugins : undefined,
-        hooks: {
-          // Registered here rather than through settings so a workspace cannot
-          // remove the one control that actually holds the boundary.
-          // The read-only hook runs first: a call it denies must never be
-          // snapshotted, and the measuring hook only opens a window.
-          PreToolUse: [
-            ...(coordinatorReadOnly && policy
-              ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
-              : []),
-            commandChangeHook.PreToolUse,
-          ],
-          PostToolUse: [commandChangeHook.PostToolUse],
-          PostToolUseFailure: [commandChangeHook.PostToolUseFailure],
-          TaskCreated: [{ hooks: [recordBackgroundTaskHook] }],
-          TaskCompleted: [{ hooks: [recordBackgroundTaskHook] }],
-          SubagentStart: [{ hooks: [recordBackgroundTaskHook] }],
-          SubagentStop: [{ hooks: [recordBackgroundTaskHook] }],
-          PreCompact: [{ hooks: [recordPreCompact] }],
-          PostCompact: [{ hooks: [recordPostCompact] }],
-        },
-        // Hook failures are observable provider-health data. Without these
-        // events a failed lifecycle hook would silently leave task or
-        // compaction projection stale.
-        includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.292: although the
-        // SDK warns that bypassPermissions shadows canUseTool for ordinary
-        // tool permission checks, AskUserQuestion is a special case. A live
-        // contract probe confirmed it still reaches this callback and the SDK
-        // waits for the returned promise. This is therefore the future input-
-        // request enforcement hook, but it is NOT sufficient for unattended
-        // command/file/permission approvals; those need a PreToolUse hook or an
-        // equivalent provider-authoritative policy path.
-        // Handle AskUserQuestion tool to get user input.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        // The SDK's own type, rather than a hand-written subset. The third
-        // argument carries `suggestions`, `blockedPath`, `decisionReason` and
-        // `title` — the last of which is the prompt sentence the CLI already
-        // composed, so reconstructing one from `toolName` and `input` produces
-        // a worse question than the one the SDK offered.
-        canUseTool: (async (
-          toolName: string,
-          input: Record<string, unknown>,
-          permissionContext: Parameters<CanUseTool>[2],
-        ) => {
-          if (toolName === "AskUserQuestion") {
-            const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
-            const questionTexts = questions.map((question) => question.question);
-            if (new Set(questionTexts).size !== questionTexts.length) {
-              // The Agent SDK answer contract is Record<questionText, string>.
-              // Duplicate text cannot be represented without silently
-              // overwriting one answer, so fail closed and let Claude ask again
-              // with distinct wording.
-              return {
-                behavior: "deny" as const,
-                message:
-                  "AskUserQuestion contains duplicate question text. Ask the questions again with distinct wording.",
-              };
-            }
-            // Create a question request and wait for user answer
-            // The SDK request id survives transport reinitialization. Reusing it
-            // keeps a redelivered question attached to the same UI interaction.
-            const questionId = permissionContext?.requestId || generateMessageId();
-            const questionRequest: QuestionRequest = {
-              id: questionId,
-              sessionId,
-              questions,
-              toolUseId: permissionContext?.toolUseID ?? questionId,
-              expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
-            };
+    const commandChangeHookFor = (route: (toolUseId: string) => ClaudeRuntimeTurn) =>
+      commandChangeHooks((toolUseId, change) =>
+        route(toolUseId).applyCommandChanges(toolUseId, change),
+      );
+    const turnCanUseTool = (async (
+      toolName: string,
+      input: Record<string, unknown>,
+      permissionContext: Parameters<CanUseTool>[2],
+    ) => {
+      if (toolName === "AskUserQuestion") {
+        const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
+        const questionTexts = questions.map((question) => question.question);
+        if (new Set(questionTexts).size !== questionTexts.length) {
+          // The Agent SDK answer contract is Record<questionText, string>.
+          // Duplicate text cannot be represented without silently
+          // overwriting one answer, so fail closed and let Claude ask again
+          // with distinct wording.
+          return {
+            behavior: "deny" as const,
+            message:
+              "AskUserQuestion contains duplicate question text. Ask the questions again with distinct wording.",
+          };
+        }
+        // Create a question request and wait for user answer
+        // The SDK request id survives transport reinitialization. Reusing it
+        // keeps a redelivered question attached to the same UI interaction.
+        const questionId = permissionContext?.requestId || generateMessageId();
+        const questionRequest: QuestionRequest = {
+          id: questionId,
+          sessionId,
+          questions,
+          toolUseId: permissionContext?.toolUseID ?? questionId,
+          expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
+        };
 
-            // Store the question
-            pendingQuestions.set(questionId, questionRequest);
+        // Store the question
+        pendingQuestions.set(questionId, questionRequest);
 
-            // Emit event so frontend knows to show the question
+        // Emit event so frontend knows to show the question
+        eventEmitter.emit({
+          type: "question.asked",
+          sessionId,
+          data: questionRequest,
+        });
+
+        // Wait for answer with a Promise that can be resolved externally
+        const answerPromise = new Promise<Record<string, string>>((resolve, reject) => {
+          questionResolvers.set(questionId, { resolve, reject });
+        });
+
+        let questionTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          questionTimeoutId = setTimeout(() => {
+            reject(new Error("Question timed out after 5 minutes"));
+          }, QUESTION_TIMEOUT_MS);
+        });
+
+        try {
+          const answers = await Promise.race([answerPromise, timeoutPromise]);
+          console.log("[session-manager] Received question answers", {
+            questionId,
+            answerCount: Object.keys(answers).length,
+          });
+
+          // Return the answers to the SDK
+          return {
+            behavior: "allow" as const,
+            updatedInput: {
+              questions: input.questions,
+              answers,
+            },
+          };
+        } catch (error) {
+          console.error("[session-manager] Error waiting for answer:", error);
+          const message = error instanceof Error ? error.message : "Question was cancelled";
+          if (pendingQuestions.has(questionId)) {
             eventEmitter.emit({
-              type: "question.asked",
+              type: "question.answered",
               sessionId,
-              data: questionRequest,
+              data: { requestId: questionId, cancelled: true },
             });
-
-            // Wait for answer with a Promise that can be resolved externally
-            const answerPromise = new Promise<Record<string, string>>((resolve, reject) => {
-              questionResolvers.set(questionId, { resolve, reject });
-            });
-
-            let questionTimeoutId: ReturnType<typeof setTimeout> | undefined;
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              questionTimeoutId = setTimeout(() => {
-                reject(new Error("Question timed out after 5 minutes"));
-              }, QUESTION_TIMEOUT_MS);
-            });
-
-            try {
-              const answers = await Promise.race([answerPromise, timeoutPromise]);
-              console.log("[session-manager] Received question answers", {
-                questionId,
-                answerCount: Object.keys(answers).length,
-              });
-
-              // Return the answers to the SDK
-              return {
-                behavior: "allow" as const,
-                updatedInput: {
-                  questions: input.questions,
-                  answers,
-                },
-              };
-            } catch (error) {
-              console.error("[session-manager] Error waiting for answer:", error);
-              const message = error instanceof Error ? error.message : "Question was cancelled";
-              if (pendingQuestions.has(questionId)) {
-                eventEmitter.emit({
-                  type: "question.answered",
-                  sessionId,
-                  data: { requestId: questionId, cancelled: true },
-                });
-              }
-              return { behavior: "deny" as const, message };
-            } finally {
-              // Cleanup
-              if (questionTimeoutId) clearTimeout(questionTimeoutId);
-              pendingQuestions.delete(questionId);
-              questionResolvers.delete(questionId);
-            }
           }
+          return { behavior: "deny" as const, message };
+        } finally {
+          // Cleanup
+          if (questionTimeoutId) clearTimeout(questionTimeoutId);
+          pendingQuestions.delete(questionId);
+          questionResolvers.delete(questionId);
+        }
+      }
 
-          // Handle EnterPlanMode - emit event so frontend can update plan mode state
-          if (toolName === "EnterPlanMode") {
-            debugLog("[session-manager] EnterPlanMode requested", { sessionId });
+      // Handle EnterPlanMode - emit event so frontend can update plan mode state
+      if (toolName === "EnterPlanMode") {
+        debugLog("[session-manager] EnterPlanMode requested", { sessionId });
 
-            // The agent itself switched the session into plan mode; record it
-            // like a user toggle so the preference survives a restart.
+        // The agent itself switched the session into plan mode; record it
+        // like a user toggle so the preference survives a restart.
+        try {
+          await applySessionPlanMode(session, true);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to persist plan mode";
+          return {
+            behavior: "deny" as const,
+            message: `Plan mode could not be persisted safely: ${message}`,
+          };
+        }
+
+        // Emit event so frontend knows to enter plan mode
+        eventEmitter.emit({
+          type: "plan.enter-requested",
+          sessionId,
+          data: { sessionId },
+        });
+
+        // Allow the tool to proceed
+        return {
+          behavior: "allow" as const,
+          updatedInput: input,
+        };
+      }
+
+      // Handle ExitPlanMode - wait for user approval before allowing
+      if (toolName === "ExitPlanMode") {
+        debugLog("[session-manager] ExitPlanMode requested, waiting for user approval", {
+          sessionId,
+        });
+
+        // Create a plan approval request and wait for user decision
+        // Keep the provider's stable identity so a transport replay cannot
+        // manufacture a second approval card for the same request.
+        const approvalId = permissionContext?.requestId || generateMessageId();
+        // The SDK's ExitPlanMode request is the authoritative plan. Reading
+        // and replaying the preceding plan-file edits duplicated Edit
+        // semantics and could drift from the bytes Claude actually asks
+        // the user to approve.
+        const directPlan = boundedPlan(input?.plan);
+        const approvalRequest: PlanApprovalRequest = {
+          id: approvalId,
+          sessionId,
+          toolUseId: permissionContext?.toolUseID ?? approvalId,
+          ...directPlan,
+          expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
+        };
+
+        // Store the approval request and set up the resolver BEFORE emitting,
+        // so an instant response from the UI can never find a missing resolver.
+        pendingPlanApprovals.set(approvalId, approvalRequest);
+
+        const approvalPromise = new Promise<PlanApprovalResponse>((resolve, reject) => {
+          planApprovalResolvers.set(approvalId, { resolve, reject });
+        });
+
+        // Emit event so frontend knows to show the approval UI
+        eventEmitter.emit({
+          type: "plan.approval-requested",
+          sessionId,
+          data: approvalRequest,
+        });
+
+        let approvalTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          approvalTimeoutId = setTimeout(() => {
+            reject(new Error("Plan approval timed out after 5 minutes"));
+          }, PLAN_APPROVAL_TIMEOUT_MS);
+        });
+
+        try {
+          const response = await Promise.race([approvalPromise, timeoutPromise]);
+          console.log("[session-manager] Plan approval result", {
+            approvalId,
+            approved: response.approved,
+            hasFeedback: typeof response.feedback === "string" && response.feedback.length > 0,
+          });
+
+          if (response.approved) {
+            // User approved - emit exit event and allow the tool.
+            // Mark `stream.planApprovedThisTurn` so the fallback below can detect
+            // the case where the SDK still fails the ExitPlanMode tool
+            // (override the failure + re-prompt Claude to continue).
+            // Approval ends plan mode; record it so the preference the
+            // next prompt rehydrates from matches what the UI shows.
             try {
-              await applySessionPlanMode(session, true);
+              await applySessionPlanMode(session, false);
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Failed to persist plan mode";
               return {
                 behavior: "deny" as const,
-                message: `Plan mode could not be persisted safely: ${message}`,
+                message: `Plan mode could not be exited safely: ${message}`,
               };
             }
-
-            // Emit event so frontend knows to enter plan mode
+            stream.planApprovedThisTurn = true;
             eventEmitter.emit({
-              type: "plan.enter-requested",
+              type: "plan.exit-requested",
               sessionId,
               data: { sessionId },
             });
 
-            // Allow the tool to proceed
             return {
               behavior: "allow" as const,
               updatedInput: input,
             };
-          }
+          } else {
+            // User rejected - deny the tool and include feedback if provided.
+            // Also capture the feedback so we can re-prompt Claude if the SDK
+            // ends the turn after the denial (ExitPlanMode denial may terminate
+            // the agent loop without Claude generating a revision).
+            const feedbackMessage = response.feedback
+              ? `User feedback: "${response.feedback}"`
+              : "No specific feedback was provided.";
+            const denyMessage = `User rejected the plan. ${feedbackMessage} Please revise your approach based on this feedback.`;
 
-          // Handle ExitPlanMode - wait for user approval before allowing
-          if (toolName === "ExitPlanMode") {
-            debugLog("[session-manager] ExitPlanMode requested, waiting for user approval", {
-              sessionId,
-            });
+            // Store the raw feedback for potential re-prompt
+            stream.pendingPlanRejectionFeedback = response.feedback
+              ? `I've reviewed the plan and I'd like changes: ${response.feedback}\n\nPlease revise the plan based on this feedback.`
+              : `I've reviewed the plan and I don't approve it as-is. Please revise your approach.`;
 
-            // Create a plan approval request and wait for user decision
-            // Keep the provider's stable identity so a transport replay cannot
-            // manufacture a second approval card for the same request.
-            const approvalId = permissionContext?.requestId || generateMessageId();
-            // The SDK's ExitPlanMode request is the authoritative plan. Reading
-            // and replaying the preceding plan-file edits duplicated Edit
-            // semantics and could drift from the bytes Claude actually asks
-            // the user to approve.
-            const directPlan = boundedPlan(input?.plan);
-            const approvalRequest: PlanApprovalRequest = {
-              id: approvalId,
-              sessionId,
-              toolUseId: permissionContext?.toolUseID ?? approvalId,
-              ...directPlan,
-              expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
+            return {
+              behavior: "deny" as const,
+              message: denyMessage,
             };
-
-            // Store the approval request and set up the resolver BEFORE emitting,
-            // so an instant response from the UI can never find a missing resolver.
-            pendingPlanApprovals.set(approvalId, approvalRequest);
-
-            const approvalPromise = new Promise<PlanApprovalResponse>((resolve, reject) => {
-              planApprovalResolvers.set(approvalId, { resolve, reject });
-            });
-
-            // Emit event so frontend knows to show the approval UI
-            eventEmitter.emit({
-              type: "plan.approval-requested",
-              sessionId,
-              data: approvalRequest,
-            });
-
-            let approvalTimeoutId: ReturnType<typeof setTimeout> | undefined;
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              approvalTimeoutId = setTimeout(() => {
-                reject(new Error("Plan approval timed out after 5 minutes"));
-              }, PLAN_APPROVAL_TIMEOUT_MS);
-            });
-
-            try {
-              const response = await Promise.race([approvalPromise, timeoutPromise]);
-              console.log("[session-manager] Plan approval result", {
-                approvalId,
-                approved: response.approved,
-                hasFeedback: typeof response.feedback === "string" && response.feedback.length > 0,
-              });
-
-              if (response.approved) {
-                // User approved - emit exit event and allow the tool.
-                // Mark `stream.planApprovedThisTurn` so the fallback below can detect
-                // the case where the SDK still fails the ExitPlanMode tool
-                // (override the failure + re-prompt Claude to continue).
-                // Approval ends plan mode; record it so the preference the
-                // next prompt rehydrates from matches what the UI shows.
-                try {
-                  await applySessionPlanMode(session, false);
-                } catch (error) {
-                  const message =
-                    error instanceof Error ? error.message : "Failed to persist plan mode";
-                  return {
-                    behavior: "deny" as const,
-                    message: `Plan mode could not be exited safely: ${message}`,
-                  };
-                }
-                stream.planApprovedThisTurn = true;
-                eventEmitter.emit({
-                  type: "plan.exit-requested",
-                  sessionId,
-                  data: { sessionId },
-                });
-
-                return {
-                  behavior: "allow" as const,
-                  updatedInput: input,
-                };
-              } else {
-                // User rejected - deny the tool and include feedback if provided.
-                // Also capture the feedback so we can re-prompt Claude if the SDK
-                // ends the turn after the denial (ExitPlanMode denial may terminate
-                // the agent loop without Claude generating a revision).
-                const feedbackMessage = response.feedback
-                  ? `User feedback: "${response.feedback}"`
-                  : "No specific feedback was provided.";
-                const denyMessage = `User rejected the plan. ${feedbackMessage} Please revise your approach based on this feedback.`;
-
-                // Store the raw feedback for potential re-prompt
-                stream.pendingPlanRejectionFeedback = response.feedback
-                  ? `I've reviewed the plan and I'd like changes: ${response.feedback}\n\nPlease revise the plan based on this feedback.`
-                  : `I've reviewed the plan and I don't approve it as-is. Please revise your approach.`;
-
-                return {
-                  behavior: "deny" as const,
-                  message: denyMessage,
-                };
-              }
-            } catch (error) {
-              console.error("[session-manager] Error waiting for plan approval:", error);
-              const errorMessage =
-                error instanceof Error ? error.message : "Plan approval was cancelled";
-              if (pendingPlanApprovals.has(approvalId)) {
-                eventEmitter.emit({
-                  type: "plan.approval-responded",
-                  sessionId,
-                  data: {
-                    requestId: approvalId,
-                    approved: false,
-                    cancelled: true,
-                  },
-                });
-              }
-              // If error (e.g., timeout or dismissed), deny the tool use
-              return { behavior: "deny" as const, message: errorMessage };
-            } finally {
-              // Cleanup
-              if (approvalTimeoutId) clearTimeout(approvalTimeoutId);
-              pendingPlanApprovals.delete(approvalId);
-              planApprovalResolvers.delete(approvalId);
-            }
           }
-
-          // Allow this invocation only. SDK permission suggestions are durable
-          // policy updates and belong behind an explicit "always allow" choice;
-          // this host does not currently present one, so returning suggestions
-          // here would silently widen permissions after an allow-once decision.
-          return {
-            behavior: "allow" as const,
-            updatedInput: input,
-          };
-        }) as CanUseTool,
-        /**
-         * An MCP server asking the user for input.
-         *
-         * Answered rather than left to the CLI's park deadline. Unset, these
-         * requests sat unanswered until the deadline expired, which the user
-         * saw as the tab freezing for minutes with nothing to explain it.
-         *
-         * Declined, not accepted: this host has no form to render an arbitrary
-         * JSON Schema into and no browser to complete a `url` flow in, and MCP
-         * defines `decline` as an outcome the server is expected to handle. The
-         * status row is what turns a silent refusal into something the user can
-         * act on — the elicitation names its server, so they know where to go.
-         */
-        onElicitation: async (request) => {
-          appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-            type: "status",
-            severity: "warning",
-            content:
-              request.mode === "url"
-                ? `${request.serverName} asked you to sign in through a link, which this tab cannot open. Complete it in a terminal and try again.`
-                : `${request.serverName} asked for input this tab cannot collect, so it was declined.`,
-            createdAt: new Date().toISOString(),
-          });
-          return { action: "decline" };
-        },
-        /**
-         * The CLI asking the host to render a blocking dialog.
-         *
-         * `supportedDialogKinds` is deliberately not declared: this host can
-         * render none of them. The SDK documents that a kind is only *sent* to
-         * clients that declared it, so in practice this callback should not
-         * fire — but a multi-client transport delivers the request to every
-         * attached client, so it can. `cancelled` is the correct answer for a
-         * kind this host cannot render: the CLI then applies the dialog's own
-         * default rather than waiting out its deadline.
-         */
-        onUserDialog: async () => ({ behavior: "cancelled" as const }),
-      },
-    });
-    const liveQuery = Object.assign(queryIterator, { pushInput: pushSteerInput });
-    session.queryControl = liveQuery;
-    queryIteratorControl = liveQuery;
-    queryStarted = true;
-    // The configuration this query actually started with, recorded only once
-    // the query exists: a save made while the previous turn ran is "pending"
-    // until here, and one made after here is pending for the next query.
-    if (mcpConfigRevision) {
-      session.mcpConfigRevision = {
-        ...mcpConfigRevision,
-        sources: { ...mcpConfigRevision.sources },
-        queryStartedAt: new Date().toISOString(),
-      };
-    }
-    testHooks?.onQueryStarted?.();
-    // One control read per turn, off the message path, so the inventory a
-    // selected command is validated against is the session's own.
-    readLiveCommandInventory(session, liveQuery);
-    reportUltracodeRuntime(session, liveQuery);
-    let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
-    if (typeof queryIterator.supportedAgents === "function") {
-      try {
-        supportedAgents = (await queryIterator.supportedAgents()).map((agent) => ({
-          name: agent.name,
-          description: agent.description,
-          model: agent.model,
-        }));
-      } catch (error) {
-        debugLog("[session-manager] Agent discovery unavailable:", error);
+        } catch (error) {
+          console.error("[session-manager] Error waiting for plan approval:", error);
+          const errorMessage =
+            error instanceof Error ? error.message : "Plan approval was cancelled";
+          if (pendingPlanApprovals.has(approvalId)) {
+            eventEmitter.emit({
+              type: "plan.approval-responded",
+              sessionId,
+              data: {
+                requestId: approvalId,
+                approved: false,
+                cancelled: true,
+              },
+            });
+          }
+          // If error (e.g., timeout or dismissed), deny the tool use
+          return { behavior: "deny" as const, message: errorMessage };
+        } finally {
+          // Cleanup
+          if (approvalTimeoutId) clearTimeout(approvalTimeoutId);
+          pendingPlanApprovals.delete(approvalId);
+          planApprovalResolvers.delete(approvalId);
+        }
       }
-    }
 
-    structuredUsageRefresh = createStructuredUsageRefreshCoordinator(session, queryIterator);
-    // Prime the limits panel as soon as the live control channel is ready.
-    // This intentionally runs off the SDK message-consumer path.
-    void structuredUsageRefresh?.trigger();
-
-    diagnostics?.sent(sessionId);
-
-    // Process the async generator
-    for await (const message of queryIterator) {
+      // Allow this invocation only. SDK permission suggestions are durable
+      // policy updates and belong behind an explicit "always allow" choice;
+      // this host does not currently present one, so returning suggestions
+      // here would silently widen permissions after an allow-once decision.
+      return {
+        behavior: "allow" as const,
+        updatedInput: input,
+      };
+    }) as CanUseTool;
+    // One SDK frame routed to this turn by the runtime's single consumer.
+    const handleMessage = async (message: SDKMessage): Promise<void> => {
       if (abortController.signal.aborted) {
-        break;
+        return;
       }
 
       sdkMessageCount += 1;
-      if (diagnostics) observeClaudeMessage(diagnostics, message);
+      // A superseded turn still draws frames for its own tools, after its
+      // diagnostics have closed.
+      if (diagnostics && !queryEnded) observeClaudeMessage(diagnostics, message);
       // Any frame is evidence the provider is still answering the notification,
       // so the watchdog is pushed out rather than allowed to expire mid-stream.
       // Retention itself is dropped by the reclaim, the result, or the watchdog
@@ -1923,7 +1854,7 @@ export async function sendPrompt(
             : {}),
           skills: Array.isArray(initMsg.skills) ? initMsg.skills : [],
           apiKeySource: typeof initMsg.apiKeySource === "string" ? initMsg.apiKeySource : undefined,
-          agents: supportedAgents,
+          agents: runtime?.supportedAgents ?? [],
         };
 
         debugLog("[session-manager] Session init data captured", {
@@ -2070,7 +2001,7 @@ export async function sendPrompt(
             taskMessage.patch?.status &&
             !LIVE_BACKGROUND_TASK_STATUSES.has(taskMessage.patch.status)
           )
-            continue;
+            return;
           const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
           const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
           // A `SendMessage` resume re-runs a finished agent under its old task
@@ -2125,7 +2056,7 @@ export async function sendPrompt(
             [task.id]: task,
           });
           if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
-            (session.backgroundTaskControls ??= new Map()).set(task.id, queryIterator);
+            (session.backgroundTaskControls ??= new Map()).set(task.id, queryIteratorControl!);
           } else {
             const owner = session.backgroundTaskControls?.get(task.id);
             session.backgroundTaskControls?.delete(task.id);
@@ -2138,7 +2069,7 @@ export async function sendPrompt(
           // consumer. This frame may belong to the preceding run; only the
           // current run's stop hook can retire its live control.
           if (isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id])) {
-            continue;
+            return;
           }
           // A task notification can re-enter the root agent loop after an
           // earlier result. That earlier result is only the response boundary
@@ -2213,17 +2144,18 @@ export async function sendPrompt(
           const previousControls = session.backgroundTaskControls;
           const previousOwners = new Set(previousControls?.values() ?? []);
           const replacementControls = new Map<string, NonNullable<SessionState["queryControl"]>>();
-          // The SDK documents this level signal as per-process. A follow-up
-          // turn can therefore publish its own empty set while an older CLI is
-          // still running a background Bash task. Preserve every live member
-          // owned by another control; only this query's slice is replaced.
+          // The SDK documents this level signal as per-process. Every turn runs
+          // on the session's one CLI, so it normally speaks for every live
+          // task; a member owned by another control (a CLI still exiting while
+          // its successor starts) is preserved, and only this query's slice is
+          // replaced.
           const previouslyLiveOwnedByThisQuery: BackgroundTaskSnapshot[] = [];
           for (const [id, task] of Object.entries(session.backgroundTasks ?? {}) as Array<
             [string, BackgroundTaskSnapshot]
           >) {
             if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
             const owner = previousControls?.get(id);
-            if ((owner && owner !== queryIterator) || isHookRunningBackgroundTask(task)) {
+            if ((owner && owner !== queryIteratorControl!) || isHookRunningBackgroundTask(task)) {
               replacement[id] = task;
               if (owner) replacementControls.set(id, owner);
               continue;
@@ -2256,7 +2188,7 @@ export async function sendPrompt(
             // only the process that started a task can stop it, and a control
             // asked to stop an id it never started answers `ok` without
             // reaching anything. This query claims genuinely new ids only.
-            replacementControls.set(id, previousControls?.get(id) ?? queryIterator);
+            replacementControls.set(id, previousControls?.get(id) ?? queryIteratorControl!);
           }
           session.backgroundTasks = boundBackgroundTaskHistory(replacement);
           session.backgroundTaskControls =
@@ -2274,7 +2206,7 @@ export async function sendPrompt(
           );
           if (droppedByThisQuery.length > 0 && turnReleasedToBackgroundTasks) {
             for (const task of droppedByThisQuery) {
-              parkSettlingBackgroundTask(session, task, queryIterator);
+              parkSettlingBackgroundTask(session, task, queryIteratorControl!);
             }
             // Mirrors the `task_notification` branch: the earlier result is
             // only the boundary before this transition, not permission to
@@ -2530,12 +2462,21 @@ export async function sendPrompt(
           recordUnknownContentBlock,
         );
 
+        // Frames a subagent sends name the call that started it. Remember that
+        // this turn's row holds the call, so they reach it after a newer turn
+        // has taken over the root conversation.
+        if (runtime && thisTurn) {
+          for (const toolUseId of toolUseIdsFromAssistantMessage(message)) {
+            recordClaudeToolOwner(runtime, toolUseId, thisTurn);
+          }
+        }
+
         // A foreground Bash call can become background work after a timeout or
         // Ctrl+B. Keep that possibility hidden from the task snapshot, but
         // retain this query's control until the correlated provider result
         // tells us whether it actually happened.
         for (const toolUseId of bashToolUseIdsFromAssistantMessage(message)) {
-          registerBackgroundTaskCandidate(session, toolUseId, queryIterator);
+          registerBackgroundTaskCandidate(session, toolUseId, queryIteratorControl!);
         }
 
         // Establish liveness from the invocation itself. The provider can emit
@@ -2544,7 +2485,7 @@ export async function sendPrompt(
         // kills the just-launched process. The provisional id is replaced by
         // the provider task id as soon as either later edge supplies it.
         for (const launch of provisionalBackgroundTaskLaunchesFromAssistantMessage(message)) {
-          recordBackgroundTaskLaunch(session, launch, queryIterator);
+          recordBackgroundTaskLaunch(session, launch, queryIteratorControl!);
         }
 
         // Update active Task tracking - add new Tasks
@@ -2663,7 +2604,7 @@ export async function sendPrompt(
         let settledProvisionalTask = false;
         for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
           if (outcome.launch) {
-            recordBackgroundTaskLaunch(session, outcome.launch, queryIterator);
+            recordBackgroundTaskLaunch(session, outcome.launch, queryIteratorControl!);
             continue;
           }
           if (outcome.retainCandidate) continue;
@@ -2793,12 +2734,15 @@ export async function sendPrompt(
         // is filtered: once it has arrived, a continuation's result is the
         // legitimate end of the retained turn.
         if (!receivedPromptResult && resultAnswersOtherInput(resultMsg, promptUuid, steerUuids)) {
+          // Whatever the CLI ran first, it was not this prompt: an inherited
+          // continuation has now been answered.
+          inheritedContinuation = false;
           debugLog("[session-manager] Result for other input skipped", {
             sessionId,
             subtype: resultMsg.subtype,
             durationMs: resultMsg.duration_ms,
           });
-          continue;
+          return;
         }
         // The only authoritative link between the id this bridge minted for the
         // prompt and the transcript record it became. Everything destructive
@@ -2832,7 +2776,15 @@ export async function sendPrompt(
             subtype: resultMsg.subtype,
             durationMs: resultMsg.duration_ms,
           });
-          continue;
+          return;
+        }
+        // A result that also names input other than this turn's own answered
+        // the inherited continuation together with this prompt.
+        if (
+          inheritedContinuation &&
+          resultInputUuids(resultMsg).some((uuid) => uuid !== promptUuid && !steerUuids.has(uuid))
+        ) {
+          inheritedContinuation = false;
         }
         diagnostics?.terminalSettled("resolved");
         receivedResult = true;
@@ -2851,7 +2803,7 @@ export async function sendPrompt(
         if (!ownsActiveTurn()) {
           if (!abortController.signal.aborted) {
             settleResultWithoutOwnership();
-            continue;
+            return;
           }
           recordInterruptedStructuredOutputIfCurrent();
           closeTurnInput();
@@ -2882,7 +2834,7 @@ export async function sendPrompt(
         if (!ownsActiveTurn()) {
           if (!abortController.signal.aborted) {
             settleResultWithoutOwnership();
-            continue;
+            return;
           }
           // The provider accepted this request, so the caller needs a
           // terminal outcome even though abort won the race with the final
@@ -3105,7 +3057,442 @@ export async function sendPrompt(
         );
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
+    };
+    thisTurn = {
+      handleMessage,
+      pushSteerInput,
+      canUseTool: turnCanUseTool,
+      recordBackgroundTaskHook,
+      recordPreCompact,
+      recordPostCompact,
+      applyCommandChanges,
+      supersede: () => {
+        // The newer turn owns the root conversation, its continuations and the
+        // input from here; this turn only draws the rows of tools it started.
+        superseded = true;
+        stopWaitingForContinuation();
+        resolveTurnEnded();
+      },
+      runtimeEnded: (failure) => {
+        if (failure) rejectTurnEnded(failure.error);
+        else resolveTurnEnded();
+      },
+      isAwaitingContinuation: () => retainedContinuationTimer !== null,
+      inheritContinuation: () => {
+        inheritedContinuation = true;
+      },
+    };
+    const liveSettings = claudeLiveSettings({
+      model: options?.model,
+      permissionMode,
+      effort: effortLevel,
+      parameterValues: options?.parameterValues,
+      fastMode,
+    });
+    // Content-free identity of the inline MCP servers, which carry credentials.
+    const mcpServersKey = createHash("sha256").update(JSON.stringify(mcpServers)).digest("hex");
+    const recordMcpConfigRevision = () => {
+      // The configuration the CLI actually has, recorded only once it has it:
+      // a save made while the previous turn ran is "pending" until here, and
+      // one made after here is pending for the next turn.
+      if (!mcpConfigRevision) return;
+      session.mcpConfigRevision = {
+        ...mcpConfigRevision,
+        sources: { ...mcpConfigRevision.sources },
+        queryStartedAt: new Date().toISOString(),
+      };
+    };
+
+    // The session's CLI is still running when an earlier turn left background
+    // work in it. This prompt is written into that process: a second CLI
+    // resumed from the same rollout would run its own root loop beside it.
+    const running = openClaudeRuntime(session);
+    if (running) {
+      // Launch-only settings may have changed while this turn was preparing.
+      await assertClaudeRuntimeAccepts(
+        session,
+        options,
+        claudeLaunchResourceProfile(plugins, queryEnvironment),
+      );
+      // Held from here so the process is not closed as unused while the
+      // settings below are applied.
+      session.queryControl = running.control;
+      queryIteratorControl = running.control;
+      try {
+        await applyClaudeLiveSettings(running, liveSettings);
+        if (running.mcpServers !== mcpServersKey) {
+          if (!running.control.setMcpServers) {
+            throw sessionOperationError(
+              "conflict",
+              "Claude MCP configuration cannot be updated on this runtime",
+            );
+          }
+          // A partial update invalidates the previous identity too. Retrying
+          // either configuration must actually restate it on the CLI.
+          running.mcpServers = "";
+          const result = await running.control.setMcpServers(mcpServers).catch(() => {
+            throw sessionOperationError(
+              "conflict",
+              "Claude MCP configuration could not be applied; retry the prompt",
+            );
+          });
+          if (
+            !result ||
+            typeof result !== "object" ||
+            !("errors" in result) ||
+            !result.errors ||
+            typeof result.errors !== "object" ||
+            Array.isArray(result.errors) ||
+            Object.keys(result.errors).length > 0
+          ) {
+            throw sessionOperationError(
+              "conflict",
+              "Claude MCP configuration could not be applied; retry the prompt",
+            );
+          }
+        }
+        // Required injected servers can disconnect even without a config change.
+        if (mcpServers[AGENT_MCP_SERVER_NAME]) {
+          const statuses = await running.control.mcpServerStatus?.().catch(() => {
+            running.mcpServers = "";
+            throw sessionOperationError(
+              "conflict",
+              "Claude required MCP server could not be confirmed; retry the prompt",
+            );
+          });
+          const required = [
+            AGENT_MCP_SERVER_NAME,
+            ...(options?.agentMcp?.design ? ["orkestrator-design"] : []),
+          ];
+          if (
+            !required.every((name) =>
+              statuses?.some((server) => server.name === name && server.status === "connected"),
+            )
+          ) {
+            running.mcpServers = "";
+            throw sessionOperationError(
+              "conflict",
+              "Claude required MCP server is not connected; retry the prompt",
+            );
+          }
+        }
+        running.mcpServers = mcpServersKey;
+        recordMcpConfigRevision();
+        const messages = await sdkPromptMessages(sdkPrompt, promptUuid);
+        runtime = running;
+        if (!submitClaudeTurn(running, thisTurn, messages)) {
+          throw sessionOperationError(
+            "conflict",
+            "Claude runtime could not accept prompt input; retry after it has stopped",
+          );
+        }
+      } catch (error) {
+        runtime = undefined;
+        if (session.queryControl === running.control) session.queryControl = undefined;
+        queryIteratorControl = undefined;
+        // A setup failure never authorizes killing or replacing shared work.
+        // Leave the previous turn and retention intact, and restore foreground
+        // ownership in the startup failure handler below.
+        throw error;
+      }
     }
+
+    if (!runtime) {
+      // Stopped while joining a process that was ending: nothing was written,
+      // and stopping must not start another one.
+      if (abortController.signal.aborted) return;
+      // A previous CLI that is still exiting must be gone before another one
+      // opens the same rollout.
+      await retireDrainingClaudeRuntime(session);
+      if (abortController.signal.aborted || session.deleting || sessions.get(sessionId) !== session)
+        return;
+      const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
+      let launched: ClaudeRuntime | undefined;
+      // Hooks and callbacks fire on the runtime's behalf for whichever turn
+      // they concern: the one whose row holds the tool, else the latest turn.
+      const turnFor = (toolUseId?: string): ClaudeRuntimeTurn =>
+        (toolUseId ? launched?.toolOwners.get(toolUseId) : undefined) ??
+        launched?.latestTurn ??
+        thisTurn!;
+      const latestTurnHook =
+        (pick: (turn: ClaudeRuntimeTurn) => HookCallback): HookCallback =>
+        (...args) =>
+          pick(turnFor())(...args);
+      const backgroundTaskHook = latestTurnHook((turn) => turn.recordBackgroundTaskHook);
+      const commandChangeHook = commandChangeHookFor(turnFor);
+      const queryIterator = query({
+        prompt: heldSdkPrompt.prompt,
+        options: {
+          cwd,
+          ...claudeExecutableOptions(),
+          // The SDK replaces (rather than merges) the CLI environment when this
+          // option is present. The snapshot therefore carries every ordinary
+          // bridge variable plus the latest managed GitHub credential.
+          env: queryEnvironment,
+          model: options?.model,
+          title: session.title,
+          agent: options?.agent,
+          ...(options?.outputSchema
+            ? {
+                outputFormat: {
+                  type: "json_schema" as const,
+                  schema: options.outputSchema,
+                },
+              }
+            : {}),
+          permissionMode,
+          // Always given: a later turn can switch this running CLI into plan mode.
+          planModeInstructions: PLAN_MODE_INSTRUCTIONS,
+          // Required when using bypassPermissions mode, and whenever the policy
+          // allows it: a later turn can switch this running CLI into it.
+          ...((permissionMode === "bypassPermissions" ||
+            policyPermissionMode === "bypassPermissions") && {
+            allowDangerouslySkipPermissions: true,
+          }),
+          // Use effort level to control thinking depth (replaces maxThinkingTokens)
+          ...(effortLevel && { effort: effortLevel }),
+          // Opus 4.7 defaults adaptive thinking display to "omitted" (signature only,
+          // redacted text). Opt back into "summarized" so thinking content renders in the UI.
+          thinking:
+            options?.parameterValues?.thinking === "disabled"
+              ? { type: "disabled" }
+              : typeof options?.parameterValues?.thinking === "string" &&
+                  options.parameterValues.thinking.startsWith("budget-")
+                ? {
+                    type: "enabled",
+                    budgetTokens: Number(options.parameterValues.thinking.slice("budget-".length)),
+                    display: "summarized",
+                  }
+                : { type: "adaptive", display: "summarized" },
+          ...(effectiveClaudeContext1m(options)
+            ? { betas: ["context-1m-2025-08-07" as const] }
+            : {}),
+          // Explicit flags override ambient CLAUDE_CODE_ENABLE_CFC. Chrome is
+          // opt-in, and a coordinator's read-only boundary always excludes
+          // driving the user's signed-in browser.
+          extraArgs:
+            options?.parameterValues?.chrome === true && !coordinatorReadOnly
+              ? { chrome: null }
+              : { "no-chrome": null },
+          ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
+            ? { maxBudgetUsd: options.maxBudgetUsd }
+            : {}),
+          includePartialMessages: true,
+          // Preserve the full nested transcript. Every forwarded subagent block
+          // carries parent_tool_use_id and is rendered inside its Agent card.
+          forwardSubagentText: true,
+          allowedTools,
+          ...(disallowedTools?.length ? { disallowedTools } : {}),
+          ...(coordinatorReadOnly && policy
+            ? { sandbox: claudeReadOnlySandbox(policy) }
+            : policy?.sandbox === "provider"
+              ? {
+                  sandbox: {
+                    enabled: true,
+                    autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
+                    network: { allowLocalBinding: policy.networkAccess === "full" },
+                  },
+                }
+              : {}),
+          abortController,
+          // A deterministic UUID makes the bridge id recoverable from the SDK's
+          // persisted session store after a bridge restart.
+          ...(session.sdkSessionId
+            ? { resume: session.sdkSessionId }
+            : {
+                sessionId: sdkSessionIdFromBridgeId(session.id) ?? crypto.randomUUID(),
+              }),
+          enableFileCheckpointing: true,
+          promptSuggestions: options?.promptSuggestions === true,
+          agentProgressSummaries: true,
+          perTaskStopAffordance: true,
+          // Use Claude Code system prompt with additional instructions
+          systemPrompt: {
+            type: "preset",
+            preset: "claude_code",
+            append: [
+              "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
+              // Since Claude Code 2.1.285 an Agent SDK session stops a background
+              // shell command at its `timeout` (30 minutes by default, 2 hours at
+              // most), so a dev server Claude starts here does not outlive that.
+              "Background shell commands in this session are stopped when they reach their timeout (30 minutes by default, 2 hours at most). For a dev server or watcher that must keep running longer, tell the user to start it in an Orkestrator terminal tab instead of running it yourself.",
+            ].join("\n\n"),
+          },
+          // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
+          // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
+          // A coordinator loads nothing: user settings can declare their own
+          // hooks and MCP servers, both of which run programs this boundary is
+          // supposed to exclude.
+          settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
+          // Fast mode (priority service tier) and Ultracode are Claude Code
+          // flag-layer settings, so the user can opt into each per prompt. The
+          // CLI keeps neither across processes, and each turn is its own query.
+          ...((fastMode || ultracode) && {
+            settings: {
+              ...(fastMode && { fastMode: true }),
+              ...(ultracode && { ultracode: true }),
+            },
+          }),
+          // Also pass MCP servers explicitly for any project-local .mcp.json overrides.
+          // The CLI (2.1.280) also loads the servers of every enabled settings
+          // source itself — `user` reads `$CLAUDE_CONFIG_DIR/.claude.json` (else
+          // `~/.claude.json`), `project` reads `.mcp.json`, `local` reads
+          // `projects[cwd]` — and an inline entry wins over a same-named native
+          // one. `strictMcpConfig` is deliberately NOT set: it would also drop
+          // every plugin-provided MCP server. The coordinator boundary instead
+          // rests on `settingSources: []` plus an inline set of `none` scope.
+          mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
+          // Load plugins from user config
+          plugins: pluginCount > 0 ? plugins : undefined,
+          hooks: {
+            // Registered here rather than through settings so a workspace cannot
+            // remove the one control that actually holds the boundary.
+            // The read-only hook runs first: a call it denies must never be
+            // snapshotted, and the measuring hook only opens a window.
+            PreToolUse: [
+              ...(coordinatorReadOnly && policy
+                ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
+                : []),
+              commandChangeHook.PreToolUse,
+            ],
+            PostToolUse: [commandChangeHook.PostToolUse],
+            PostToolUseFailure: [commandChangeHook.PostToolUseFailure],
+            TaskCreated: [{ hooks: [backgroundTaskHook] }],
+            TaskCompleted: [{ hooks: [backgroundTaskHook] }],
+            SubagentStart: [{ hooks: [backgroundTaskHook] }],
+            SubagentStop: [{ hooks: [backgroundTaskHook] }],
+            PreCompact: [{ hooks: [latestTurnHook((turn) => turn.recordPreCompact)] }],
+            PostCompact: [{ hooks: [latestTurnHook((turn) => turn.recordPostCompact)] }],
+          },
+          // Hook failures are observable provider-health data. Without these
+          // events a failed lifecycle hook would silently leave task or
+          // compaction projection stale.
+          includeHookEvents: true,
+          // Pinned against @anthropic-ai/claude-agent-sdk 0.3.292: although the
+          // SDK warns that bypassPermissions shadows canUseTool for ordinary
+          // tool permission checks, AskUserQuestion is a special case. A live
+          // contract probe confirmed it still reaches this callback and the SDK
+          // waits for the returned promise. This is therefore the future input-
+          // request enforcement hook, but it is NOT sufficient for unattended
+          // command/file/permission approvals; those need a PreToolUse hook or an
+          // equivalent provider-authoritative policy path.
+          // Handle AskUserQuestion tool to get user input.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          // The SDK's own type, rather than a hand-written subset. The third
+          // argument carries `suggestions`, `blockedPath`, `decisionReason` and
+          // `title` — the last of which is the prompt sentence the CLI already
+          // composed, so reconstructing one from `toolName` and `input` produces
+          // a worse question than the one the SDK offered.
+          canUseTool: ((toolName, input, permissionContext) =>
+            turnFor(permissionContext?.toolUseID).canUseTool(
+              toolName,
+              input,
+              permissionContext,
+            )) as CanUseTool,
+          /**
+           * An MCP server asking the user for input.
+           *
+           * Answered rather than left to the CLI's park deadline. Unset, these
+           * requests sat unanswered until the deadline expired, which the user
+           * saw as the tab freezing for minutes with nothing to explain it.
+           *
+           * Declined, not accepted: this host has no form to render an arbitrary
+           * JSON Schema into and no browser to complete a `url` flow in, and MCP
+           * defines `decline` as an outcome the server is expected to handle. The
+           * status row is what turns a silent refusal into something the user can
+           * act on — the elicitation names its server, so they know where to go.
+           */
+          onElicitation: async (request) => {
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              severity: "warning",
+              content:
+                request.mode === "url"
+                  ? `${request.serverName} asked you to sign in through a link, which this tab cannot open. Complete it in a terminal and try again.`
+                  : `${request.serverName} asked for input this tab cannot collect, so it was declined.`,
+              createdAt: new Date().toISOString(),
+            });
+            return { action: "decline" };
+          },
+          /**
+           * The CLI asking the host to render a blocking dialog.
+           *
+           * `supportedDialogKinds` is deliberately not declared: this host can
+           * render none of them. The SDK documents that a kind is only *sent* to
+           * clients that declared it, so in practice this callback should not
+           * fire — but a multi-client transport delivers the request to every
+           * attached client, so it can. `cancelled` is the correct answer for a
+           * kind this host cannot render: the CLI then applies the dialog's own
+           * default rather than waiting out its deadline.
+           */
+          onUserDialog: async () => ({ behavior: "cancelled" as const }),
+        },
+      });
+      const liveQuery = Object.assign(queryIterator, {
+        pushInput: (message: SDKUserMessage) => turnFor().pushSteerInput(message),
+      });
+      const created = createClaudeRuntime({
+        session,
+        control: liveQuery,
+        heldInput: heldSdkPrompt,
+        abortController,
+        toolTracker: stream.toolTracker,
+        activeTaskIds: stream.activeTaskIds,
+        launch: {
+          ...claudeLaunchedProfile(session, options),
+          ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+        },
+        mcpServers: mcpServersKey,
+        firstTurn: thisTurn,
+      });
+      launched = created.runtime;
+      runtime = launched;
+      session.claudeRuntime = launched;
+      session.queryControl = liveQuery;
+      queryIteratorControl = liveQuery;
+      recordMcpConfigRevision();
+      if (typeof queryIterator.supportedAgents === "function") {
+        try {
+          launched.supportedAgents = (await queryIterator.supportedAgents()).map((agent) => ({
+            name: agent.name,
+            description: agent.description,
+            model: agent.model,
+          }));
+        } catch (error) {
+          debugLog("[session-manager] Agent discovery unavailable:", error);
+        }
+      }
+      void consumeClaudeRuntime(launched, queryIterator, created.markEnded);
+    }
+    const control = queryIteratorControl!;
+    const turnRuntime = runtime;
+    // Abort ownership follows the turn: stopping the latest turn stops the
+    // process it runs on, exactly as stopping a turn that launched it does.
+    abortController.signal.addEventListener(
+      "abort",
+      () => {
+        if (turnRuntime.latestTurn === thisTurn) turnRuntime.abortController.abort();
+      },
+      { once: true },
+    );
+    session.finishTurnInputIfSettled = finishTurnInputIfSettled;
+    queryStarted = true;
+    testHooks?.onQueryStarted?.();
+    // One control read per turn, off the message path, so the inventory a
+    // selected command is validated against is the session's own.
+    readLiveCommandInventory(session, control);
+    reportUltracodeRuntime(session, control);
+
+    structuredUsageRefresh = createStructuredUsageRefreshCoordinator(session, control);
+    // Prime the limits panel as soon as the live control channel is ready.
+    // This intentionally runs off the SDK message-consumer path.
+    void structuredUsageRefresh?.trigger();
+
+    diagnostics?.sent(sessionId);
+
+    // Frames arrive through the runtime's consumer. This turn is done waiting
+    // once a newer turn takes over or the process ends.
+    await turnEnded;
     diagnostics?.streamSettled("resolved");
 
     // The stream can end on a delta (abort, SDK hang-up) with a snapshot still
@@ -3133,7 +3520,8 @@ export async function sendPrompt(
     if (
       stream.pendingPlanRejectionFeedback &&
       !abortController.signal.aborted &&
-      !options?._isReprompt
+      !options?._isReprompt &&
+      !superseded
     ) {
       const feedbackPrompt = stream.pendingPlanRejectionFeedback;
       stream.pendingPlanRejectionFeedback = null;
@@ -3174,7 +3562,8 @@ export async function sendPrompt(
     if (
       stream.pendingPlanApprovalContinuation &&
       !abortController.signal.aborted &&
-      !options?._isReprompt
+      !options?._isReprompt &&
+      !superseded
     ) {
       const continuationPrompt = stream.pendingPlanApprovalContinuation;
       stream.pendingPlanApprovalContinuation = null;
@@ -3244,6 +3633,31 @@ export async function sendPrompt(
 
     diagnostics?.terminalSettled("rejected");
     diagnostics?.streamSettled("rejected");
+    // This turn never reached the SDK, so it hands the foreground back to
+    // whichever turn held it — including a released one whose process is
+    // still running background work and may yet need to reclaim it.
+    if (!queryStarted && session.latestTurnGeneration === turnGeneration) {
+      session.latestTurnGeneration = latestTurnGenerationBeforeStartup;
+    }
+    if (
+      !queryStarted &&
+      runtimeBeforeStartup &&
+      !abortController.signal.aborted &&
+      !session.deleting
+    ) {
+      session.status = statusBeforeStartup;
+      session.turnStartedAt = turnStartedAtBeforeStartup;
+      session.abortController = abortControllerBeforeStartup;
+      session.error = errorBeforeStartup;
+      session.inProgressUsage = inProgressUsageBeforeStartup;
+      session.inProgressUsageGeneration = inProgressUsageGenerationBeforeStartup;
+      const index = session.messages.indexOf(userMessage);
+      if (index >= 0) {
+        session.messages.splice(index, 1);
+        markTranscriptChanged(session);
+      }
+      throw error;
+    }
     if (abortController.signal.aborted) {
       recordInterruptedStructuredOutputIfCurrent();
       return;
@@ -3319,7 +3733,7 @@ export async function sendPrompt(
     if (session.finishTurnInputIfSettled === finishTurnInputForThisTurn) {
       session.finishTurnInputIfSettled = undefined;
     }
-    if (session.splitAssistantAfterSteer) {
+    if (session.splitAssistantAfterSteer === splitAssistantAfterSteer) {
       session.splitAssistantAfterSteer = undefined;
     }
     // Once the SDK accepted the query, a retry must replay the outcome rather
@@ -3344,32 +3758,9 @@ export async function sendPrompt(
         session.retainedContinuationRequestIds = undefined;
       }
     }
-    // The loop above is the only consumer of this iterator, and it ends either
-    // exhausted or through an abrupt exit — which invokes `return()`, i.e. the
-    // SDK's `cleanup()` → `transport.close()`. So the handle is dead either
-    // way: nothing more can arrive on it and `stopTask` would answer a stop
-    // request with a transport error. Settle what it owned instead of retaining
-    // a handle that can only fail, and never leave a task at `running`.
-    if (queryIteratorControl) {
-      // Dropping the retention is what lets the close below actually run.
-      forgetRetainedQueryControl(session, queryIteratorControl);
-      removeBackgroundTaskCandidatesOwnedBy(session, queryIteratorControl);
-      // The handle is dead, so no edge can still arrive to claim these.
-      forgetSettlingBackgroundTasksOwnedBy(session, queryIteratorControl);
-      const settled = settleTasksOwnedByClosedControl(
-        session,
-        queryIteratorControl,
-        "The Claude session that owned this task ended before it reported a result",
-      );
-      if (session.queryControl === queryIteratorControl) {
-        session.queryControl = undefined;
-      }
-      if (session.queryControlDraining === queryIteratorControl) {
-        session.queryControlDraining = undefined;
-      }
-      closeQueryControlIfUnused(session, queryIteratorControl);
-      if (settled) emitBackgroundTaskSnapshot(session);
-    }
+    // What the process owned is settled by the runtime when it ends
+    // (`endClaudeRuntime`), not here: a turn that is superseded or released to
+    // background work finishes while the process it ran on keeps going.
     // The pre-turn transcript read failed, so `persistedMessagesLoaded` claims
     // a hydration that never happened. Clearing it once the turn is over lets
     // the next transcript request retry; leaving it set hid the on-disk history

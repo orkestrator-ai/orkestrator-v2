@@ -4261,10 +4261,10 @@ describe("sendPrompt", () => {
       outputSchema: { type: "object" },
       requestId: "structured-after-restart",
     });
-    const secondCall = await nextQueryCall();
-
+    await expect(nextQueryCall(30)).rejects.toThrow();
     resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
     await firstPrompt;
+    const secondCall = await nextQueryCall();
     expect(session.structuredOutputRequestId).toBe("structured-after-restart");
     expect(session.structuredOutput).toBeUndefined();
 

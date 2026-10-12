@@ -25,6 +25,7 @@ import {
   mcpConfigSnapshot,
   mockExecFile,
   mockExistsSync,
+  mockGetMcpRuntimeConfig,
   mockGetMcpServerNames,
   mockGetMcpServersForSdk,
   mockGetPluginsForSdk,
@@ -43,7 +44,8 @@ import {
   queryWaiters,
   resetSdkSessionStoreMocks,
 } from "./session-manager-test-mocks.js";
-import { afterAll, afterEach, mock, test } from "bun:test";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { expect, afterAll, afterEach, mock } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -224,6 +226,8 @@ export function track(id: string): string {
   return id;
 }
 
+const defaultMcpRuntimeConfig = mockGetMcpRuntimeConfig.getMockImplementation()!;
+
 afterEach(() => {
   setClaudeHomeForTesting(sessionManagerTestHome);
   // Clean up any sessions/abortable work the test created.
@@ -241,6 +245,8 @@ afterEach(() => {
   mockExecFile.mockImplementation(originalExecFile);
   mockSpawn.mockReset();
   mockSpawn.mockImplementation(originalSpawn);
+  mockGetMcpRuntimeConfig.mockReset();
+  mockGetMcpRuntimeConfig.mockImplementation(defaultMcpRuntimeConfig);
   mockGetMcpServersForSdk.mockReset();
   mockGetMcpServersForSdk.mockImplementation(async () => ({}));
   mockGetMcpServerNames.mockReset();
@@ -459,4 +465,56 @@ export async function inspectDuringTurn(
       await promptPromise;
     },
   };
+}
+
+export async function releaseWithBackgroundWork(
+  name: string,
+  taskId = "agent-bg",
+  options?: Parameters<typeof sendPrompt>[2],
+  policy?: ReturnType<typeof createSession>["executionPolicy"],
+) {
+  const session = createSession(name);
+  session.executionPolicy = policy;
+  track(session.id);
+  const firstPrompt = sendPrompt(session.id, "delegate", options);
+  const call = await nextQueryCall();
+  const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+  expect((await input.next()).done).toBe(false);
+  call.push({
+    type: "assistant",
+    message: {
+      id: "msg-first",
+      model: "claude-sonnet-4-6",
+      content: [
+        {
+          type: "tool_use",
+          id: "agent-call",
+          name: "Agent",
+          input: { description: "Survey", run_in_background: true },
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+  });
+  call.push({
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "agent-call", content: "Async agent launched" },
+      ],
+    },
+    parent_tool_use_id: null,
+  });
+  call.push({
+    type: "system",
+    subtype: "task_started",
+    task_id: taskId,
+    tool_use_id: "agent-call",
+    description: "Survey",
+  });
+  call.push({ type: "result", subtype: "success" });
+  await waitFor(() => session.status === "idle");
+  expect(session.claudeRuntime?.state).toBe("open");
+  return { session, call, input, firstPrompt };
 }

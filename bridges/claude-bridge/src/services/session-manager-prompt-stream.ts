@@ -52,6 +52,13 @@ export function createPromptStreamState(
   options: {
     flushIntervalMs: number;
     maxBlockIndex: number;
+    /**
+     * The tracker of the CLI this turn runs on, when it is already running.
+     * Every turn on one process shares it, so a report for a tool an earlier
+     * turn started still finds that tool's row.
+     */
+    toolTracker?: ToolTracker;
+    activeTaskIds?: Set<string>;
   },
 ): PromptStreamState {
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -59,8 +66,9 @@ export function createPromptStreamState(
   // Track current assistant message for updates
   let currentAssistantMessage: NormalizedMessage | null = null;
 
-  // Tool tracker persists across all messages in this turn
-  const toolTracker = new ToolTracker();
+  // Tool tracker persists across all messages in this turn, and across every
+  // turn written into the same CLI.
+  const toolTracker = options.toolTracker ?? new ToolTracker();
 
   // The task list, unlike the tool tracker, persists across turns — Claude's
   // tasks survive from one prompt to the next, so the registry hangs off the
@@ -142,7 +150,7 @@ export function createPromptStreamState(
 
   // Track active (pending) Task tool IDs for parent tracking
   // This allows us to associate child tools with their parent Task
-  const activeTaskIds = new Set<string>();
+  const activeTaskIds = options.activeTaskIds ?? new Set<string>();
 
   // Track plan rejection feedback so we can re-prompt Claude after the turn ends.
   // When ExitPlanMode is denied, the SDK may end the turn without Claude seeing

@@ -18,3 +18,22 @@
 
 Observed while validating AddProjectDialog remote detection. No code in the
 owning area changed, and no test was skipped or loosened.
+
+## Recurrence — 2026-10-12
+
+Observed while validating Claude retained-runtime fencing. The owning backend
+code was unchanged.
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`,
+  with the testing guide's macOS GNU-tool PATH.
+- **Workers:** workspace two slots (one Bun worker per package), root three,
+  bridges two, protocol one. A focused Claude bridge package run also ran.
+- **Failure:** the same case exceeded 5000 ms (5021.03 ms).
+- **Suite counts:** backend 5772 pass, 15 skip, 2 fail, 1 unhandled error;
+  5789 tests across 323 files. The other failed case was flake 0189.
+- **Isolated rerun:** `mise run test:logged -- --name recurring-baseline-isolated -- bun test --cwd apps/backend ./tests/recurring-baseline.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed, exit 0 (6.0 s).
+- **Evidence:** `/tmp/orkestrator-test-run.3FTW4U/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Hypothesis:** consistent with the existing concurrent-load timeout; the
+  isolated pass does not identify which operation consumed the budget. No
+  timeout, assertion or skip changed.

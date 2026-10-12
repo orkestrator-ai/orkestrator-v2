@@ -360,9 +360,10 @@ export async function stopBackgroundTask(
     return { ok: false, reason: "task_not_found", message: "Task not found" };
   }
   // Strictly the handle that owns this task. Falling back to whatever control
-  // is current asked a *later* turn's provider process to stop a task it never
-  // started — it answers `ok` for a task id it has never heard of, so the user
-  // was told the work had stopped when nothing had been reached at all.
+  // is current could ask a different provider process (one started after the
+  // owner exited) to stop a task it never started — it answers `ok` for a task
+  // id it has never heard of, so the user would be told the work had stopped
+  // when nothing had been reached at all.
   const control = session.backgroundTaskControls?.get(taskId);
   const stopTask = control?.stopTask;
   if (typeof stopTask !== "function") {
@@ -451,6 +452,16 @@ export function takeQueryControls(
 ): Set<NonNullable<SessionState["queryControl"]>> {
   const controls = new Set<NonNullable<SessionState["queryControl"]>>();
   if (session.queryControl) controls.add(session.queryControl);
+  // The session's CLI, including while it is idle between turns running
+  // background work that no other collection names.
+  if (session.claudeRuntime && session.claudeRuntime.state !== "ended") {
+    const runtime = session.claudeRuntime;
+    runtime.state = "draining";
+    runtime.input.close();
+    runtime.abortController.abort();
+    session.queryControlDraining = runtime.control;
+    controls.add(runtime.control);
+  }
   for (const control of session.backgroundTaskControls?.values() ?? []) {
     controls.add(control);
   }

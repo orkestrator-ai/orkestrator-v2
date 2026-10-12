@@ -17,23 +17,13 @@
  * Snapshots of the real modules are exported so the harness can restore them on
  * `afterAll`; see CLAUDE.md > "Bun `mock.module()` Rules".
  */
-import { afterAll, afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
-
-import { EventEmitter } from "node:events";
+import { mock } from "bun:test";
 
 import * as realChildProcess from "node:child_process";
 
 import * as realFs from "node:fs";
 
 import * as realFsPromises from "node:fs/promises";
-
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-
-import { homedir, tmpdir } from "node:os";
-
-import { join } from "node:path";
-
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 // Snapshot the real mcp-config / plugin-config modules BEFORE installing the
 // stub mocks below. Bun's `mock.module(...)` is process-global, so without
@@ -211,6 +201,7 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
     pendingCalls.push(call);
   }
 
+  const beforeExit = queryControlOverrides.beforeExit as (() => Promise<void>) | undefined;
   async function* iter() {
     while (true) {
       if (error) {
@@ -222,7 +213,10 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
         yield queue.shift();
         continue;
       }
-      if (finished) return;
+      if (finished) {
+        await beforeExit?.();
+        return;
+      }
       await new Promise<void>((r) => {
         pendingResolve = r;
       });

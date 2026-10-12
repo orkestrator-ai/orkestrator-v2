@@ -4848,6 +4848,70 @@ describe("NativeAgentService shared observations", () => {
     );
   });
 
+  test("mail injection reaches a released turn whose background work is still running", async () => {
+    let observation: ProviderActivityObservation = { state: "working", readyForInput: false };
+    let refuse = false;
+    const { provider, send } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+      send: async () => {
+        // The Claude bridge's 409 for a launch-only change on a live CLI.
+        if (refuse) throw new ProviderUnavailableError("claude prompt dispatch (HTTP 409)");
+      },
+    });
+    const tab = { ...TAB, agent: "claude" as const };
+    await withService(
+      { prefix: "orkestrator-native-observation-mail-released-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1", "claude");
+
+        // The turn itself is running: hold.
+        await service.reconcileAgentActivity();
+        await expect(
+          service.dispatchMailInject({
+            ...tab,
+            prompt: "Mail",
+            requestId: "mail-turn",
+            allowProviderCommands: false,
+          }),
+        ).resolves.toEqual({ outcome: "held", reason: "busy" });
+        expect(send).not.toHaveBeenCalled();
+
+        // The turn released the composer to its background subagents. The
+        // environment still reads working, but the session can take a prompt.
+        observation = { state: "working", readyForInput: true };
+        await service.reconcileAgentActivity();
+        refuse = true;
+        await expect(
+          service.dispatchMailInject({
+            ...tab,
+            prompt: "Mail",
+            requestId: "mail-refused",
+            allowProviderCommands: false,
+          }),
+        ).resolves.toEqual({ outcome: "held", reason: "busy" });
+        // Not parked: a refused mail must not lock the user's prompts out.
+        expect(
+          (
+            await storage.getNativeAgentSession(
+              nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+            )
+          )?.pendingDispatch,
+        ).toBeUndefined();
+
+        refuse = false;
+        await service.reconcileAgentActivity();
+        await expect(
+          service.dispatchMailInject({
+            ...tab,
+            prompt: "Mail",
+            requestId: "mail-released",
+            allowProviderCommands: false,
+          }),
+        ).resolves.toEqual({ outcome: "accepted", requestId: "mail-released" });
+      },
+    );
+  });
+
   test("a replaced provider fences late results and retires the obsolete observer", async () => {
     const transitions: Array<
       Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0]

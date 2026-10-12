@@ -34,6 +34,7 @@ import {
   PendingNativeAgentDispatchError,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
   PromptRejectedError,
+  ProviderUnavailableError,
   nativeCapabilities,
 } from "./native-agent-service-shared.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
@@ -610,8 +611,15 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
           // Anything older — a group the observer has backed off, a sweep that
           // has not run — is `unknown` here and costs one authoritative read:
           // slower observation must never read as permission to inject.
+          //
+          // This reads the turn, not the process: a session whose turn ended
+          // but whose CLI still runs background subagents is free to take a
+          // prompt, and the Claude bridge writes it into that same CLI rather
+          // than resuming a second one. Holding on the raw state instead kept
+          // mail from a tab's own subagents undelivered until all of them had
+          // finished — long after anyone needed it.
           const observation = this.observations.view(session.key, session.providerSessionId);
-          const observed = this.sessionActivitySnapshot(
+          const observed = this.sessionTurnActivitySnapshot(
             input.environmentId,
             input.agent,
             input.logicalSessionKey,
@@ -645,6 +653,21 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       }
       if (error instanceof AmbiguousPromptDispatchError) {
         return { outcome: "unknown", requestId: input.requestId, error: error.message };
+      }
+      // A refusal the bridge proves was not processed (409, 503, unreachable)
+      // is "not now", not a failure. The Claude bridge answers 409 when a
+      // prompt would change a launch-only setting on a CLI that is still
+      // finishing background work; the mail waits for that and is retried.
+      // The journal row opened for the send is released first: parked, it
+      // would refuse the user's own prompts until this mail got through.
+      if (error instanceof ProviderUnavailableError) {
+        await this.storage
+          .clearPendingNativeAgentDispatch(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+            input.requestId,
+          )
+          .catch(() => undefined);
+        return { outcome: "held", reason: "busy" };
       }
       return {
         outcome: "rejected",

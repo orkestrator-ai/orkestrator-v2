@@ -568,11 +568,60 @@ describe("StorageService agent mail", () => {
       expect(stored.placement).toBe("stored");
 
       await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "idle" });
-      await expect(storage.retryAgentMailInject("e2", "agent", stored.id)).resolves.toMatchObject({
+      expect(await storage.getAgentMailMessage("e2", "agent", stored.id)).toMatchObject({
         placement: "pending-inject",
         injectRequestId: `mail-inject-${stored.id}`,
       });
+      // A later retry only resets backoff; it must not queue the message twice.
+      await storage.retryAgentMailInject("e2", "agent", stored.id);
       expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("enabling delivery skips handled mail and does not re-run when already on", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "off" });
+      const send = (requestId: string) =>
+        storage.sendAgentMail(
+          { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+          { requestId, toEnvironmentId: "e2", toTabId: "agent", body: requestId },
+        );
+      const acked = await send("acked");
+      await storage.ackAgentMail("e2", "agent", acked.id);
+      const waiting = await send("waiting");
+
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "idle", mutedInbound: true });
+      expect((await storage.getAgentMailMessage("e2", "agent", waiting.id)).placement).toBe(
+        "stored",
+      );
+      await storage.updateAgentMailboxPolicy("e2", "agent", { mutedInbound: false });
+      expect(
+        (await storage.listPendingAgentMailInjects()).map(({ message }) => message.id),
+      ).toEqual([waiting.id]);
+      expect((await storage.getAgentMailMessage("e2", "agent", acked.id)).placement).toBe("stored");
+
+      // Already idle: unrelated policy edits do not resurrect discarded mail.
+      await storage.discardAgentMail("e2", "agent", waiting.id);
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "idle" });
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses mail a tab addresses to its own mailbox", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await expect(
+        storage.sendAgentMail(
+          { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+          { requestId: "self", toEnvironmentId: "e1", toTabId: "agent", body: "to the parent" },
+        ),
+      ).rejects.toMatchObject({ code: "policy-denied" });
+      expect(await storage.listAgentMailSentByMailbox("e1", "agent")).toHaveLength(0);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

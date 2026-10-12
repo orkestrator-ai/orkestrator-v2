@@ -392,3 +392,111 @@ test("a CLI-started question rehydrates in an inactive, reloaded renderer and ta
     rmSync(configDir, { recursive: true, force: true });
   }
 });
+
+test("live Codex conversation resumes after moving its worktree", async ({ page }, testInfo) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_LIVE_MOVE !== "1",
+    "Needs a disposable profile with --credential-source codex and ORKESTRATOR_AGENT_TEST_LIVE_MOVE=1",
+  );
+  testInfo.setTimeout(900_000);
+  const status = profileStatus();
+  const configDir = mkdtempSync(path.join(os.tmpdir(), "ork-live-move-"));
+  let environmentId: string | undefined;
+  try {
+    const fixture = await fixtureProject(configDir, status);
+    const suffix = Date.now().toString(36);
+    environmentId = readyEnvironment(configDir, fixture.id, `live-move-${suffix}`);
+    await login(page);
+    const invoke = async <T>(command: string, args: Record<string, unknown>): Promise<T> => {
+      const response = await page.request.post(
+        new URL("/__orkestrator/invoke", status.browserUrl!).href,
+        { data: { command, args } },
+      );
+      expect(response.ok(), `Command failed: ${command}`).toBe(true);
+      return ((await response.json()) as { result: T }).result;
+    };
+    const original = (await invoke<{ worktreePath: string }>("get_environment", { environmentId }))
+      .worktreePath;
+    const prompt = path.join(configDir, "prompt.txt");
+    const memory = `move-memory-${suffix}`;
+    writeFileSync(
+      prompt,
+      `Remember this phrase for the next turn: ${memory}. Reply only Ready. Do not create any files.\n`,
+    );
+    const first = cliRun(configDir, [
+      "session",
+      "start",
+      "--environment",
+      environmentId,
+      "--agent",
+      "codex",
+      "--mode",
+      "build",
+      "--model",
+      process.env.ORKESTRATOR_AGENT_TEST_MOVE_MODEL ?? "gpt-6-sol",
+      "--prompt-file",
+      prompt,
+      "--request-id",
+      `move-first-${suffix}`,
+      "--wait",
+      "--timeout",
+      "5m",
+    ]);
+    expect(
+      first.code,
+      `First turn failure code: ${first.envelope.error?.code ?? "run-failed"}`,
+    ).toBe(0);
+    const sessionId = (
+      first.envelope as unknown as { receipt: { resources: { sessionId: string } } }
+    ).receipt.resources.sessionId;
+    expect(sessionId).toBeTruthy();
+    // Wait for authoritative activity reconciliation before opening settings.
+    await expect
+      .poll(
+        async () =>
+          (await invoke<{ agentActivityState?: string }>("get_environment", { environmentId }))
+            .agentActivityState ?? "idle",
+        { timeout: 30_000 },
+      )
+      .toBe("idle");
+    const moved = await invoke<{ worktreePath: string; lifecycleError?: string }>(
+      "move_environment",
+      { environmentId, destinationDir: path.join(configDir, "destination") },
+    );
+    expect(moved.lifecycleError).toBeFalsy();
+    await page.reload();
+    writeFileSync(
+      prompt,
+      "Create a file named remembered.txt in your current working directory containing only the phrase I asked you to remember in the preceding turn. Do nothing else.\n",
+    );
+    const second = cliRun(configDir, [
+      "session",
+      "prompt",
+      sessionId,
+      "--prompt-file",
+      prompt,
+      "--request-id",
+      `move-followup-${suffix}`,
+      "--wait",
+      "--timeout",
+      "5m",
+    ]);
+    expect(
+      second.code,
+      `Follow-up failure code: ${second.envelope.error?.code ?? "run-failed"}`,
+    ).toBe(0);
+    const { promises: filesystem } = await import("node:fs");
+    expect(
+      (await filesystem.readFile(path.join(moved.worktreePath, "remembered.txt"), "utf8")).trim(),
+    ).toBe(memory);
+    expect(
+      await filesystem.stat(original).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  } finally {
+    if (environmentId) deleteQuietly(configDir, environmentId);
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});

@@ -106,6 +106,8 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageBase } from "./storage-base.ts";
+import type { WorktreeMoveRecord } from "./models.js";
+import path from "node:path";
 import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folders";
 
 /**
@@ -120,6 +122,80 @@ export function applyProjectFolder(project: Project, folder: unknown): void {
   const normalized = normalizeProjectFolderName(folder);
   if (normalized) project.folder = normalized;
   else delete project.folder;
+}
+
+/** Validates a durable environment-move record; paths are absolute and bounded. */
+export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
+  if (!isRecord(value)) throw new Error("Invalid worktree move record");
+  const absolute = (field: string, candidate: unknown): string => {
+    if (
+      typeof candidate !== "string" ||
+      !path.isAbsolute(candidate) ||
+      candidate.length > 4096 ||
+      candidate.includes("\0")
+    ) {
+      throw new Error(`Invalid worktree move ${field}`);
+    }
+    return candidate;
+  };
+  if (value.phase !== "moving" && value.phase !== "copied" && value.phase !== "committed") {
+    throw new Error("Invalid worktree move phase");
+  }
+  if (typeof value.startedAt !== "string" || value.startedAt.length > 64) {
+    throw new Error("Invalid worktree move start time");
+  }
+  if (value.removeSource !== undefined && typeof value.removeSource !== "boolean") {
+    throw new Error("Invalid worktree move source cleanup flag");
+  }
+  if (value.sourceCleaned !== undefined && typeof value.sourceCleaned !== "boolean")
+    throw new Error("Invalid worktree move cleanup completion");
+  if (
+    value.sourceIdentity !== undefined &&
+    (!isRecord(value.sourceIdentity) ||
+      !Number.isSafeInteger(value.sourceIdentity.dev) ||
+      !Number.isSafeInteger(value.sourceIdentity.ino) ||
+      (value.sourceIdentity.dev as number) < 0 ||
+      (value.sourceIdentity.ino as number) < 0)
+  )
+    throw new Error("Invalid worktree move source identity");
+  let submodules: WorktreeMoveRecord["submodules"];
+  if (value.submodules !== undefined) {
+    if (!Array.isArray(value.submodules) || value.submodules.length > 10_000) {
+      throw new Error("Invalid worktree move submodules");
+    }
+    submodules = value.submodules.map((entry: unknown) => {
+      const relative = isRecord(entry) ? entry.path : undefined;
+      if (
+        !isRecord(entry) ||
+        typeof relative !== "string" ||
+        !relative ||
+        path.isAbsolute(relative) ||
+        relative.length > 4096 ||
+        relative.includes("\0") ||
+        relative.split(/[\\/]/).some((segment) => segment === "" || segment === "..")
+      ) {
+        throw new Error("Invalid worktree move submodule path");
+      }
+      return { path: relative, gitDir: absolute("submodule git dir", entry.gitDir) };
+    });
+  }
+  return {
+    from: absolute("source", value.from),
+    to: absolute("destination", value.to),
+    ...(value.staging === undefined ? {} : { staging: absolute("staging path", value.staging) }),
+    ...(value.fromCanonical === undefined
+      ? {}
+      : { fromCanonical: absolute("canonical source", value.fromCanonical) }),
+    ...(value.fromRoot === undefined ? {} : { fromRoot: absolute("source root", value.fromRoot) }),
+    ...(value.removeSource === undefined ? {} : { removeSource: value.removeSource === true }),
+    ...(value.sourceIdentity === undefined
+      ? {}
+      : { sourceIdentity: value.sourceIdentity as { dev: number; ino: number } }),
+    ...(value.sourceCleaned === undefined ? {} : { sourceCleaned: value.sourceCleaned === true }),
+    ...(submodules ? { submodules } : {}),
+    phase: value.phase,
+    startedAt: value.startedAt,
+  };
 }
 
 export type StorageLayerTypes = [
@@ -625,12 +701,21 @@ export abstract class StorageProjects extends StorageBase {
           environment.lifecycleError = value ?? null;
         }
       }
+      if ("worktreeMove" in updates) {
+        const value = updates.worktreeMove;
+        if (value === null || value === undefined) {
+          environment.worktreeMove = undefined;
+        } else {
+          environment.worktreeMove = parseWorktreeMoveRecord(value);
+        }
+      }
       if ("lifecycleOperation" in updates) {
         if (updates.lifecycleOperation == null) {
           environment.lifecycleOperation = undefined;
         } else if (
           updates.lifecycleOperation === "deleting" ||
-          updates.lifecycleOperation === "merging"
+          updates.lifecycleOperation === "merging" ||
+          updates.lifecycleOperation === "moving"
         ) {
           environment.lifecycleOperation = updates.lifecycleOperation;
         }

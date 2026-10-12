@@ -157,7 +157,7 @@ export interface PublicEnvironmentSummary {
     completedAt?: string;
   };
   lifecycle: {
-    operation: "deleting" | "merging" | null;
+    operation: "deleting" | "merging" | "moving" | null;
     error: string | null;
     deletionRequested: boolean;
   };

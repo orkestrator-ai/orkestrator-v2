@@ -1,3 +1,4 @@
+import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import {
   isReviewValidationRun,
@@ -257,6 +258,23 @@ export async function readReviewValidationOutput(
  * remaining commands continue; `cancel` stops the whole run.
  */
 export async function controlReviewValidation(
+  environmentId: string,
+  value: unknown,
+  action: "start" | "status" | "cancel" | "stop-command",
+  context: CommandContext,
+  resultIdValue?: string,
+): Promise<ReviewValidationRun> {
+  const release = action === "start" ? beginEnvironmentMutation(environmentId) : undefined;
+  try {
+    if (action === "start" && (await context.storage.getEnvironment(environmentId))?.worktreeMove)
+      throw new Error("Move recovery is pending. Restart Orkestrator before starting validation.");
+    return await controlReviewValidationOnce(environmentId, value, action, context, resultIdValue);
+  } finally {
+    release?.();
+  }
+}
+
+async function controlReviewValidationOnce(
   environmentId: string,
   value: unknown,
   action: "start" | "status" | "cancel" | "stop-command",

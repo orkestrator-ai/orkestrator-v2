@@ -1,3 +1,4 @@
+import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
   isProjectHomeEnvironment,
@@ -196,14 +197,20 @@ export function createEnvironmentCommandRunner(environment: Environment): Enviro
     if (!environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
-    return async (command, args, timeoutMs = 60_000, env) =>
-      (
-        await runCommand(command, args, {
-          cwd: environment.worktreePath,
-          timeoutMs,
-          ...(env ? { env } : {}),
-        })
-      ).stdout;
+    return async (command, args, timeoutMs = 60_000, env) => {
+      const release = beginEnvironmentMutation(environment.id);
+      try {
+        return (
+          await runCommand(command, args, {
+            cwd: environment.worktreePath,
+            timeoutMs,
+            ...(env ? { env } : {}),
+          })
+        ).stdout;
+      } finally {
+        release();
+      }
+    };
   }
   if (!environment.containerId) {
     throw new Error("Container environment is not available");

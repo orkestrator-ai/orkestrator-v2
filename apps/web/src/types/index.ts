@@ -37,7 +37,7 @@ export type NetworkAccessMode = "full" | "restricted";
 
 /** Type of environment - containerized (Docker) or local (git worktree) */
 export type EnvironmentType = "containerized" | "local";
-export type EnvironmentLifecycleOperation = "deleting" | "merging";
+export type EnvironmentLifecycleOperation = "deleting" | "merging" | "moving";
 
 /** Port protocol type for port mappings */
 export type PortProtocol = "tcp" | "udp";
@@ -139,6 +139,17 @@ export interface Environment {
   worktreePath?: string;
   /** The folder the worktree was created in, when recorded. */
   worktreeBaseDir?: string;
+  /** A move of the worktree to another folder that has not settled yet. */
+  worktreeMove?: {
+    from: string;
+    to: string;
+    staging?: string;
+    phase: "moving" | "copied" | "committed";
+    fromCanonical?: string;
+    fromRoot?: string;
+    removeSource?: boolean;
+    startedAt: string;
+  };
   /**
    * The project home: a local environment whose `worktreePath` is the
    * project's own checkout rather than a disposable worktree. Deleting it only

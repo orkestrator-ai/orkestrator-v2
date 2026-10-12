@@ -1,3 +1,7 @@
+import {
+  beginEnvironmentMove,
+  endEnvironmentMove,
+} from "../../../apps/backend/src/core/environment-replacement-fence";
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { MAX_TEXT_FILE_BYTES } from "../../../apps/backend/src/core/path-safety";
 import { terminalAccountHomes } from "../../../apps/backend/src/core/terminal-account-usage";
@@ -3676,4 +3680,81 @@ exec sleep 30
     },
     ASYNC_TEST_BUDGET_MS,
   );
+});
+
+test("a terminal suspended in account preparation cannot spawn after move cleanup", async () => {
+  const worktreePath = await createTempDir("ork-terminal-move-race-");
+  const environment = createEnvironment({
+    id: "env-terminal-move-race",
+    environmentType: "local",
+    worktreePath,
+  });
+  const { context } = createContext(environment);
+  const commands = createCommandRegistry();
+  const { sessionId } = terminalSessionResult(
+    await commands.get("create_local_terminal_session")!(
+      { environmentId: environment.id },
+      context,
+    ),
+  );
+  const gate = createDeferred<void>();
+  const entered = createDeferred<void>();
+  const accounts = spyOn(context.storage, "loadAgentAccounts").mockImplementation(async () => {
+    entered.resolve();
+    await gate.promise;
+    return { version: 1, accounts: [], active: {} };
+  });
+  const count = ptyProcesses.length;
+  const starting = commands.get("start_local_terminal_session")!({ sessionId }, context);
+  void starting.catch(() => undefined);
+  try {
+    await Promise.race([
+      entered.promise,
+      starting.then(() => {
+        throw new Error("Terminal spawned before account preparation");
+      }),
+    ]);
+    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    await commands.get("close_local_terminal_session")!({ sessionId }, context);
+    gate.resolve();
+    await expect(starting).rejects.toThrow("being moved");
+    expect(ptyProcesses.length).toBe(count);
+    await expect(
+      commands.get("create_local_terminal_session")!({ environmentId: environment.id }, context),
+    ).rejects.toThrow("being moved");
+  } finally {
+    gate.resolve();
+    accounts.mockRestore();
+    endEnvironmentMove(environment.id);
+  }
+});
+
+test("terminal creation rechecks a move admitted during its environment read", async () => {
+  const environment = createEnvironment({
+    id: "env-terminal-create-move",
+    environmentType: "local",
+  });
+  const { context } = createContext(environment);
+  const gate = createDeferred<void>();
+  const entered = createDeferred<void>();
+  const read = spyOn(context.storage, "getEnvironment").mockImplementation(async () => {
+    entered.resolve();
+    await gate.promise;
+    return environment;
+  });
+  const creating = createCommandRegistry().get("create_local_terminal_session")!(
+    { environmentId: environment.id },
+    context,
+  );
+  void creating.catch(() => undefined);
+  try {
+    await entered.promise;
+    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    gate.resolve();
+    await expect(creating).rejects.toThrow("being moved");
+  } finally {
+    gate.resolve();
+    read.mockRestore();
+    endEnvironmentMove(environment.id);
+  }
 });

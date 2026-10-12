@@ -296,6 +296,31 @@ export async function syncClaudeAccountSettings(
   return locked ? outcome : "skipped";
 }
 
+/**
+ * Give a moved folder the per-project entry (local MCP servers, trust,
+ * allowed tools) Claude keeps for its old path in `.claude.json`. An entry
+ * already present for the new path is kept. False when the lock was busy.
+ */
+export async function copyClaudeProjectEntry(
+  jsonPath: string,
+  fromPath: string,
+  toPath: string,
+): Promise<boolean> {
+  return withClaudeJsonLock(jsonPath, async () => {
+    // A linked file is the user's own arrangement; replacing it would unlink it.
+    if ((await fs.lstat(jsonPath).catch(() => null))?.isSymbolicLink()) return;
+    const current = await readJsonObjectFile(jsonPath);
+    if (!current) return;
+    const projects = asObject(current.projects);
+    const entry = asObject(projects?.[fromPath]);
+    if (!projects || !entry || toPath in projects) return;
+    await writeFileAtomic(
+      jsonPath,
+      `${JSON.stringify({ ...current, projects: { ...projects, [toPath]: entry } }, null, 2)}\n`,
+    );
+  });
+}
+
 export interface AgentAccountHomeSources {
   claudeHome: string;
   claudeJson: string;

@@ -1,3 +1,7 @@
+import {
+  beginEnvironmentMove,
+  endEnvironmentMove,
+} from "../../../apps/backend/src/core/environment-replacement-fence";
 import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
@@ -1188,5 +1192,80 @@ exit 0
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
+  });
+});
+
+test("tmux launch admission and every input path are fenced during transfer", async () => {
+  const naming = deferred<void>();
+  const entered = deferred<void>();
+  const handlers = createHandlers({
+    prepareEnvironmentFirstPrompt: async () => {
+      entered.resolve();
+      await naming.promise;
+    },
+  });
+  await withFakeTmuxRuntime(async ({ environment }) => {
+    const context = {
+      storage: { getEnvironment: async () => environment },
+      emit: () => undefined,
+      appRoot: "",
+      resourceRoot: "",
+    };
+    const starting = invoke(
+      handlers,
+      "claude_tmux_start",
+      { tabId: "tab-move", environmentId: environment.id, initialPrompt: "fixture" },
+      context,
+    );
+    try {
+      await entered.promise;
+      expect(() => beginEnvironmentMove(environment.id)).toThrow("submission is still in progress");
+      naming.resolve();
+      await starting;
+      const terminalSessionId = await invoke(
+        handlers,
+        "claude_tmux_create_interactive_terminal",
+        { tabId: "tab-move", environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      );
+      expect(beginEnvironmentMove(environment.id)).toBe(true);
+      for (const command of [
+        "claude_tmux_start",
+        "claude_tmux_submit",
+        "claude_tmux_submit_queued",
+        "claude_tmux_send_text",
+        "claude_tmux_send_keys",
+      ]) {
+        await expect(
+          invoke(
+            handlers,
+            command,
+            { tabId: "tab-move", environmentId: environment.id, text: "fixture", keys: ["Enter"] },
+            context,
+          ),
+        ).rejects.toThrow("being moved");
+      }
+      await expect(
+        invoke(handlers, "claude_tmux_start_interactive_terminal", { terminalSessionId }, context),
+      ).rejects.toThrow("being moved");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_write_interactive_terminal",
+          { terminalSessionId, data: "fixture" },
+          context,
+        ),
+      ).rejects.toThrow("being moved");
+    } finally {
+      naming.resolve();
+      endEnvironmentMove(environment.id);
+      await starting;
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-move", environmentId: environment.id },
+        context,
+      );
+    }
   });
 });

@@ -42,6 +42,52 @@ created with; the setting places new profiles, read from the production
 carries a `.orkestrator-dev-worktrees` sentinel and is removed with the
 profile only while that sentinel names it.
 
+## Moving an existing environment
+
+A local environment's worktree can be moved later, for example to a larger
+disk: environment settings > General > **Move environment**. Choose the
+destination folder; the worktree keeps its folder name inside it, and every
+file moves with it, including uncommitted changes, `node_modules` and other
+ignored files. The project home cannot be moved.
+
+- On the same disk this is `git worktree move` (a rename). Across disks the
+  worktree is copied to a staging folder next to the destination, renamed into
+  place, `git worktree repair` points the repository at it, and only then is
+  the old folder removed. Worktrees with submodules use this copy path even
+  on the same disk; nested submodule Git links are repaired at the destination.
+- The move is refused while an agent in the environment is working or waiting
+  for input, while setup runs, and while another lifecycle operation (delete,
+  merge, rebuild) is in progress. An admitted file write or worker start must
+  finish before a move can begin. While it runs, file mutations, new exec and
+  validation workers, prompts and new terminals are refused; its terminals, Claude tmux sessions and
+  local agent bridges are stopped first and start again on demand in the new
+  folder.
+- Agents key their saved conversations by folder, so that state moves too,
+  before any bridge restarts (`environment-move-sessions.ts`): Claude
+  transcripts move to the new folder's `~/.claude/projects/<slug>` with a
+  `relocated` line appended (what Claude Code does itself) and the
+  `~/.claude.json` project entry is copied; the Codex bridge's registry and
+  dispatch journal in `~/.codex` and every account home are re-keyed to the
+  new folder's hash; Cursor's stored agent `cwd` is rewritten. Pi reopens
+  sessions by file and needs nothing. OpenCode and Grok keep sessions in
+  their own stores keyed by folder, which Orkestrator does not rewrite: their
+  earlier conversations are not resumed in the new folder.
+- The environment records the new folder as its `worktreeBaseDir`, so
+  deletion removes the worktree from there.
+- Progress is recorded on the environment (`worktreeMove`). If Orkestrator
+  stops mid-move, the next start adopts a move that completed and otherwise
+  leaves the worktree where it was and removes the unfinished copy. Once the
+  destination is committed, it stays authoritative even if later bookkeeping
+  fails. The move record remains until conversation relocation and old-copy
+  cleanup finish. Partial completion names affected providers in settings and
+  retries on the next backend start; edits, agent work and another move are
+  refused until it settles. A rejected path commit restores the original
+  worktree when storage confirms that it still owns the source. Ambiguous
+  failures keep the environment fenced for recovery. Cleanup records the
+  original source directory identity and its completion, so retries preserve
+  unrelated directories subsequently created at the old pathname. Legacy
+  journals without source identity retain an existing source for manual cleanup.
+
 ## What prunes itself
 
 | Location | Pruned by | When |

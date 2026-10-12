@@ -292,6 +292,64 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       .digest("hex");
   }
 
+  /** Destructive lifecycle admission: fresh metadata reads, without starting a bridge. */
+  async assertEnvironmentIdleForMove(environmentId: string): Promise<void> {
+    const sessions = (await this.storage.listNativeAgentSessions()).filter(
+      (session) => session.environmentId === environmentId,
+    );
+    for (const session of sessions) {
+      if (session.pendingDispatch)
+        throw new Error("An agent submission is unresolved; settle it before moving");
+      if (!session.providerSessionId) continue;
+      this.absentBridgeUntil.delete(`${environmentId}\0${session.agent}`);
+      const input = {
+        environmentId,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+      };
+      let provider: NativeAgentRuntimeProvider | undefined;
+      if (this.options.provider) {
+        provider = await this.observeProvider(input);
+      } else {
+        // The move stops bridges between its two reads. Cached providers can
+        // still point at a stopped child, so verify its current connection.
+        const connection = await this.observeBridgeConnection(
+          session.agent,
+          await this.assertEnvironmentLive(environmentId),
+        );
+        if (connection) {
+          const key = `${environmentId}\0${session.agent}`;
+          const identity = this.bridgeConnectionIdentity(connection);
+          const cached = this.providers.get(key);
+          if (cached && this.providerConnections.get(key) === identity) provider = cached;
+          else {
+            provider = createNativeAgentProvider(connection, { autoAnswerRequests: false });
+            this.cacheProvider(key, provider, identity);
+          }
+        }
+      }
+      if (!provider) {
+        const observed = this.observedSessionActivity.get(session.key);
+        if (observed && observed.state !== "idle")
+          throw new Error(
+            "An agent is running in this environment; wait for it to finish before moving",
+          );
+        continue;
+      }
+      if (!provider.activity)
+        throw new Error("Agent activity cannot be verified; stop the agent before moving");
+      const state = await provider.activity(session.providerSessionId);
+      if (state !== "idle" && state !== "missing")
+        throw new Error(
+          "An agent is running in this environment; wait for it to finish before moving",
+        );
+      this.observedSessionActivity.set(session.key, {
+        providerSessionId: session.providerSessionId,
+        state: "idle",
+      });
+    }
+  }
+
   /**
    * Resolve a provider for observation only, never starting a bridge.
    *

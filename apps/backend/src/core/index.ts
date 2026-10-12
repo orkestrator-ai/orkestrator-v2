@@ -100,6 +100,7 @@ import {
   EnvironmentLifecycleTaskTracker,
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
+import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
 import {
   configureTerminalHistoryRetention,
   flushTerminalHistories,
@@ -789,6 +790,8 @@ export class OrkestratorBackend {
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,
     );
+    // Before any bridge or terminal can start in a half-moved worktree.
+    await recoverInterruptedEnvironmentMoves(this.context);
     // Before background launch or cleanup can act on their resources:
     // operations a previous process left unresolved are settled by exact
     // Docker identity. An unreachable daemon leaves them for the next attempt.

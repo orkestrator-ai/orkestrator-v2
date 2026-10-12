@@ -11,3 +11,21 @@
 - **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed all four tests in 0.5 seconds.
 - **Evidence:** aggregate artifact `orkestrator-test-run.wloB6p/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; wrapper artifact `orkestrator-test-run.v3aPaS`. The aggregate contains only this backend assertion failure.
 - **Hypothesis:** another watcher hint may invalidate the file-list cache after the test observes the changed revision but before `readRows()` runs. The correct file row followed by a missing cache hit is consistent with a fresh read-triggered scan. This is unconfirmed; no test was skipped or loosened.
+
+## Recurrence on 2026-10-12
+
+The environment-move fix validation reproduced `real Git through the shared owner > a tracked edit that never touches the index is detected` under
+`mise run test:logged -- --name move-full-suite -- mise run test`, with the GNU
+tool PATH documented in the testing guide. Group allocations were 2/3/2/1.
+Backend package: 5,840 passed, 15 skipped and 4 failed across 328 files; this failure lasted 288.04 ms and expected 1 cache hit but received 0.
+
+The owning file passed alone, exit 0, in 0.5 seconds:
+
+```bash
+mise run test:logged -- --name isolate-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.tUZZDC/summary.json`
+and its compressed group logs. Status remains open; the isolated pass confirms
+recurrence but does not establish a root cause. No assertion, timeout or skip
+was changed.

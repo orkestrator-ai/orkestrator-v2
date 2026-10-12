@@ -1,3 +1,4 @@
+import { beginEnvironmentMutation } from "../environment-replacement-fence.js";
 import path from "node:path";
 import type { PublicExecutionState } from "@orkestrator/protocol/public-api";
 import type { CommandContext } from "../commands-context.js";
@@ -61,33 +62,43 @@ export async function control(
   context: CommandContext,
   payload: Record<string, unknown>,
 ): Promise<unknown> {
-  const input = JSON.stringify(payload);
-  const args = ["-e", EXEC_CONTROL, EXEC_WORKER];
-  // The payload travels on stdin; argv and /proc cmdline contain no secrets.
-  const redactValues = [input, EXEC_CONTROL, EXEC_WORKER];
-  const { stdout } =
-    environment.environmentType === "local"
-      ? await runCommand(resolveBunBinary(context), args, {
-          cwd: "/",
-          timeoutMs: 30_000,
-          stdin: input,
-          redactValues,
-        })
-      : await runCommand(
-          "docker",
-          [
-            "exec",
-            "-i",
-            "--workdir",
-            "/",
-            environment.containerId!,
-            "bash",
-            "-lc",
-            withContainerRuntimeCredential(["bun", ...args].map(quoteShell).join(" ")),
-          ],
-          { timeoutMs: 30_000, redactValues, stdin: input },
-        );
-  return JSON.parse(stdout);
+  const release = payload.action === "start" ? beginEnvironmentMutation(environment.id) : undefined;
+  try {
+    if (
+      payload.action === "start" &&
+      (await context.storage.getEnvironment(environment.id))?.worktreeMove
+    )
+      throw new Error("Move recovery is pending. Restart Orkestrator before starting commands.");
+    const input = JSON.stringify(payload);
+    const args = ["-e", EXEC_CONTROL, EXEC_WORKER];
+    // The payload travels on stdin; argv and /proc cmdline contain no secrets.
+    const redactValues = [input, EXEC_CONTROL, EXEC_WORKER];
+    const { stdout } =
+      environment.environmentType === "local"
+        ? await runCommand(resolveBunBinary(context), args, {
+            cwd: "/",
+            timeoutMs: 30_000,
+            stdin: input,
+            redactValues,
+          })
+        : await runCommand(
+            "docker",
+            [
+              "exec",
+              "-i",
+              "--workdir",
+              "/",
+              environment.containerId!,
+              "bash",
+              "-lc",
+              withContainerRuntimeCredential(["bun", ...args].map(quoteShell).join(" ")),
+            ],
+            { timeoutMs: 30_000, redactValues, stdin: input },
+          );
+    return JSON.parse(stdout);
+  } finally {
+    release?.();
+  }
 }
 
 export function executionFromState(state: ExecState): { patch: OperationPatch; terminal: boolean } {
@@ -178,6 +189,7 @@ export function executionFromState(state: ExecState): { patch: OperationPatch; t
 export async function stopEnvironmentExecWorkers(
   environmentId: string,
   context: CommandContext,
+  options: { requireStopped?: boolean } = {},
 ): Promise<void> {
   // Partial storage adapters (compatibility fixtures) have no operation store.
   if (typeof context.storage.listActivePublicOperations !== "function") return;
@@ -192,6 +204,7 @@ export async function stopEnvironmentExecWorkers(
   } catch (error) {
     // Never block a stop/delete on the receipt store; workers still die with
     // their workspace and reconcile as interrupted.
+    if (options.requireStopped) throw new Error("Exec workers could not be verified stopped");
     console.warn(`[public-api] Could not list exec workers: ${boundedMessage(error)}`);
     return;
   }
@@ -203,13 +216,17 @@ export async function stopEnvironmentExecWorkers(
         directory: execDirectory(environment, record.operationId, context),
       })) as ExecState;
       const { patch, terminal } = executionFromState(state);
-      if (!terminal) continue;
+      if (!terminal) {
+        if (options.requireStopped) throw new Error("Exec worker is still running");
+        continue;
+      }
       await context.storage.updatePublicOperation(record.operationId, (current) =>
         ["admitted", "running", "unknown"].includes(current.state)
           ? { ...current, ...patch, completedAt: new Date().toISOString() }
           : null,
       );
     } catch (error) {
+      if (options.requireStopped) throw new Error("Exec workers could not be verified stopped");
       console.warn(
         `[public-api] Could not cancel exec ${record.operationId}: ${boundedMessage(error)}`,
       );

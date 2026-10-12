@@ -65,6 +65,7 @@ import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
 import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
+import { EnvironmentMoveSection } from "./EnvironmentMoveSection";
 import { EnvironmentRecoveryCopies } from "./EnvironmentRecoveryCopies";
 import { EnvironmentInputsSection } from "./EnvironmentInputsSection";
 import { EnvironmentResourcesSection } from "./EnvironmentResourcesSection";
@@ -806,6 +807,9 @@ export function EnvironmentSettingsDialog({
                       <span className="text-sm font-mono truncate">{environment.worktreePath}</span>
                     </div>
                   </div>
+                )}
+                {environment.worktreePath && !environment.projectHome && (
+                  <EnvironmentMoveSection environment={environment} onUpdate={onUpdate} />
                 )}
               </div>
             )}

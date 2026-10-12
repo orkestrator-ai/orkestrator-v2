@@ -48,7 +48,37 @@ export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "
 export type PrState = "open" | "merged" | "closed";
 export type NetworkAccessMode = "full" | "restricted";
 export type EnvironmentType = "containerized" | "local";
-export type EnvironmentLifecycleOperation = "deleting" | "merging";
+export type EnvironmentLifecycleOperation = "deleting" | "merging" | "moving";
+/**
+ * Durable progress of an environment move. `moving`: the worktree may still
+ * be at `from` (git renames it atomically; a copy to another disk goes to
+ * `staging` first). `copied`: the copy is complete at `to` and Git points
+ * at it. `committed`: storage also points at `to`; provider relocation and
+ * source cleanup remain retryable, and filesystem rollback is forbidden.
+ */
+export interface WorktreeMoveRecord {
+  from: string;
+  to: string;
+  staging?: string;
+  phase: "moving" | "copied" | "committed";
+  fromCanonical?: string;
+  fromRoot?: string;
+  removeSource?: boolean;
+  sourceIdentity?: { dev: number; ino: number };
+  sourceCleaned?: boolean;
+  /**
+   * Submodules whose git dir lives outside the worktree (under the
+   * repository's `.git/worktrees/<name>/modules`). A copy re-links each one.
+   */
+  submodules?: WorktreeMoveSubmodule[];
+  startedAt: string;
+}
+export interface WorktreeMoveSubmodule {
+  /** Path relative to the worktree root. */
+  path: string;
+  /** Absolute git dir of the submodule checkout. */
+  gitDir: string;
+}
 export type EnvironmentSetupPhase = "pending" | "running" | "ready" | "failed";
 export type PortProtocol = "tcp" | "udp";
 
@@ -300,6 +330,11 @@ export interface Environment {
    * removes the worktree only from inside it.
    */
   worktreeBaseDir?: string;
+  /**
+   * A move of the worktree to another folder that has started and not yet
+   * settled. Startup recovery adopts a completed move or abandons the rest.
+   */
+  worktreeMove?: WorktreeMoveRecord;
   /**
    * Marks the project home: a local environment whose `worktreePath` is the
    * project's own checkout. Never a disposable workspace — see

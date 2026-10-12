@@ -1,6 +1,12 @@
+import { canonicalWorktreePath } from "@orkestrator/protocol/worktree-paths";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
+import {
+  assertEnvironmentNotMoving,
+  beginEnvironmentMutation,
+  beginWorktreeMutation,
+} from "./environment-replacement-fence.js";
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
@@ -145,14 +151,21 @@ async function withLocalFileMutation<T>(
   environmentId: string,
   action: (environment: Environment) => Promise<T>,
 ): Promise<T> {
-  const stored = await context.storage.getEnvironment(environmentId);
-  const release = stored?.projectHome
-    ? context.projectGit?.beginCoordinatorTurn(stored.projectId)
-    : undefined;
+  const releaseMutation = beginEnvironmentMutation(environmentId);
+  let release: (() => void) | undefined;
   try {
+    const stored = await context.storage.getEnvironment(environmentId);
+    if (stored?.worktreeMove)
+      throw new Error(
+        "Move recovery is pending. Restart Orkestrator before editing this environment.",
+      );
+    release = stored?.projectHome
+      ? context.projectGit?.beginCoordinatorTurn(stored.projectId)
+      : undefined;
     return await action(await requireLocalMutationEnvironment(context.storage, environmentId));
   } finally {
     release?.();
+    releaseMutation();
   }
 }
 
@@ -654,9 +667,12 @@ export function registerTerminalCommands(
     async ({ environmentId, terminalKey, cols, rows, trackEnvironmentActivity }, { storage }) => {
       const resolvedEnvironmentId = asString(environmentId, "environmentId");
       assertEnvironmentNotDeleting(resolvedEnvironmentId);
+      // A shell opened in the folder being moved would be left behind in it.
+      assertEnvironmentNotMoving(resolvedEnvironmentId);
       const environment = await storage.getEnvironment(resolvedEnvironmentId);
       assertEnvironmentNotDeleting(resolvedEnvironmentId);
       assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
+      assertEnvironmentNotMoving(resolvedEnvironmentId);
       const stableKey = stableTerminalKey(
         "local",
         resolvedEnvironmentId,
@@ -717,6 +733,7 @@ export function registerTerminalCommands(
     assertEnvironmentNotDeleting(environmentId);
     const currentEnvironment = await storage.getEnvironment(environmentId);
     assertEnvironmentNotDeleting(environmentId);
+    assertEnvironmentNotMoving(environmentId);
     assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
     if (!currentEnvironment?.worktreePath || currentEnvironment.worktreePath !== env.worktreePath) {
       throw new Error("Local environment worktree is no longer available");
@@ -732,6 +749,16 @@ export function registerTerminalCommands(
       stripInheritedAgentCredentials(launchEnvironment);
     }
     await resumeTerminalHistory(id);
+    const launchTarget = await storage.getEnvironment(environmentId);
+    assertEnvironmentNotDeleting(environmentId);
+    assertEnvironmentNotMoving(environmentId);
+    assertEnvironmentDeletionNotRequested(launchTarget, environmentId);
+    if (
+      launchTarget?.worktreePath !== currentEnvironment.worktreePath ||
+      terminalSessionConfigs.get(id) !== storedConfig
+    ) {
+      throw new Error("Local terminal session or worktree is no longer available");
+    }
     const alreadyRunning = terminalProcesses.has(id);
     const terminalProcess = spawnTerminalProcess(
       id,
@@ -885,13 +912,29 @@ export function registerTerminalCommands(
       environment.worktreePath!,
     ]);
   });
-  register("write_local_file", ({ worktreePath, filePath, base64Data }) =>
-    writeFileBase64(
-      asString(worktreePath, "worktreePath"),
-      asString(filePath, "filePath"),
-      asString(base64Data, "base64Data"),
-    ),
-  );
+  register("write_local_file", async ({ worktreePath, filePath, base64Data }, context) => {
+    const root = asString(worktreePath, "worktreePath");
+    const release = beginWorktreeMutation(root);
+    try {
+      const canonical = canonicalWorktreePath(root);
+      const environments = (await context.storage.loadEnvironments?.()) ?? [];
+      const environment = environments.find(
+        (candidate) =>
+          candidate.worktreePath && canonicalWorktreePath(candidate.worktreePath) === canonical,
+      );
+      const write = () =>
+        writeFileBase64(root, asString(filePath, "filePath"), asString(base64Data, "base64Data"));
+      // Coordinator worktrees and compatibility callers use the raw-path API.
+      if (!environment) return await write();
+      return await withLocalFileMutation(context, environment.id, async (current) => {
+        if (canonicalWorktreePath(current.worktreePath!) !== canonical)
+          throw new Error("The worktree moved; refresh before saving");
+        return write();
+      });
+    } finally {
+      release();
+    }
+  });
   register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const id = asString(environmentId, "environmentId");
     return withLocalFileMutation(context, id, async (environment) => {
@@ -1294,13 +1337,18 @@ export function registerTerminalCommands(
     },
   );
 
-  register("write_initial_prompt_attachments", async ({ environmentId, attachments }, context) => {
+  const writeInitialPromptAttachments = async (
+    { environmentId, attachments }: Record<string, unknown>,
+    context: CommandContext,
+  ) => {
     const environmentIdString = asString(environmentId, "environmentId");
     if (!Array.isArray(attachments) || attachments.length === 0 || attachments.length > 20) {
       throw new Error("Expected between 1 and 20 initial prompt attachments");
     }
     const environment = await context.storage.getEnvironment(environmentIdString);
     if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
+    if (environment.worktreeMove)
+      throw new Error("Move recovery is pending. Restart Orkestrator before staging attachments.");
     if (environment.environmentType === "local" && !environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
@@ -1429,5 +1477,9 @@ export function registerTerminalCommands(
       }
       throw error;
     }
+  };
+  register("write_initial_prompt_attachments", (args, context) => {
+    const release = beginEnvironmentMutation(asString(args.environmentId, "environmentId"));
+    return writeInitialPromptAttachments(args, context).finally(release);
   });
 }

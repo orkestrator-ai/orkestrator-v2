@@ -49,12 +49,20 @@ No new renderer surface. Changes are in the provider contract and bridges:
 ### Claude bridge (the large item)
 
 - [ ] Move from one `query()` per turn to one long-lived `query()` per
-  session driven by `streamInput()` (`session-manager-prompt.ts:751`,
-  hand-rolled generator at `session-manager-persistence.ts:1290-1332`).
-  Turns become messages on the input stream; `resume` is used only when the
-  query is (re)created. Keep the at-most-once dispatch journal semantics:
-  the journal records the message write, and `result.user_message_uuid`
-  remains the reconciliation link.
+  session driven by `streamInput()`. **Partly done — the case that was a
+  defect (2026-10-12):** a turn that ends while its CLI still owns
+  background work used to leave that process running and start a second
+  one, resumed from the same rollout, for the next prompt — every process
+  then answered its own task notifications as the coordinator.
+  `session-manager-runtime.ts` now owns one CLI per session: a follow-up is
+  written into the running process, frames are routed to the turn that
+  owns them, and launch-only settings that differ are refused with a 409
+  rather than starting another process. The journal records the message
+  write (the prompt's client uuid rides on the input message) and
+  `result.user_message_uuid` remains the reconciliation link. **Still
+  open:** a turn with no background work left
+  closes input at its result, so the next turn launches a fresh process;
+  keeping it warm is the idle-detach item below.
 - [ ] Implement `/session/:id/steer` on the Claude bridge by writing to the
   same input stream while a turn is running; report `steerStatus` from the
   journal exactly as Codex does. Declare `perTaskStopAffordance` so an
@@ -66,10 +74,15 @@ No new renderer surface. Changes are in the provider contract and bridges:
 - [ ] `setPermissionMode()`, `setModel()` and `applyFlagSettings()` on the
   live query when the composer changes between turns, instead of recreating
   the query. This is what makes mid-session model or mode changes cheap.
+  Partly done: applied whenever a turn joins a running CLI
+  (`applyClaudeLiveSettings` restates every live setting, since the CLI
+  changes some itself).
 - [ ] Retire the continuation-timer, `backgroundTaskControls` and
   `closeQueryControlIfUnused` machinery in `session-manager-prompt.ts` and
   `session-manager-background-tasks.ts` that existed only because each turn
-  was a fresh process. Track the deleted line count in the PR.
+  was a fresh process. Track the deleted line count in the PR. Unblocked:
+  with one runtime per session every task maps to the same control, so this
+  bookkeeping can become runtime state (live work, owed continuation).
 - [ ] Idle detach: a long-lived query is a live CLI child. Detach on the same
   idle policy the Codex bridge uses (`detachableThreads`), and re-create on
   the next request. The activity route must stay a no-touch read.

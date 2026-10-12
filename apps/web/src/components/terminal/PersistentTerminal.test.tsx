@@ -2475,6 +2475,79 @@ describe("PersistentTerminal", () => {
     expect(screen.getByRole("button", { name: "Open earlier terminal output" })).toBeDefined();
   });
 
+  it("reveals the history button only while the pointer is in the top-right corner", () => {
+    const { container } = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+    const historyButton = screen.getByRole("button", { name: "Open earlier terminal output" });
+    const terminalElement = container.querySelector(".inset-x-0") as HTMLElement;
+    const rect = { top: 0, left: 0, right: 800, bottom: 600, width: 800, height: 600 };
+    terminalElement.getBoundingClientRect = () => ({ ...rect, x: 0, y: 0, toJSON: () => rect });
+
+    expect(historyButton.classList.contains("hover-fine:opacity-0")).toBe(true);
+    expect(historyButton.classList.contains("hover-fine:pointer-events-none")).toBe(true);
+    fireEvent.mouseMove(terminalElement, { clientX: 780, clientY: 20 });
+    expect(historyButton.classList.contains("hover-fine:opacity-0")).toBe(false);
+    expect(historyButton.classList.contains("hover-fine:pointer-events-none")).toBe(false);
+    // Moving onto the sibling toolbar must not hide it during terminal leave.
+    fireEvent.mouseLeave(terminalElement, { relatedTarget: historyButton });
+    expect(historyButton.classList.contains("hover-fine:opacity-0")).toBe(false);
+    fireEvent.mouseEnter(historyButton, { relatedTarget: terminalElement });
+    expect(historyButton.classList.contains("hover-fine:pointer-events-none")).toBe(false);
+    fireEvent.mouseLeave(historyButton, { relatedTarget: terminalElement });
+    fireEvent.mouseEnter(terminalElement, { clientX: 780, clientY: 40 });
+    expect(historyButton.classList.contains("hover-fine:opacity-0")).toBe(false);
+    fireEvent.mouseMove(terminalElement, { clientX: 100, clientY: 300 });
+    expect(historyButton.classList.contains("hover-fine:opacity-0")).toBe(true);
+    fireEvent.mouseMove(terminalElement, { clientX: 780, clientY: 20 });
+    fireEvent.mouseLeave(terminalElement, { relatedTarget: document.body });
+    expect(historyButton.classList.contains("hover-fine:opacity-0")).toBe(true);
+  });
+
+  it("keeps history usable alongside manual setup completion in the shared toolbar", async () => {
+    setMobileViewport(true);
+    const onSetupComplete = mock(() => {});
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab
+        paneId="pane-1"
+        isSetupTab
+        onSetupComplete={onSetupComplete}
+      />,
+    );
+    const history = screen.getByRole("button", { name: "Open earlier terminal output" });
+    const setup = screen.getByRole("button", { name: "Mark setup complete" });
+    expect(history.parentElement === setup.parentElement).toBe(true);
+    expect(history.parentElement?.classList.contains("pointer-events-none")).toBe(true);
+    fireEvent.click(history);
+    expect(screen.getByRole("region", { name: "Earlier terminal output" })).toBeDefined();
+    expect(onSetupComplete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    fireEvent.click(setup);
+    expect(onSetupComplete).toHaveBeenCalledWith({ persistSetupComplete: false });
+    expect(screen.queryByRole("button", { name: "Mark setup complete" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Open earlier terminal output" })).toBeDefined();
+  });
+
   it("replaces a truncated tail with late durable history plus post-snapshot live output", async () => {
     let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
     persistentSessionStore.loadSessionBuffer.mockImplementation(

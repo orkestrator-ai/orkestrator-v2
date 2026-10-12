@@ -3486,6 +3486,13 @@ describe("NativeAgentService", () => {
           requestId: "mail-ambiguous",
         });
         expect(
+          (await storage.getNativeAgentSession(session.key))?.pendingDispatch?.mailRefused,
+        ).toBeUndefined();
+        expect(await service.mailInjectPresence(identity)).toBe("working");
+        expect((await storage.getNativeAgentSession(session.key))?.pendingDispatch?.requestId).toBe(
+          "mail-ambiguous",
+        );
+        expect(
           await service.dispatchMailInject({
             ...identity,
             prompt: "second mail",

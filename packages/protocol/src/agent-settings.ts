@@ -51,6 +51,8 @@ export interface AgentPlatformSettings {
   claudeThinkingMode?: ClaudeThinkingMode;
   /** Whether new Claude Agent SDK sessions opt into the 1M-context beta. */
   claudeContext1m?: boolean;
+  /** Whether new Claude Agent SDK sessions connect to Claude in Chrome. */
+  claudeChrome?: boolean;
 }
 
 export const DEFAULT_MULTI_REVIEW_REVIEWER_COUNT = 2;
@@ -115,6 +117,8 @@ export interface ResolvedAgentPlatformSettings {
   claudeThinkingMode?: ClaudeThinkingMode;
   /** Claude Agent SDK 1M-context beta; absent means its disabled default. */
   claudeContext1m?: boolean;
+  /** Claude in Chrome for Agent SDK sessions; absent means its disabled default. */
+  claudeChrome?: boolean;
 }
 
 export const DEFAULT_AGENT_PLATFORM: AgentPlatform = "claude";
@@ -122,13 +126,22 @@ export const DEFAULT_CLAUDE_NATIVE_BACKEND: ClaudeNativeBackend = "sdk";
 export const DEFAULT_CLAUDE_THINKING_MODE: ClaudeThinkingMode = "adaptive";
 export const DEFAULT_CLAUDE_CONTEXT_1M = false;
 
-/** Translate persisted Claude defaults to the bridge's generic parameter ids. */
+/**
+ * Translate persisted Claude defaults to the bridge's generic parameter ids.
+ *
+ * `chrome` is sent only when enabled: the bridge treats absence as off, so
+ * sessions that never opted in carry the same values they always did.
+ */
 export function claudeNativeParameterValues(
-  settings: Pick<ResolvedAgentPlatformSettings, "claudeThinkingMode" | "claudeContext1m">,
+  settings: Pick<
+    ResolvedAgentPlatformSettings,
+    "claudeThinkingMode" | "claudeContext1m" | "claudeChrome"
+  >,
 ): Record<string, string | boolean> {
   return {
     thinking: settings.claudeThinkingMode ?? DEFAULT_CLAUDE_THINKING_MODE,
     context1m: settings.claudeContext1m ?? DEFAULT_CLAUDE_CONTEXT_1M,
+    ...(settings.claudeChrome === true ? { chrome: true } : {}),
   };
 }
 
@@ -208,6 +221,8 @@ export function resolveAgentPlatformSettings(
     environment?.claudeThinkingMode ?? repository?.claudeThinkingMode ?? global?.claudeThinkingMode;
   const claudeContext1m =
     environment?.claudeContext1m ?? repository?.claudeContext1m ?? global?.claudeContext1m;
+  const claudeChrome =
+    environment?.claudeChrome ?? repository?.claudeChrome ?? global?.claudeChrome;
 
   return {
     mode,
@@ -217,6 +232,7 @@ export function resolveAgentPlatformSettings(
     claudeNativeBackend,
     ...(claudeThinkingMode ? { claudeThinkingMode } : {}),
     ...(claudeContext1m !== undefined ? { claudeContext1m } : {}),
+    ...(claudeChrome !== undefined ? { claudeChrome } : {}),
   };
 }
 
@@ -296,6 +312,10 @@ function normalizePlatformSettings(
     platform === "claude" && typeof record.claudeContext1m === "boolean"
       ? record.claudeContext1m
       : undefined;
+  const claudeChrome =
+    platform === "claude" && typeof record.claudeChrome === "boolean"
+      ? record.claudeChrome
+      : undefined;
   const normalized: AgentPlatformSettings = {
     ...(mode ? { mode } : {}),
     ...(model ? { model } : {}),
@@ -304,6 +324,7 @@ function normalizePlatformSettings(
     ...(claudeNativeBackend ? { claudeNativeBackend } : {}),
     ...(claudeThinkingMode ? { claudeThinkingMode } : {}),
     ...(claudeContext1m !== undefined ? { claudeContext1m } : {}),
+    ...(claudeChrome !== undefined ? { claudeChrome } : {}),
   };
   // An all-empty block is "inherit everything", which is what absence already
   // means. Dropping it keeps persisted config free of blocks the UI wrote on

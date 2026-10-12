@@ -600,7 +600,9 @@ export abstract class StorageNative extends StorageReviews {
       const retainedParameterValues = modelChanged
         ? Object.fromEntries(
             Object.entries(existing.controls?.parameterValues ?? {}).filter(
-              ([id]) => existing.agent === "claude" && (id === "thinking" || id === "context1m"),
+              ([id]) =>
+                existing.agent === "claude" &&
+                (id === "thinking" || id === "context1m" || id === "chrome"),
             ),
           )
         : Object.fromEntries(
@@ -818,6 +820,7 @@ export abstract class StorageNative extends StorageReviews {
     requestId: string,
     dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
       dispatched: false;
+      mailRefused?: true;
       openCodeIncompleteTurnNotice?:
         | PersistedNativeAgentSession["openCodeIncompleteTurnNotice"]
         | null;
@@ -866,13 +869,18 @@ export abstract class StorageNative extends StorageReviews {
         return { session, dispatched: false };
       }
 
-      if (pendingDispatch) {
-        if (pendingDispatch.requestId !== requestId) {
+      if (pendingDispatch || session.pendingDispatch?.mailRefused) {
+        if (pendingDispatch && pendingDispatch.requestId !== requestId) {
           throw new Error("Pending native agent dispatch request ID mismatch");
         }
         session = {
           ...session,
-          pendingDispatch,
+          // Even a composer retry with the same ID invalidates prior refusal
+          // evidence before provider I/O. Its outcome may now be ambiguous.
+          pendingDispatch: {
+            ...(pendingDispatch ?? session.pendingDispatch!),
+            mailRefused: undefined,
+          },
           updatedAt: nowIso(),
         };
         sessions[key] = session;
@@ -887,6 +895,19 @@ export abstract class StorageNative extends StorageReviews {
       // second turn.
       const outcome = await dispatch(session);
       if (outcome?.dispatched === false) {
+        if (outcome.mailRefused && session.pendingDispatch?.requestId === requestId) {
+          const updated: PersistedNativeAgentSession = {
+            ...session,
+            pendingDispatch: { ...session.pendingDispatch, mailRefused: true },
+            updatedAt: nowIso(),
+          };
+          sessions[key] = updated;
+          // Persist proof of refusal before cleanup. A restart can release this
+          // fence without interpreting a missing provider journal as unsent.
+          await this.saveNativeAgentSessions(sessions, opaque);
+          this.announceNativeAgentRecord(updated);
+          return { session: updated, dispatched: false };
+        }
         if (outcome.openCodeIncompleteTurnNotice === undefined) {
           // A preparation refusal happens before provider.send. The durable
           // pending row was opened only to protect the provider side effect,
@@ -980,7 +1001,11 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  async clearPendingNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
+  async clearPendingNativeAgentDispatch(
+    key: string,
+    requestId: string,
+    onlyMailRefused = false,
+  ): Promise<boolean> {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Pending native agent dispatch identity must not be blank");
     }
@@ -989,7 +1014,11 @@ export abstract class StorageNative extends StorageReviews {
       const { sessions, opaque, migrated } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
-      if (!session || session.pendingDispatch?.requestId !== requestId) {
+      if (
+        !session ||
+        session.pendingDispatch?.requestId !== requestId ||
+        (onlyMailRefused && !session.pendingDispatch.mailRefused)
+      ) {
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }

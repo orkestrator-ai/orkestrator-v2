@@ -48,7 +48,7 @@ describe("pinNativeAgentParts", () => {
 
     // A task the user can still stop belongs beside the composer; a finished
     // one belongs in the transcript where it happened.
-    expect(last?.id.endsWith(":active-agents")).toBe(expectPinned);
+    expect(last?.id === "active-agents").toBe(expectPinned);
   });
 
   test("moves active subagents to the bottom as temporary message rows", () => {
@@ -72,7 +72,7 @@ describe("pinNativeAgentParts", () => {
     expect(pinned.map((message) => message.id)).toEqual([
       "assistant-1",
       "assistant-2",
-      "assistant-1:active-agents",
+      "active-agents",
     ]);
     expect(pinned[0]?.parts.map((part) => part.type)).toEqual(["text", "text"]);
     expect(pinned[2]?.parts).toEqual([
@@ -183,9 +183,7 @@ describe("pinNativeAgentParts", () => {
       ]),
     ];
 
-    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual([
-      "assistant-1:active-agents",
-    ]);
+    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual(["active-agents"]);
   });
 
   test("releases an agent when authoritative lifecycle finishes despite stale child work", () => {
@@ -270,10 +268,7 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts(messages);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1",
-      "assistant-1:active-agents",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1", "active-agents"]);
     expect(pinned[0]?.parts[0]?.type).toBe("tool-group");
     if (pinned[0]?.parts[0]?.type === "tool-group") {
       expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual(["tool-invocation"]);
@@ -332,10 +327,7 @@ describe("pinNativeAgentParts", () => {
     expect(normalized.parts[0]?.type).toBe("agent-group");
     const pinned = pinNativeAgentParts([normalized]);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1",
-      "assistant-1:active-agents",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1", "active-agents"]);
     expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
     if (pinned[0]?.parts[0]?.type === "agent-group") {
       expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual(["subagent", "task-group"]);
@@ -361,7 +353,7 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts([normalized]);
 
-    expect(pinned.map((message) => message.id)).toEqual(["assistant-1:active-agents"]);
+    expect(pinned.map((message) => message.id)).toEqual(["active-agents"]);
     expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
     if (pinned[0]?.parts[0]?.type === "agent-group") {
       expect(pinned[0].parts[0].parts.map((part) => part.subagentId)).toEqual([
@@ -385,7 +377,7 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts(messages);
 
-    expect(pinned.map((message) => message.id)).toEqual(["assistant-1:active-agents"]);
+    expect(pinned.map((message) => message.id)).toEqual(["active-agents"]);
     expect(pinned[0]?.parts[0]?.type).toBe("subagent");
   });
 
@@ -406,7 +398,7 @@ describe("pinNativeAgentParts", () => {
     ]);
 
     const grouped = pinNativeAgentParts([activeMessage]);
-    expect(grouped.map((message) => message.id)).toEqual(["assistant-1:active-agents"]);
+    expect(grouped.map((message) => message.id)).toEqual(["active-agents"]);
 
     const partiallyComplete = pinNativeAgentParts([
       {
@@ -420,7 +412,7 @@ describe("pinNativeAgentParts", () => {
     ]);
     expect(partiallyComplete.map((message) => message.id)).toEqual([
       "assistant-1",
-      "assistant-1:active-agents",
+      "active-agents",
     ]);
     expect(partiallyComplete[0]?.parts).toEqual([
       expect.objectContaining({
@@ -505,10 +497,7 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts(messages);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1",
-      "assistant-1:active-agents",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1", "active-agents"]);
     expect(pinned[0]?.parts.map((part) => part.type)).toEqual([
       "text",
       "tool-group",
@@ -694,7 +683,7 @@ describe("pinNativeAgentParts", () => {
     ];
 
     const pinned = pinNativeAgentParts(messages);
-    expect(pinned.at(-1)?.id).toBe("assistant-1:active-agents");
+    expect(pinned.at(-1)?.id).toBe("active-agents");
     expect(pinned.at(-1)?.createdAt).toBe("2026-06-28T12:00:00.000Z");
   });
 
@@ -796,7 +785,7 @@ describe("pinNativeAgentParts", () => {
     expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual([
       "assistant-1",
       "assistant-2",
-      "assistant-1:active-agents",
+      "active-agents",
     ]);
   });
 
@@ -867,6 +856,201 @@ describe("pinNativeAgentParts", () => {
       expect(pinned[1].parts[0].parts.map((part) => part.subagentId)).toEqual([
         "agent-1",
         "agent-2",
+      ]);
+    }
+  });
+
+  test("lists running children from different launches in one row", () => {
+    // A burst of background tasks each arrives in its own message. Pinned one
+    // row apiece, they stacked as separate cards with a footer and gap between
+    // each; side by side at the bottom, they belong in one list.
+    const messages = [
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        { type: "subagent", content: "first", subagentId: "agent-1", toolState: "pending" },
+      ]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [{ type: "text", content: "Meanwhile" }]),
+      at("background-task:bg-1", "2026-06-28T12:01:00.000Z", [
+        { type: "subagent", content: "second", subagentId: "agent-2", toolState: "pending" },
+      ]),
+      at("background-task:bg-2", "2026-06-28T12:01:00.000Z", [
+        { type: "subagent", content: "third", subagentId: "agent-3", toolState: "pending" },
+      ]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-2", "active-agents"]);
+    // The row takes the first launch's clock, as a lone running card does.
+    expect(pinned[1]?.createdAt).toBe("2026-06-28T12:00:00.000Z");
+    const group = pinned[1]?.parts[0];
+    expect(group?.type).toBe("agent-group");
+    if (group?.type === "agent-group") {
+      expect(group.parts.map((part) => part.subagentId)).toEqual(["agent-1", "agent-2", "agent-3"]);
+    }
+
+    // Membership changing must not rename the row: expansion state is scoped
+    // to it, so the card being read would collapse when another one finished.
+    const firstFinished = pinNativeAgentParts([
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        { type: "text", content: "Delegated" },
+        { type: "subagent", content: "first", subagentId: "agent-1", toolState: "success" },
+      ]),
+      ...messages.slice(1),
+    ]);
+    expect(firstFinished.at(-1)?.id).toBe("active-agents");
+  });
+
+  test("joins settled rows that end up next to each other", () => {
+    // Both launch rows held nothing but their child, so once released nothing
+    // separates the two settled cards.
+    const messages = [
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        { type: "text", content: "Delegating" },
+        settledWorker("2026-06-28T12:00:30.000Z"),
+      ]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [
+        {
+          type: "subagent",
+          content: "second",
+          subagentId: "agent-2",
+          toolState: "success",
+          settledAt: "2026-06-28T12:01:30.000Z",
+        },
+      ]),
+      at("assistant-3", "2026-06-28T12:05:00.000Z", [{ type: "text", content: "Afterwards" }]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-1:settled-agents",
+      "assistant-3",
+    ]);
+    const group = pinned[1]?.parts[0];
+    expect(group?.type).toBe("agent-group");
+    if (group?.type === "agent-group") {
+      expect(group.parts.map((part) => part.subagentId)).toEqual(["agent-1", "agent-2"]);
+    }
+  });
+
+  test("lists a card that settled at the bottom with the ones still running", () => {
+    const messages = [
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        { type: "text", content: "Delegating" },
+        settledWorker("2026-06-28T12:02:00.000Z"),
+        { type: "subagent", content: "second", subagentId: "agent-2", toolState: "pending" },
+      ]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1", "active-agents"]);
+    expect(pinned[1]?.createdAt).toBe("2026-06-28T12:00:00.000Z");
+    const group = pinned[1]?.parts[0];
+    expect(group?.type).toBe("agent-group");
+    if (group?.type === "agent-group") {
+      expect(group.parts.map((part) => part.subagentId)).toEqual(["agent-1", "agent-2"]);
+    }
+  });
+
+  test("preserves launch identities as a mixed row splits and the last runner settles", () => {
+    const first = settledWorker("2026-06-28T12:02:00.000Z");
+    const second = {
+      type: "subagent" as const,
+      content: "second",
+      subagentId: "agent-2",
+      toolState: "pending" as const,
+      sourceMessageId: "provider-launch-2",
+    };
+    const launch = at("assistant-1", "2026-06-28T12:00:00.000Z", [
+      { type: "text", content: "Delegating" },
+      first,
+      second,
+    ]);
+    const later = at("assistant-later", "2026-06-28T12:03:00.000Z", [
+      { type: "text", content: "Still working" },
+    ]);
+    const children = (rows: NativeMessage[]) =>
+      rows.flatMap((row) =>
+        row.parts.flatMap((part) =>
+          part.type === "agent-group"
+            ? part.parts
+            : part.type === "subagent" || part.type === "task-group"
+              ? [part]
+              : [],
+        ),
+      );
+    const identity = (rows: NativeMessage[]) =>
+      children(rows).map((part) => [part.subagentId, part.sourceMessageId]);
+    const merged = pinNativeAgentParts([launch]);
+    expect(merged.at(-1)?.id).toBe("active-agents");
+    expect(identity(merged)).toEqual([
+      ["agent-1", "assistant-1"],
+      ["agent-2", "provider-launch-2"],
+    ]);
+
+    const separated = pinNativeAgentParts([launch, later]);
+    expect(separated.map((row) => row.id)).toEqual([
+      "assistant-1",
+      "assistant-1:settled-agents",
+      "assistant-later",
+      "active-agents",
+    ]);
+    expect(identity(separated)).toEqual(identity(merged));
+
+    const finished = pinNativeAgentParts([
+      {
+        ...launch,
+        parts: [
+          launch.parts[0]!,
+          first,
+          {
+            ...second,
+            toolState: "success",
+            settledAt: "2026-06-28T12:02:30.000Z",
+          },
+        ],
+      },
+    ]);
+    expect(finished.map((row) => row.id)).toEqual(["assistant-1", "assistant-1:settled-agents"]);
+    expect(identity(finished)).toEqual(identity(merged));
+    expect(finished.at(-1)?.createdAt).toBe("2026-06-28T12:02:00.000Z");
+    // The projection must not rewrite the authoritative source parts.
+    expect(first.sourceMessageId).toBeUndefined();
+  });
+
+  test("keeps the running launch clock across multiple adjacent settled rows", () => {
+    const messages = [
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        { type: "text", content: "Delegating" },
+        settledWorker("2026-06-28T12:00:30.000Z"),
+      ]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [
+        {
+          type: "subagent",
+          content: "second",
+          subagentId: "agent-2",
+          toolState: "success",
+          settledAt: "2026-06-28T12:01:30.000Z",
+        },
+      ]),
+      at("assistant-3", "2026-06-28T12:02:00.000Z", [
+        {
+          type: "subagent",
+          content: "third",
+          subagentId: "agent-3",
+          toolState: "pending",
+        },
+      ]),
+    ];
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((row) => row.id)).toEqual(["assistant-1", "active-agents"]);
+    expect(pinned.at(-1)?.createdAt).toBe(messages[2]!.createdAt);
+    const group = pinned.at(-1)?.parts[0];
+    expect(group?.type).toBe("agent-group");
+    if (group?.type === "agent-group") {
+      expect(group.parts.map((part) => part.sourceMessageId)).toEqual([
+        "assistant-1",
+        "assistant-2",
+        "assistant-3",
       ]);
     }
   });
@@ -972,9 +1156,7 @@ describe("pinNativeAgentParts", () => {
       );
 
     // Live: at the bottom, where its stop control cannot scroll away.
-    expect(pinNativeAgentParts(transcript("running")).at(-1)?.id).toBe(
-      "assistant-launch:active-agents",
-    );
+    expect(pinNativeAgentParts(transcript("running")).at(-1)?.id).toBe("active-agents");
 
     // Settled: under the row the conversation had reached when the bridge
     // recorded it ending.

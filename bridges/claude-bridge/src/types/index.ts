@@ -403,6 +403,9 @@ export interface ClaudeQueryControl {
   toggleMcpServer?: (name: string, enabled: boolean) => Promise<void>;
   accountInfo?: () => Promise<import("@anthropic-ai/claude-agent-sdk").AccountInfo>;
   stopTask?: (taskId: string) => Promise<void>;
+  setMcpServers?: (
+    servers: Record<string, import("@anthropic-ai/claude-agent-sdk").McpServerConfig>,
+  ) => Promise<unknown>;
   backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
   getContextUsage?: (options?: { detail?: "summary" | "full" }) => Promise<unknown>;
   /**
@@ -674,6 +677,14 @@ export interface SessionState {
   /** Control for the currently executing (or most recently completed) turn. */
   queryControl?: ClaudeQueryControl;
   /**
+   * The one Claude CLI this session runs, while it is alive.
+   *
+   * A turn that ends while that process still owns background work leaves it
+   * running, and the next prompt is written into it rather than into a second
+   * process resumed from the same rollout. See `session-manager-runtime.ts`.
+   */
+  claudeRuntime?: import("../services/session-manager-runtime.js").ClaudeRuntime;
+  /**
    * The turn query whose stdin has been closed and which is now shutting down.
    *
    * `queryControl` stays set from turn start until the turn's `finally`, but
@@ -696,8 +707,9 @@ export interface SessionState {
   /**
    * Control that owns each live background task.
    *
-   * A follow-up turn installs a new `queryControl`; these per-task handles keep
-   * older provider processes addressable until their tasks settle.
+   * There is one process per session (`claudeRuntime`), so every entry names
+   * its control; the map is what keeps that control from being closed while a
+   * task still runs after its turn released the foreground.
    */
   backgroundTaskControls?: Map<string, ClaudeQueryControl>;
   /**
@@ -741,10 +753,10 @@ export interface SessionState {
   /**
    * Generation of the most recently started turn.
    *
-   * A released turn can be superseded by a follow-up while its provider process
-   * is still alive. Only the latest generation may reclaim the foreground; an
-   * older one publishing `running` would take abort ownership away from the
-   * turn the user is actually waiting on.
+   * A released turn can be superseded by a follow-up while background work it
+   * started is still running. Only the latest generation may reclaim the
+   * foreground; an older one publishing `running` would take abort ownership
+   * away from the turn the user is actually waiting on.
    */
   latestTurnGeneration?: number;
   /**

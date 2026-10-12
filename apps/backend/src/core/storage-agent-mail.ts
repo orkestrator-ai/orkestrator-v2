@@ -1021,6 +1021,15 @@ export class StorageAgentMail extends StorageDrafts {
       const recipient = store.mailboxes[destinationId];
       if (!recipient || recipient.tombstonedAt)
         throw new AgentMailError("recipient-not-found", "Recipient mailbox is not active");
+      // A mailbox is a tab, so a subagent or background task inside that tab
+      // shares its address. Mail it sends "to the parent" would land back in
+      // its own inbox and only surface when the whole tab next goes idle —
+      // usually after the subagent that needed an answer has finished.
+      if (senderMailbox?.mailboxId === destinationId)
+        throw new AgentMailError(
+          "policy-denied",
+          "A tab cannot message its own mailbox. Subagents and background tasks share their parent tab's address, so this would only reach you; report to the parent session in your final result instead.",
+        );
       const crossProject = senderMailbox && senderMailbox.projectId !== recipient.projectId;
       if (crossProject && !settings.allowCrossProject)
         throw new AgentMailError("policy-denied", "Cross-project messaging is disabled");
@@ -1346,38 +1355,9 @@ export class StorageAgentMail extends StorageDrafts {
   async promoteStoredAgentMailForMailbox(environmentId: string, tabId: string): Promise<number> {
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
-      const mailboxId = agentMailboxId(environmentId, tabId);
-      const mailbox = store.mailboxes[mailboxId];
+      const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
       if (!mailbox) return 0;
-      if (!agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject)
-        return 0;
-      let promoted = 0;
-      for (const message of mailbox.messages) {
-        if (
-          message.placement !== "stored" ||
-          message.ackedAt ||
-          message.discardedAt ||
-          mailbox.mutedInbound ||
-          message.injectDepth !== 0 ||
-          message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS ||
-          message.trust === "cross-project" ||
-          message.trust === "external"
-        ) {
-          continue;
-        }
-        message.placement = "pending-inject";
-        delete message.placementReason;
-        message.injectRequestId ??= `mail-inject-${message.id}`;
-        if (
-          !store.pendingInject.some(
-            (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === message.id,
-          )
-        ) {
-          store.pendingInject.push({ mailboxId, messageId: message.id });
-        }
-        message.revision += 1;
-        promoted += 1;
-      }
+      const promoted = this.promoteStoredMessages(store, mailbox);
       if (promoted === 0) return 0;
       mailbox.revision += 1;
       store.revision += 1;
@@ -1386,6 +1366,46 @@ export class StorageAgentMail extends StorageDrafts {
       this.announce("agent-mail-summary", "all");
       return promoted;
     });
+  }
+
+  /**
+   * Move a mailbox's stored, unhandled mail onto the inject queue. Callers own
+   * the mutation lock and the save. Mail addressed to an earlier incarnation of
+   * the tab is left alone: the claim would refuse it, and it would sit in
+   * `pending-inject` for good.
+   */
+  private promoteStoredMessages(store: PersistedAgentMailStore, mailbox: PersistedMailbox): number {
+    if (!agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject) return 0;
+    if (mailbox.tombstonedAt || mailbox.mutedInbound) return 0;
+    let promoted = 0;
+    for (const message of mailbox.messages) {
+      if (
+        message.placement !== "stored" ||
+        message.toIncarnationId !== mailbox.incarnationId ||
+        message.ackedAt ||
+        message.discardedAt ||
+        message.injectDepth !== 0 ||
+        message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS ||
+        message.trust === "cross-project" ||
+        message.trust === "external"
+      ) {
+        continue;
+      }
+      message.placement = "pending-inject";
+      delete message.placementReason;
+      message.injectRequestId ??= `mail-inject-${message.id}`;
+      if (
+        !store.pendingInject.some(
+          (candidate) =>
+            candidate.mailboxId === mailbox.mailboxId && candidate.messageId === message.id,
+        )
+      ) {
+        store.pendingInject.push({ mailboxId: mailbox.mailboxId, messageId: message.id });
+      }
+      message.revision += 1;
+      promoted += 1;
+    }
+    return promoted;
   }
 
   /** Whether this exact delegation has a worker report waiting to be released. */
@@ -1579,19 +1599,27 @@ export class StorageAgentMail extends StorageDrafts {
       const store = await this.loadAgentMailStore();
       const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
       if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
+      const config = await this.loadConfig();
+      const defaultPolicy = normalizeAgentMessagingSettings(
+        config.global.agentMessaging,
+      ).defaultInjectPolicy;
+      const deliversWhenIdle = () =>
+        !mailbox.mutedInbound &&
+        (mailbox.injectOverride === "inherit" ? defaultPolicy : mailbox.injectOverride) === "idle";
+      const delivered = deliversWhenIdle();
       if (updates.inject) mailbox.injectOverride = updates.inject;
       if (typeof updates.mutedInbound === "boolean") mailbox.mutedInbound = updates.mutedInbound;
       if (typeof updates.mutedOutbound === "boolean") mailbox.mutedOutbound = updates.mutedOutbound;
+      // Turning delivery on is a request to deliver what is already waiting,
+      // not only what arrives next. Mail sent while delivery was off would
+      // otherwise stay `stored` until an agent happened to pull it.
+      if (!delivered && deliversWhenIdle()) this.promoteStoredMessages(store, mailbox);
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      const config = await this.loadConfig();
       this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
       this.announce("agent-mail-summary", "all");
-      return this.descriptor(
-        mailbox,
-        normalizeAgentMessagingSettings(config.global.agentMessaging).defaultInjectPolicy,
-      );
+      return this.descriptor(mailbox, defaultPolicy);
     });
   }
 

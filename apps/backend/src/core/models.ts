@@ -534,6 +534,8 @@ export interface OpenCodeIncompleteTurnNotice {
  * request id and timestamp, never prompt or attachment content.
  */
 export interface PersistedNativeAgentPendingDispatch {
+  /** Provider proved this mail send was refused; cleanup may be retried safely. */
+  mailRefused?: true;
   requestId: string;
   prompt: string;
   images?: Array<{ filename: string; data: string }>;

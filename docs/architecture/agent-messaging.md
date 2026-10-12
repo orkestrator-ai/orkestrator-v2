@@ -88,10 +88,10 @@ carrier text tells the model the payload is untrusted.
 
 | Placement | Meaning |
 | --- | --- |
-| `stored` | Durable; recipient must pull, or a later promotion/retry may schedule inject |
-| `pending-inject` | Claimed for the drain |
+| `stored` | Durable; recipient must pull, or a later promotion/retry may schedule inject. Turning a mailbox's delivery on (off → idle, or unmuting inbound) promotes its unhandled stored mail |
+| `pending-inject` | Waiting for the drain; busy, queue, draft and parked-dispatch holds retain a reason and retry backoff |
 | `injected` | Carrier was accepted as a prompt |
-| `inject-held` | Held for a busy recipient, a still-open worker delegation, or the hop budget |
+| `inject-held` | Held by an open worker delegation or hop budget, or claimed with reason `submitting` while dispatch is in flight |
 | `inject_failed` | Dispatch rejected or ambiguous; UI can retry |
 | `undeliverable` | Recipient gone or superseded |
 | `bounced` | Policy refusal (muted inbound, messaging disabled, …) |
@@ -116,6 +116,11 @@ There are no attachments, no multicast, and no search-over-bodies API. One
 `requestId` per sender scope is idempotent; retrying the same id with a
 different body is `idempotency-conflict`.
 
+A tab cannot send to its own mailbox (`policy-denied`). Subagents and
+background tasks inside a tab share that tab's credential and address, so
+"mail to the parent" would only come back to the sender, and it would wait
+for the whole tab to go idle.
+
 ## How a message moves
 
 ```text
@@ -137,7 +142,7 @@ sender  --send-->  store (placement + trust)
                           native dispatchMailInject  |  tmux submit
                                         |
                               accepted --> injected
-                              held     --> inject-held (backoff)
+                              held     --> pending-inject (reason + backoff)
                               failed   --> inject_failed
 ```
 
@@ -174,13 +179,23 @@ filesystem.
 
 **Presence.** Native inject uses `mailInjectPresence` (queue, compose draft,
 pending dispatch, environment readiness, then turn activity). Drain admits
-`idle` and `unknown` (never-prompted tab). The dispatch fence is stricter:
-background `working` holds the claim. Tmux requires observed idle and will
-not restart a stopped session. Terminal-kind mailboxes are never drained.
+`idle` and `unknown` (never-prompted tab). The dispatch fence rechecks the
+same turn view under the session lock, with a fresh post-dispatch
+observation. A turn that ended while its subagents or background tasks
+still run reads as idle there (`readyForInput`): the Claude bridge writes the
+carrier into that same CLI rather than resuming a second one (see
+`bridges/claude-bridge/AGENTS.md`, “One CLI per session”). Tmux requires
+observed idle and will not restart a stopped session. Terminal-kind
+mailboxes are never drained.
 
 Interrupted native injects are reconciled on backend start against the
 session’s dispatch journal (`reconcileMailInject`). Ambiguous outcomes fail
-closed as `inject_failed` rather than double-sending.
+closed as `inject_failed` rather than double-sending. A refusal the bridge
+proves was not processed (409, 503, unreachable) is held and retried, and
+its dispatch-journal row is released before reporting a busy hold. If cleanup
+fails, the mail stays pending with a parked reason and the durable session
+retains proof of refusal. Presence reconciliation retries that cleanup before
+the next drain; ambiguous rows are never cleared through this path.
 
 ## Three MCP surfaces
 

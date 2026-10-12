@@ -936,6 +936,8 @@ export function isPersistedNativeAgentSession(
         value.dispatchedRequestIds.every(isNonBlankString))) &&
     (value.pendingDispatch === undefined ||
       (isRecord(value.pendingDispatch) &&
+        (value.pendingDispatch.mailRefused === undefined ||
+          value.pendingDispatch.mailRefused === true) &&
         isNonBlankString(value.pendingDispatch.requestId) &&
         isNonBlankString(value.pendingDispatch.prompt) &&
         typeof value.pendingDispatch.createdAt === "string" &&

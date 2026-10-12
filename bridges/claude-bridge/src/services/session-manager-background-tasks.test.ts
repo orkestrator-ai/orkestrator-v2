@@ -1195,89 +1195,62 @@ describe("background task reducer", () => {
     expect(created.backgroundTasks?.["agent-dl"]?.status).toBe("completed");
   });
 
-  test("records a released query's agent lifecycle after a follow-up turn takes the foreground", async () => {
+  test("writes a follow-up into the CLI still running the released turn's agent", async () => {
     const created = createSession("released query hooks");
     track(created.id);
     const firstPrompt = sendPrompt(created.id, "delegate then keep chatting");
-    const firstCall = await nextQueryCall();
-    const hooks = firstCall.options.hooks as Record<
+    const call = await nextQueryCall();
+    const firstController = call.options.abortController;
+    const hooks = call.options.hooks as Record<
       string,
       Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
     >;
-    const input = (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
-    let inputClosed = false;
-    void input.next().then((result) => {
-      inputClosed = result.done === true;
-    });
 
-    firstCall.push({
+    call.push({
       type: "system",
       subtype: "task_started",
       task_id: "agent-bg",
       tool_use_id: "agent-bg-call",
     });
-    firstCall.push({ type: "result", subtype: "success" });
+    call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
+    const control = created.claudeRuntime?.control;
+    expect(control).toBeDefined();
 
+    // One conversation, one CLI: the follow-up is the next message on the
+    // running process's input, never a second process resumed from the rollout.
     const secondPrompt = sendPrompt(created.id, "a follow-up while it runs");
-    const secondCall = await nextQueryCall();
-    await waitFor(() => created.status === "running");
+    const followUp = await input.next();
+    expect(followUp.done).toBe(false);
+    expect(followUp.value).toMatchObject({
+      type: "user",
+      message: { content: [{ type: "text", text: "a follow-up while it runs" }] },
+      uuid: expect.any(String),
+    });
+    await expect(nextQueryCall(50)).rejects.toThrow();
+    expect(created.status).toBe("running");
+    expect(created.queryControl).toBe(control);
+    expect(created.abortController).toBeDefined();
+    expect(created.abortController).not.toBe(firstController);
+    // The released turn is done waiting once the follow-up owns the process.
+    await firstPrompt;
 
-    const successorHooks = secondCall.options.hooks as typeof hooks;
-    await successorHooks.TaskCreated![0]!.hooks[0]!({
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+    // The process's hooks keep recording every agent it runs, whichever turn
+    // started it.
+    await hooks.TaskCreated![0]!.hooks[0]!({
       hook_event_name: "TaskCreated",
       task_id: "foreground-task",
       task_subject: "New work",
     });
-    const foregroundTask = created.backgroundTasks?.["foreground-task"];
-    for (const event of ["SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted"]) {
-      await hooks[event]![0]!.hooks[0]!({
-        hook_event_name: event,
-        agent_id: "foreground-task",
-        task_id: "foreground-task",
-        task_subject: "Old work",
-        agent_type: "Explore",
-        stop_hook_active: false,
-        agent_transcript_path: "/tmp/foreground-task.jsonl",
-      });
-    }
-    expect(created.backgroundTasks?.["foreground-task"]).toBe(foregroundTask);
-    const foregroundControl = created.queryControl;
-    const foregroundController = created.abortController;
-    for (const [event, id] of [
-      ["SubagentStart", "older-agent"],
-      ["TaskCreated", "older-task"],
-    ]) {
-      await hooks[event!]![0]!.hooks[0]!({
-        hook_event_name: event,
-        agent_id: id,
-        task_id: id,
-        task_subject: "Older work",
-        agent_type: "Explore",
-      });
-      expect(created.backgroundTasks?.[id!]?.status).toBe("running");
-      expect(created.backgroundTaskControls?.get(id!)).not.toBe(foregroundControl);
-    }
-    await hooks.TaskCompleted![0]!.hooks[0]!({
-      hook_event_name: "TaskCompleted",
-      task_id: "older-task",
-      task_subject: "Older work",
-    });
-    await hooks.SubagentStop![0]!.hooks[0]!({
-      hook_event_name: "SubagentStop",
-      agent_id: "older-agent",
-      agent_type: "Explore",
-      stop_hook_active: false,
-      agent_transcript_path: "/tmp/older-agent.jsonl",
-    });
-    expect(created.backgroundTasks?.["older-task"]?.status).toBe("completed");
-    expect(created.backgroundTasks?.["older-agent"]?.status).toBe("completed");
-    expect(created.queryControl).toBe(foregroundControl);
-    expect(created.abortController).toBe(foregroundController);
-
-    // The older CLI still owns the agent; its stop hook must be recorded and
-    // must hold that CLI open for the continuation the stop leads to.
+    expect(created.backgroundTasks?.["foreground-task"]?.status).toBe("running");
+    expect(created.backgroundTaskControls?.get("foreground-task")).toBe(control);
     await hooks.SubagentStop![0]!.hooks[0]!({
       hook_event_name: "SubagentStop",
       agent_id: "agent-bg",
@@ -1289,42 +1262,17 @@ describe("background task reducer", () => {
     expect(inputClosed).toBe(false);
     expect(created.status).toBe("running");
 
-    firstCall.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "agent-bg",
-      tool_use_id: "agent-bg-call",
-      status: "completed",
-    });
-    pushSuccessfulContinuationResult(firstCall);
-    await waitFor(() => inputClosed);
-    firstCall.finish();
-    await firstPrompt;
-    expect(created.status).toBe("running");
-    const tasksAfterClose = created.backgroundTasks;
-    for (const event of ["SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted"]) {
-      await hooks[event]![0]!.hooks[0]!({
-        hook_event_name: event,
-        agent_id: "late-closed",
-        task_id: "late-closed",
-        task_subject: "Late work",
-        agent_type: "Explore",
-        stop_hook_active: false,
-        agent_transcript_path: "/tmp/late-closed.jsonl",
-      });
-    }
-    expect(created.backgroundTasks).toBe(tasksAfterClose);
-    expect(created.queryControl).toBe(foregroundControl);
-
-    await successorHooks.TaskCompleted![0]!.hooks[0]!({
+    await hooks.TaskCompleted![0]!.hooks[0]!({
       hook_event_name: "TaskCompleted",
       task_id: "foreground-task",
       task_subject: "New work",
     });
-    secondCall.push({ type: "result", subtype: "success" });
-    secondCall.finish();
+    call.push({ type: "result", subtype: "success" });
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
     await secondPrompt;
     expect(created.status).toBe("idle");
+    expect(created.claudeRuntime).toBeUndefined();
   });
 
   test("reclaims a resumed turn from its first streamed partial, before any assistant record", async () => {
@@ -1630,23 +1578,24 @@ describe("background task reducer", () => {
     await promptPromise;
   });
 
-  test("does not let an older released turn reclaim the foreground from a newer one", async () => {
-    const created = createSession("two released turns");
+  test("a follow-up takes over the continuation the released turn was waiting for", async () => {
+    const created = createSession("released turn superseded");
     track(created.id);
     const firstPrompt = sendPrompt(created.id, "delegate first");
-    const firstCall = await nextQueryCall();
-    const firstInput = (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    expect((await firstInput.next()).done).toBe(false);
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
 
-    firstCall.push({
+    call.push({
       type: "system",
       subtype: "task_started",
       task_id: "agent-older",
       description: "Older task",
     });
-    firstCall.push({ type: "result", subtype: "success" });
+    call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
-    firstCall.push({
+    // The notification owes a root continuation the CLI has not started yet.
+    call.push({
       type: "system",
       subtype: "task_notification",
       task_id: "agent-older",
@@ -1654,29 +1603,19 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["agent-older"]?.status === "completed");
 
-    // Releasing exists so a follow-up turn can start while the older CLI lives.
     const secondPrompt = sendPrompt(created.id, "delegate second");
-    const secondCall = await nextQueryCall();
-    const secondInput = (secondCall.prompt as AsyncIterable<SDKUserMessage>)[
-      Symbol.asyncIterator
-    ]();
-    expect((await secondInput.next()).done).toBe(false);
-    secondCall.push({
-      type: "system",
-      subtype: "task_started",
-      task_id: "agent-newer",
-      description: "Newer task",
-    });
-    secondCall.push({ type: "result", subtype: "success" });
-    await waitFor(
-      () =>
-        created.status === "idle" && created.backgroundTasks?.["agent-newer"]?.status === "running",
-    );
+    const followUp = await input.next();
+    const followUpUuid = (followUp.value as SDKUserMessage).uuid;
+    expect(followUpUuid).toEqual(expect.any(String));
+    await expect(nextQueryCall(50)).rejects.toThrow();
+    await firstPrompt;
+    const followUpController = created.abortController;
+    expect(followUpController).toBeDefined();
 
-    // The older query resumes. It must not publish `running` or take abort
-    // ownership: stop would then reach the wrong CLI, and the newer turn could
-    // never reclaim its own foreground.
-    firstCall.push({
+    // The CLI answers the queued notification first. That is the root
+    // conversation, owned by the newest turn: it stays running under the
+    // follow-up's controller, and the continuation's result is not its own.
+    call.push({
       type: "assistant",
       message: {
         id: "assistant-older-continuation",
@@ -1686,18 +1625,46 @@ describe("background task reducer", () => {
       },
       parent_tool_use_id: null,
     });
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(created.status).toBe("idle");
-    expect(created.abortController).toBeUndefined();
+    call.push({
+      type: "result",
+      subtype: "success",
+      user_message_uuid: "notification-older",
+      result_index: 0,
+    });
+    await Bun.sleep(20);
+    expect(created.status).toBe("running");
+    expect(created.abortController).toBe(followUpController);
 
-    // The newest turn still can.
-    secondCall.push({
+    let inputClosed = false;
+    void input.next().then((result) => {
+      inputClosed = result.done === true;
+    });
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-newer",
+      description: "Newer task",
+    });
+    call.push({
+      type: "result",
+      subtype: "success",
+      user_message_uuid: followUpUuid,
+      result_index: 1,
+    });
+    await waitFor(
+      () =>
+        created.status === "idle" && created.backgroundTasks?.["agent-newer"]?.status === "running",
+    );
+    expect(inputClosed).toBe(false);
+
+    // The newest turn reclaims the foreground for its own agent's continuation.
+    call.push({
       type: "system",
       subtype: "task_notification",
       task_id: "agent-newer",
       status: "completed",
     });
-    secondCall.push({
+    call.push({
       type: "assistant",
       message: {
         id: "assistant-newer-continuation",
@@ -1708,41 +1675,35 @@ describe("background task reducer", () => {
       parent_tool_use_id: null,
     });
     await waitFor(() => created.status === "running");
-    expect(created.abortController).toBeDefined();
-
-    firstCall.push({ type: "result", subtype: "success" });
-    firstCall.finish();
-    await firstPrompt;
-    secondCall.push({ type: "result", subtype: "success" });
-    secondCall.finish();
+    expect(created.abortController).toBe(followUpController);
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => inputClosed);
+    call.finish();
     await secondPrompt;
     expect(created.status).toBe("idle");
   });
 
-  test("does not let a released result move the successor's usage baseline or control", async () => {
-    const firstContextUsage = mock(async () => ({
+  test("a continuation's result does not settle the follow-up or move its usage", async () => {
+    const contextUsage = mock(async () => ({
       totalTokens: 100,
       maxTokens: 1_000,
       percentage: 10,
     }));
-    const secondContextUsage = mock(async () => ({
-      totalTokens: 100,
-      maxTokens: 1_000,
-      percentage: 10,
-    }));
-    queryControlOverrides.getContextUsage = firstContextUsage;
+    queryControlOverrides.getContextUsage = contextUsage;
 
     const created = createSession("released usage ownership");
     track(created.id);
     const firstPrompt = sendPrompt(created.id, "delegate first");
-    const firstCall = await nextQueryCall();
-    firstCall.push({
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    call.push({
       type: "system",
       subtype: "task_started",
       task_id: "agent-older-usage",
       description: "Older task",
     });
-    firstCall.push({
+    call.push({
       type: "result",
       subtype: "success",
       modelUsage: {
@@ -1756,24 +1717,28 @@ describe("background task reducer", () => {
       total_cost_usd: 0.5,
     });
     await waitFor(() => created.status === "idle");
-    firstCall.push({
+    call.push({
       type: "system",
       subtype: "task_notification",
       task_id: "agent-older-usage",
       status: "completed",
     });
     await waitFor(() => created.backgroundTasks?.["agent-older-usage"]?.status === "completed");
-    expect(firstContextUsage).toHaveBeenCalledTimes(1);
+    expect(contextUsage).toHaveBeenCalledTimes(1);
 
-    queryControlOverrides.getContextUsage = secondContextUsage;
     const secondPrompt = sendPrompt(created.id, "foreground successor");
-    const secondCall = await nextQueryCall();
+    const followUp = await input.next();
+    const followUpUuid = (followUp.value as SDKUserMessage).uuid;
+    await firstPrompt;
 
-    // The old query's continuation result arrives while the successor owns the
-    // session. It must be discarded before differencing or querying context.
-    firstCall.push({
+    // The notification's continuation answers before the follow-up. Its result
+    // names other input, so it is discarded before differencing or querying
+    // context, and the follow-up keeps running.
+    call.push({
       type: "result",
       subtype: "success",
+      user_message_uuid: "notification-older",
+      result_index: 1,
       modelUsage: {
         "claude-mock": {
           inputTokens: 30,
@@ -1785,30 +1750,40 @@ describe("background task reducer", () => {
       total_cost_usd: 1.5,
     });
     await Bun.sleep(20);
-    expect(secondContextUsage).not.toHaveBeenCalled();
+    expect(contextUsage).toHaveBeenCalledTimes(1);
+    expect(created.status).toBe("running");
     expect(created.claudeUsageBaseline).toMatchObject({ input: 10, cost: 0.5 });
     expect(created.usage).toMatchObject({ inputTokens: 10, sessionTokens: 100, costUsd: 0.5 });
-    firstCall.finish();
-    await firstPrompt;
 
-    secondCall.push({
+    call.push({
       type: "result",
       subtype: "success",
+      user_message_uuid: followUpUuid,
+      result_index: 2,
       modelUsage: {
         "claude-mock": {
-          inputTokens: 20,
-          outputTokens: 40,
-          cacheReadInputTokens: 140,
+          inputTokens: 50,
+          outputTokens: 100,
+          cacheReadInputTokens: 350,
           contextWindow: 1_000,
         },
       },
-      total_cost_usd: 1,
+      total_cost_usd: 2.5,
     });
-    secondCall.finish();
+    call.finish();
     await secondPrompt;
 
-    expect(secondContextUsage).toHaveBeenCalledTimes(1);
-    expect(created.usage).toMatchObject({ inputTokens: 20, sessionTokens: 200, costUsd: 1 });
+    // One process reports running totals. The session total is that total;
+    // this turn is what it grew by since the last result the session counted,
+    // continuation included.
+    expect(contextUsage).toHaveBeenCalledTimes(2);
+    expect(created.usage).toMatchObject({
+      inputTokens: 50,
+      sessionTokens: 500,
+      costUsd: 2.5,
+      lastTurnTokens: 400,
+    });
+    expect(created.status).toBe("idle");
   });
 
   test("does not let an aborted result handler reassert a hold or clobber a restart", async () => {
@@ -1845,6 +1820,9 @@ describe("background task reducer", () => {
       expect(abortSession(created.id)).toBe(true);
       delete queryControlOverrides.getContextUsage;
       const secondPrompt = sendPrompt(created.id, "restart immediately");
+      await expect(nextQueryCall(30)).rejects.toThrow();
+      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+      await firstPrompt;
       const secondCall = await nextQueryCall();
 
       const hooks = firstCall.options.hooks as Record<
@@ -1869,9 +1847,6 @@ describe("background task reducer", () => {
         expect(created.queryControl).toBeDefined();
         expect(created.status).toBe("running");
       };
-      await verifyStaleHooks();
-      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
-      await firstPrompt;
       await verifyStaleHooks();
 
       expect(getSession(created.id)?.status).toBe("running");
@@ -1903,11 +1878,16 @@ describe("background task reducer", () => {
   });
 
   test.each(["refresh", "context"])(
-    "retains live tasks when a successor takes over during %s settlement",
+    "retains live tasks when a follow-up joins during %s settlement",
     async (stage) => {
       let resolveUsage!: (value: unknown) => void;
       let usageRequestStarted = false;
+      // Only the released turn's request is held; the follow-up runs on the
+      // same process, so its own request is answered at once.
       const holdUsage = mock(() => {
+        if (usageRequestStarted) {
+          return Promise.resolve({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+        }
         usageRequestStarted = true;
         return new Promise<unknown>((resolve) => {
           resolveUsage = resolve;
@@ -1930,7 +1910,6 @@ describe("background task reducer", () => {
       const call = await nextQueryCall();
       const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
       expect((await input.next()).done).toBe(false);
-      const inputCompletion = input.next();
       call.push({
         type: "system",
         subtype: "task_started",
@@ -1946,20 +1925,24 @@ describe("background task reducer", () => {
       const staleSettlement = created.finishTurnInputIfSettled;
       const baseline = created.claudeUsageBaseline;
       const usage = created.usage;
-      const oldControl = created.backgroundTaskControls?.get("agent-superseded");
-      // Force foreground release at this asynchronous boundary so the real
-      // successor dispatch can exercise both post-await ownership checks.
+      const control = created.backgroundTaskControls?.get("agent-superseded");
+      // Force foreground release at this asynchronous boundary so a real
+      // follow-up dispatch can exercise both post-await ownership checks.
       created.status = "idle";
       created.abortController = undefined;
-      delete queryControlOverrides.getContextUsage;
-      delete queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
       const successorPrompt = sendPrompt(created.id, "foreground successor");
-      const successor = await nextQueryCall();
-      const successorControl = created.queryControl;
+      expect((await input.next()).done).toBe(false);
+      await expect(nextQueryCall(50)).rejects.toThrow();
+      await promptPromise;
+      const successorController = created.abortController;
+      expect(successorController).toBeDefined();
+      // The superseded turn's settlement no longer owns the input: closing it
+      // would end the follow-up's conversation and kill the running agent.
       staleSettlement!();
       let inputClosed = false;
-      void inputCompletion.then(() => {
-        inputClosed = true;
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+        return result;
       });
       resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
       call.push({
@@ -1974,28 +1957,24 @@ describe("background task reducer", () => {
       );
       expect(inputClosed).toBe(false);
       expect(call.isClosed()).toBe(false);
-      expect(created.backgroundTaskControls?.get("agent-superseded")).toBe(oldControl);
+      expect(created.backgroundTaskControls?.get("agent-superseded")).toBe(control);
       expect(created.backgroundTasks?.["agent-superseded"]?.status).toBe("running");
       expect(created.claudeUsageBaseline).toBe(baseline);
       expect(created.usage).toBe(usage);
       expect(created.status).toBe("running");
-      expect(created.queryControl).toBe(successorControl);
-      expect(created.abortController).toBe(successor.options.abortController);
+      expect(created.queryControl).toBe(control);
+      expect(created.abortController).toBe(successorController);
       call.push({
         type: "system",
         subtype: "task_notification",
         task_id: "agent-superseded",
         status: "completed",
       });
-      pushSuccessfulContinuationResult(call);
+      call.push({ type: "result", subtype: "success" });
       expect(await inputCompletion).toEqual({ done: true, value: undefined });
       call.finish();
-      await promptPromise;
-      expect(created.queryControl).toBe(successorControl);
-      expect(created.abortController).toBe(successor.options.abortController);
-      successor.push({ type: "result", subtype: "success" });
-      successor.finish();
       await successorPrompt;
+      expect(created.status).toBe("idle");
     },
   );
 
@@ -3028,108 +3007,111 @@ describe("background task reducer", () => {
     expect(session.backgroundTasks).toBeUndefined();
   });
 
-  test("a follow-up query cannot erase tasks owned by the retained runtime", async () => {
-    const created = createSession("retained runtime followed by another turn");
+  test("one CLI owns every task, whichever turn started it", async () => {
+    const created = createSession("one runtime for every turn");
     track(created.id);
     const firstPrompt = sendPrompt(created.id, "start background work");
-    const firstCall = await nextQueryCall();
-    const firstInput = (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    expect((await firstInput.next()).done).toBe(false);
-    let firstInputClosed = false;
-    const firstInputCompletion = firstInput.next().then((result) => {
-      firstInputClosed = result.done === true;
-      return result;
-    });
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
 
-    firstCall.push({
+    call.push({
       type: "system",
       subtype: "task_started",
-      task_id: "old-runtime-task",
-      description: "Owned by the first CLI",
+      task_id: "first-turn-task",
+      description: "Started by the first turn",
     });
-    firstCall.push({ type: "result", subtype: "success" });
+    call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
+    const control = created.backgroundTaskControls?.get("first-turn-task");
+    expect(control).toBe(created.claudeRuntime?.control);
 
     const secondPrompt = sendPrompt(created.id, "continue while it runs");
-    const secondCall = await nextQueryCall();
-    secondCall.push({
-      type: "system",
-      subtype: "background_tasks_changed",
-      tasks: [],
-    });
-    secondCall.push({ type: "result", subtype: "success" });
-    secondCall.finish();
-    await secondPrompt;
-
-    expect(created.backgroundTasks?.["old-runtime-task"]?.status).toBe("running");
-    expect(firstInputClosed).toBe(false);
-
-    firstCall.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "old-runtime-task",
-      status: "completed",
-    });
-    pushSuccessfulContinuationResult(firstCall);
-    expect(await firstInputCompletion).toEqual({ done: true, value: undefined });
-    firstCall.finish();
+    const followUp = await input.next();
+    const followUpUuid = (followUp.value as SDKUserMessage).uuid;
     await firstPrompt;
-    expect(created.backgroundTasks?.["old-runtime-task"]?.status).toBe("completed");
-  });
-
-  test("a follow-up query listing an older task does not take ownership of it", async () => {
-    const created = createSession("cross-runtime task ownership");
-    track(created.id);
-    const firstPrompt = sendPrompt(created.id, "start background work");
-    const firstCall = await nextQueryCall();
-    firstCall.push({
-      type: "system",
-      subtype: "task_started",
-      task_id: "shared-task",
-      description: "Owned by the first CLI",
-    });
-    firstCall.push({ type: "result", subtype: "success" });
-    await waitFor(() => created.status === "idle");
-    const firstOwner = created.backgroundTaskControls?.get("shared-task");
-    expect(firstOwner).toBeDefined();
-
-    const secondPrompt = sendPrompt(created.id, "continue while it runs");
-    const secondCall = await nextQueryCall();
-    secondCall.push({
+    // The process's level signal names everything it runs: the first turn's
+    // task and the follow-up's alike.
+    call.push({
       type: "system",
       subtype: "background_tasks_changed",
       tasks: [
-        { task_id: "shared-task", description: "Also listed by the second CLI" },
-        { task_id: "second-runtime-task", description: "Started by the second CLI" },
+        { task_id: "first-turn-task", description: "Started by the first turn" },
+        { task_id: "second-turn-task", description: "Started by the follow-up" },
       ],
     });
-    await waitFor(() => created.backgroundTasks?.["second-runtime-task"] !== undefined);
+    await waitFor(() => created.backgroundTasks?.["second-turn-task"] !== undefined);
+    expect(created.backgroundTaskControls?.get("first-turn-task")).toBe(control);
+    expect(created.backgroundTaskControls?.get("second-turn-task")).toBe(control);
+    expect(created.backgroundTasks?.["first-turn-task"]?.status).toBe("running");
 
-    // Only the process that started a task can stop it: a control asked to stop
-    // an id it never started answers `ok` without reaching anything.
-    expect(created.backgroundTaskControls?.get("shared-task")).toBe(firstOwner);
-    expect(created.backgroundTaskControls?.get("second-runtime-task")).not.toBe(firstOwner);
-    expect(created.backgroundTasks?.["shared-task"]?.status).toBe("running");
-
-    secondCall.push({
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+    call.push({
       type: "system",
       subtype: "task_notification",
-      task_id: "second-runtime-task",
+      task_id: "second-turn-task",
       status: "completed",
     });
-    secondCall.push({ type: "result", subtype: "success" });
-    secondCall.finish();
+    call.push({
+      type: "result",
+      subtype: "success",
+      user_message_uuid: followUpUuid,
+      result_index: 1,
+    });
+    await waitFor(() => created.status === "idle");
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "first-turn-task",
+      status: "completed",
+    });
+    pushSuccessfulContinuationResult(call);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
     await secondPrompt;
+    expect(created.backgroundTasks?.["first-turn-task"]?.status).toBe("completed");
+    expect(created.backgroundTasks?.["second-turn-task"]?.status).toBe("completed");
+  });
 
-    firstCall.push({
+  test("stopping an earlier turn's task reaches the CLI a follow-up is running on", async () => {
+    const stopTask = mock(async (_taskId: string) => {});
+    queryControlOverrides.stopTask = stopTask;
+    const created = createSession("stop across turns");
+    track(created.id);
+    const firstPrompt = sendPrompt(created.id, "start background work");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    call.push({
       type: "system",
-      subtype: "task_notification",
+      subtype: "task_started",
       task_id: "shared-task",
-      status: "completed",
+      description: "Started by the first turn",
     });
-    firstCall.finish();
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    const secondPrompt = sendPrompt(created.id, "continue while it runs");
+    expect((await input.next()).done).toBe(false);
     await firstPrompt;
-    expect(created.backgroundTasks?.["shared-task"]?.status).toBe("completed");
+
+    expect(await stopBackgroundTask(created.id, "shared-task")).toEqual({ ok: true });
+    expect(stopTask).toHaveBeenCalledWith("shared-task");
+    expect(created.backgroundTasks?.["shared-task"]?.status).toBe("killed");
+    // The follow-up still owns the process; stopping a task does not end it.
+    expect(created.status).toBe("running");
+    expect(call.isClosed()).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await secondPrompt;
+    expect(created.status).toBe("idle");
   });
 
   test.each([

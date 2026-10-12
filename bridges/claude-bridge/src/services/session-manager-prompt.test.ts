@@ -141,6 +141,39 @@ describe("sendPrompt", () => {
     await prompt;
   });
 
+  test("passes --chrome when the session enables Claude in Chrome", async () => {
+    const session = createSession();
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Open the dashboard", {
+      parameterValues: { chrome: true },
+    });
+    const call = await nextQueryCall();
+    expect(call.options.extraArgs).toEqual({ chrome: null });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test.each([
+    ["explicit Off", { parameterValues: { chrome: false } }],
+    ["absent preference", {}],
+    ["read-only coordinator", { readOnly: true, parameterValues: { chrome: true } }],
+  ] as const)("overrides ambient Chrome enablement for %s", async (_label, options) => {
+    const originalChromeEnv = process.env.CLAUDE_CODE_ENABLE_CFC;
+    process.env.CLAUDE_CODE_ENABLE_CFC = "1";
+    try {
+      const { call } = await runPromptWithMessages(
+        [{ type: "result", subtype: "success" }],
+        options,
+      );
+      expect(call.options.env.CLAUDE_CODE_ENABLE_CFC).toBe("1");
+      expect(call.options.extraArgs).toEqual({ "no-chrome": null });
+    } finally {
+      if (originalChromeEnv === undefined) delete process.env.CLAUDE_CODE_ENABLE_CFC;
+      else process.env.CLAUDE_CODE_ENABLE_CFC = originalChromeEnv;
+    }
+  });
+
   test.each([undefined, "default", "claude-sonnet-test"])(
     "applies the 1M-context parameter to the supported model selection %s",
     async (model) => {
@@ -4228,10 +4261,10 @@ describe("sendPrompt", () => {
       outputSchema: { type: "object" },
       requestId: "structured-after-restart",
     });
-    const secondCall = await nextQueryCall();
-
+    await expect(nextQueryCall(30)).rejects.toThrow();
     resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
     await firstPrompt;
+    const secondCall = await nextQueryCall();
     expect(session.structuredOutputRequestId).toBe("structured-after-restart");
     expect(session.structuredOutput).toBeUndefined();
 

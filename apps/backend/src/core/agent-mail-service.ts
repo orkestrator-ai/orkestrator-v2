@@ -96,7 +96,6 @@ export class AgentMailService {
 
   async init(): Promise<void> {
     await this.storage.synchronizeAgentMailboxes();
-    await this.refreshPresence();
     this.unsubscribe ??= this.storage.addResourceChangeListener((change) => {
       if (change.resource === "agent-mail") {
         // Durable mail is the authority. Wake the backend dispatcher from the
@@ -143,27 +142,33 @@ export class AgentMailService {
       if (mailbox.kind !== "native" || !mailbox.agent || !message.injectRequestId) continue;
       const logicalSessionKey =
         mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
-      let dispatched = false;
+      let status: "dispatched" | "not-dispatched" | "unknown" = "unknown";
       try {
-        dispatched =
-          (await this.nativeAgents.reconcileMailInject({
-            environmentId: mailbox.environmentId,
-            agent: mailbox.agent,
-            logicalSessionKey,
-            requestId: message.injectRequestId,
-          })) === "dispatched";
+        status = await this.nativeAgents.reconcileMailInject({
+          environmentId: mailbox.environmentId,
+          agent: mailbox.agent,
+          logicalSessionKey,
+          requestId: message.injectRequestId,
+        });
       } catch {
-        dispatched = false;
+        status = "unknown";
       }
       await this.applyInjectorMutation(() =>
         this.storage.finishAgentMailInject(
           mailbox.mailboxId,
           message.id,
-          dispatched ? { outcome: "accepted" } : { outcome: "failed", reason: "ambiguous" },
+          status === "dispatched"
+            ? { outcome: "accepted" }
+            : status === "not-dispatched"
+              ? { outcome: "held", reason: "parked" }
+              : { outcome: "failed", reason: "ambiguous" },
         ),
       );
     }
     await this.storage.recoverInterruptedAgentMailInjects();
+    // Presence recovery may clear a proven-unsent dispatch row. Reconcile the
+    // interrupted mail first, while that durable refusal evidence still exists.
+    await this.refreshPresence();
     this.recovered = true;
   }
 

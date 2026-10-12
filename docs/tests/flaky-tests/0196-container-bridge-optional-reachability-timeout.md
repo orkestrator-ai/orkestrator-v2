@@ -1,6 +1,6 @@
 # Container bridge without reachability service times out in the aggregate
 
-- **ID:** 0190
+- **ID:** 0196
 - **Status:** open
 - **Date observed:** 2026-10-12
 - **Test:** `Electron backend command registry > starts a container bridge without a reachability service`

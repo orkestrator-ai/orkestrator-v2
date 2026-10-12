@@ -1,3 +1,11 @@
+[install]
+# The build relies on every dependency resolving from inside this checkout:
+# TypeScript finds peer type packages (e.g. @types/react for @dnd-kit) by
+# walking up to the workspace node_modules, and bridge vendoring copies the
+# isolated store. A user-level `globalStore = true` moves store entries under
+# ~/.bun/install/cache/links, outside that walk, so pin it off here.
+globalStore = false
+
 [test]
 preload = ["./tests/register-dom.ts", "./tests/setup.ts"]
 pathIgnorePatterns = [

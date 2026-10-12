@@ -59,6 +59,14 @@ mise run test:logged -- --name project-home-rerun -- \
 Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XzVEFK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No assertion, timeout or skip was changed.
 
+## Recurrence on 2026-10-11
+
+`mise run test:logged -- --name full-tests-final -- mise run test` encountered the same fixture `.git/index.lock` conflict at 169.25 ms (workspace packages used one Bun worker each). The aggregate ran beside isolated browser validation and was later interrupted after its superseding validation began.
+
+The owning file passed alone (exit 0, 3.0 seconds): `mise run test:logged -- --name project-home-isolation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures`.
+
+Evidence: `/tmp/orkestrator-test-run.DjXKcv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No assertion or timeout was changed.
+
 ## Recurrence on 2026-10-12
 
 `mise run test:logged -- --name backend-package-tests -- bun run --cwd apps/backend test:workspace`

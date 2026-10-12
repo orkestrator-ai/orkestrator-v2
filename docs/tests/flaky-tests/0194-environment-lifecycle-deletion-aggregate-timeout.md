@@ -1,6 +1,6 @@
 # Environment lifecycle deletion cases time out in the aggregate
 
-- **ID:** 0188
+- **ID:** 0194
 - **Status:** open
 - **Date observed:** 2026-10-12
 - **Tests:** in `Electron backend environment lifecycle commands`:

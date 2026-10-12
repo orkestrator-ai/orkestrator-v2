@@ -484,6 +484,38 @@ export function AgentPlatformPane({
               ]}
             />
           </div>
+
+          <div className="space-y-2">
+            <div>
+              <h4 className="text-sm font-medium text-foreground">Claude in Chrome</h4>
+              <p className="mt-1 text-xs text-muted-foreground/80">
+                Lets Claude control your signed-in Chrome through the Claude in Chrome extension.
+                Requires the extension on this machine and a claude.ai login.
+              </p>
+            </div>
+            <OptionCards
+              ariaLabel="Claude in Chrome"
+              value={
+                stored?.claudeChrome === undefined ? INHERIT : stored.claudeChrome ? "on" : "off"
+              }
+              onChange={(value) =>
+                set("claudeChrome", value === INHERIT ? undefined : value === "on")
+              }
+              disabled={disabled}
+              columns="sm:grid-cols-3"
+              inherit={{
+                label: canInherit
+                  ? `Inherit — ${inherited.claudeChrome ? "On" : "Off"} (from ${
+                      TIER_LABELS[inheritedFrom(parentTiers, "claude", "claudeChrome")]
+                    })`
+                  : "Provider default — Off",
+              }}
+              options={[
+                { value: "off", label: "Off" },
+                { value: "on", label: "On" },
+              ]}
+            />
+          </div>
         </div>
       )}
 

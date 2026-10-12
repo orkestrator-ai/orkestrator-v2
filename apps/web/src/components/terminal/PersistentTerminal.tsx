@@ -55,11 +55,11 @@ import {
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
 import { TerminalDisconnectedBanner } from "@/components/terminal/TerminalDisconnectedBanner";
-import { CheckCircle2, History } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
 import { TerminalHistoryPanel } from "./TerminalHistoryPanel";
+import { TerminalCornerToolbar, useTerminalCornerHover } from "./TerminalCornerToolbar";
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -1973,6 +1973,7 @@ export function PersistentTerminal({
 
   const [manuallyCompleted, setManuallyCompleted] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const cornerHover = useTerminalCornerHover();
   const handleMarkSetupComplete = useCallback(() => {
     if (!setupCompleteRef.current) {
       console.log("[PersistentTerminal] Manually marking setup complete for tab:", tabId);
@@ -2086,6 +2087,13 @@ export function PersistentTerminal({
   // ever reach it. They share a slot, so only the more actionable one shows.
   const showDisconnectedNotice =
     disconnectedNoticeVisible && !disconnectedNoticeDismissed && isActive;
+  const showHistoryButton = isActive && Boolean(sessionId) && !historyOpen;
+  const showMarkSetupComplete =
+    Boolean(isSetupTab) &&
+    isActive &&
+    !setupScriptsComplete &&
+    !manuallyCompleted &&
+    !setupCompleteRef.current;
 
   return (
     <>
@@ -2103,42 +2111,22 @@ export function PersistentTerminal({
       {visibleWarning !== null && isActive && !showDisconnectedNotice && (
         <TerminalWarningBanner message={visibleWarning} onDismiss={handleDismissWarning} />
       )}
-      {isActive && sessionId && !historyOpen && (
-        <div className="absolute top-1 left-2 z-20">
-          <button
-            type="button"
-            aria-label="Open earlier terminal output"
-            title="Earlier output"
-            onClick={() => setHistoryOpen(true)}
-            className="rounded-md border border-zinc-700/50 bg-zinc-800/90 p-1.5 text-zinc-400 shadow-md backdrop-blur-sm hover:bg-zinc-700 hover:text-zinc-100"
-          >
-            <History className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
       {isActive && historyOpen && sessionId && (
         <TerminalHistoryPanel sessionId={sessionId} onClose={() => setHistoryOpen(false)} />
       )}
-      {isSetupTab &&
-        isActive &&
-        !setupScriptsComplete &&
-        !manuallyCompleted &&
-        !setupCompleteRef.current && (
-          <div className="absolute top-1 right-2 z-10">
-            <button
-              onClick={handleMarkSetupComplete}
-              className="flex items-center gap-1.5 rounded-md bg-zinc-800/90 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 border border-zinc-700/50 transition-colors shadow-md backdrop-blur-sm"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Mark setup complete
-            </button>
-          </div>
-        )}
+      <TerminalCornerToolbar
+        showHistoryButton={showHistoryButton}
+        showMarkSetupComplete={showMarkSetupComplete}
+        onOpenHistory={() => setHistoryOpen(true)}
+        onMarkSetupComplete={handleMarkSetupComplete}
+        hover={cornerHover}
+      />
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
             ref={terminalRef}
             onClick={handleTerminalClick}
+            {...cornerHover.terminalHoverProps}
             className={cn(
               "absolute inset-x-0 top-0",
               isMobile ? "bottom-[calc(3rem+env(safe-area-inset-bottom))]" : "bottom-0",

@@ -186,6 +186,11 @@ export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMov
                   The environment&apos;s terminals and agent connections are closed first and reopen
                   in the new folder. Moving to another disk copies every file and can take a while.
                 </p>
+                <p>
+                  Claude, Codex, Cursor and Pi conversations continue in the new folder. OpenCode
+                  and Grok start new conversations there; their earlier ones stay in the
+                  agents&apos; own history.
+                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

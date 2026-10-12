@@ -36,6 +36,11 @@ import {
   endEnvironmentMove,
   isEnvironmentBeingReplaced,
 } from "./environment-replacement-fence.js";
+import {
+  defaultSessionRelocationHomes,
+  relocateAgentSessionState,
+  type SessionRelocationHomes,
+} from "./environment-move-sessions.js";
 import type { Environment, WorktreeMoveRecord } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
@@ -58,6 +63,8 @@ export interface MoveEnvironmentOptions {
   invalidateDiscovery?: (environmentId: string) => void;
   /** Tests: skip `git worktree move` and take the copy path used across disks. */
   forceCopy?: boolean;
+  /** Tests: where each provider's folder-keyed session state lives. */
+  sessionHomes?: SessionRelocationHomes;
 }
 
 /** Where a worktree goes when it is moved into `destinationRoot`: its folder name is kept. */
@@ -179,6 +186,8 @@ async function moveEnvironmentOnce(
   if (await pathExists(to)) {
     throw new Error(`The destination already contains ${path.basename(to)}: ${to}`);
   }
+  // Agents may have keyed their state by either spelling of the old folder.
+  const fromResolved = canonicalWorktreePath(from);
   const fromRoot = environment.worktreeBaseDir
     ? path.resolve(environment.worktreeBaseDir)
     : getWorktreeBaseDir(context);
@@ -246,6 +255,13 @@ async function moveEnvironmentOnce(
 
     const updated = await finishMove(storage, environment.id, record, destinationRoot);
     if (!viaGit.moved) await removeOldWorktree(fromRoot, from, projectPath);
+    // Still inside the bridge queue: no agent can start before its
+    // conversations know about the new folder.
+    await relocateAgentSessionState(
+      [from, fromResolved],
+      to,
+      options.sessionHomes ?? (await defaultSessionRelocationHomes(environment.id, context)),
+    );
     await afterMove(updated, context);
     return updated;
   } catch (error) {
@@ -398,6 +414,7 @@ export async function recoverInterruptedEnvironmentMove(
   environment: Environment,
   storage: StorageService,
   worktreeRoot: string,
+  sessionHomes?: SessionRelocationHomes,
 ): Promise<void> {
   const record = environment.worktreeMove;
   if (!record) return;
@@ -412,6 +429,12 @@ export async function recoverInterruptedEnvironmentMove(
   if (adopt) {
     if (record.phase === "copied") await repairWorktree(projectPath, record.to);
     await finishMove(storage, environment.id, record, destinationRoot);
+    // Recovery runs before any bridge starts, as the move itself would have.
+    await relocateAgentSessionState(
+      [record.from],
+      record.to,
+      sessionHomes ?? (await defaultSessionRelocationHomes(environment.id, { storage })),
+    );
     if (record.phase === "copied" && fromExists) {
       const fromRoot = environment.worktreeBaseDir
         ? path.resolve(environment.worktreeBaseDir)
@@ -436,6 +459,7 @@ export async function recoverInterruptedEnvironmentMove(
 /** Startup: settles every move a previous backend process left unfinished. */
 export async function recoverInterruptedEnvironmentMoves(
   context: Pick<CommandContext, "storage" | "worktreeDir">,
+  options: { sessionHomes?: SessionRelocationHomes } = {},
 ): Promise<void> {
   const environments = await context.storage.loadEnvironments();
   for (const environment of environments) {
@@ -444,6 +468,7 @@ export async function recoverInterruptedEnvironmentMoves(
       environment,
       context.storage,
       getWorktreeBaseDir(context),
+      options.sessionHomes,
     ).catch((error: unknown) => {
       console.warn(
         `[backend] interrupted move recovery failed for ${environment.id}:`,

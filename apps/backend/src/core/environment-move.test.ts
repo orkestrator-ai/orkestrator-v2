@@ -13,6 +13,7 @@ import {
   moveEnvironmentTask,
   recoverInterruptedEnvironmentMoves,
 } from "./environment-move.js";
+import { claudeProjectSlug, codexCwdHash } from "./environment-move-sessions.js";
 import {
   assertEnvironmentAcceptsAgentWork,
   beginEnvironmentMove,
@@ -96,6 +97,15 @@ async function registeredWorktrees(projectPath: string): Promise<string[]> {
     .map((line) => line.slice("worktree ".length));
 }
 
+function isolatedHomes(root: string) {
+  return {
+    claudeConfigDir: path.join(root, "claude-home"),
+    claudeJsonPath: path.join(root, "claude.json"),
+    codexHomes: [path.join(root, "codex-home")],
+    cursorStateDir: path.join(root, "cursor-state"),
+  };
+}
+
 async function exists(target: string): Promise<boolean> {
   return fs
     .stat(target)
@@ -115,7 +125,28 @@ describe("move_environment", () => {
       await fs.symlink("README.md", path.join(from, "readme-link"));
       const destination = path.join(root, "elsewhere");
 
-      const moved = await moveEnvironmentTask(environment.id, destination, context, { forceCopy });
+      const homes = {
+        claudeConfigDir: path.join(root, "claude-home"),
+        claudeJsonPath: path.join(root, "claude.json"),
+        codexHomes: [path.join(root, "codex-home")],
+        cursorStateDir: path.join(root, "cursor-state"),
+      };
+      const oldTranscripts = path.join(homes.claudeConfigDir, "projects", claudeProjectSlug(from));
+      await fs.mkdir(oldTranscripts, { recursive: true });
+      await fs.writeFile(path.join(oldTranscripts, "session-1.jsonl"), "{}\n");
+      const codexState = path.join(homes.codexHomes[0]!, "orkestrator-bridge");
+      await fs.mkdir(path.join(codexState, `bridge-sessions-${codexCwdHash(from)}`), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(codexState, `bridge-sessions-${codexCwdHash(from)}`, "r.json"),
+        JSON.stringify({ bridgeSessionId: "b", threadId: "t", cwdHash: codexCwdHash(from) }),
+      );
+
+      const moved = await moveEnvironmentTask(environment.id, destination, context, {
+        forceCopy,
+        sessionHomes: homes,
+      });
 
       const to = path.join(destination, path.basename(from));
       expect(moved.worktreePath).toBe(to);
@@ -135,6 +166,18 @@ describe("move_environment", () => {
       const { stdout: status } = await runCommand("git", ["-C", to, "status", "--porcelain"]);
       expect(status).toContain("untracked.txt");
       expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(to);
+      // Agents resume the environment's conversations from the new folder.
+      const newTranscripts = path.join(homes.claudeConfigDir, "projects", claudeProjectSlug(to));
+      expect(await fs.readFile(path.join(newTranscripts, "session-1.jsonl"), "utf8")).toContain(
+        `"relocatedCwd":${JSON.stringify(to)}`,
+      );
+      const record = JSON.parse(
+        await fs.readFile(
+          path.join(codexState, `bridge-sessions-${codexCwdHash(to)}`, "r.json"),
+          "utf8",
+        ),
+      ) as { cwdHash: string };
+      expect(record.cwdHash).toBe(codexCwdHash(to));
     });
   }
 
@@ -215,10 +258,22 @@ describe("move_environment", () => {
     const { root, commands, context, startLocal } = await setup();
     const environment = await startLocal();
     const destination = path.join(root, "via-command");
-    const moved = (await commands.get("move_environment")!(
-      { environmentId: environment.id, destinationDir: destination },
-      context,
-    )) as Environment;
+    // The command relocates agent state in the default homes; keep them private.
+    const saved = { claude: process.env.CLAUDE_CONFIG_DIR, codex: process.env.CODEX_HOME };
+    process.env.CLAUDE_CONFIG_DIR = path.join(root, "claude-home");
+    process.env.CODEX_HOME = path.join(root, "codex-home");
+    let moved: Environment;
+    try {
+      moved = (await commands.get("move_environment")!(
+        { environmentId: environment.id, destinationDir: destination },
+        context,
+      )) as Environment;
+    } finally {
+      if (saved.claude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved.claude;
+      if (saved.codex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = saved.codex;
+    }
     expect(moved.worktreePath).toBe(
       path.join(destination, path.basename(environment.worktreePath!)),
     );
@@ -247,7 +302,7 @@ describe("interrupted move recovery", () => {
       worktreeMove: { from, to, phase: "moving", startedAt: new Date().toISOString() },
     });
 
-    await recoverInterruptedEnvironmentMoves(context);
+    await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
 
     let current = (await storage.getEnvironment(environment.id))!;
     expect(current.worktreePath).toBe(to);
@@ -269,7 +324,7 @@ describe("interrupted move recovery", () => {
       },
     });
 
-    await recoverInterruptedEnvironmentMoves(context);
+    await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
 
     current = (await storage.getEnvironment(environment.id))!;
     expect(current.worktreePath).toBe(to);

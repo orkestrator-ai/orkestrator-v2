@@ -89,9 +89,9 @@ carrier text tells the model the payload is untrusted.
 | Placement | Meaning |
 | --- | --- |
 | `stored` | Durable; recipient must pull, or a later promotion/retry may schedule inject. Turning a mailbox's delivery on (off → idle, or unmuting inbound) promotes its unhandled stored mail |
-| `pending-inject` | Claimed for the drain |
+| `pending-inject` | Waiting for the drain; busy, queue, draft and parked-dispatch holds retain a reason and retry backoff |
 | `injected` | Carrier was accepted as a prompt |
-| `inject-held` | Held for a busy recipient, a still-open worker delegation, or the hop budget |
+| `inject-held` | Held by an open worker delegation or hop budget, or claimed with reason `submitting` while dispatch is in flight |
 | `inject_failed` | Dispatch rejected or ambiguous; UI can retry |
 | `undeliverable` | Recipient gone or superseded |
 | `bounced` | Policy refusal (muted inbound, messaging disabled, …) |
@@ -142,7 +142,7 @@ sender  --send-->  store (placement + trust)
                           native dispatchMailInject  |  tmux submit
                                         |
                               accepted --> injected
-                              held     --> inject-held (backoff)
+                              held     --> pending-inject (reason + backoff)
                               failed   --> inject_failed
 ```
 
@@ -192,7 +192,10 @@ Interrupted native injects are reconciled on backend start against the
 session’s dispatch journal (`reconcileMailInject`). Ambiguous outcomes fail
 closed as `inject_failed` rather than double-sending. A refusal the bridge
 proves was not processed (409, 503, unreachable) is held and retried, and
-its dispatch-journal row is released so it cannot park the user's prompts.
+its dispatch-journal row is released before reporting a busy hold. If cleanup
+fails, the mail stays pending with a parked reason and the durable session
+retains proof of refusal. Presence reconciliation retries that cleanup before
+the next drain; ambiguous rows are never cleared through this path.
 
 ## Three MCP surfaces
 

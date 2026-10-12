@@ -580,6 +580,195 @@ describe("StorageService agent mail", () => {
     }
   });
 
+  test.each(["off-to-inherit", "unmute-inherit"] as const)(
+    "promotes stored mail with inherited idle policy: %s",
+    async (transition) => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const config = await storage.loadConfig();
+        config.global.agentMessaging = {
+          ...config.global.agentMessaging!,
+          defaultInjectPolicy: "idle",
+        };
+        await storage.saveConfig(config);
+        await storage.updateAgentMailboxPolicy(
+          "e2",
+          "agent",
+          transition === "off-to-inherit"
+            ? { inject: "off" }
+            : { inject: "inherit", mutedInbound: true },
+        );
+        // Muting mail already stored leaves it eligible for the unmute transition.
+        if (transition === "unmute-inherit")
+          await storage.updateAgentMailboxPolicy("e2", "agent", {
+            inject: "off",
+            mutedInbound: false,
+          });
+        const message = await storage.sendAgentMail(
+          { kind: "user" },
+          {
+            requestId: transition,
+            toEnvironmentId: "e2",
+            toTabId: "agent",
+            body: "Deliver when inherited policy allows.",
+          },
+        );
+        expect(message.placement).toBe("stored");
+        if (transition === "unmute-inherit")
+          await storage.updateAgentMailboxPolicy("e2", "agent", {
+            inject: "inherit",
+            mutedInbound: true,
+          });
+        expect((await storage.getAgentMailMessage("e2", "agent", message.id)).placement).toBe(
+          "stored",
+        );
+        const descriptor = await storage.updateAgentMailboxPolicy(
+          "e2",
+          "agent",
+          transition === "off-to-inherit" ? { inject: "inherit" } : { mutedInbound: false },
+        );
+        expect(descriptor).toMatchObject({ injectOverride: "inherit", injectPolicy: "idle" });
+        expect(
+          (await storage.listPendingAgentMailInjects()).map(({ message }) => message.id),
+        ).toEqual([message.id]);
+        await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "inherit" });
+        expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["policy", "assignment"] as const)(
+    "%s promotion excludes tombstoned and prior-incarnation mail",
+    async (trigger) => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const now = new Date(0).toISOString();
+        const environmentId =
+          trigger === "policy" ? "e2" : coordinatorRuntimeId("coordinator-1", "conversation-1");
+        const tabId = trigger === "policy" ? "agent" : "coordinator-tab";
+        if (trigger === "assignment") {
+          await storage.mutateCoordinatorWorkspace("p1", () => ({
+            version: COORDINATOR_WORKSPACE_VERSION,
+            id: "coordinator-1",
+            projectId: "p1",
+            executionPolicy: COORDINATOR_EXECUTION_POLICY,
+            lifecycleState: "ready",
+            conversations: [
+              {
+                id: "conversation-1",
+                tabId,
+                logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+                title: "Coordinator",
+                createdAt: now,
+                mailboxIncarnationId: "old-incarnation",
+              },
+            ],
+            selectedConversationId: "conversation-1",
+            repositoryContextRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+          }));
+          await storage.synchronizeAgentMailboxes();
+        } else {
+          await storage.updateAgentMailboxPolicy(environmentId, tabId, { inject: "off" });
+        }
+        const old = await storage.sendAgentMail(
+          { kind: "user" },
+          {
+            requestId: "old-mail",
+            toEnvironmentId: environmentId,
+            toTabId: tabId,
+            body: "For the former recipient.",
+          },
+        );
+        expect(old.placement).toBe("stored");
+        const originalLayout = await storage.getPaneLayout(environmentId);
+        if (trigger === "assignment") {
+          // Assignment supplies the capability, but the conversation is closed
+          // before any promotion is allowed to run.
+          await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+            ...workspace!,
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              agent: "codex" as const,
+            })),
+          }));
+          await storage.synchronizeAgentMailboxes();
+          await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+            ...workspace!,
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              closedAt: now,
+            })),
+          }));
+        } else {
+          await storage.savePaneLayout(
+            environmentId,
+            { ...originalLayout!, root: { kind: "leaf", id: "pane", tabs: [], activeTabId: null } },
+            originalLayout!.revision,
+          );
+        }
+        await storage.synchronizeAgentMailboxes();
+        expect(
+          (await storage.getAgentMailMailbox(environmentId, tabId)).descriptor.tombstonedAt,
+        ).toBeDefined();
+        if (trigger === "assignment")
+          expect(await storage.promoteStoredAgentMailForMailbox(environmentId, tabId)).toBe(0);
+        else await storage.updateAgentMailboxPolicy(environmentId, tabId, { inject: "idle" });
+        expect((await storage.getAgentMailMessage(environmentId, tabId, old.id)).placement).toBe(
+          "stored",
+        );
+        expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+        if (trigger === "assignment") {
+          await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+            ...workspace!,
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              closedAt: undefined,
+              mailboxIncarnationId: "new-incarnation",
+            })),
+          }));
+        } else {
+          const closed = await storage.getPaneLayout(environmentId);
+          await storage.savePaneLayout(environmentId, originalLayout!, closed!.revision);
+        }
+        await storage.synchronizeAgentMailboxes();
+        expect(
+          (await storage.getAgentMailMailbox(environmentId, tabId)).descriptor.incarnationId,
+        ).not.toBe(old.toIncarnationId);
+        if (trigger === "assignment")
+          expect(await storage.promoteStoredAgentMailForMailbox(environmentId, tabId)).toBe(0);
+        else await storage.updateAgentMailboxPolicy(environmentId, tabId, { inject: "idle" });
+        expect((await storage.getAgentMailMessage(environmentId, tabId, old.id)).placement).toBe(
+          "stored",
+        );
+        expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+        const current = await storage.sendAgentMail(
+          { kind: "user" },
+          {
+            requestId: "current-mail",
+            toEnvironmentId: environmentId,
+            toTabId: tabId,
+            body: "For the new recipient.",
+          },
+        );
+        if (trigger === "assignment") {
+          expect(current.placement).toBe("stored");
+          expect(await storage.promoteStoredAgentMailForMailbox(environmentId, tabId)).toBe(1);
+        } else {
+          expect(current.placement).toBe("pending-inject");
+        }
+        expect(
+          (await storage.listPendingAgentMailInjects()).map(({ message }) => message.id),
+        ).toEqual([current.id]);
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("enabling delivery skips handled mail and does not re-run when already on", async () => {
     const { storage, dataDir } = await fixture();
     try {

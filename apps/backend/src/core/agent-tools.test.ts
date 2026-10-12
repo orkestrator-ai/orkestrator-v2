@@ -624,6 +624,46 @@ describe("agent Kanban tools", () => {
     }
   });
 
+  test("send_message reports pending, held and bounced delivery hints", async () => {
+    await addMessagingEnvironment("env-a", "project-mail", ["agent-a"]);
+    await addMessagingEnvironment("env-c", "project-mail", ["agent-c"]);
+    await storage.updateAgentMailboxPolicy("env-c", "agent-c", { inject: "idle" });
+    const sender = server.connection("env-a", "project-mail", "host", "agent-a");
+    const args = {
+      requestId: "hint-pending",
+      toEnvironmentId: "env-c",
+      toTabId: "agent-c",
+      body: "Inspect this.",
+    };
+    const call = (arguments_: typeof args) =>
+      rpc(sender.url, sender.token, "tools/call", { name: "send_message", arguments: arguments_ });
+    const pending = await call(args);
+    expect(pending.body.result?.structuredContent).toMatchObject({
+      placement: "pending-inject",
+      deliveryHint: "queued, delivers when idle",
+    });
+    const message = pending.body.result?.structuredContent?.message as { id: string };
+    const mailbox = await storage.getAgentMailMailbox("env-c", "agent-c");
+    await storage.beginAgentMailInject(
+      mailbox.descriptor.mailboxId,
+      message.id,
+      mailbox.descriptor.incarnationId,
+    );
+    // Idempotent send reads the current placement of the same message.
+    const held = await call(args);
+    expect(held.body.result?.structuredContent).toMatchObject({
+      placement: "inject-held",
+      message: { placementReason: "submitting" },
+      deliveryHint: "stored, delivery pending",
+    });
+    await storage.updateAgentMailboxPolicy("env-c", "agent-c", { mutedInbound: true });
+    const bounced = await call({ ...args, requestId: "hint-bounced" });
+    expect(bounced.body.result?.structuredContent).toMatchObject({
+      placement: "bounced",
+      deliveryHint: "bounced: recipient-muted",
+    });
+  });
+
   test("binds messaging actions to the credential's tab and covers send/read/ack/reply/status", async () => {
     await addMessagingEnvironment("env-a", "project-mail", ["agent-a", "agent-b"]);
     await addMessagingEnvironment("env-c", "project-mail", ["agent-c"]);

@@ -17,6 +17,7 @@ import {
 import {
   PromptRejectedError,
   ProviderUnavailableError,
+  ProviderUnreachableError,
   type AgentInteractionProviderCapability,
   type AgentSessionProvider,
   type BridgeConnection,
@@ -39,6 +40,9 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import { AgentMailService } from "./agent-mail-service.js";
+import { httpProvider } from "./agent-provider-test-support.js";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 import { deferred } from "./recurring-test-support.js";
 
@@ -4908,6 +4912,245 @@ describe("NativeAgentService shared observations", () => {
             allowProviderCommands: false,
           }),
         ).resolves.toEqual({ outcome: "accepted", requestId: "mail-released" });
+      },
+    );
+  });
+
+  test.each([
+    [409, false],
+    [503, false],
+    ["unreachable", false],
+    [409, true],
+  ] as const)(
+    "mail refusal %s recovers failed cleanup (restart=%s) with the same request ID",
+    async (refusal, restart) => {
+      let refuse = true;
+      const bridge = httpProvider(() =>
+        Response.json({ error: "Busy" }, { status: refusal === "unreachable" ? 503 : refusal }),
+      );
+      const { provider, send } = createProviderStub("claude", {
+        observeActivity: async () => ({ state: "working", readyForInput: true }),
+        send: async (id, prompt, options) => {
+          if (!refuse) return;
+          if (refusal === "unreachable") throw new ProviderUnreachableError("Bridge unavailable");
+          await bridge.provider.send(id, prompt, options);
+        },
+      });
+      await withService(
+        { prefix: "orkestrator-mail-cleanup-", provider: async () => provider },
+        async ({ storage, service }) => {
+          const input = {
+            environmentId: "env-1",
+            agent: "claude" as const,
+            logicalSessionKey: "env-env-1:agent",
+          };
+          const key = await adopt(storage, input.logicalSessionKey, "provider-1", "claude");
+          await storage.addProject({
+            id: "project-1",
+            name: "Project",
+            gitUrl: "https://example.invalid/project.git",
+            localPath: null,
+            addedAt: new Date(0).toISOString(),
+            order: 0,
+          });
+          await storage.savePaneLayout(
+            "env-1",
+            {
+              version: PANE_LAYOUT_VERSION,
+              containerId: null,
+              activePaneId: "pane",
+              root: {
+                kind: "leaf",
+                id: "pane",
+                tabs: [
+                  {
+                    id: "agent",
+                    type: "agent-native",
+                    nativeAgentData: { environmentId: "env-1", platform: "claude" },
+                  },
+                ],
+                activeTabId: "agent",
+              },
+            },
+            0,
+          );
+          const config = await storage.loadConfig();
+          config.global.agentMessaging = {
+            ...config.global.agentMessaging!,
+            defaultInjectPolicy: "idle",
+          };
+          await storage.saveConfig(config);
+          await storage.synchronizeAgentMailboxes();
+          const message = await storage.sendAgentMail(
+            { kind: "user" },
+            {
+              requestId: "mail",
+              toEnvironmentId: "env-1",
+              toTabId: "agent",
+              body: "Please inspect this.",
+            },
+          );
+          const clear = storage.clearPendingNativeAgentDispatch.bind(storage);
+          let cleanupFails = true;
+          storage.clearPendingNativeAgentDispatch = async (...args) => {
+            if (cleanupFails) throw new Error("Storage temporarily unavailable");
+            return clear(...args);
+          };
+          let mail = new AgentMailService(storage, service, {
+            dispatchMailInject: async () => ({ outcome: "accepted" }),
+          });
+          try {
+            await mail.init();
+            await service.reconcileAgentActivity();
+            await mail.drainInjects();
+            expect(await storage.getAgentMailMessage("env-1", "agent", message.id)).toMatchObject({
+              placement: "pending-inject",
+              placementReason: "parked",
+            });
+            expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toMatchObject({
+              requestId: message.injectRequestId,
+              mailRefused: true,
+            });
+            expect(await service.mailInjectPresence(input)).toBe("working");
+            expect(send).toHaveBeenCalledTimes(1);
+            // Storage returns; the periodic drain must recover without a manual
+            // retry, while an unchanged idle turn view still permits delivery.
+            cleanupFails = false;
+            refuse = false;
+            if (restart) {
+              await mail.shutdown();
+              // Model the crash boundary before mail settlement persisted:
+              // refusal evidence is durable, but the claim is still submitting.
+              const mailbox = await storage.getAgentMailMailbox("env-1", "agent");
+              await storage.beginAgentMailInject(
+                mailbox.descriptor.mailboxId,
+                message.id,
+                mailbox.descriptor.incarnationId,
+              );
+              mail = new AgentMailService(storage, service, {
+                dispatchMailInject: async () => ({ outcome: "accepted" }),
+              });
+              await mail.init();
+              expect(
+                (await storage.getAgentMailMessage("env-1", "agent", message.id)).placement,
+              ).toBe("pending-inject");
+            }
+            await mail.drainInjects();
+            expect(await storage.getAgentMailMessage("env-1", "agent", message.id)).toMatchObject({
+              placement: "injected",
+            });
+            expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+            expect(send).toHaveBeenCalledTimes(2);
+            expect(send.mock.calls[0]?.[2].requestId).toBe(message.injectRequestId);
+            expect(send.mock.calls[1]?.[2].requestId).toBe(message.injectRequestId);
+            await service.dispatchMailInject({
+              ...input,
+              requestId: message.injectRequestId!,
+              prompt: "Please inspect this.",
+            });
+            expect(send).toHaveBeenCalledTimes(2);
+            await service.dispatchPrompt({
+              ...input,
+              requestId: "user-after-mail",
+              prompt: "Continue",
+            });
+            expect(send).toHaveBeenCalledTimes(3);
+          } finally {
+            await mail.shutdown();
+            storage.clearPendingNativeAgentDispatch = clear;
+          }
+        },
+      );
+    },
+  );
+
+  test("repeated busy refusals on a ready-for-input turn remain deferred for new-mail drains", async () => {
+    const { provider, send } = createProviderStub("claude", {
+      observeActivity: async () => ({ state: "working", readyForInput: true }),
+      send: async () => {
+        throw new ProviderUnavailableError("Busy");
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-mail-busy-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "env-env-1:agent", "provider-1", "claude");
+        await storage.addProject({
+          id: "project-1",
+          name: "Project",
+          gitUrl: "https://example.invalid/project.git",
+          localPath: null,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        });
+        await storage.savePaneLayout(
+          "env-1",
+          {
+            version: PANE_LAYOUT_VERSION,
+            containerId: null,
+            activePaneId: "pane",
+            root: {
+              kind: "leaf",
+              id: "pane",
+              tabs: [
+                {
+                  id: "agent",
+                  type: "agent-native",
+                  nativeAgentData: { environmentId: "env-1", platform: "claude" },
+                },
+              ],
+              activeTabId: "agent",
+            },
+          },
+          0,
+        );
+        const config = await storage.loadConfig();
+        config.global.agentMessaging = {
+          ...config.global.agentMessaging!,
+          defaultInjectPolicy: "idle",
+        };
+        await storage.saveConfig(config);
+        await storage.synchronizeAgentMailboxes();
+        const message = await storage.sendAgentMail(
+          { kind: "user" },
+          {
+            requestId: "busy-mail",
+            toEnvironmentId: "env-1",
+            toTabId: "agent",
+            body: "Wait for the bridge.",
+          },
+        );
+        const mail = new AgentMailService(storage, service, {
+          dispatchMailInject: async () => ({ outcome: "accepted" }),
+        });
+        try {
+          await mail.init();
+          await service.reconcileAgentActivity();
+          await mail.drainInjects();
+          await mail.drainInjects({ includeDeferred: false });
+          expect(send).toHaveBeenCalledTimes(1);
+          await mail.drainInjects();
+          expect(send).toHaveBeenCalledTimes(2);
+          await mail.drainInjects({ includeDeferred: false });
+          expect(send).toHaveBeenCalledTimes(2);
+          const pending = await storage.listPendingAgentMailInjects(100, { includeDeferred: true });
+          expect(pending).toHaveLength(1);
+          expect(pending[0]?.message).toMatchObject({
+            id: message.id,
+            placement: "pending-inject",
+            placementReason: "busy",
+          });
+          expect(Date.parse(pending[0]!.deferredUntil!)).toBeGreaterThan(Date.now());
+          expect(
+            await service.mailInjectPresence({
+              environmentId: "env-1",
+              agent: "claude",
+              logicalSessionKey: "env-env-1:agent",
+            }),
+          ).toBe("idle");
+        } finally {
+          await mail.shutdown();
+        }
       },
     );
   });

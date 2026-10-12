@@ -147,6 +147,56 @@ describe("AgentMailService", () => {
     }
   });
 
+  test("startup returns a proven-unsent interrupted injection to the automatic drain", async () => {
+    const { storage, dataDir } = await fixture();
+    const message = await storage.sendAgentMail(
+      { kind: "user" },
+      {
+        requestId: "interrupted-refusal",
+        toEnvironmentId: "recipient",
+        toTabId: "agent",
+        body: "Recover the refusal.",
+      },
+    );
+    const mailbox = await storage.getAgentMailMailbox("recipient", "agent");
+    await storage.beginAgentMailInject(
+      mailbox.descriptor.mailboxId,
+      message.id,
+      mailbox.descriptor.incarnationId,
+    );
+    const requests: string[] = [];
+    const service = new AgentMailService(
+      storage,
+      {
+        reconcileMailInject: async () => "not-dispatched",
+        sessionActivitySnapshot: () => "idle",
+        mailInjectPresence: async () => "idle",
+        dispatchMailInject: async (input) => {
+          requests.push(input.requestId);
+          return { outcome: "accepted", requestId: input.requestId };
+        },
+      },
+      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+    );
+    try {
+      await service.init();
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "pending-inject",
+        placementReason: "parked",
+        injectRequestId: message.injectRequestId,
+      });
+      await service.drainInjects();
+      await service.drainInjects();
+      expect(requests).toEqual([message.injectRequestId!]);
+      expect((await storage.getAgentMailMessage("recipient", "agent", message.id)).placement).toBe(
+        "injected",
+      );
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("automatically starts the coordinator turn when a worker report is released", async () => {
     const { storage, dataDir } = await fixture();
     const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");

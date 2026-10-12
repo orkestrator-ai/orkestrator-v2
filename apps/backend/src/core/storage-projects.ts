@@ -106,6 +106,8 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageBase } from "./storage-base.ts";
+import type { WorktreeMoveRecord } from "./models.js";
+import path from "node:path";
 import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folders";
 
 /**
@@ -120,6 +122,35 @@ export function applyProjectFolder(project: Project, folder: unknown): void {
   const normalized = normalizeProjectFolderName(folder);
   if (normalized) project.folder = normalized;
   else delete project.folder;
+}
+
+/** Validates a durable environment-move record; paths are absolute and bounded. */
+export function parseWorktreeMoveRecord(value: unknown): WorktreeMoveRecord {
+  if (!isRecord(value)) throw new Error("Invalid worktree move record");
+  const absolute = (field: string, candidate: unknown): string => {
+    if (
+      typeof candidate !== "string" ||
+      !path.isAbsolute(candidate) ||
+      candidate.length > 4096 ||
+      candidate.includes("\0")
+    ) {
+      throw new Error(`Invalid worktree move ${field}`);
+    }
+    return candidate;
+  };
+  if (value.phase !== "moving" && value.phase !== "copied") {
+    throw new Error("Invalid worktree move phase");
+  }
+  if (typeof value.startedAt !== "string" || value.startedAt.length > 64) {
+    throw new Error("Invalid worktree move start time");
+  }
+  return {
+    from: absolute("source", value.from),
+    to: absolute("destination", value.to),
+    ...(value.staging === undefined ? {} : { staging: absolute("staging path", value.staging) }),
+    phase: value.phase,
+    startedAt: value.startedAt,
+  };
 }
 
 export type StorageLayerTypes = [
@@ -625,12 +656,21 @@ export abstract class StorageProjects extends StorageBase {
           environment.lifecycleError = value ?? null;
         }
       }
+      if ("worktreeMove" in updates) {
+        const value = updates.worktreeMove;
+        if (value === null || value === undefined) {
+          environment.worktreeMove = undefined;
+        } else {
+          environment.worktreeMove = parseWorktreeMoveRecord(value);
+        }
+      }
       if ("lifecycleOperation" in updates) {
         if (updates.lifecycleOperation == null) {
           environment.lifecycleOperation = undefined;
         } else if (
           updates.lifecycleOperation === "deleting" ||
-          updates.lifecycleOperation === "merging"
+          updates.lifecycleOperation === "merging" ||
+          updates.lifecycleOperation === "moving"
         ) {
           environment.lifecycleOperation = updates.lifecycleOperation;
         }

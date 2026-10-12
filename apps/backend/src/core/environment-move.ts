@@ -1,0 +1,454 @@
+import { randomBytes } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+import {
+  canonicalWorktreePath,
+  captureWorktreePathIdentity,
+} from "@orkestrator/protocol/worktree-paths";
+
+import type { CommandContext } from "./commands-context.js";
+import {
+  enqueueLocalServerEnvironmentOperation,
+  stopLocalServersForEnvironmentUnlocked,
+} from "./commands-local-server-lifecycle.js";
+import { syncPrMonitorTracking, invalidatePendingPrMonitorSync } from "./commands-pr-monitor.js";
+import {
+  diffStatsService,
+  environmentSetupSessions,
+  gitFetchScheduler,
+  invalidatePendingDiffStatsSync,
+  isLocalServerShutdownRequested,
+  mergingEnvironments,
+  syncDiffStatsTracking,
+} from "./commands-runtime-state.js";
+import {
+  assertEnvironmentDeletionNotRequested,
+  assertEnvironmentNotDeleting,
+  terminateTerminalSessionsForEnvironment,
+} from "./commands-terminal.js";
+import {
+  enqueueEnvironmentLifecycleOperation,
+  invalidateEnvironmentStartDedupe,
+} from "./commands-environment.js";
+import {
+  beginEnvironmentMove,
+  endEnvironmentMove,
+  isEnvironmentBeingReplaced,
+} from "./environment-replacement-fence.js";
+import type { Environment, WorktreeMoveRecord } from "./models.js";
+import { removeConfinedDirectory } from "./path-safety.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
+import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
+import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { pathExists, runCommand } from "./shell.js";
+import type { StorageService } from "./storage.js";
+import { cleanupEnvironmentTmux } from "./tmux-commands.js";
+import { getWorktreeBaseDir, validateWorktreeLocation } from "./worktree-locations.js";
+
+const GIT_TIMEOUT_MS = 120_000;
+// A copy to another disk carries dependencies and build output too.
+const COPY_TIMEOUT_MS = 2 * 60 * 60_000;
+
+export const AGENT_ACTIVE_MOVE_ERROR =
+  "An agent is running in this environment. Wait for it to finish or stop it, then move the environment.";
+
+export interface MoveEnvironmentOptions {
+  /** Called once the environment's processes are stopped, before any file moves. */
+  invalidateDiscovery?: (environmentId: string) => void;
+  /** Tests: skip `git worktree move` and take the copy path used across disks. */
+  forceCopy?: boolean;
+}
+
+/** Where a worktree goes when it is moved into `destinationRoot`: its folder name is kept. */
+export function movedWorktreePath(worktreePath: string, destinationRoot: string): string {
+  return path.join(destinationRoot, path.basename(worktreePath));
+}
+
+function isSameOrInside(candidate: string, root: string): boolean {
+  const relative = path.relative(canonicalWorktreePath(root), canonicalWorktreePath(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function confinedRelative(root: string, target: string): string | null {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+  return relative;
+}
+
+function isAgentActive(environment: Environment): boolean {
+  const state = environment.agentActivityState ?? "idle";
+  return state === "working" || state === "waiting";
+}
+
+/**
+ * Every reason a move is refused that can be decided from the record alone.
+ * Checked when the move is requested and again once it reaches the front of
+ * the environment's lifecycle queue.
+ */
+export function assertEnvironmentMovable(environment: Environment): void {
+  assertEnvironmentNotDeleting(environment.id);
+  assertEnvironmentDeletionNotRequested(environment, environment.id);
+  if (environment.environmentType !== "local") {
+    throw new Error("Only a local environment can be moved to another folder");
+  }
+  if (isProjectHomeEnvironment(environment)) {
+    throw new Error("The project home works in the project's own checkout and cannot be moved");
+  }
+  if (!environment.worktreePath) {
+    throw new Error("This environment has no worktree yet; start it before moving it");
+  }
+  if (environment.lifecycleOperation || mergingEnvironments.has(environment.id)) {
+    throw new Error("Another operation is running for this environment");
+  }
+  if (isEnvironmentBeingReplaced(environment.id)) {
+    throw new Error("Another operation is running for this environment");
+  }
+  if (environment.status === "creating" || environment.status === "stopping") {
+    throw new Error("Wait for the environment to finish starting or stopping, then move it");
+  }
+  if (environment.setupPhase === "running" || environmentSetupSessions.has(environment.id)) {
+    throw new Error("Environment setup is still running; move the environment when it finishes");
+  }
+  if (isAgentActive(environment)) throw new Error(AGENT_ACTIVE_MOVE_ERROR);
+}
+
+/**
+ * Moves a local environment's worktree, with every file in it, into another
+ * folder. Serialized with the environment's other lifecycle operations and
+ * with its bridge starts: a bridge or terminal asked for during the move
+ * starts afterwards, in the new folder.
+ */
+export function moveEnvironmentTask(
+  environmentId: string,
+  destinationDir: unknown,
+  context: CommandContext,
+  options: MoveEnvironmentOptions = {},
+): Promise<Environment> {
+  if (isLocalServerShutdownRequested()) {
+    return Promise.reject(new Error("Backend is shutting down; environments cannot be moved"));
+  }
+  if (!beginEnvironmentMove(environmentId)) {
+    return Promise.reject(new Error("This environment is already being moved"));
+  }
+  invalidateEnvironmentStartDedupe(environmentId);
+  try {
+    return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      enqueueLocalServerEnvironmentOperation(environmentId, () =>
+        moveEnvironmentOnce(environmentId, destinationDir, context, options),
+      ),
+    ).finally(() => endEnvironmentMove(environmentId));
+  } catch (error) {
+    endEnvironmentMove(environmentId);
+    throw error;
+  }
+}
+
+async function moveEnvironmentOnce(
+  environmentId: string,
+  destinationDir: unknown,
+  context: CommandContext,
+  options: MoveEnvironmentOptions,
+): Promise<Environment> {
+  const { storage } = context;
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  assertEnvironmentMovable(environment);
+  const project = await storage.getProject(environment.projectId);
+  const projectPath = project?.localPath?.trim();
+  if (!projectPath || !(await pathExists(projectPath))) {
+    throw new Error("The project checkout is unavailable; the worktree cannot be moved");
+  }
+  const from = path.resolve(environment.worktreePath!);
+  const fromStats = await fs.stat(from).catch(() => null);
+  if (!fromStats?.isDirectory()) {
+    throw new Error(`The environment's worktree does not exist: ${from}`);
+  }
+  const destinationRoot = validateWorktreeLocation(destinationDir, {
+    label: "Destination folder",
+    dataDir: storage.getDataDir(),
+    projectPath,
+  });
+  if (isSameOrInside(destinationRoot, from)) {
+    throw new Error("The destination folder must not be inside the environment's worktree");
+  }
+  const to = movedWorktreePath(from, destinationRoot);
+  if (canonicalWorktreePath(to) === canonicalWorktreePath(from)) {
+    throw new Error("The environment is already in this folder");
+  }
+  if (await pathExists(to)) {
+    throw new Error(`The destination already contains ${path.basename(to)}: ${to}`);
+  }
+  const fromRoot = environment.worktreeBaseDir
+    ? path.resolve(environment.worktreeBaseDir)
+    : getWorktreeBaseDir(context);
+
+  const startedAt = new Date().toISOString();
+  let record: WorktreeMoveRecord = { from, to, phase: "moving", startedAt };
+  await storage.updateEnvironment(environment.id, {
+    lifecycleOperation: "moving",
+    lifecycleOperationStartedAt: startedAt,
+    worktreeMove: record,
+  });
+
+  let moved = false;
+  try {
+    await quiesceLocalEnvironment(environment, context, options);
+    // The prompt fence has been held since the move was admitted, so a turn
+    // cannot have started since the check above; a stale "working" written
+    // by a bridge that just stopped still refuses the move.
+    const current = await storage.getEnvironment(environment.id);
+    if (current && isAgentActive(current)) throw new Error(AGENT_ACTIVE_MOVE_ERROR);
+
+    const recheckDestination = captureWorktreePathIdentity(destinationRoot);
+    await fs.mkdir(destinationRoot, { recursive: true });
+    recheckDestination();
+
+    const viaGit = options.forceCopy
+      ? { moved: false as const, crossDevice: true }
+      : await tryGitWorktreeMove(projectPath, from, to);
+    if (viaGit.moved) {
+      moved = true;
+    } else {
+      if (await pathExists(path.join(from, ".gitmodules"))) {
+        throw new Error(
+          "A worktree with submodules can only be moved within the same disk; choose a folder on the same disk",
+        );
+      }
+      const staging = path.join(
+        destinationRoot,
+        `.${path.basename(to)}.orkestrator-move-${randomBytes(4).toString("hex")}`,
+      );
+      record = { ...record, staging };
+      await storage.updateEnvironment(environment.id, { worktreeMove: record });
+      let renamed = false;
+      try {
+        await runCommand("cp", ["-Rp", from, staging], { timeoutMs: COPY_TIMEOUT_MS });
+        recheckDestination();
+        if (await pathExists(to)) throw new Error(`The destination already contains ${to}`);
+        await fs.rename(staging, to);
+        renamed = true;
+        // Points the repository's record of this worktree at the copy. Until
+        // it succeeds the original stays the worktree git knows about.
+        await runCommand("git", ["-C", projectPath, "worktree", "repair", to], {
+          timeoutMs: GIT_TIMEOUT_MS,
+        });
+      } catch (error) {
+        await removeInside(destinationRoot, staging).catch(() => undefined);
+        if (renamed) await removeInside(destinationRoot, to).catch(() => undefined);
+        await repairWorktree(projectPath, from);
+        throw error;
+      }
+      record = { from, to, phase: "copied", startedAt };
+      await storage.updateEnvironment(environment.id, { worktreeMove: record });
+      moved = true;
+    }
+
+    const updated = await finishMove(storage, environment.id, record, destinationRoot);
+    if (!viaGit.moved) await removeOldWorktree(fromRoot, from, projectPath);
+    await afterMove(updated, context);
+    return updated;
+  } catch (error) {
+    if (moved && record.phase === "moving") {
+      // `git worktree move` succeeded but the record could not follow it: put
+      // the folder back where the record says it is.
+      await runCommand("git", ["-C", projectPath, "worktree", "move", to, from], {
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).catch(() => undefined);
+    }
+    const stillCopied = record.phase === "copied" && (await pathExists(to));
+    await storage
+      .updateEnvironment(environment.id, {
+        lifecycleOperation: null,
+        lifecycleOperationStartedAt: null,
+        worktreeMove: null,
+        ...(stillCopied
+          ? {
+              worktreePath: to,
+              worktreeBaseDir: destinationRoot,
+            }
+          : {}),
+        lifecycleError: `Moving the environment failed: ${errorMessage(error)}`,
+      })
+      .catch(() => undefined);
+    await syncDiffStatsTracking(context).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Stops everything that runs in the worktree: terminals (and their build
+ * descendants), Claude tmux sessions, review validation, exec workers and the
+ * local agent bridges. They are restarted on demand afterwards in the new
+ * folder.
+ */
+async function quiesceLocalEnvironment(
+  environment: Environment,
+  context: CommandContext,
+  options: MoveEnvironmentOptions,
+): Promise<void> {
+  await stopEnvironmentReviewValidation(environment.id, context);
+  await stopEnvironmentExecWorkers(environment.id, context);
+  const survivingTerminals = await terminateTerminalSessionsForEnvironment(environment.id);
+  if (survivingTerminals.length > 0) {
+    throw new Error("Terminal processes in the environment are still running; try again");
+  }
+  // Restores `.claude/settings.local.json` from the tmux-mode backup while the
+  // worktree is still where the backup recorded it.
+  await cleanupEnvironmentTmux(environment.id, context).catch((error: unknown) => {
+    console.warn("[backend] claude-tmux cleanup failed before environment move:", error);
+  });
+  context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
+  await stopLocalServersForEnvironmentUnlocked(environment.id, context);
+  options.invalidateDiscovery?.(environment.id);
+  // Release the worktree watcher and fetch schedule of the old folder.
+  invalidatePendingDiffStatsSync();
+  diffStatsService.pause(environment.id);
+  invalidatePendingPrMonitorSync();
+  if (environment.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
+}
+
+async function tryGitWorktreeMove(
+  projectPath: string,
+  from: string,
+  to: string,
+): Promise<{ moved: true } | { moved: false; crossDevice: true }> {
+  try {
+    await runCommand("git", ["-C", projectPath, "worktree", "move", from, to], {
+      timeoutMs: GIT_TIMEOUT_MS,
+    });
+    return { moved: true };
+  } catch (error) {
+    const message = errorMessage(error);
+    // Git only renames; another disk needs a copy.
+    if (/cross-device|EXDEV/i.test(message)) return { moved: false, crossDevice: true };
+    throw new Error(`git could not move the worktree: ${message}`);
+  }
+}
+
+/** Best effort: re-point the repository's record of a worktree at `worktreePath`. */
+async function repairWorktree(projectPath: string | null, worktreePath: string): Promise<void> {
+  if (!projectPath) return;
+  await runCommand("git", ["-C", projectPath, "worktree", "repair", worktreePath], {
+    timeoutMs: GIT_TIMEOUT_MS,
+  }).catch(() => undefined);
+}
+
+async function finishMove(
+  storage: StorageService,
+  environmentId: string,
+  record: WorktreeMoveRecord,
+  destinationRoot: string,
+): Promise<Environment> {
+  return storage.updateEnvironment(environmentId, {
+    worktreePath: record.to,
+    worktreeBaseDir: destinationRoot,
+    worktreeMove: null,
+    lifecycleOperation: null,
+    lifecycleOperationStartedAt: null,
+    lifecycleError: null,
+  });
+}
+
+async function afterMove(environment: Environment, context: CommandContext): Promise<void> {
+  // Terminal panes still name sessions that were closed in the old folder.
+  await context.storage.clearBackendTerminalSessionIds?.(environment.id);
+  await syncDiffStatsTracking(context);
+  await syncPrMonitorTracking(context);
+}
+
+/** Removes a copied-from worktree, but only from inside the folder it was created in. */
+async function removeOldWorktree(
+  fromRoot: string,
+  from: string,
+  projectPath: string | null,
+): Promise<void> {
+  try {
+    await removeInside(fromRoot, from);
+  } catch (error) {
+    console.warn(
+      "[backend] the moved environment's previous folder could not be removed:",
+      errorMessage(error),
+    );
+  }
+  if (projectPath) {
+    await runCommand("git", ["-C", projectPath, "worktree", "prune"], {
+      timeoutMs: 30_000,
+    }).catch(() => undefined);
+  }
+}
+
+async function removeInside(root: string, target: string): Promise<void> {
+  const relative = confinedRelative(root, target);
+  if (!relative) throw new Error("The folder is outside the location it was created in");
+  if (!(await pathExists(target))) return;
+  await removeConfinedDirectory(root, relative);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A backend that stopped mid-move left `worktreeMove` behind. A completed
+ * rename or copy is adopted; anything earlier is abandoned, leaving the
+ * worktree where it was and removing only the move's own staging copy.
+ */
+export async function recoverInterruptedEnvironmentMove(
+  environment: Environment,
+  storage: StorageService,
+  worktreeRoot: string,
+): Promise<void> {
+  const record = environment.worktreeMove;
+  if (!record) return;
+  const destinationRoot = path.dirname(record.to);
+  const [fromExists, toExists] = await Promise.all([
+    pathExists(record.from),
+    pathExists(record.to),
+  ]);
+  const project = await storage.getProject(environment.projectId).catch(() => null);
+  const projectPath = project?.localPath?.trim() || null;
+  const adopt = toExists && (record.phase === "copied" || !fromExists);
+  if (adopt) {
+    if (record.phase === "copied") await repairWorktree(projectPath, record.to);
+    await finishMove(storage, environment.id, record, destinationRoot);
+    if (record.phase === "copied" && fromExists) {
+      const fromRoot = environment.worktreeBaseDir
+        ? path.resolve(environment.worktreeBaseDir)
+        : worktreeRoot;
+      await removeOldWorktree(fromRoot, record.from, projectPath);
+    }
+    return;
+  }
+  if (record.staging) await removeInside(destinationRoot, record.staging).catch(() => undefined);
+  // A copy may have been repaired just before the backend stopped.
+  if (fromExists) await repairWorktree(projectPath, record.from);
+  await storage.updateEnvironment(environment.id, {
+    worktreeMove: null,
+    lifecycleOperation: null,
+    lifecycleOperationStartedAt: null,
+    lifecycleError: toExists
+      ? `An interrupted move left a copy of this environment at ${record.to}; the environment still uses ${record.from}.`
+      : "Orkestrator stopped while moving this environment. Its files were left where they were; move it again.",
+  });
+}
+
+/** Startup: settles every move a previous backend process left unfinished. */
+export async function recoverInterruptedEnvironmentMoves(
+  context: Pick<CommandContext, "storage" | "worktreeDir">,
+): Promise<void> {
+  const environments = await context.storage.loadEnvironments();
+  for (const environment of environments) {
+    if (!environment.worktreeMove) continue;
+    await recoverInterruptedEnvironmentMove(
+      environment,
+      context.storage,
+      getWorktreeBaseDir(context),
+    ).catch((error: unknown) => {
+      console.warn(
+        `[backend] interrupted move recovery failed for ${environment.id}:`,
+        errorMessage(error),
+      );
+    });
+  }
+}

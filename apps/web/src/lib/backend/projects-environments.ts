@@ -323,6 +323,18 @@ export async function renameEnvironment(environmentId: string, name: string): Pr
   return invoke<Environment>("rename_environment", { environmentId, name });
 }
 
+/**
+ * Moves a local environment's worktree, with all its files, into
+ * `destinationDir` (the worktree keeps its folder name). Refused while an
+ * agent is working in the environment.
+ */
+export async function moveEnvironment(
+  environmentId: string,
+  destinationDir: string,
+): Promise<Environment> {
+  return invoke<Environment>("move_environment", { environmentId, destinationDir });
+}
+
 export async function getEnvironmentStatus(environmentId: string): Promise<EnvironmentStatus> {
   return invoke<EnvironmentStatus>("get_environment_status", { environmentId });
 }

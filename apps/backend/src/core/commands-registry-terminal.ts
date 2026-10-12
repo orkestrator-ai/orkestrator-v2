@@ -1,6 +1,7 @@
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
+import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
@@ -654,6 +655,8 @@ export function registerTerminalCommands(
     async ({ environmentId, terminalKey, cols, rows, trackEnvironmentActivity }, { storage }) => {
       const resolvedEnvironmentId = asString(environmentId, "environmentId");
       assertEnvironmentNotDeleting(resolvedEnvironmentId);
+      // A shell opened in the folder being moved would be left behind in it.
+      assertEnvironmentNotMoving(resolvedEnvironmentId);
       const environment = await storage.getEnvironment(resolvedEnvironmentId);
       assertEnvironmentNotDeleting(resolvedEnvironmentId);
       assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
@@ -717,6 +720,7 @@ export function registerTerminalCommands(
     assertEnvironmentNotDeleting(environmentId);
     const currentEnvironment = await storage.getEnvironment(environmentId);
     assertEnvironmentNotDeleting(environmentId);
+    assertEnvironmentNotMoving(environmentId);
     assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
     if (!currentEnvironment?.worktreePath || currentEnvironment.worktreePath !== env.worktreePath) {
       throw new Error("Local environment worktree is no longer available");

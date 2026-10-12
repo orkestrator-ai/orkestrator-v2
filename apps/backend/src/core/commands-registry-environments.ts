@@ -84,6 +84,7 @@ import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
 import { ensureProjectHomeEnvironment, readCheckoutBranch } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import { validateWorktreeLocation } from "./worktree-locations.js";
+import { moveEnvironmentTask } from "./environment-move.js";
 
 /**
  * A validated environment tier, or `undefined` when it expresses no opinion.
@@ -357,6 +358,14 @@ export function registerEnvironmentCommands(
     const id = asString(environmentId, "environmentId");
     extensionDiscoveryCache.invalidate(id);
     return deleteEnvironmentTask(id, context);
+  });
+  register("move_environment", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "destinationDir"], "arguments");
+    const id = asString(args.environmentId, "environmentId");
+    const moved = await moveEnvironmentTask(id, args.destinationDir, context, {
+      invalidateDiscovery: (environmentId) => extensionDiscoveryCache.invalidate(environmentId),
+    });
+    return toClientEnvironment(moved);
   });
   register("rename_environment", async ({ environmentId, name }, context) => {
     const { storage } = context;

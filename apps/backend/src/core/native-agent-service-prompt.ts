@@ -34,6 +34,7 @@ import {
   PendingNativeAgentDispatchError,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
   PromptRejectedError,
+  ProviderUnavailableError,
   nativeCapabilities,
 } from "./native-agent-service-shared.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
@@ -523,7 +524,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     }
   }
 
-  /** Read-only delivery gate used before agent mail claims a durable message. */
+  /** Delivery gate; recovers proven-unsent mail before checking its durable fence. */
   async mailInjectPresence(input: NativeAgentProjectionInput): Promise<MailboxPresence> {
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -532,12 +533,24 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     );
     const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
     const draftKey = `${input.agent}:${input.environmentId}:${encodeURIComponent(input.logicalSessionKey)}`;
-    const [environment, session, queue, draft] = await Promise.all([
+    let [environment, session, queue, draft] = await Promise.all([
       this.storage.getEnvironment(input.environmentId),
       this.storage.getNativeAgentSession(sessionKey),
       this.storage.getPromptQueue(queueKey),
       this.storage.getComposeDraft(draftKey),
     ]);
+    if (session?.pendingDispatch?.mailRefused) {
+      try {
+        await this.storage.clearPendingNativeAgentDispatch(
+          sessionKey,
+          session.pendingDispatch.requestId,
+          true,
+        );
+        session = await this.storage.getNativeAgentSession(sessionKey);
+      } catch {
+        return "working";
+      }
+    }
     if (!coordinatorIdFromRuntimeId(input.environmentId)) {
       if (!environment || environment.deletionRequestedAt || environment.status !== "running") {
         return "environment_stopped";
@@ -563,7 +576,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
 
   async reconcileMailInject(
     input: NativeAgentProjectionInput & { requestId: string },
-  ): Promise<"dispatched" | "unknown"> {
+  ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -572,6 +585,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     const session = await this.storage.getNativeAgentSession(key);
     if (session?.dispatchedRequestIds?.includes(input.requestId)) return "dispatched";
     if (session?.pendingDispatch?.requestId !== input.requestId) return "unknown";
+    if (session.pendingDispatch.mailRefused) return "not-dispatched";
     return (await this.settleAmbiguousDispatch(input, key, input.requestId))
       ? "dispatched"
       : "unknown";
@@ -582,7 +596,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   ): Promise<MailInjectDispatchOutcome> {
     let heldReason: "parked" | "queue" | "draft" | "busy" | undefined;
     try {
-      await this.dispatchPromptInternal(
+      const result = await this.dispatchPromptInternal(
         { ...input, allowProviderCommands: false },
         async (session, provider) => {
           if (session.pendingDispatch && session.pendingDispatch.requestId !== input.requestId) {
@@ -610,8 +624,15 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
           // Anything older — a group the observer has backed off, a sweep that
           // has not run — is `unknown` here and costs one authoritative read:
           // slower observation must never read as permission to inject.
+          //
+          // This reads the turn, not the process: a session whose turn ended
+          // but whose CLI still runs background subagents is free to take a
+          // prompt, and the Claude bridge writes it into that same CLI rather
+          // than resuming a second one. Holding on the raw state instead kept
+          // mail from a tab's own subagents undelivered until all of them had
+          // finished — long after anyone needed it.
           const observation = this.observations.view(session.key, session.providerSessionId);
-          const observed = this.sessionActivitySnapshot(
+          const observed = this.sessionTurnActivitySnapshot(
             input.environmentId,
             input.agent,
             input.logicalSessionKey,
@@ -635,7 +656,24 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
           return { dispatch: true };
         },
         true,
+        true,
       );
+      if (result.pendingDispatch?.mailRefused) heldReason = "busy";
+      if (heldReason === "busy") {
+        const key = nativeAgentSessionStorageKey(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        );
+        try {
+          await this.storage.clearPendingNativeAgentDispatch(key, input.requestId, true);
+          if ((await this.storage.getNativeAgentSession(key))?.pendingDispatch) {
+            return { outcome: "held", reason: "parked" };
+          }
+        } catch {
+          return { outcome: "held", reason: "parked" };
+        }
+      }
       return heldReason
         ? { outcome: "held", reason: heldReason }
         : { outcome: "accepted", requestId: input.requestId };
@@ -645,6 +683,14 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       }
       if (error instanceof AmbiguousPromptDispatchError) {
         return { outcome: "unknown", requestId: input.requestId, error: error.message };
+      }
+      if (error instanceof ProviderUnavailableError) {
+        // Readiness/attach can refuse before the dispatch window even opens.
+        // Do not release an existing row: it may belong to an ambiguous send.
+        const session = await this.storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+        );
+        if (!session?.pendingDispatch) return { outcome: "held", reason: "busy" };
       }
       return {
         outcome: "rejected",
@@ -666,9 +712,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       provider: NativeAgentRuntimeProvider,
     ) => Promise<PromptDispatchPreparation>,
     persistAmbiguousDispatch = false,
+    mailInject = false,
   ): Promise<PersistedNativeAgentSession> {
     return this.withSessionMutationFence(input, () =>
-      this.dispatchPromptUnderFence(input, prepare, persistAmbiguousDispatch),
+      this.dispatchPromptUnderFence(input, prepare, persistAmbiguousDispatch, mailInject),
     );
   }
 
@@ -681,6 +728,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         ) => Promise<PromptDispatchPreparation>)
       | undefined,
     persistAmbiguousDispatch: boolean,
+    mailInject: boolean,
   ): Promise<PersistedNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     const coordinatorContextRevision =
@@ -893,11 +941,20 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 groupKey,
                 providerSessionId: durable.providerSessionId,
               });
+            } catch (error) {
+              if (
+                mailInject &&
+                error instanceof ProviderUnavailableError &&
+                !(error instanceof AmbiguousPromptDispatchError)
+              ) {
+                return { dispatched: false as const, mailRefused: true as const };
+              }
+              throw error;
             } finally {
               releaseDispatchFence();
             }
           },
-          persistAmbiguousDispatch && session.origin === "interactive-native"
+          persistAmbiguousDispatch && (session.origin === "interactive-native" || mailInject)
             ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })
             : undefined,
         );

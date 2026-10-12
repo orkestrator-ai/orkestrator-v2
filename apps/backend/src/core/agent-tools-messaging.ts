@@ -161,7 +161,7 @@ export function registerAgentMessagingTools(
       title: "Send an agent message",
       description: mailToolDescription(
         scope,
-        "Durably send bounded Markdown text to one tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying.",
+        "Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.",
       ),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),

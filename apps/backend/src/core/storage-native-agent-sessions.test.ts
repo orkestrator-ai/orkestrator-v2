@@ -804,6 +804,58 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("persists mail refusal for cleanup, but invalidates it before a same-ID ambiguous retry", async () => {
+    await withStorage(async (first, second) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const pending = {
+        requestId: "mail-refused",
+        prompt: "Mail",
+        createdAt: new Date(0).toISOString(),
+      };
+      await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        pending.requestId,
+        async () => ({ dispatched: false, mailRefused: true }),
+        pending,
+      );
+      expect((await second.getNativeAgentSession(input.key))?.pendingDispatch).toMatchObject({
+        ...pending,
+        mailRefused: true,
+      });
+      await expect(
+        second.dispatchNativeAgentPromptOnce(input.key, "another-request", async () => undefined),
+      ).rejects.toBeInstanceOf(PendingNativeAgentDispatchError);
+      await expect(
+        second.dispatchNativeAgentPromptOnce(input.key, pending.requestId, async (session) => {
+          expect(session.pendingDispatch?.mailRefused).toBeUndefined();
+          throw new Error("Lost acknowledgement");
+        }),
+      ).rejects.toThrow("Lost acknowledgement");
+      expect(await first.clearPendingNativeAgentDispatch(input.key, pending.requestId, true)).toBe(
+        false,
+      );
+      expect((await first.getNativeAgentSession(input.key))?.pendingDispatch).toMatchObject(
+        pending,
+      );
+      // A later explicit refusal restores the durable cleanup proof.
+      await second.dispatchNativeAgentPromptOnce(
+        input.key,
+        pending.requestId,
+        async () => ({ dispatched: false, mailRefused: true }),
+        pending,
+      );
+      expect(await first.clearPendingNativeAgentDispatch(input.key, pending.requestId, true)).toBe(
+        true,
+      );
+      expect((await second.getNativeAgentSession(input.key))?.pendingDispatch).toBeUndefined();
+      await second.dispatchNativeAgentPromptOnce(
+        input.key,
+        "another-request",
+        async () => undefined,
+      );
+    });
+  });
+
   test("dispatches a stable request once across backend processes", async () => {
     await withStorage(async (first, second) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");

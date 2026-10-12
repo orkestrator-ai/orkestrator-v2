@@ -4,6 +4,7 @@ import type { AppConfig } from "@/types";
 import type { ClaudeOptions } from "./CreateEnvironmentDialog";
 import {
   resolveEnvironmentAgentLaunchSettings,
+  resolveEnvironmentCreateRequest,
   usesNativeStartupAgentTab,
 } from "./CreateEnvironmentFlowDialog";
 
@@ -86,6 +87,27 @@ describe("resolveEnvironmentAgentLaunchSettings", () => {
     expect(
       resolveEnvironmentAgentLaunchSettings(launchOptions({ launchAgent: false, fastMode: true }))
         .initialFastMode,
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveEnvironmentCreateRequest", () => {
+  const options = (overrides: Partial<ClaudeOptions>) =>
+    launchOptions({ environmentName: "", portMappings: [], ...overrides });
+
+  test("sends a chosen worktree folder for a local environment", () => {
+    expect(
+      resolveEnvironmentCreateRequest(
+        options({ environmentType: "local", worktreeBaseDir: "/trees" }),
+      ).worktreeBaseDir,
+    ).toBe("/trees");
+  });
+
+  test("never sends a worktree folder for a container", () => {
+    expect(
+      resolveEnvironmentCreateRequest(
+        options({ environmentType: "containerized", worktreeBaseDir: "/trees" }),
+      ).worktreeBaseDir,
     ).toBeUndefined();
   });
 });

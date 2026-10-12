@@ -137,6 +137,8 @@ export interface Environment {
   environmentType: EnvironmentType;
   /** Path to git worktree (only for local environments) */
   worktreePath?: string;
+  /** The folder the worktree was created in, when recorded. */
+  worktreeBaseDir?: string;
   /**
    * The project home: a local environment whose `worktreePath` is the
    * project's own checkout rather than a disposable worktree. Deleting it only

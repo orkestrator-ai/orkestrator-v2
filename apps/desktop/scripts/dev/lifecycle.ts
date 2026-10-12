@@ -1,9 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFile, rename, rm, stat, truncate } from "node:fs/promises";
+import { appendFile, readFile, rename, rm, stat, truncate } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
+import { parseWorktreeLocationSettings } from "@orkestrator/protocol/disk-usage";
+
 import {
+  defaultRuntimeProfileRoots,
   resolveRuntimeProfile,
   statusManifestPath,
   type RuntimeProfile,
@@ -129,6 +132,33 @@ async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
     await Bun.sleep(150);
   }
   throw new Error(`Timed out waiting for ${url}`);
+}
+
+/** The production app's dev worktree location setting, if one is saved. */
+export async function configuredDevWorktreeRoot(
+  roots: RuntimeProfileRoots = defaultRuntimeProfileRoots(),
+): Promise<string | undefined> {
+  try {
+    const config = JSON.parse(
+      await readFile(path.join(roots.productionDataDir, "config.json"), "utf8"),
+    ) as { global?: { worktreeLocations?: unknown } } | null;
+    return parseWorktreeLocationSettings(config?.global?.worktreeLocations).dev;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A profile keeps the worktree folder it was created with: its environments
+ * record worktree paths there, so the setting only places new profiles.
+ */
+export async function profileWorktreeLocation(
+  existing: RuntimeProfile,
+  roots: RuntimeProfileRoots | undefined,
+): Promise<{ worktreeDir?: string; worktreeRoot?: string }> {
+  const stored = await stat(path.join(existing.profileRoot, "profile.json")).catch(() => null);
+  if (stored) return { worktreeDir: existing.worktreeDir };
+  return { worktreeRoot: await configuredDevWorktreeRoot(roots) };
 }
 
 async function resolveStoredProfile(
@@ -470,6 +500,7 @@ export async function startDevelopment(
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
     roots: dependencies.roots,
+    ...(await profileWorktreeLocation(existingProfile, dependencies.roots)),
   });
   const profilePath = await initializeProfile(profile);
   await seedAgentTestProfileState(profile, flavor);

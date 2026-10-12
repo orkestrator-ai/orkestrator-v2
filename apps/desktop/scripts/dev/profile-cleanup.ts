@@ -1,3 +1,4 @@
+import { captureWorktreePathIdentity } from "@orkestrator/protocol/worktree-paths";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
@@ -17,6 +18,7 @@ import {
   readProfile,
   readStatus,
   removeProfileState,
+  assertExternalWorktreeOwnership,
 } from "./profile-io.js";
 
 export type CommandResult = { status: number | null; stdout: string; stderr: string };
@@ -147,6 +149,9 @@ export async function removeProfile(
 ): Promise<ProfileRemoval> {
   const run = options.run ?? runCommand;
   await readAndValidateSentinel(profile, options.roots);
+  await assertExternalWorktreeOwnership(profile);
+  const recheckWorktrees = captureWorktreePathIdentity(profile.worktreeDir);
+  const recheckProfile = captureWorktreePathIdentity(profile.profileRoot);
   const worktrees = await externalProfileWorktrees(profile);
   if (!options.force) assertCleanWorktrees(worktrees, run);
 
@@ -201,10 +206,15 @@ export async function removeProfile(
   }
 
   for (const { worktree, commonDir } of worktrees) {
+    recheckWorktrees();
+    recheckProfile();
+    await assertExternalWorktreeOwnership(profile);
     const removed = run("git", ["--git-dir", commonDir, "worktree", "remove", "--force", worktree]);
     if (removed.status !== 0) throw new Error(`Could not release linked worktree ${worktree}`);
   }
 
+  recheckWorktrees();
+  recheckProfile();
   await removeProfileState(profile, options.keepToolchains);
 
   const branchesDeleted: string[] = [];

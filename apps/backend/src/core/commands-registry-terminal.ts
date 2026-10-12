@@ -857,9 +857,23 @@ export function registerTerminalCommands(
       asString(branch, "branch"),
     ),
   );
-  register("read_file_base64", ({ filePath }, context) =>
-    readFileBase64(asString(filePath, "filePath"), [getWorktreeBaseDir(context)]),
-  );
+  register("read_file_base64", async ({ filePath }, context) => {
+    // Worktrees created in a folder the user chose are readable one by one,
+    // never the chosen folder as a whole.
+    const customWorktrees = (await context.storage.loadEnvironments())
+      .filter(
+        (environment) =>
+          environment.environmentType === "local" &&
+          !environment.projectHome &&
+          !!environment.worktreeBaseDir &&
+          !!environment.worktreePath,
+      )
+      .map((environment) => environment.worktreePath!);
+    return readFileBase64(asString(filePath, "filePath"), [
+      getWorktreeBaseDir(context),
+      ...customWorktrees,
+    ]);
+  });
   register("read_environment_file_base64", async (args, context) => {
     assertOnlyKeys(args, ["environmentId", "filePath"], "arguments");
     const environment = await requireLocalMutationEnvironment(

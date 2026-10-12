@@ -86,6 +86,7 @@ export function buildEnvironmentCleanupEntry(
     recordedAt: now.toISOString(),
     projectPath,
     worktreePath,
+    worktreeRoot: worktreePath ? environment.worktreeBaseDir?.trim() || null : null,
     branch: ownsBranch ? environment.branch : null,
     prMerged: environment.prState === "merged",
     createdFromCommit: environment.createdFromCommit ?? null,
@@ -236,7 +237,12 @@ async function cleanupWorktree(
   // Once this path is gone, a new environment may be allocated the same one.
   // A late retry must leave it alone.
   const resolved = path.resolve(worktreePath);
-  const baseDir = getWorktreeBaseDir(context);
+  // A recorded folder is one the user chose (or the default at the time) and
+  // was validated when the environment was created; older entries use the
+  // startup root every environment was created under before it existed.
+  const baseDir = entry.worktreeRoot
+    ? path.resolve(entry.worktreeRoot)
+    : getWorktreeBaseDir(context);
   const relative = confinedRelativePath(baseDir, worktreePath);
   if (!relative) throw new CleanupRefusedError("worktree is outside the workspaces root");
   if (await directoryExists(worktreePath)) {

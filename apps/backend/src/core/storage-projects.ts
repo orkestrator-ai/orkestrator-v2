@@ -591,6 +591,7 @@ export abstract class StorageProjects extends StorageBase {
 
       const optionalStringFields = [
         "worktreePath",
+        "worktreeBaseDir",
         "initialPrompt",
         "initialAgentModel",
         "initialReasoningEffort",

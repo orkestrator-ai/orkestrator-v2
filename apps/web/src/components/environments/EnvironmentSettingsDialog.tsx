@@ -59,6 +59,7 @@ import {
   type SettingsMenuItem,
 } from "@/components/settings/FullscreenSettingsLayout";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
+import { EnvironmentDiskUsageBreakdown } from "@/components/disk-usage/EnvironmentDiskUsageBreakdown";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
@@ -808,6 +809,10 @@ export function EnvironmentSettingsDialog({
                 )}
               </div>
             )}
+            <div className="space-y-2">
+              <Label>Disk Usage</Label>
+              <EnvironmentDiskUsageBreakdown environmentId={environment.id} />
+            </div>
           </div>
         );
       case "defaults":

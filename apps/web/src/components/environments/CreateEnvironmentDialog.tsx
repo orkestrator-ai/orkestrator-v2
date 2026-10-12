@@ -37,6 +37,7 @@ import {
   ChevronDown,
   Container,
   FileText,
+  FolderOpen,
   Globe,
   Laptop,
   Loader2,
@@ -58,6 +59,7 @@ import {
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
+import { pickHostPath } from "@/lib/host-path-picker";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { toast } from "sonner";
 import type {
@@ -96,6 +98,7 @@ import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import {
   getCachedOpenCodeModelCatalog,
+  getWorktreeLocations,
   ensureHostPiModelCatalog,
   type CachedOpenCodeModel,
 } from "@/lib/backend";
@@ -249,6 +252,8 @@ function AttachmentPreviews({
 export interface ClaudeOptions {
   environmentType: EnvironmentType;
   environmentName: string;
+  /** A folder the user picked for a local worktree; absent uses the default location. */
+  worktreeBaseDir?: string;
   launchAgent: boolean;
   agentType: AgentType;
   claudeMode: ClaudeMode;
@@ -568,6 +573,7 @@ export function CreateEnvironmentDialog({
     effectiveDefaultEnvironmentType,
   );
   const [environmentName, setEnvironmentName] = useState("");
+  const [worktreeBaseDir, setWorktreeBaseDir] = useState<string | null>(null);
   const [launchAgent, setLaunchAgent] = useState(true);
   const [agentType, setAgentType] = useState<AgentType>(initialAgentDefaults.agent);
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(initialAgentDefaults.claudeMode);
@@ -743,6 +749,21 @@ export function CreateEnvironmentDialog({
     }
   }, [open, launchAgent, mobileSection, projectId]);
 
+  const handleChooseWorktreeLocation = useCallback(async () => {
+    let defaultPath = worktreeBaseDir ?? undefined;
+    if (!defaultPath) {
+      defaultPath = await getWorktreeLocations()
+        .then((locations) => locations.environments.effective)
+        .catch(() => undefined);
+    }
+    const chosen = await pickHostPath({
+      mode: "directory",
+      title: "Choose where the worktree is created",
+      defaultPath,
+    });
+    if (chosen) setWorktreeBaseDir(chosen);
+  }, [worktreeBaseDir]);
+
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;
     attachmentProcessingGenerationRef.current += 1;
@@ -750,6 +771,7 @@ export function CreateEnvironmentDialog({
     promptPasteOperationRef.current = null;
     setEnvironmentType(effectiveDefaultEnvironmentType);
     setEnvironmentName("");
+    setWorktreeBaseDir(null);
     setLaunchAgent(true);
     setAgentType(initialAgentDefaults.agent);
     setClaudeMode(initialAgentDefaults.claudeMode);
@@ -816,6 +838,7 @@ export function CreateEnvironmentDialog({
     setIsDraggingAttachments(false);
     buildIntentRef.current = intent;
     setBuildIntent(intent);
+    if (intent === "feature") setWorktreeBaseDir(null);
   }, []);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -1434,6 +1457,7 @@ export function CreateEnvironmentDialog({
         const created = await onCreate({
           environmentType,
           environmentName: environmentName.trim(),
+          ...(environmentType === "local" && worktreeBaseDir ? { worktreeBaseDir } : {}),
           launchAgent,
           agentType,
           claudeMode,
@@ -1471,6 +1495,7 @@ export function CreateEnvironmentDialog({
       dockerAvailable,
       environmentType,
       environmentName,
+      worktreeBaseDir,
       launchAgent,
       agentType,
       buildIntent,
@@ -1711,8 +1736,42 @@ export function CreateEnvironmentDialog({
                     disabled={isLoading}
                     className="h-9 rounded-lg border border-border/70 bg-input-surface px-3 py-1 shadow-none"
                   />
-                  <p className="font-mono text-[11px] text-muted-foreground sm:px-1">= branch</p>
+                  <div className="flex items-center gap-2">
+                    {environmentType === "local" && buildIntent !== "feature" && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-7 w-7 shrink-0 text-muted-foreground",
+                          worktreeBaseDir && "text-sky-400",
+                        )}
+                        aria-label="Choose worktree location"
+                        title={worktreeBaseDir ?? "Choose where the worktree is created"}
+                        disabled={isLoading}
+                        onClick={() => void handleChooseWorktreeLocation()}
+                      >
+                        <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    )}
+                    <p className="font-mono text-[11px] text-muted-foreground sm:px-1">= branch</p>
+                  </div>
                 </div>
+                {environmentType === "local" && buildIntent !== "feature" && worktreeBaseDir && (
+                  <div className="mt-2 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground sm:col-start-2 sm:mt-0">
+                    <span className="truncate font-mono" title={worktreeBaseDir}>
+                      Worktree in {worktreeBaseDir}
+                    </span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded p-0.5 hover:bg-zinc-800 hover:text-foreground"
+                      aria-label="Use the default worktree location"
+                      onClick={() => setWorktreeBaseDir(null)}
+                    >
+                      <X className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
               </div>
             </TabsContent>
 

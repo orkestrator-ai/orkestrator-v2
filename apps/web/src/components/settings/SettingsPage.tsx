@@ -20,10 +20,12 @@ import {
   MonitorPlay,
   Volume2,
   Server,
+  HardDrive,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
+import { DiskUsageSettings } from "./DiskUsageSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
@@ -36,6 +38,7 @@ import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
+  { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
   { id: "connections", label: "Connections", icon: <RadioTower className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
@@ -134,7 +137,9 @@ export function SettingsPage({
       {(activeSection) =>
         // Skills is a read-only browser of the host's skill directories, not a
         // config form, so it bypasses the auto-saving settings form.
-        activeSection === "skills" ? (
+        activeSection === "disk-usage" ? (
+          <DiskUsageSettings />
+        ) : activeSection === "skills" ? (
           <SkillsSettings />
         ) : activeSection === "connections" ? (
           <ConnectionsSettings />

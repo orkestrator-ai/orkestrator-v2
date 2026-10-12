@@ -349,3 +349,55 @@ describe("dev:prune arguments", () => {
     expect(() => parsePruneArguments(["--profile", "x"])).toThrow(/Unknown prune option/);
   });
 });
+
+test("reset and orphan prune preserve linked worktrees without external ownership", async () => {
+  git(checkout, "init", "-b", "main");
+  await writeFile(path.join(checkout, "file"), "source");
+  git(checkout, "add", ".");
+  git(checkout, "commit", "-m", "initial");
+  for (const sentinel of [null, { version: 1, profile: "someone-else" }]) {
+    const id = sentinel ? "mismatched" : "missing";
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: gone(),
+      requestedId: id,
+      roots,
+      worktreeRoot: path.join(root, "trees"),
+    });
+    await initializeProfile(profile);
+    const linked = path.join(profile.worktreeDir, "linked");
+    git(checkout, "worktree", "add", "-b", id, linked);
+    const marker = path.join(profile.worktreeDir, ".orkestrator-dev-worktrees");
+    if (sentinel) await writeFile(marker, JSON.stringify(sentinel));
+    else await rm(marker);
+    await expect(
+      removeProfile(profile, { roots, run, force: true, keepToolchains: false }),
+    ).rejects.toThrow("sentinel");
+    await pruneProfiles({ roots, run, force: true });
+    expect(existsSync(linked)).toBe(true);
+    expect(existsSync(profile.profileRoot)).toBe(true);
+    expect(git(checkout, "worktree", "list", "--porcelain")).toContain(linked);
+    expect(git(checkout, "branch", "--list", id)).toContain(id);
+  }
+  expect(dockerCalls).toEqual([]);
+});
+
+test("cleanup releases linked worktrees from a persisted non-default internal directory", async () => {
+  git(checkout, "init", "-b", "main");
+  await writeFile(path.join(checkout, "file"), "source");
+  git(checkout, "add", ".");
+  git(checkout, "commit", "-m", "initial");
+  const basic = resolveRuntimeProfile({ repositoryRoot: checkout, requestedId: "custom", roots });
+  const profile = resolveRuntimeProfile({
+    repositoryRoot: checkout,
+    requestedId: "custom",
+    roots,
+    worktreeDir: path.join(basic.profileRoot, "nested", "trees"),
+  });
+  await initializeProfile(profile);
+  const linked = path.join(profile.worktreeDir, "linked");
+  git(checkout, "worktree", "add", "-b", "custom-branch", linked);
+  await removeProfile(profile, { roots, run, force: true, keepToolchains: false });
+  expect(existsSync(linked)).toBe(false);
+  expect(git(checkout, "worktree", "list", "--porcelain")).not.toContain(linked);
+  expect(git(checkout, "branch", "--list", "custom-branch")).toBe("");
+});

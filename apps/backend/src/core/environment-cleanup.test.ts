@@ -146,6 +146,7 @@ describe("environment cleanup entry", () => {
     );
     expect(local).toMatchObject({
       branch: "feature",
+      worktreeRoot: null,
       prMerged: true,
       createdFromCommit: "abc",
       pending: ["worktree", "branch", "state-dirs"],
@@ -161,6 +162,15 @@ describe("environment cleanup entry", () => {
       branch: null,
       pending: ["container", "network", "state-dirs"],
     });
+  });
+
+  test("records the folder a worktree was created in", () => {
+    const cleanup = buildEnvironmentCleanupEntry(
+      environment({ worktreePath: "/chosen/p-feature", worktreeBaseDir: "/chosen" }),
+      { localPath: "/project" },
+      "/data",
+    );
+    expect(cleanup).toMatchObject({ worktreePath: "/chosen/p-feature", worktreeRoot: "/chosen" });
   });
 
   test("never schedules the project checkout or its branch for a project home", () => {
@@ -331,6 +341,43 @@ describe("environment cleanup steps", () => {
       ),
     ).toBe(true);
     await expect(fs.stat(worktreePath)).rejects.toThrow();
+  });
+
+  test("removes a worktree from the folder the environment recorded", async () => {
+    const { context } = await cleanupContext();
+    const { projectPath, base } = await project();
+    const chosenRoot = await tempDir("ork-cleanup-chosen-");
+    const worktreePath = path.join(chosenRoot, "project-feature");
+    await git(projectPath, "worktree", "add", "-q", "-b", "feature", worktreePath, base);
+    const sibling = path.join(chosenRoot, "unrelated");
+    await fs.mkdir(sibling);
+
+    expect(
+      await runEnvironmentCleanupStep(
+        entry({ projectPath, worktreePath, worktreeRoot: chosenRoot, pending: ["worktree"] }),
+        "worktree",
+        context,
+      ),
+    ).toBe(true);
+    await expect(fs.stat(worktreePath)).rejects.toThrow();
+    expect((await fs.stat(sibling)).isDirectory()).toBe(true);
+  });
+
+  test("refuses a worktree outside the folder the environment recorded", async () => {
+    const { context, worktreeDir } = await cleanupContext();
+    const chosenRoot = await tempDir("ork-cleanup-chosen-");
+    // Inside the default root, but not the recorded one.
+    const worktreePath = path.join(worktreeDir, "project-feature");
+    await fs.mkdir(worktreePath);
+
+    expect(
+      await runEnvironmentCleanupStep(
+        entry({ worktreePath, worktreeRoot: chosenRoot, pending: ["worktree"] }),
+        "worktree",
+        context,
+      ),
+    ).toBe(false);
+    expect((await fs.stat(worktreePath)).isDirectory()).toBe(true);
   });
 
   test("refuses to delete a worktree directory outside the workspaces root", async () => {

@@ -1,14 +1,16 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
+import { initializeProfile } from "./profile-io.js";
 import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
   startDevelopment,
+  configuredDevWorktreeRoot,
 } from "./lifecycle.js";
 
 const complete = {
@@ -197,4 +199,69 @@ describe("development Electron compilation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+test("dev settings come from production and apply only to new profiles; restarts retain every stored directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-location-"));
+  const roots = {
+    developmentRoot: path.join(root, "dev"),
+    productionDataDir: path.join(root, "production"),
+    homeDir: root,
+  };
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  try {
+    const original = path.join(root, "trees-original");
+    const changed = path.join(root, "trees-changed");
+    await mkdir(roots.productionDataDir, { recursive: true });
+    await writeFile(
+      path.join(roots.productionDataDir, "config.json"),
+      JSON.stringify({ global: { worktreeLocations: { dev: original } } }),
+    );
+    expect(await configuredDevWorktreeRoot(roots)).toBe(original);
+    for (const kind of ["default", "internal", "external", "new"] as const) {
+      const args = parseDevArguments(["--profile", kind]);
+      const basic = resolveRuntimeProfile({ repositoryRoot, requestedId: kind, roots });
+      const profile = resolveRuntimeProfile({
+        repositoryRoot,
+        requestedId: kind,
+        roots,
+        ...(kind === "internal"
+          ? { worktreeDir: path.join(basic.profileRoot, "nested", "custom") }
+          : {}),
+        ...(kind === "external" ? { worktreeRoot: original } : {}),
+      });
+      if (kind !== "new") {
+        await initializeProfile(profile);
+        await writeFile(
+          path.join(profile.dataDir, "config.json"),
+          JSON.stringify({
+            global: { worktreeLocations: { dev: path.join(root, "ignored-profile-setting") } },
+          }),
+        );
+      }
+      await writeFile(
+        path.join(roots.productionDataDir, "config.json"),
+        JSON.stringify({ global: { worktreeLocations: { dev: changed } } }),
+      );
+      await expect(
+        startDevelopment(args, "development", {
+          roots,
+          prune: async () => [],
+          typecheck: () => ({ status: 2, stderr: "intentional compile stop" }),
+        }),
+      ).rejects.toThrow("Electron compilation failed");
+      const stored = JSON.parse(
+        await readFile(path.join(profile.profileRoot, "profile.json"), "utf8"),
+      );
+      expect(stored.worktreeDir).toBe(
+        kind === "new" ? path.join(changed, kind) : profile.worktreeDir,
+      );
+    }
+    await rm(path.join(roots.productionDataDir, "config.json"));
+    expect(await configuredDevWorktreeRoot(roots)).toBeUndefined();
+    await writeFile(path.join(roots.productionDataDir, "config.json"), "invalid");
+    expect(await configuredDevWorktreeRoot(roots)).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

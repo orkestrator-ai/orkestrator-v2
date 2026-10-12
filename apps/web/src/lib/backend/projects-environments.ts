@@ -163,6 +163,8 @@ export async function createEnvironment(
   environmentType?: EnvironmentType,
   namingPrompt?: string,
   buildPipelineId?: string,
+  /** Parent folder for a local environment's worktree; omitted uses the default. */
+  worktreeBaseDir?: string,
 ): Promise<Environment> {
   return invoke<Environment>("create_environment", {
     projectId,
@@ -173,6 +175,7 @@ export async function createEnvironment(
     environmentType,
     namingPrompt,
     ...(buildPipelineId ? { buildPipelineId } : {}),
+    ...(worktreeBaseDir ? { worktreeBaseDir } : {}),
   });
 }
 

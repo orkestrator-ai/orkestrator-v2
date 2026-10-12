@@ -30,6 +30,12 @@ export interface EnvironmentCleanupEntry {
   /** The project checkout that owns the worktree and branch, when local. */
   projectPath: string | null;
   worktreePath: string | null;
+  /**
+   * The folder the worktree was created in, which deletion is confined to.
+   * Absent for environments created before the location was recorded; those
+   * live under the backend's startup worktree root.
+   */
+  worktreeRoot?: string | null;
   /** The environment's branch name at deletion time. */
   branch: string | null;
   /** True when the environment's PR was merged, which covers squash merges. */
@@ -101,6 +107,7 @@ function parseEntry(value: unknown): EnvironmentCleanupEntry | null {
     recordedAt: stringOrNull(record.recordedAt) ?? new Date(0).toISOString(),
     projectPath: stringOrNull(record.projectPath),
     worktreePath: stringOrNull(record.worktreePath),
+    worktreeRoot: stringOrNull(record.worktreeRoot),
     branch: stringOrNull(record.branch),
     prMerged: record.prMerged === true,
     createdFromCommit: stringOrNull(record.createdFromCommit),
@@ -151,6 +158,9 @@ export class EnvironmentCleanupLedger {
             ...entry,
             projectPath: entry.projectPath ?? existing.projectPath,
             worktreePath: entry.worktreePath ?? existing.worktreePath,
+            worktreeRoot: entry.worktreePath
+              ? (entry.worktreeRoot ?? null)
+              : (existing.worktreeRoot ?? null),
             branch: entry.branch ?? existing.branch,
             containerId: entry.containerId ?? existing.containerId,
             prMerged: entry.prMerged || existing.prMerged,

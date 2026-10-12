@@ -783,6 +783,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       environmentType?: EnvironmentType,
       namingPrompt?: string,
       buildPipelineId?: string,
+      worktreeBaseDir?: string,
     ) => {
       beginEnvironmentCreation(pid);
       setLoading(true);
@@ -797,6 +798,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           environmentType,
           namingPrompt,
           buildPipelineId,
+          ...(worktreeBaseDir ? [worktreeBaseDir] : []),
         );
         addEnvironmentToStore(environment);
         useConfigStore

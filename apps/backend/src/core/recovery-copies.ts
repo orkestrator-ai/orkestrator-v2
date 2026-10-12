@@ -81,7 +81,7 @@ async function requireEnvironment(
   return environment;
 }
 
-async function containerSize(containerId: string): Promise<number | null> {
+export async function containerSize(containerId: string): Promise<number | null> {
   try {
     const { stdout } = await runCommand(
       "docker",

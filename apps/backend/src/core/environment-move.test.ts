@@ -953,6 +953,19 @@ test("a paused copy refuses file writers and new workers before deleting the sou
         },
       ],
       [
+        "write_initial_prompt_attachments",
+        {
+          environmentId: environment.id,
+          attachments: [
+            {
+              id: "attachment",
+              name: "draft.txt",
+              base64Data: Buffer.from("draft").toString("base64"),
+            },
+          ],
+        },
+      ],
+      [
         "revert_local_file",
         { environmentId: environment.id, filePath: "README.md", targetBranch: "main" },
       ],

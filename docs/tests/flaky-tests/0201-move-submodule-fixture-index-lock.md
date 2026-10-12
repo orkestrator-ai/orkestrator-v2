@@ -13,4 +13,4 @@
 
 - **Root cause:** application background status scans may refresh the index while the test-owned reset takes its write lock. The aggregate stack points to fixture setup, before the move under test.
 - **Fix:** set `GIT_OPTIONAL_LOCKS=0` before starting the fixture environment and restore the original value after each test. This removes optional status writes while retaining required Git mutations and all assertions.
-- **Verification:** the complete owning file passes with the regression cases; final aggregate verification is recorded separately when it finishes.
+- **Verification:** the complete owning file passes with the regression cases; the committed aggregate was attempted, but its workspace group stopped on an unchanged desktop runner timeout before the backend package ran. The owning move file passed independently in 14.3 seconds; the expanded three-file regression run passed in 13.4 seconds.

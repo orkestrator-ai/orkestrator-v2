@@ -1337,13 +1337,18 @@ export function registerTerminalCommands(
     },
   );
 
-  register("write_initial_prompt_attachments", async ({ environmentId, attachments }, context) => {
+  const writeInitialPromptAttachments = async (
+    { environmentId, attachments }: Record<string, unknown>,
+    context: CommandContext,
+  ) => {
     const environmentIdString = asString(environmentId, "environmentId");
     if (!Array.isArray(attachments) || attachments.length === 0 || attachments.length > 20) {
       throw new Error("Expected between 1 and 20 initial prompt attachments");
     }
     const environment = await context.storage.getEnvironment(environmentIdString);
     if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
+    if (environment.worktreeMove)
+      throw new Error("Move recovery is pending. Restart Orkestrator before staging attachments.");
     if (environment.environmentType === "local" && !environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
@@ -1472,5 +1477,9 @@ export function registerTerminalCommands(
       }
       throw error;
     }
+  };
+  register("write_initial_prompt_attachments", (args, context) => {
+    const release = beginEnvironmentMutation(asString(args.environmentId, "environmentId"));
+    return writeInitialPromptAttachments(args, context).finally(release);
   });
 }

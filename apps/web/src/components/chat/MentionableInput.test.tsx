@@ -10,6 +10,27 @@ describe("MentionableInput", () => {
     window.getSelection()?.removeAllRanges();
   });
 
+  test("locked focused input ignores submit and completion shortcuts until unlocked", () => {
+    const onKeyDown = mock(() => {});
+    const onChange = mock(() => {});
+    const props = { value: "/com", mentions: [], onChange, onKeyDown };
+    const { getByRole, rerender } = render(<MentionableInput {...props} />);
+    const input = getByRole("textbox");
+    input.focus();
+    rerender(<MentionableInput {...props} disabled />);
+    for (const key of ["Enter", "Tab", "ArrowDown", "Escape"]) {
+      fireEvent.keyDown(input, { key });
+    }
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onKeyDown).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input.textContent).toBe("/com");
+    expect(document.activeElement).toBe(input);
+    rerender(<MentionableInput {...props} />);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+  });
+
   test("restores draft text into the DOM on first render", () => {
     const draftText = "Hello, this is my draft";
     const { container } = render(

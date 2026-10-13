@@ -479,6 +479,10 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
     const handleKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
+        if (disabled) {
+          if (event.key === "Enter") event.preventDefault();
+          return;
+        }
         if (event.key === "Enter" && !event.shiftKey) {
           // Enter confirms an active IME composition. It must remain available
           // to the browser and must not reach provider submit handlers.
@@ -497,7 +501,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
         onKeyDown?.(event);
       },
-      [onKeyDown],
+      [disabled, onKeyDown],
     );
 
     const showPlaceholder = !value;

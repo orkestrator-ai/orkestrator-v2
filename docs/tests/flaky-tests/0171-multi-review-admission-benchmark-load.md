@@ -33,3 +33,29 @@ The isolated run completed in 2.3 seconds. Aggregate failure evidence is in
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FrGJ2w/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 This supports the existing host-contention hypothesis; no benchmark assertion
 or backend behavior was changed.
+
+
+## Recurrence (2026-10-13)
+
+During validation of the composer lock fixes at `d0885894`, the unchanged
+benchmark's admission time was 322 ms against the 310 ms limit; the case took
+1213.40 ms. The original command was `mise run test:logged -- --name
+full-suite-final -- mise run test`, with GNU host utilities preferred in PATH.
+The aggregate reserved workspace 2, root 3, bridges 2 and protocol 1 worker
+slots; other worktrees were also validating on the host.
+
+The backend group reported 5,879 passed, 23 failed and 15 skipped. Twenty-two
+failures were in the unchanged environment-move suite, which also failed alone
+with `claude-tmux cleanup incomplete`. The final root group passed 5,029 tests
+with 24 skipped; the bridge and protocol groups passed.
+
+The benchmark owning file passed unchanged when rerun alone:
+
+```bash
+mise run test:logged -- --name review-benchmark-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures
+```
+
+The logged rerun completed in 2.9 seconds. Aggregate failure evidence is in
+`/tmp/orkestrator-test-run.OloPu3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+This supports the existing host-contention hypothesis; no benchmark assertion
+or backend behavior was changed.

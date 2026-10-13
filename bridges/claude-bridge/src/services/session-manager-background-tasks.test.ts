@@ -80,7 +80,9 @@ describe("background task reducer", () => {
       description: "Explore",
       status: "running",
       isBackgrounded: true,
+      subagentType: "Explore",
     });
+    expect(created.backgroundTasks?.["task-hook-1"]?.subagentType).toBeUndefined();
 
     await hooks.TaskCompleted![0]!.hooks[0]!({
       hook_event_name: "TaskCompleted",
@@ -97,6 +99,7 @@ describe("background task reducer", () => {
 
     expect(created.backgroundTasks?.["task-hook-1"]?.status).toBe("completed");
     expect(created.backgroundTasks?.["agent-hook-1"]?.status).toBe("completed");
+    expect(created.backgroundTasks?.["agent-hook-1"]?.subagentType).toBe("Explore");
     expect(created.backgroundTasks?.["task-hook-1"]?.endedAt).toBeNumber();
     expect(created.backgroundTasks?.["agent-hook-1"]?.endedAt).toBeNumber();
 
@@ -4166,6 +4169,55 @@ describe("background task reducer", () => {
       status: "running",
       isBackgrounded: true,
     });
+    await finish();
+  });
+
+  test("keeps the level's subagent type through later edges and levels without it", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [
+            { task_id: "task-agent", task_type: "local_agent", subagent_type: "Explore" },
+            { task_id: "task-main", task_type: "local_agent", subagent_type: "main-session" },
+            { task_id: "task-shell", task_type: "local_bash", description: "Watch" },
+          ],
+        },
+        {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-agent",
+          description: "Survey the repo",
+        },
+        // A CLI that predates the field: the earlier value stands.
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [
+            { task_id: "task-agent", task_type: "local_agent" },
+            { task_id: "task-main", task_type: "local_agent" },
+            { task_id: "task-shell", task_type: "local_bash", subagent_type: "" },
+          ],
+        },
+        {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-agent",
+          status: "completed",
+          summary: "Surveyed",
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-agent"]?.status === "completed",
+    );
+
+    expect(session.backgroundTasks?.["task-agent"]).toMatchObject({
+      status: "completed",
+      description: "Survey the repo",
+      subagentType: "Explore",
+    });
+    expect(session.backgroundTasks?.["task-main"]?.subagentType).toBe("main-session");
+    expect(session.backgroundTasks?.["task-shell"]?.subagentType).toBeUndefined();
     await finish();
   });
 

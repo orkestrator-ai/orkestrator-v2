@@ -52,11 +52,15 @@ export const CLAUDE_FALLBACK_MODEL_CATALOG: readonly ClaudeFallbackModel[] = [
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
+  // Claude Code 2.1.293 made Haiku 5.5 the default Haiku. Unlike 4.5 it takes
+  // effort levels (default medium) and runs adaptive thinking only.
   {
     id: "haiku",
-    resolvedModel: "claude-haiku-4-5-20251001",
+    resolvedModel: "claude-haiku-5-5",
     name: "Haiku",
-    description: "Haiku 4.5 · Fastest for quick answers",
+    description: "Haiku 5.5 · Fastest for quick answers",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
 ];
 
@@ -126,6 +130,13 @@ export function claudeModelReasoningIds(
  * cannot exist on one read of the catalogue and be missing from another.
  * `thinking` and `context1m` are settings-backed defaults the input bar
  * suppresses (`SUPPRESSED_COMPOSER_PARAMETERS`).
+ *
+ * Every model gets the same thinking options, although some (Haiku 5.5 since
+ * Claude Code 2.1.293) run adaptive thinking only. The SDK's `ModelInfo` says
+ * whether a model *supports* adaptive thinking, not whether it is the only
+ * mode, so there is no provider signal to narrow the list on (verified against
+ * Agent SDK 0.3.296); a name-based guess would go stale with the next model.
+ * If `ModelInfo` gains one, drop `disabled` and the budgets for those models.
  */
 export function claudeModelParameters(model: ClaudeParameterModel): AgentModelParameter[] {
   return [

@@ -84,6 +84,7 @@ import {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { PLAN_USAGE_PLATFORMS } from "@orkestrator/protocol/plan-usage";
+import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
@@ -129,6 +130,22 @@ function formatLogBytes(bytes: number): string {
 }
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
+
+const CLAUDE_BACKGROUND_COMMAND_LIMIT_PRESETS = [2, 4, 6, 8, 12, 24, 48, 72, 168] as const;
+
+/** The presets, plus a stored value set outside this form so it stays selectable. */
+export function claudeBackgroundCommandLimitOptions(current: number): number[] {
+  const presets: number[] = [...CLAUDE_BACKGROUND_COMMAND_LIMIT_PRESETS];
+  return presets.includes(current) ? presets : [...presets, current].sort((a, b) => a - b);
+}
+
+export function formatClaudeBackgroundCommandLimit(hours: number): string {
+  const label =
+    hours % 24 === 0 && hours >= 24
+      ? `${hours / 24} ${hours === 24 ? "day" : "days"}`
+      : `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return hours === DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS ? `${label} (default)` : label;
+}
 
 /**
  * Ordered strongest first, and worded in terms of what the user gets rather
@@ -258,6 +275,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,
     setCodexMaxConcurrentThreads,
+    claudeBackgroundCommandLimitHours,
+    setClaudeBackgroundCommandLimitHours,
     terminalFontFamily,
     setTerminalFontFamily,
     terminalFontSize,
@@ -1034,6 +1053,49 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             >
               console.anthropic.com
             </a>
+          </p>
+        </div>
+
+        <div className="space-y-3 border-t border-border/60 pt-5">
+          <div>
+            <Label htmlFor="claude-background-command-limit">Background task time limit</Label>
+            <p
+              id="claude-background-command-limit-description"
+              className="mt-1 text-xs text-muted-foreground"
+            >
+              Longest Claude can keep a background shell command running in a native session, such
+              as a long build or test run, before it is stopped. Claude still stops a background
+              command after 30 minutes unless it asks for longer. Raising the limit also lets a
+              foreground command wait up to this long.
+            </p>
+          </div>
+          <Select
+            value={String(claudeBackgroundCommandLimitHours)}
+            onValueChange={(value) => setClaudeBackgroundCommandLimitHours(Number(value))}
+          >
+            <SelectTrigger
+              id="claude-background-command-limit"
+              aria-describedby="claude-background-command-limit-description claude-background-command-limit-restart"
+              className="w-full max-w-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {claudeBackgroundCommandLimitOptions(claudeBackgroundCommandLimitHours).map(
+                (hours) => (
+                  <SelectItem key={hours} value={String(hours)}>
+                    {formatClaudeBackgroundCommandLimit(hours)}
+                  </SelectItem>
+                ),
+              )}
+            </SelectContent>
+          </Select>
+          <p
+            id="claude-background-command-limit-restart"
+            className="text-xs text-muted-foreground/60"
+          >
+            Applies when an environment&apos;s Claude bridge next starts, for example after the
+            environment restarts. Interactive Claude terminals have no limit.
           </p>
         </div>
       </>,

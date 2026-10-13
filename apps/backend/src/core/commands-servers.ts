@@ -3,6 +3,10 @@ import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
 } from "@orkestrator/protocol/container-lifecycle";
+import {
+  CLAUDE_BASH_MAX_TIMEOUT_ENV,
+  claudeBashMaxTimeoutEnvValue,
+} from "@orkestrator/protocol/claude-background-commands";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
@@ -1130,6 +1134,11 @@ export async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
     env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
+    // Read by the Claude CLI the bridge spawns; unset keeps its 2-hour ceiling.
+    const bashMaxTimeout = claudeBashMaxTimeoutEnvValue(
+      bridgeConfig.global.claudeBackgroundCommandLimitHours,
+    );
+    if (bashMaxTimeout) env[CLAUDE_BASH_MAX_TIMEOUT_ENV] = bashMaxTimeout;
     await applyClaudeHostCredentialEnvironment(context, env);
     if (coordinatorId) {
       // The same isolation Codex gets: credentials, and nothing else. The

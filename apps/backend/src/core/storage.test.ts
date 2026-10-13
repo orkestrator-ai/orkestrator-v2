@@ -2830,6 +2830,65 @@ describe("GitHub credential source config migration", () => {
   });
 });
 
+describe("Claude background command limit config storage", () => {
+  const limitError = "claudeBackgroundCommandLimitHours must be an integer between 2 and 168.";
+
+  test("is absent by default, leaving the Claude CLI's own ceiling", () => {
+    expect(defaultConfig().global.claudeBackgroundCommandLimitHours).toBeUndefined();
+  });
+
+  test.each([
+    ["below the CLI ceiling", 1],
+    ["above one week", 169],
+    ["fraction", 2.5],
+    ["numeric string", "8"],
+    ["null", null],
+  ])("drops a persisted %s value", async (_label, value) => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const persisted = structuredClone(defaultConfig()) as unknown as Record<string, unknown>;
+      (persisted.global as Record<string, unknown>).claudeBackgroundCommandLimitHours = value;
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        `${JSON.stringify(persisted)}\n`,
+        "utf8",
+      );
+
+      expect((await storage.loadConfig()).global.claudeBackgroundCommandLimitHours).toBeUndefined();
+    });
+  });
+
+  test("saves and reloads valid boundary values", async () => {
+    await withTemporaryStorage(async (storage) => {
+      for (const value of [2, 168]) {
+        const config = defaultConfig();
+        await storage.saveConfig(config);
+        await storage.updateGlobalConfig({
+          ...config.global,
+          claudeBackgroundCommandLimitHours: value,
+        });
+        expect((await storage.loadConfig()).global.claudeBackgroundCommandLimitHours).toBe(value);
+      }
+    });
+  });
+
+  test("rejects invalid values without changing stored state", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const config = defaultConfig();
+      config.global.claudeBackgroundCommandLimitHours = 12;
+      await storage.saveConfig(config);
+
+      await expect(
+        storage.updateGlobalConfig({ ...config.global, claudeBackgroundCommandLimitHours: 1 }),
+      ).rejects.toThrow(limitError);
+      const invalidFull = structuredClone(config);
+      (invalidFull.global as unknown as Record<string, unknown>).claudeBackgroundCommandLimitHours =
+        "24";
+      await expect(storage.saveConfig(invalidFull)).rejects.toThrow(limitError);
+      expect((await storage.loadConfig()).global.claudeBackgroundCommandLimitHours).toBe(12);
+    });
+  });
+});
+
 describe("Codex max concurrent thread config storage", () => {
   test.each([
     ["missing", undefined],

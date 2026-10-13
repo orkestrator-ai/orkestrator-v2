@@ -2687,7 +2687,15 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const appRoot = await createTempDir("ork-electron-app-bun-");
     const resourceRoot = await createTempDir("ork-electron-res-bun-");
     const worktreePath = await createTempDir("ork-electron-worktree-bun-");
-    await writeBridgeServer(appRoot, "claude-bridge");
+    const backgroundLimitMarkerPath = path.join(appRoot, "claude-bash-max-timeout.log");
+    await writeBridgeServer(
+      appRoot,
+      "claude-bridge",
+      undefined,
+      undefined,
+      undefined,
+      backgroundLimitMarkerPath,
+    );
 
     const markerPath = path.join(resourceRoot, "bun-was-used.log");
     const bunWrapperDir = path.join(resourceRoot, "bin");
@@ -2700,7 +2708,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     await fs.chmod(path.join(bunWrapperDir, "bun"), 0o755);
 
     const environment = createEnvironment({ worktreePath });
-    const { context, updates } = createContext(environment);
+    const { context, updates } = createContext(environment, {
+      globalConfig: { claudeBackgroundCommandLimitHours: 4 },
+    });
     context.appRoot = appRoot;
     context.resourceRoot = resourceRoot;
 
@@ -2721,6 +2731,8 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used");
+      // The Claude CLI the bridge spawns reads this to raise its 2-hour ceiling.
+      expect(await fs.readFile(backgroundLimitMarkerPath, "utf8")).toBe(String(4 * 3_600_000));
       expect(updates).toContainEqual({ localClaudePort: result.port, claudeBridgePid: result.pid });
       await expect(
         commands.get("get_local_claude_server_status")?.(

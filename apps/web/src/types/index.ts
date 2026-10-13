@@ -550,6 +550,8 @@ export interface GlobalConfig {
   openCodeModelProviders?: string[];
   /** Maximum concurrently open spawned-agent threads per native Codex session */
   codexMaxConcurrentThreads?: number;
+  /** Longest a Claude native background shell command may run, in hours. Absent is 2. */
+  claudeBackgroundCommandLimitHours?: number;
   /** Terminal appearance settings (font, size, colors) */
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */

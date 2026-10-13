@@ -43,7 +43,7 @@
     "@orkestrator/toolchain": "workspace:*"
   },
   "engines": {
-    "bun": ">=1.4.2"
+    "bun": ">=1.4.3"
   },
   "//dependencies": "Only modules scripts/build.ts leaves unbundled belong here; everything else is inlined into dist/ and resources/. tests/cli.test.ts derives this list from the built artifacts and fails if it drifts."
 }

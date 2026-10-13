@@ -849,7 +849,7 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.2-debian`, pinned by its multi-architecture
+The image is built from `oven/bun:1.4.3-debian`, pinned by its multi-architecture
 index digest on both stages, matching the Bun version managed in `mise.toml`
 for development and CI. Refresh the digest deliberately (`docker buildx
 imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;

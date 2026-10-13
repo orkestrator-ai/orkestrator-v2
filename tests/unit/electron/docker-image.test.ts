@@ -50,7 +50,7 @@ function validManifest(overrides: Record<string, unknown> = {}): string {
     appVersion: "2.17.0",
     sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
     architecture: "amd64",
-    runtimes: { bun: "1.4.2", node: "24.21.0" },
+    runtimes: { bun: "1.4.3", node: "24.21.0" },
     agents: { claude: "2.1.280" },
     bridges: ["claude-bridge"],
     capabilities: { "workspace-prepare": 1, "future-capability": 3 },

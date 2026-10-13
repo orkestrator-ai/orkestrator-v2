@@ -19,7 +19,7 @@
     "@orkestrator/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "~1.4.2",
+    "@types/bun": "~1.4.3",
     "@types/node": "^22.20.3",
     "typescript": "~7.0.2"
   }

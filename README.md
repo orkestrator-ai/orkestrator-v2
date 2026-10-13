@@ -36,7 +36,7 @@ its own terminal session, Git branch, and PR workflow.
 ## Prerequisites
 
 - macOS or Linux. Windows is not supported because terminal sessions use Bun's native PTY.
-- [mise](https://mise.jdx.dev) - installs the repository-pinned Bun 1.4.2 runtime
+- [mise](https://mise.jdx.dev) - installs the repository-pinned Bun 1.4.3 runtime
 - [Docker](https://docker.com) - Container runtime
 - [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
 

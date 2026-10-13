@@ -14,7 +14,8 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts", "src/core/**/*.ts", "src/gateway.ts", "scripts/**/*.ts"],
   "exclude": []

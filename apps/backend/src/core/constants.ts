@@ -1,3 +1,5 @@
+import backendPackage from "../../package.json" with { type: "json" };
+
 export const APP_SLUG = "orkestrator-v2";
 export const PRODUCT_NAME = "Orkestrator AI";
 
@@ -125,6 +127,10 @@ export const ORKESTRATOR_PROJECT_CONFIG = "orkestrator-ai.json";
  * Orkestrator version, forwarded to the Codex bridge and on to app-server as
  * `clientInfo.version` (app-server uses it for compliance logging).
  *
+ * Launchers (Electron, the CLI) export `ORKESTRATOR_VERSION`. A backend started
+ * directly (`bun dist/main.js`, e.g. `start:web-public`) has no launcher, so it
+ * falls back to the version of the backend package it was built from.
+ *
  * Sanitized to a conservative charset because it is interpolated into the
  * `docker exec` script that starts the container bridge. It comes from the
  * environment, so anything not matching gets replaced rather than trusted — an
@@ -135,4 +141,9 @@ export function sanitizeAppVersion(raw: string | undefined): string {
   return /^[A-Za-z0-9._+-]{1,64}$/.test(trimmed) ? trimmed : "0.0.0";
 }
 
-export const APP_VERSION = sanitizeAppVersion(process.env.ORKESTRATOR_VERSION);
+/** Version of the backend package this code was built from. */
+export const BACKEND_PACKAGE_VERSION = sanitizeAppVersion(backendPackage.version);
+
+export const APP_VERSION = sanitizeAppVersion(
+  process.env.ORKESTRATOR_VERSION?.trim() || BACKEND_PACKAGE_VERSION,
+);

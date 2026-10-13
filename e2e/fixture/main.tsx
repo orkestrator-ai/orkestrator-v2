@@ -1,3 +1,4 @@
+import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
@@ -1664,6 +1665,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
+  if (window.location.pathname === "/tmux-compose-focus") return <TmuxComposeFocusFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }

@@ -390,6 +390,22 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       pendingFocusRef.current = false;
     }, [value, mentions]);
 
+    // Callers disable the input while a prompt is in flight. It stays
+    // focusable meanwhile (see `tabIndex` below), so focus survives the send;
+    // once editing is allowed again the browser still needs a caret inside the
+    // element before keystrokes land. Runs after the value sync above so the
+    // caret lands in the cleared or restored draft.
+    const wasDisabledRef = useRef(disabled);
+    useLayoutEffect(() => {
+      const wasDisabled = wasDisabledRef.current;
+      wasDisabledRef.current = disabled;
+      const input = inputRef.current;
+      if (disabled || !wasDisabled || !input || document.activeElement !== input) return;
+      const cursorPosition = extractText(input).length;
+      lastCursorPositionRef.current = cursorPosition;
+      setCursorOffset(input, cursorPosition);
+    }, [disabled]);
+
     const handleInput = useCallback(() => {
       if (!inputRef.current || isComposingRef.current) return;
 
@@ -440,6 +456,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const handlePaste = useCallback(
       (event: ClipboardEvent<HTMLDivElement>) => {
         event.preventDefault();
+        if (disabled) return;
         const text = event.clipboardData.getData("text/plain");
 
         const selection = window.getSelection();
@@ -457,11 +474,15 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
         handleInput();
       },
-      [handleInput],
+      [disabled, handleInput],
     );
 
     const handleKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
+        if (disabled) {
+          if (event.key === "Enter") event.preventDefault();
+          return;
+        }
         if (event.key === "Enter" && !event.shiftKey) {
           // Enter confirms an active IME composition. It must remain available
           // to the browser and must not reach provider submit handlers.
@@ -480,7 +501,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
         onKeyDown?.(event);
       },
-      [onKeyDown],
+      [disabled, onKeyDown],
     );
 
     const showPlaceholder = !value;
@@ -490,6 +511,11 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         <div
           ref={inputRef}
           contentEditable={!disabled}
+          // A non-editable div is not focusable, so disabling the focused
+          // input during a send would drop focus to the document and force a
+          // click before the next prompt. Keep it programmatically focusable,
+          // and out of the tab order, while disabled.
+          tabIndex={disabled ? -1 : undefined}
           suppressContentEditableWarning
           onInput={handleInput}
           onCompositionStart={handleCompositionStart}

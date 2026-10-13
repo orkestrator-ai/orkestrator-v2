@@ -21,6 +21,7 @@ import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
@@ -2544,6 +2545,9 @@ describe("ActionBar toolbar interactions", () => {
 
     const toolbar = document.querySelector("[data-mobile-toolbar]")!;
     const projectRow = screen.getByTestId("project-navigation-bar");
+    for (const heightClass of WORKSPACE_BAR_HEIGHT_CLASS.split(" ")) {
+      expect(projectRow.classList.contains(heightClass)).toBe(true);
+    }
     expect(toolbar.contains(screen.getByRole("button", { name: "New native agent tab" }))).toBe(
       true,
     );

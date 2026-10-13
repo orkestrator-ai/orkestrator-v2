@@ -11,6 +11,10 @@ import type {
   RecoveryCopyList,
 } from "@orkestrator/protocol/container-recovery";
 import type {
+  GitHubCloneAccount,
+  GitHubCloneRepositoryList,
+} from "@orkestrator/protocol/github-clone";
+import type {
   Project,
   Environment,
   EnvironmentType,
@@ -95,12 +99,34 @@ export async function getProjects(): Promise<Project[]> {
   return invoke<Project[]>("get_projects");
 }
 
-export async function addProject(gitUrl: string, localPath?: string): Promise<Project> {
-  return invoke<Project>("add_project", { gitUrl, localPath });
+export async function addProject(
+  gitUrl: string,
+  localPath?: string,
+  cloneOnly?: boolean,
+): Promise<Project> {
+  return invoke<Project>("add_project", {
+    gitUrl,
+    localPath,
+    ...(cloneOnly === undefined ? {} : { cloneOnly }),
+  });
 }
 
 export async function createProjectFromScratch(localPath: string): Promise<Project> {
   return invoke<Project>("create_project_from_scratch", { localPath });
+}
+
+export async function listGitHubCloneAccounts(): Promise<GitHubCloneAccount[]> {
+  return invoke<GitHubCloneAccount[]>("list_github_clone_accounts");
+}
+
+export async function listGitHubCloneRepositories(
+  owner: string,
+  cursor?: string,
+): Promise<GitHubCloneRepositoryList> {
+  return invoke<GitHubCloneRepositoryList>("list_github_clone_repositories", {
+    owner,
+    ...(cursor === undefined ? {} : { cursor }),
+  });
 }
 
 export async function removeProject(projectId: string): Promise<void> {

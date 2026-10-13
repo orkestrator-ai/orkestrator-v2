@@ -1,3 +1,4 @@
+import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import {
   fs,
@@ -379,6 +380,53 @@ async function inspectProjectPath(projectPath: string): Promise<ProjectPathInspe
   }
 }
 
+/** Retry registration only for a checkout rooted here with the selected origin. */
+async function assertMatchingCloneDestination(
+  projectPath: string,
+  gitUrl: string,
+  run: typeof runCommand,
+): Promise<void> {
+  const rejection =
+    "Clone destination is not empty. Choose an empty folder or a checkout of the selected repository";
+  try {
+    const { stdout } = await run("git", ["-C", projectPath, "rev-parse", "--show-toplevel"], {
+      timeoutMs: 10_000,
+    });
+    if (
+      comparableProjectPath(await fs.realpath(stdout.trim())) !==
+      comparableProjectPath(await fs.realpath(projectPath))
+    ) {
+      throw new Error(rejection);
+    }
+    // A missing origin is a mismatch; operational failures must still reject.
+    const { stdout: originOutput } = await run(
+      "git",
+      ["-C", projectPath, "config", "--get", "--default", "", "remote.origin.url"],
+      { timeoutMs: 10_000 },
+    );
+    const origin = withoutUrlCredentials(originOutput.trim());
+    const selected = parseGitHubRepositoryRemote(gitUrl);
+    const existing = parseGitHubRepositoryRemote(origin);
+    const matches =
+      origin === gitUrl ||
+      (selected.ok &&
+        existing.ok &&
+        selected.repository.owner.toLowerCase() === existing.repository.owner.toLowerCase() &&
+        selected.repository.name.toLowerCase() === existing.repository.name.toLowerCase());
+    if (!matches) throw new Error(rejection);
+  } catch (error) {
+    if (error instanceof Error && error.message === rejection) throw error;
+    if (error instanceof CommandFailedError) {
+      if (error.executableMissing) throw new Error("Git is not installed or available on PATH");
+      if (error.timedOut)
+        throw new Error("Could not inspect the clone destination: Git inspection timed out");
+      // Only this specific rev-parse failure establishes that it is not a checkout.
+      if (/^fatal: not a git repository/i.test(error.message.trim())) throw new Error(rejection);
+    }
+    throw new Error(`Could not inspect the clone destination: ${conciseError(error)}`);
+  }
+}
+
 /**
  * Adds a remote-only project, adopts an existing local checkout, or clones the
  * remote when the requested local path is missing or an empty directory.
@@ -389,6 +437,7 @@ export async function addExistingProject(
   storage: StorageService,
   run: typeof runCommand,
   lockTimeouts?: AddExistingProjectLockTimeouts,
+  cloneOnly = false,
 ): Promise<Project> {
   const urlLockTimeoutMs = lockTimeouts?.urlLockTimeoutMs ?? PROJECT_CREATION_URL_LOCK_TIMEOUT_MS;
   const pathLockTimeoutMs =
@@ -397,6 +446,8 @@ export async function addExistingProject(
     storage.withProjectCreationLock(projectGitUrlLockKey(gitUrl), operation, {
       acquireTimeoutMs: urlLockTimeoutMs,
     });
+
+  if (cloneOnly && requestedPath === undefined) throw new Error("Clone destination is required");
 
   if (requestedPath === undefined) {
     return withGitUrlLock(async () => {
@@ -413,7 +464,7 @@ export async function addExistingProject(
   const assertPathIsFree = duplicateLocalPathGuard(targetKey, projectPath);
   const target = await inspectProjectPath(projectPath);
 
-  if (target.kind === "existing") {
+  if (target.kind === "existing" && !cloneOnly) {
     return withGitUrlLock(async () => {
       const projects = await storage.loadProjects();
       if (projects.some((project) => project.gitUrl === gitUrl)) {
@@ -436,6 +487,7 @@ export async function addExistingProject(
 
         const targetAfterLock = await inspectProjectPath(projectPath);
         if (targetAfterLock.kind === "existing") {
+          if (cloneOnly) await assertMatchingCloneDestination(projectPath, gitUrl, run);
           return storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
         }
 

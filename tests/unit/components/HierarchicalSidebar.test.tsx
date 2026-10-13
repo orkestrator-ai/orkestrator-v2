@@ -1970,7 +1970,11 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     await screen.findByText("repository already exists");
-    expect(addProjectMock).toHaveBeenCalledWith("https://github.com/acme/new.git", undefined);
+    expect(addProjectMock).toHaveBeenCalledWith(
+      "https://github.com/acme/new.git",
+      undefined,
+      undefined,
+    );
     expect(screen.getByRole("heading", { name: "Add project" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Add project" }));

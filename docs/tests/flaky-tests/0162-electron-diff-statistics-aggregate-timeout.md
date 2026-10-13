@@ -34,3 +34,22 @@
 - The change under validation (disk usage reporting, worktree locations) adds
   a recorded worktree root to deletion cleanup; the isolated pass covers those
   deletion paths.
+
+## Recurrence 2026-10-13 (GitHub clone review fixes)
+
+- **Original command:** GNU-tool `PATH` prefix from the testing guide with
+  `mise run test:logged -- --name fix-full-tests -- mise run test`.
+- **Worker configuration:** three root workers beside two workspace and two
+  bridge workers; browser checks also ran on the host.
+- **Tests:** `computes counts for a tracked local environment and announces them`
+  (5,905.74 ms), `serves the Files panel from the scan the badge already ran`
+  (5,239.82 ms), and `refreshes a tracked environment on explicit request`
+  (5,392.15 ms), all exceeding the five-second deadline.
+- **Root-suite counts:** 5,047 total, 5,018 passed, 24 skipped, 5 failed. One of
+  those failures was a new bounded-diagnostics assertion, corrected in this
+  change; the other unrelated failure was a firewall fixture timeout.
+- **Isolated rerun:** `mise run test:logged -- --name isolate-diff-stats -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures`
+  passed in 30.5 seconds.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FOIo01/root-and-agent-support-tests.log.gz`.
+- **Hypothesis:** the same scan timeouts recur under aggregate contention;
+  the owning file passes unchanged alone. The root cause remains unconfirmed.

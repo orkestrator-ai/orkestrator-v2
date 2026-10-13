@@ -12,7 +12,9 @@ const capturedResyncHandlers = new Set<ResourceResyncHandler>();
 
 // Mock backend module BEFORE importing the hook
 const mockGetProjects = mock<() => Promise<Project[]>>(() => Promise.resolve([]));
-const mockAddProject = mock<(gitUrl: string, localPath?: string) => Promise<Project>>((gitUrl) =>
+const mockAddProject = mock<
+  (gitUrl: string, localPath?: string, cloneOnly?: boolean) => Promise<Project>
+>((gitUrl) =>
   Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl })),
 );
 const mockCreateProjectFromScratch = mock<(localPath: string) => Promise<Project>>((localPath) =>
@@ -165,10 +167,28 @@ describe("useProjects", () => {
       addedProject = await result.current.addProject("git@github.com:test/repo.git");
     });
 
-    expect(mockAddProject).toHaveBeenCalledWith("git@github.com:test/repo.git", undefined);
+    expect(mockAddProject).toHaveBeenCalledWith(
+      "git@github.com:test/repo.git",
+      undefined,
+      undefined,
+    );
     expect(addedProject?.id).toBe("new-project-id");
     expect(result.current.projects).toHaveLength(1);
     expect(result.current.error).toBeNull();
+  });
+
+  test("forwards clone-only intent to the backend and stores the resulting project", async () => {
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => {
+      await result.current.addProject("https://github.com/acme/api.git", "/code/api", true);
+    });
+    expect(mockAddProject).toHaveBeenCalledWith(
+      "https://github.com/acme/api.git",
+      "/code/api",
+      true,
+    );
+    expect(result.current.projects).toHaveLength(1);
   });
 
   test("addProject sets error on failure", async () => {

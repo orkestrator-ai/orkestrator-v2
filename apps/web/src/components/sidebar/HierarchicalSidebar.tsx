@@ -42,6 +42,7 @@ import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
+import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
 import {
   CreateEnvironmentFlowDialog,
@@ -531,6 +532,11 @@ export function HierarchicalSidebar() {
     () => sortEnvironmentsByActivity(sidebarEnvironments, projects),
     [sidebarEnvironments, projects],
   );
+  const defaultCloneDirectory = useMemo(
+    () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
+    [projects],
+  );
+  const projectGitUrls = useMemo(() => projects.map((project) => project.gitUrl), [projects]);
   const projectsById = useMemo(
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
@@ -754,9 +760,9 @@ export function HierarchicalSidebar() {
     });
   };
 
-  const handleAddProject = async (gitUrl: string, localPath?: string) => {
+  const handleAddProject = async (gitUrl: string, localPath?: string, cloneOnly?: boolean) => {
     try {
-      await addProject(gitUrl, localPath);
+      await addProject(gitUrl, localPath, cloneOnly);
     } catch (err) {
       console.error("Failed to add project:", err);
       throw err; // Re-throw so the dialog can handle it
@@ -1403,6 +1409,8 @@ export function HierarchicalSidebar() {
         onAdd={handleAddProject}
         onCreate={handleCreateProject}
         validateGitUrl={validateGitUrl}
+        defaultCloneDirectory={defaultCloneDirectory}
+        existingGitUrls={projectGitUrls}
       />
 
       {/* Add to Folder Dialog */}

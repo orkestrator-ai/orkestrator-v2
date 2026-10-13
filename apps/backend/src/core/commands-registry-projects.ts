@@ -72,6 +72,7 @@ import {
   addExistingProject,
   createProjectFromScratch,
 } from "./commands-helpers.js";
+import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 
 /**
  * Total extra time a first-use catalogue read may spend starting a bridge and
@@ -381,13 +382,15 @@ export function registerProjectCommands(
   register("get_projects", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects()),
   );
-  register("add_project", async ({ gitUrl, localPath }, { storage }) => {
+  register("add_project", async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);
     return addExistingProject(
       asString(gitUrl, "gitUrl"),
       requestedLocalPath,
       storage,
       runProjectCreationCommand,
+      undefined,
+      cloneOnly === undefined ? false : asRequiredBoolean(cloneOnly, "cloneOnly"),
     );
   });
   register("create_project_from_scratch", (args, { storage }) => {
@@ -396,6 +399,20 @@ export function registerProjectCommands(
       asNonBlankString(args.localPath, "localPath"),
       storage,
       runProjectCreationCommand,
+    );
+  });
+  // Read-only listings for the "From GitHub" add-project picker. The clone
+  // itself goes through `add_project`, which owns locking and rollback.
+  register("list_github_clone_accounts", (args) => {
+    assertOnlyKeys(args, [], "arguments");
+    return listGitHubCloneAccounts(runProjectCreationCommand);
+  });
+  register("list_github_clone_repositories", (args) => {
+    assertOnlyKeys(args, ["owner", "cursor"], "arguments");
+    return listGitHubCloneRepositories(
+      asNonBlankString(args.owner, "owner").trim(),
+      runProjectCreationCommand,
+      args.cursor === undefined ? undefined : asNonBlankString(args.cursor, "cursor"),
     );
   });
   register("remove_project", async ({ projectId }, context) => {

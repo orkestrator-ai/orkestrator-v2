@@ -150,11 +150,11 @@ RUN mkdir -p /workspace /opencode-state /home/node/.claude /home/node/.codex /ho
 
 WORKDIR /workspace
 
-ARG GIT_DELTA_VERSION=0.19.2
+ARG GIT_DELTA_VERSION=0.20.1
 RUN ARCH=$(dpkg --print-architecture) && \
   case "$ARCH" in \
-    amd64) GIT_DELTA_SHA=ea4f0222950ee750a3d38dd80d03bce4cee07a3f63928fc47548383bcaf23093 ;; \
-    arm64) GIT_DELTA_SHA=0edc36cf514f1bd84becac3e94ee8ae9f8818c6a1f99f7b2ee67b362afa253d3 ;; \
+    amd64) GIT_DELTA_SHA=0683067a4cbbcc19b9fd2841253131d1b37ccfa724725098d811d4d0d9fcc25b ;; \
+    arm64) GIT_DELTA_SHA=6e08b734d611037eb9eb5db883cab7ac0a089216a9efdc1d2caac44319029c28 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
@@ -290,7 +290,7 @@ RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
 # namespaces (the default seccomp profile blocks them), so an explicit
 # `chromiumSandbox: true` dies with "Chromium sandboxing failed!". The container
 # is the isolation boundary.
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_VERSION=1.64.0
 # One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
 # root terminals, instead of a per-user ~/.cache/ms-playwright copy.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -366,11 +366,11 @@ RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
 # shared Bun install remains visible if a devcontainer mounts over the node
 # user's home. Keep both supported image architectures pinned to
 # config/mise-version.json.
-ARG MISE_VERSION=2026.9.11
+ARG MISE_VERSION=2026.10.9
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) MISE_ARCH=x64; MISE_SHA=02a19e4a5eda23cda916503ad09dbc608a249fe7a7d5686c5a74ff3a7ce3b7e0 ;; \
-    arm64) MISE_ARCH=arm64; MISE_SHA=d781ce1b4daad6ead469b0a57fef4bfb49c4e02025dc88111ff1bfaa8c90aad9 ;; \
+    amd64) MISE_ARCH=x64; MISE_SHA=7af2e3d798e9ddec142f5a968a18c3f33aa68d19aa8a4111302d4c7d04feb6fa ;; \
+    arm64) MISE_ARCH=arm64; MISE_SHA=9a58b5b72e58ed66f38d6d2550c2f6279d8c39884574c389a39a9c441a5580b9 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   MISE_TARBALL="mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" && \

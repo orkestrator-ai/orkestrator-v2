@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   formatAgentDurationMs,
   formatNativeAgentElapsed,
+  formatSettledToolDuration,
   nativeAgentElapsedMs,
 } from "./native-agent-duration";
 
@@ -113,5 +114,24 @@ describe("formatNativeAgentElapsed", () => {
   test("returns nothing when no elapsed value is available", () => {
     expect(formatNativeAgentElapsed({ status: "active" })).toBeUndefined();
     expect(formatNativeAgentElapsed({ status: "finished" })).toBeUndefined();
+  });
+});
+
+describe("formatSettledToolDuration", () => {
+  test("labels a call that finished, either way", () => {
+    expect(formatSettledToolDuration("success", 2_400)).toBe("2.4s");
+    expect(formatSettledToolDuration("failure", 65_000)).toBe("1m 5s");
+    expect(formatSettledToolDuration("success", 0)).toBe("0ms");
+  });
+
+  test("never labels a running or stateless call", () => {
+    expect(formatSettledToolDuration("pending", 2_400)).toBeUndefined();
+    expect(formatSettledToolDuration(undefined, 2_400)).toBeUndefined();
+  });
+
+  test("drops a missing, negative or non-finite duration", () => {
+    expect(formatSettledToolDuration("success", undefined)).toBeUndefined();
+    expect(formatSettledToolDuration("success", -1)).toBeUndefined();
+    expect(formatSettledToolDuration("success", Number.POSITIVE_INFINITY)).toBeUndefined();
   });
 });

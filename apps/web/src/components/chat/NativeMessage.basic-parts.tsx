@@ -25,6 +25,7 @@ import {
 import { InlineMessageMarkdown, MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { type NativeBackgroundTask } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
+import { formatSettledToolDuration } from "@/lib/chat/native-agent-duration";
 import {
   markdownComponents,
   TASK_LIST_SYNTAX_PATTERN,
@@ -152,6 +153,25 @@ function formatElapsed(elapsedMs: number): string {
   return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
+/**
+ * How long a settled call ran, at the trailing edge of its header row.
+ *
+ * Every tool card variant renders it the same way and from the same neutral
+ * part field, so a provider that reports durations gets them on every card and
+ * one that does not simply shows nothing.
+ */
+export function ToolDurationLabel({ label }: { label?: string }) {
+  if (!label) return null;
+  return (
+    <span
+      className="shrink-0 tabular-nums text-[10px] text-muted-foreground/60"
+      title={`Ran for ${label}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export function ToolPart({
   expansionKey,
   toolName,
@@ -164,6 +184,7 @@ export function ToolPart({
   progress,
   denied,
   commandChanges,
+  durationMs,
   deferredDetails = false,
 }: {
   expansionKey: string;
@@ -190,6 +211,8 @@ export function ToolPart({
   denied?: { reason?: string; source?: string };
   /** Files this shell call changed, measured by the bridge. */
   commandChanges?: MeasuredWorkspaceChange;
+  /** Provider-reported runtime of the settled call (`toolDurationMs`). */
+  durationMs?: number;
   /** Output exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
 }) {
@@ -397,6 +420,13 @@ export function ToolPart({
     : toolState === "failure"
       ? toolResultState
       : (lifecycleState ?? toolResultState);
+  // The call's own runtime, so only beside the call's own result: a refused
+  // call never ran, and a background launch returns at once while the badge
+  // reports the task's lifecycle, which the launch time would misdescribe.
+  const durationLabel =
+    denied || displayedState !== toolResultState
+      ? undefined
+      : formatSettledToolDuration(toolState, durationMs);
   const deniedLine = denied
     ? [denied.source ? `Denied (${denied.source.replaceAll("_", " ")})` : "Denied", denied.reason]
         .filter(Boolean)
@@ -470,6 +500,7 @@ export function ToolPart({
             {displayedState.label}
           </span>
         )}
+        <ToolDurationLabel label={durationLabel} />
       </CollapsibleTrigger>
 
       {deniedLine ? (
@@ -741,6 +772,7 @@ export function EditToolPart({
   toolOutput,
   toolError,
   toolDiff,
+  durationMs,
   deferredDetails = false,
 }: {
   expansionKey: string;
@@ -750,6 +782,8 @@ export function EditToolPart({
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /** Provider-reported runtime of the settled call (`toolDurationMs`). */
+  durationMs?: number;
   /** Diff body exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
 }) {
@@ -880,6 +914,7 @@ export function EditToolPart({
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}
+        <ToolDurationLabel label={formatSettledToolDuration(toolState, durationMs)} />
       </CollapsibleTrigger>
 
       {hasExpandableContent && (

@@ -144,6 +144,8 @@ const OPTIONAL_PART_STRING_FIELDS = [
   "toolError",
   "subagentName",
   "subagentRole",
+  "subagentModelId",
+  "subagentReasoningEffort",
   "comment",
 ] as const;
 
@@ -180,7 +182,8 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
       "task-group",
     ].includes(String(value.type)) ||
     !hasValidOptionalPartStrings(value) ||
-    !hasValidToolDiff(value.toolDiff)
+    !hasValidToolDiff(value.toolDiff) ||
+    (value.toolDurationMs !== undefined && typeof value.toolDurationMs !== "number")
   ) {
     return false;
   }

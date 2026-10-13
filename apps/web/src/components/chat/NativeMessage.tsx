@@ -27,6 +27,7 @@ import {
   AsyncQuestionResponseContext,
   BackgroundTaskStopContext,
   MessageExpansionScopeContext,
+  ModelLabelResolverContext,
   NativeMessagePartRendererContext,
   ToolDetailLoaderContext,
   UserPromptEvidenceContext,
@@ -229,83 +230,87 @@ export const NativeMessage = memo(function NativeMessage({
           }}
         >
           <AgentPlatformContext.Provider value={platform}>
-            <AgentExpansionScopeContext.Provider value={stableAgentExpansionScope}>
-              <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-                <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
-                  <NativeMessagePartRendererContext.Provider
-                    value={(props) => (
-                      <MessagePart
-                        {...props}
-                        suppressImageReadPreview={
-                          props.suppressImageReadPreview ??
-                          (props.part.type === "tool-invocation" &&
-                            Boolean(
-                              props.part.toolUseId &&
-                              toolIdsWithFirstClassImages.has(props.part.toolUseId),
-                            ))
-                        }
-                      />
-                    )}
-                  >
-                    <MessageShell
-                      isUser={isUser}
-                      authorLabel={isUser ? "You" : assistantAuthorLabel}
-                      timestampLabel={formatTime(message.createdAt)}
-                      durationLabel={durationLabel}
-                      showHeader={!isContinuation}
-                      showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
-                      className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-                      onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
-                      actions={
-                        (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-                          <>
-                            {messageActions}
-                            {(isUser ? userCopyContent : assistantCopyContent) ? (
-                              <MessageCopyButton
-                                content={isUser ? userCopyContent : assistantCopyContent}
-                                wrapperClassName="mt-0 pr-0"
-                              />
-                            ) : null}
-                          </>
-                        ) : undefined
-                      }
-                    >
-                      {annotationMarker ? (
-                        <WebAnnotationRequestChip
-                          requestId={annotationMarker.requestId}
-                          operation={annotationMarker.operation}
-                          annotationCount={annotationMarker.annotationCount}
-                        />
-                      ) : null}
-                      {isUser && message.promptEvidence ? (
-                        <div className="pb-2">
-                          <JsonPayloadPart
-                            payload={structuredReviewJsonPayload(message.promptEvidence)}
-                            expansionKey={`${message.id}-content/json/prompt-evidence`}
-                          />
-                        </div>
-                      ) : null}
-                      {renderMessageParts(message, {
-                        showTextCopy: false,
-                        containerId,
-                        toolIdsWithFirstClassImages,
-                      })}
-
-                      {!hasTextParts && message.content && (
-                        <TextPart
-                          content={message.content}
-                          showCopy={false}
-                          truncateUserPrompt={isUser}
-                          promptPresentation={message.promptPresentation}
-                          renderJsonPayload={!isUser}
-                          expansionKey={`${message.id}-content/json`}
+            <ModelLabelResolverContext.Provider value={resolveModelLabel}>
+              <AgentExpansionScopeContext.Provider value={stableAgentExpansionScope}>
+                <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+                  <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
+                    <NativeMessagePartRendererContext.Provider
+                      value={(props) => (
+                        <MessagePart
+                          {...props}
+                          suppressImageReadPreview={
+                            props.suppressImageReadPreview ??
+                            (props.part.type === "tool-invocation" &&
+                              Boolean(
+                                props.part.toolUseId &&
+                                toolIdsWithFirstClassImages.has(props.part.toolUseId),
+                              ))
+                          }
                         />
                       )}
-                    </MessageShell>
-                  </NativeMessagePartRendererContext.Provider>
-                </UserPromptEvidenceContext.Provider>
-              </MessageExpansionScopeContext.Provider>
-            </AgentExpansionScopeContext.Provider>
+                    >
+                      <MessageShell
+                        isUser={isUser}
+                        authorLabel={isUser ? "You" : assistantAuthorLabel}
+                        timestampLabel={formatTime(message.createdAt)}
+                        durationLabel={durationLabel}
+                        showHeader={!isContinuation}
+                        showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
+                        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+                        onUserLongPress={
+                          isUser && userCopyContent ? handleUserLongPress : undefined
+                        }
+                        actions={
+                          (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+                            <>
+                              {messageActions}
+                              {(isUser ? userCopyContent : assistantCopyContent) ? (
+                                <MessageCopyButton
+                                  content={isUser ? userCopyContent : assistantCopyContent}
+                                  wrapperClassName="mt-0 pr-0"
+                                />
+                              ) : null}
+                            </>
+                          ) : undefined
+                        }
+                      >
+                        {annotationMarker ? (
+                          <WebAnnotationRequestChip
+                            requestId={annotationMarker.requestId}
+                            operation={annotationMarker.operation}
+                            annotationCount={annotationMarker.annotationCount}
+                          />
+                        ) : null}
+                        {isUser && message.promptEvidence ? (
+                          <div className="pb-2">
+                            <JsonPayloadPart
+                              payload={structuredReviewJsonPayload(message.promptEvidence)}
+                              expansionKey={`${message.id}-content/json/prompt-evidence`}
+                            />
+                          </div>
+                        ) : null}
+                        {renderMessageParts(message, {
+                          showTextCopy: false,
+                          containerId,
+                          toolIdsWithFirstClassImages,
+                        })}
+
+                        {!hasTextParts && message.content && (
+                          <TextPart
+                            content={message.content}
+                            showCopy={false}
+                            truncateUserPrompt={isUser}
+                            promptPresentation={message.promptPresentation}
+                            renderJsonPayload={!isUser}
+                            expansionKey={`${message.id}-content/json`}
+                          />
+                        )}
+                      </MessageShell>
+                    </NativeMessagePartRendererContext.Provider>
+                  </UserPromptEvidenceContext.Provider>
+                </MessageExpansionScopeContext.Provider>
+              </AgentExpansionScopeContext.Provider>
+            </ModelLabelResolverContext.Provider>
           </AgentPlatformContext.Provider>
         </AsyncQuestionResponseContext.Provider>
       </BackgroundTaskStopContext.Provider>

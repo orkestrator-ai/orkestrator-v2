@@ -26,6 +26,7 @@ import {
 import {
   AgentPlatformContext,
   BackgroundTaskStopContext,
+  ModelLabelResolverContext,
   NativeMessagePartRenderer,
   markdownComponents,
   useAgentExpansion,
@@ -201,19 +202,50 @@ function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
   return part.agentUsageDisplay === "token-only" && Boolean(part.tokenCountText);
 }
 
+/**
+ * The model and effort a child ran on, from the neutral sub-agent fields.
+ *
+ * Every provider that names them fills the same two part fields, so this is
+ * the one place they become labels; a launch argument naming a model is only
+ * the fallback for providers that report nothing better.
+ */
+function useAgentModelOptions(part: NativeMessagePart): {
+  modelId?: string;
+  reasoningEffort?: string;
+  resolveModelLabel?: (modelId: string) => string;
+} {
+  // Typed as strings, but read off provider JSON: a drifted value must cost a
+  // meta row, not the card.
+  const text = (value: unknown) =>
+    typeof value === "string" ? value.trim() || undefined : undefined;
+  return {
+    modelId: text(part.subagentModelId),
+    reasoningEffort: text(part.subagentReasoningEffort),
+    resolveModelLabel: useContext(ModelLabelResolverContext),
+  };
+}
+
 function agentMetaEntries(
   toolArgs: Record<string, unknown> | undefined,
   displayName: string,
-  options: { includeDuration?: boolean } = {},
+  options: {
+    includeDuration?: boolean;
+    modelId?: string;
+    reasoningEffort?: string;
+    resolveModelLabel?: (modelId: string) => string;
+  } = {},
 ): Array<{ label: string; value: string }> {
   const role = stringToolArg(toolArgs, "subagent_type", "subagentType", "role");
-  const model = stringToolArg(toolArgs, "model");
+  const modelId = options.modelId ?? stringToolArg(toolArgs, "model");
+  const model = modelId ? options.resolveModelLabel?.(modelId).trim() || modelId : undefined;
+  const reasoningEffort = options.reasoningEffort;
   const durationMs =
     options.includeDuration === false ? undefined : numberToolArg(toolArgs, "durationMs");
   const agentId = stringToolArg(toolArgs, "agentId", "agent_id");
   return [
     ...(role && role !== displayName ? [{ label: "Type", value: role }] : []),
     ...(model ? [{ label: "Model", value: model }] : []),
+    ...(reasoningEffort ? [{ label: "Effort", value: reasoningEffort }] : []),
     ...(durationMs !== undefined
       ? [{ label: "Duration", value: formatAgentDurationMs(durationMs) }]
       : []),
@@ -425,8 +457,36 @@ function backgroundTaskPresentation(task: NativeBackgroundTask): BackgroundTaskP
   return task.status ? BACKGROUND_TASK_PRESENTATION[task.status] : UNKNOWN_BACKGROUND_TASK;
 }
 
+/** The provider-neutral role naming the conversation's own backgrounded agent. */
+const MAIN_SESSION_AGENT_ROLE = "main-session";
+
+/**
+ * The delegated agent's role, for display. The conversation's own agent is not
+ * a delegate, so it has none here; the kicker names it instead.
+ */
+function backgroundTaskAgentType(task: NativeBackgroundTask): string | undefined {
+  const role = task.agentRole?.trim();
+  return role && role !== MAIN_SESSION_AGENT_ROLE ? role : undefined;
+}
+
+function backgroundTaskKind(task: NativeBackgroundTask): string {
+  const role = task.agentRole?.trim();
+  if (!role) return "Task";
+  return role === MAIN_SESSION_AGENT_ROLE ? "Main session" : "Agent";
+}
+
+/*
+ * A card with no launch row may have no description either. The agent's role
+ * is then the most specific name the snapshot carries, and still better than
+ * an opaque id.
+ */
 function backgroundTaskLabel(task: NativeBackgroundTask): string {
-  return task.description?.trim() || `Background task ${task.id}`;
+  return (
+    task.description?.trim() ||
+    backgroundTaskAgentType(task) ||
+    (task.agentRole?.trim() === MAIN_SESSION_AGENT_ROLE ? "Backgrounded conversation" : "") ||
+    `Background task ${task.id}`
+  );
 }
 
 interface BackgroundTaskOutcomeLine {
@@ -464,6 +524,13 @@ function backgroundTaskUsageEntries(
       ? [{ label: "Tokens", value: formatTokenCount(usage.totalTokens) }]
       : []),
   ];
+}
+
+function backgroundTaskAgentTypeEntries(
+  task: NativeBackgroundTask,
+): Array<{ label: string; value: string }> {
+  const agentType = backgroundTaskAgentType(task);
+  return agentType ? [{ label: "Agent type", value: agentType }] : [];
 }
 
 function BackgroundTaskOutputFile({ path, containerId }: { path: string; containerId?: string }) {
@@ -557,7 +624,11 @@ function BackgroundTaskDetails({
         </div>
       ))}
       <AgentMetaRows
-        entries={[{ label: "Task ID", value: task.id }, ...backgroundTaskUsageEntries(task)]}
+        entries={[
+          ...backgroundTaskAgentTypeEntries(task),
+          { label: "Task ID", value: task.id },
+          ...backgroundTaskUsageEntries(task),
+        ]}
       />
       {task.outputFile ? (
         <BackgroundTaskOutputFile path={task.outputFile} containerId={containerId} />
@@ -638,9 +709,10 @@ function StopBackgroundTaskButton({
  * A provider-owned background task, rendered as the agent card every other
  * long-running child uses.
  *
- * It says "Task" rather than "Agent" and carries a stop control where an agent
- * carries its tool and update counts: a background shell command reports
- * neither, so those slots would always read zero.
+ * It carries a stop control where an agent carries its tool and update counts:
+ * a background shell command reports neither, so those slots would always read
+ * zero. It says "Task" unless the provider named the agent running it, which
+ * is all a card with no launch row can say about what kind of work it is.
  */
 export function BackgroundTaskCard({
   task,
@@ -685,6 +757,7 @@ export function BackgroundTaskCard({
   const description = task.description?.trim();
   const outcome = backgroundTaskOutcome(task);
   const usageEntries = backgroundTaskUsageEntries(task);
+  const agentType = backgroundTaskAgentType(task);
   // The header already carries the description, so the collapsed second line is
   // for what it does not say: the command actually running, or — when no launch
   // row supplied one — how the task ended.
@@ -697,7 +770,8 @@ export function BackgroundTaskCard({
     resultPending ||
     outcome.length > 0 ||
     task.outputFile ||
-    usageEntries.length > 0,
+    usageEntries.length > 0 ||
+    agentType,
   );
 
   // The failure belongs to the attempt, not the task: a later status change
@@ -725,7 +799,7 @@ export function BackgroundTaskCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs">
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
-                Task
+                {backgroundTaskKind(task)}
               </span>
               <span className="min-w-0 truncate text-sm font-medium text-foreground">
                 {backgroundTaskLabel(task)}
@@ -827,6 +901,7 @@ export function SubagentPart({
   const status = getNativeAgentStatus(part);
   const statusLabel = getSubagentStatusLabel(status);
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
+  const modelOptions = useAgentModelOptions(part);
   const durationLabel = useAgentRuntimeLabel(
     status,
     part.createdAt,
@@ -917,6 +992,7 @@ export function SubagentPart({
           <AgentMetaRows
             entries={agentMetaEntries(part.toolArgs, displayName, {
               includeDuration: isTerminalAgentStatus(status),
+              ...modelOptions,
             })}
           />
           <AgentResultBlock result={result} />
@@ -1070,6 +1146,7 @@ export function TaskGroupPart({
   ).length;
   const toolCount = part.task.toolUseCount ?? capturedToolCount;
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
+  const modelOptions = useAgentModelOptions(part.task);
   const durationLabel = useAgentRuntimeLabel(
     status,
     backgroundAgentTask?.startedAt ?? part.task.createdAt ?? part.createdAt,
@@ -1106,6 +1183,7 @@ export function TaskGroupPart({
   }, [description, displayName, hideCounts, part, prompt, status]);
   const metaEntries = agentMetaEntries(part.task.toolArgs, displayName, {
     includeDuration: isTerminalAgentStatus(status),
+    ...modelOptions,
   });
 
   if (standaloneBackgroundTask) {

@@ -1,4 +1,5 @@
 import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
+import { AgentUsageFixture } from "./AgentUsageFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
@@ -1675,6 +1676,7 @@ function fixtureForPath() {
     return <WorkspaceBarHeightFixture />;
   }
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
+  if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;

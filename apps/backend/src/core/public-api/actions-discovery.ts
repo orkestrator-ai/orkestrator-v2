@@ -25,6 +25,7 @@ import {
   type PublicCatalogueState,
   type PublicPage,
 } from "@orkestrator/protocol/public-api-resources";
+import { APP_VERSION } from "../constants.js";
 import { cachedLaunchModels } from "../control-shared-actions.js";
 import type { Environment, Project } from "../models.js";
 import { PublicActionError } from "./errors.js";
@@ -141,7 +142,7 @@ export function createCapabilitiesHandler(
         backend: {
           installationId: context.installationId,
           generation: context.generation,
-          version: process.env.ORKESTRATOR_VERSION ?? "development",
+          version: APP_VERSION,
           startedAt: BACKEND_STARTED_AT,
         },
         actions,

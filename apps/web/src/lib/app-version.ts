@@ -6,27 +6,16 @@ const packagedVersion = typeof webPackage.version === "string" ? webPackage.vers
 export const BUNDLED_APP_VERSION = packagedVersion || "0.0.0";
 
 /**
- * What the backend reports when `ORKESTRATOR_VERSION` is absent or malformed.
- * The desktop launcher deliberately omits it outside production builds.
+ * What a backend reports when it could not determine its own version. Current
+ * backends fall back to their package version; older ones still send this.
  */
 export const UNSET_APP_VERSION = "0.0.0";
 
-export interface DisplayedAppVersion {
-  /** The version string to render. */
-  version: string;
-  /** Where it came from, so a fallback is never shown as a backend answer. */
-  source: "runtime" | "bundled";
-}
-
 /**
- * Prefer the running backend version. Fall back to the bundled package
- * version when the backend is unreachable or still reporting the unset
- * placeholder, and say which of the two the caller is looking at.
+ * Normalize the version a backend reported. Returns null for a missing, blank
+ * or placeholder answer so the caller never renders it as a real version.
  */
-export function resolveDisplayedAppVersion(
-  runtimeVersion: string | null | undefined,
-): DisplayedAppVersion {
+export function normalizeBackendVersion(runtimeVersion: string | null | undefined): string | null {
   const trimmed = runtimeVersion?.trim() ?? "";
-  if (trimmed && trimmed !== UNSET_APP_VERSION) return { version: trimmed, source: "runtime" };
-  return { version: BUNDLED_APP_VERSION, source: "bundled" };
+  return trimmed && trimmed !== UNSET_APP_VERSION ? trimmed : null;
 }

@@ -3731,6 +3731,17 @@ describe("NativeMessage task list rendering", () => {
       );
       expect(rail?.firstElementChild?.contains(tools)).toBe(true);
       expect(rail?.contains(screen.getByText("12k tokens"))).toBe(true);
+
+      // Icons replace the words: the full phrase is screen-reader text and a
+      // tooltip, and tools and tokens share one line.
+      const toolStat = tools.parentElement;
+      expect(toolStat?.getAttribute("title")).toBe("7 tool uses");
+      expect(toolStat?.querySelector("svg")).toBeTruthy();
+      expect(toolStat?.querySelector("[aria-hidden='true']:not(svg)")?.textContent).toBe("7");
+      expect(getClassTokens(tools)).toContain("sr-only");
+      const tokenStat = screen.getByText("12k tokens").parentElement;
+      expect(tokenStat?.querySelector("[aria-hidden='true']:not(svg)")?.textContent).toBe("12k");
+      expect(toolStat?.parentElement).toBe(tokenStat?.parentElement);
     } finally {
       Date.now = originalNow;
     }
@@ -3811,7 +3822,8 @@ describe("NativeMessage task list rendering", () => {
       );
       const tools = screen.getByText("2 tool uses");
       const updates = screen.getByText("3 updates");
-      expect(tools.parentElement?.contains(updates)).toBe(true);
+      // Both counts sit side by side on the rail's single usage line.
+      expect(tools.parentElement?.parentElement?.contains(updates)).toBe(true);
       expect(tools.closest("button") === null).toBe(true);
       expect(
         screen

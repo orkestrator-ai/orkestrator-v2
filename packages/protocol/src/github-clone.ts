@@ -35,9 +35,9 @@ export interface GitHubCloneRepositoryList {
   truncated: boolean;
 }
 
-/** GitHub logins: alphanumerics and single hyphens, at most 39 characters. */
+/** Existing GitHub logins, including managed users; never an argv flag or path. */
 export function isGitHubLogin(value: string): boolean {
-  return /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(value);
 }
 
 export type GitHubRepositorySortOrder = "recent" | "alphabetical";

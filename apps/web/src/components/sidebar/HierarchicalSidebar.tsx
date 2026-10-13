@@ -42,7 +42,7 @@ import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
-import { suggestedCloneDirectory } from "@/components/projects/GitHubRepositoryPicker";
+import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
 import {
   CreateEnvironmentFlowDialog,
@@ -760,9 +760,11 @@ export function HierarchicalSidebar() {
     });
   };
 
-  const handleAddProject = async (gitUrl: string, localPath?: string) => {
+  const handleAddProject = async (gitUrl: string, localPath?: string, cloneOnly?: boolean) => {
     try {
-      await addProject(gitUrl, localPath);
+      await (cloneOnly === undefined
+        ? addProject(gitUrl, localPath)
+        : addProject(gitUrl, localPath, cloneOnly));
     } catch (err) {
       console.error("Failed to add project:", err);
       throw err; // Re-throw so the dialog can handle it

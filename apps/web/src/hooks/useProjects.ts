@@ -102,12 +102,14 @@ export function useProjects() {
   );
 
   const addProject = useCallback(
-    async (gitUrl: string, localPath?: string) => {
+    async (gitUrl: string, localPath?: string, cloneOnly?: boolean) => {
       invalidateProjectSnapshots();
       setLoading(true);
       setError(null);
       try {
-        const project = await backend.addProject(gitUrl, localPath);
+        const project = await (cloneOnly === undefined
+          ? backend.addProject(gitUrl, localPath)
+          : backend.addProject(gitUrl, localPath, cloneOnly));
         addProjectToStore(project);
         toast.success("Project added", { description: project.name });
         return project;

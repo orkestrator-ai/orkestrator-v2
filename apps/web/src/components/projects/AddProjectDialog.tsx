@@ -19,6 +19,7 @@ import {
   LockKeyhole,
   Plus,
 } from "lucide-react";
+import { toast } from "sonner";
 import { pickHostPath } from "@/lib/host-path-picker";
 import {
   getGitRemoteUrl,
@@ -39,7 +40,7 @@ const SOURCE_SELECTOR_TRIGGER_CLASSES =
 interface AddProjectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAdd: (gitUrl: string, localPath?: string) => Promise<void>;
+  onAdd: (gitUrl: string, localPath?: string, cloneOnly?: boolean) => Promise<void>;
   onCreate: (localPath: string) => Promise<void>;
   validateGitUrl: (url: string) => Promise<boolean>;
   /** Folder a repository cloned from GitHub is placed in by default. */
@@ -70,6 +71,17 @@ export function AddProjectDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isValidUrl, setIsValidUrl] = useState<boolean | null>(null);
+  const [isGitHubCloning, setIsGitHubCloning] = useState(false);
+  const gitHubCloneInFlightRef = useRef(false);
+  const dialogGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      dialogGenerationRef.current += 1;
+    };
+  }, []);
   const validationRequestRef = useRef(0);
   const submissionInFlightRef = useRef(false);
   const lastInspectedPathRef = useRef<string | null>(null);
@@ -91,11 +103,17 @@ export function AddProjectDialog({
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
+      if (!open && gitHubCloneInFlightRef.current) return;
       if (!open) resetForm();
       onOpenChange(open);
     },
     [onOpenChange, resetForm],
   );
+
+  useEffect(() => {
+    dialogGenerationRef.current += 1;
+    if (!isOpen) resetForm();
+  }, [isOpen, resetForm]);
 
   const handleSourceChange = useCallback((value: string) => {
     setSource(value as ProjectSource);
@@ -284,17 +302,45 @@ export function AddProjectDialog({
 
   const handleGitHubClone = useCallback(
     async (cloneUrl: string, clonePath: string) => {
-      await onAdd(cloneUrl, clonePath);
-      handleOpenChange(false);
+      if (gitHubCloneInFlightRef.current) throw new Error("A clone is already in progress");
+      const generation = dialogGenerationRef.current;
+      gitHubCloneInFlightRef.current = true;
+      setIsGitHubCloning(true);
+      const isCurrent = () => mountedRef.current && generation === dialogGenerationRef.current;
+      try {
+        await onAdd(cloneUrl, clonePath, true);
+        if (isCurrent()) {
+          resetForm();
+          onOpenChange(false);
+        } else {
+          toast.success("Repository cloned and added as a project");
+        }
+      } catch (error) {
+        if (!isCurrent())
+          toast.error(error instanceof Error ? error.message : "Failed to clone the repository");
+        throw error;
+      } finally {
+        gitHubCloneInFlightRef.current = false;
+        if (mountedRef.current) setIsGitHubCloning(false);
+      }
     },
-    [handleOpenChange, onAdd],
+    [onOpenChange, onAdd, resetForm],
   );
 
   const canSubmit = source === "scratch" ? newProjectPath.trim() : gitUrl.trim();
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent
+        className="sm:max-w-2xl"
+        showCloseButton={!isGitHubCloning}
+        onEscapeKeyDown={(event) => {
+          if (gitHubCloneInFlightRef.current) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (gitHubCloneInFlightRef.current) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{isBrowsingGitHub ? "Clone from GitHub" : "Add project"}</DialogTitle>
           <DialogDescription>

@@ -1,14 +1,17 @@
 import { describe, expect, mock, test } from "bun:test";
-import { GITHUB_CLONE_REPOSITORY_LIMIT } from "@orkestrator/protocol/github-clone";
+import {
+  GITHUB_CLONE_ACCOUNT_LIMIT,
+  GITHUB_CLONE_REPOSITORY_LIMIT,
+} from "@orkestrator/protocol/github-clone";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { CommandFailedError, type runCommand } from "./shell.js";
 
 type Run = typeof runCommand;
-type Call = { command: string; args: string[] };
+type Call = { command: string; args: string[]; options?: Parameters<Run>[2] };
 
 function runner(respond: (call: Call) => string | Error, calls: Call[] = []): Run {
-  return mock(async (command: string, args: string[] = []) => {
-    const call = { command, args };
+  return mock(async (command: string, args: string[] = [], options?: Parameters<Run>[2]) => {
+    const call = { command, args, options };
     calls.push(call);
     const result = respond(call);
     if (result instanceof Error) throw result;
@@ -159,5 +162,92 @@ describe("listGitHubCloneRepositories", () => {
     await expect(listGitHubCloneRepositories("acme", run)).rejects.toThrow(
       "Could not list repositories for acme: HTTP 404: Not Found",
     );
+  });
+});
+
+describe("GitHub listing edge cases", () => {
+  test("accepts managed-user logins in accounts and repository lookups", async () => {
+    const run = runner(({ args }) => {
+      if (args.includes("user")) return "octocat_acme\n";
+      if (args[0] === "repo") return "[]";
+      return "";
+    });
+    expect(await listGitHubCloneAccounts(run)).toEqual([{ login: "octocat_acme", kind: "user" }]);
+    expect(await listGitHubCloneRepositories("octocat_acme", run)).toEqual({
+      repositories: [],
+      truncated: false,
+    });
+    await expect(listGitHubCloneRepositories("-x", run)).rejects.toThrow(
+      "Invalid GitHub account name",
+    );
+  });
+
+  test("pins all lookups to github.com even with an inherited Enterprise host", async () => {
+    const previous = process.env.GH_HOST;
+    process.env.GH_HOST = "github.enterprise.test";
+    const calls: Call[] = [];
+    try {
+      const run = runner(
+        ({ args }) => (args.includes("user") ? "octocat" : args[0] === "repo" ? "[]" : ""),
+        calls,
+      );
+      await listGitHubCloneAccounts(run);
+      await listGitHubCloneRepositories("octocat", run);
+      for (const call of calls) {
+        if (call.args[0] === "api")
+          expect(call.args.slice(1, 3)).toEqual(["--hostname", "github.com"]);
+        if (call.args[0] === "config")
+          expect(call.args.slice(-2)).toEqual(["--host", "github.com"]);
+        if (call.args[0] === "repo") expect(call.options?.env?.GH_HOST).toBe("github.com");
+      }
+      expect(process.env.GH_HOST).toBe("github.enterprise.test");
+    } finally {
+      if (previous === undefined) delete process.env.GH_HOST;
+      else process.env.GH_HOST = previous;
+    }
+  });
+
+  test("rejects malformed JSON and non-array repository output", async () => {
+    for (const [output, message] of [
+      ["{", "invalid JSON"],
+      ["{}", "unexpected GitHub CLI output"],
+      ["null", "unexpected GitHub CLI output"],
+    ]) {
+      await expect(
+        listGitHubCloneRepositories(
+          "acme",
+          runner(({ args }) => (args[0] === "config" ? "https" : output!)),
+        ),
+      ).rejects.toThrow(message!);
+    }
+  });
+
+  test("rejects missing or invalid viewer logins", async () => {
+    for (const viewer of ["", "not a login", "--help"]) {
+      await expect(
+        listGitHubCloneAccounts(runner(({ args }) => (args.includes("user") ? viewer : "acme"))),
+      ).rejects.toThrow("Could not determine the signed-in GitHub account");
+    }
+  });
+
+  test("caps accounts at 500 while retaining the viewer", async () => {
+    const run = runner(({ args }) =>
+      args.includes("user")
+        ? "viewer"
+        : Array.from({ length: 550 }, (_, i) => `org-${i}`).join("\n"),
+    );
+    const accounts = await listGitHubCloneAccounts(run);
+    expect(accounts).toHaveLength(GITHUB_CLONE_ACCOUNT_LIMIT);
+    expect(accounts).toContainEqual({ login: "viewer", kind: "user" });
+  });
+
+  test("falls back to HTTPS when an SSH-preferred repository has no SSH URL", async () => {
+    const result = await listGitHubCloneRepositories(
+      "acme",
+      runner(({ args }) =>
+        args[0] === "config" ? "ssh" : JSON.stringify([ghRepository("api", { sshUrl: null })]),
+      ),
+    );
+    expect(result.repositories[0]?.cloneUrl).toBe("https://github.com/acme/api.git");
   });
 });

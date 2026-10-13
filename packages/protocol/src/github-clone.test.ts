@@ -18,16 +18,18 @@ describe("isGitHubLogin", () => {
   test("accepts GitHub user and organization names", () => {
     expect(isGitHubLogin("acme")).toBe(true);
     expect(isGitHubLogin("Acme-Labs-2")).toBe(true);
-    expect(isGitHubLogin("a".repeat(39))).toBe(true);
+    expect(isGitHubLogin("a".repeat(100))).toBe(true);
+    for (const login of ["octocat_acme", "ac--me", "acme-"])
+      expect(isGitHubLogin(login)).toBe(true);
   });
 
   test("rejects names that could be read as flags or paths", () => {
     expect(isGitHubLogin("")).toBe(false);
     expect(isGitHubLogin("-acme")).toBe(false);
-    expect(isGitHubLogin("acme-")).toBe(false);
-    expect(isGitHubLogin("ac--me")).toBe(false);
+    expect(isGitHubLogin("--help")).toBe(false);
+    expect(isGitHubLogin("-x")).toBe(false);
     expect(isGitHubLogin("acme/repo")).toBe(false);
-    expect(isGitHubLogin("a".repeat(40))).toBe(false);
+    expect(isGitHubLogin("a".repeat(101))).toBe(false);
   });
 });
 

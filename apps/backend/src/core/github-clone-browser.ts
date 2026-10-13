@@ -164,7 +164,10 @@ export async function listGitHubCloneRepositories(
         "--json",
         REPOSITORY_FIELDS,
       ],
-      { timeoutMs: GITHUB_REPOSITORY_LIST_TIMEOUT_MS },
+      {
+        timeoutMs: GITHUB_REPOSITORY_LIST_TIMEOUT_MS,
+        env: { ...process.env, GH_HOST: GITHUB_HOST },
+      },
     ).then(
       (result) => result.stdout,
       (error: unknown) => {

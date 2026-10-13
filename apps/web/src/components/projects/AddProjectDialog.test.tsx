@@ -1,18 +1,20 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   GitHubCloneAccount,
   GitHubCloneRepository,
   GitHubCloneRepositoryList,
 } from "@orkestrator/protocol/github-clone";
 import { AddProjectDialog } from "./AddProjectDialog";
-import {
-  joinHostPath,
-  normalizeGitHubRemote,
-  suggestedCloneDirectory,
-} from "./GitHubRepositoryPicker";
+import { joinHostPath, normalizeGitHubRemote, suggestedCloneDirectory } from "@/lib/github-clone";
 
-afterEach(cleanup);
+import { toast } from "sonner";
+import { useHostPathPickerStore } from "@/lib/host-path-picker";
+
+afterEach(() => {
+  cleanup();
+  useHostPathPickerStore.getState().settle(null);
+});
 
 function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectDialog>> = {}) {
   const onOpenChange = mock((_open: boolean) => undefined);
@@ -26,19 +28,26 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectD
       truncated: false,
     }),
   );
-  render(
-    <AddProjectDialog
-      open
-      onOpenChange={onOpenChange}
-      onAdd={onAdd}
-      onCreate={onCreate}
-      validateGitUrl={validateGitUrl}
-      loadGitHubAccounts={loadGitHubAccounts}
-      loadGitHubRepositories={loadGitHubRepositories}
-      {...overrides}
-    />,
-  );
-  return { onOpenChange, onAdd, onCreate, validateGitUrl, loadGitHubRepositories };
+  const props = {
+    open: true,
+    onOpenChange,
+    onAdd,
+    onCreate,
+    validateGitUrl,
+    loadGitHubAccounts,
+    loadGitHubRepositories,
+    ...overrides,
+  };
+  const view = render(<AddProjectDialog {...props} />);
+  return {
+    onOpenChange,
+    onAdd,
+    onCreate,
+    validateGitUrl,
+    loadGitHubRepositories,
+    rerenderOpen: (open: boolean) => view.rerender(<AddProjectDialog {...props} open={open} />),
+    unmount: view.unmount,
+  };
 }
 
 const GITHUB_ACCOUNTS: GitHubCloneAccount[] = [
@@ -235,6 +244,7 @@ describe("AddProjectDialog", () => {
       expect(onAdd).toHaveBeenCalledWith(
         "https://github.com/acme/web.git",
         "/Users/dev/code/web-app",
+        true,
       );
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -310,5 +320,161 @@ describe("GitHub clone path helpers", () => {
     expect(normalizeGitHubRemote("git@github.com:Acme/API.git")).toBe("github.com/acme/api");
     expect(normalizeGitHubRemote("https://github.com/acme/api")).toBe("github.com/acme/api");
     expect(normalizeGitHubRemote("ssh://git@github.com/acme/api.git")).toBe("github.com/acme/api");
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+async function chooseClone(name = "api") {
+  await openGitHubRepositories();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+  fireEvent.change(screen.getByLabelText(/Local path/), { target: { value: `/code/${name}` } });
+  fireEvent.click(screen.getByRole("button", { name: "Clone project" }));
+}
+
+describe("GitHub clone lifecycle and navigation", () => {
+  for (const outcome of ["success", "failure"] as const) {
+    test(`prevents dismissal during a clone and displays its ${outcome}`, async () => {
+      const pending = deferred<void>();
+      const { onOpenChange } = renderDialog({ onAdd: () => pending.promise });
+      await chooseClone();
+      expect(screen.queryByRole("button", { name: "Close" }) === null).toBe(true);
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      const overlay = document.querySelector('[data-slot="dialog-overlay"]')!;
+      fireEvent.pointerDown(overlay);
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Cloning…" }).hasAttribute("disabled")).toBe(true);
+      await act(async () => {
+        if (outcome === "success") pending.resolve();
+        else pending.reject(new Error("clone failed"));
+      });
+      if (outcome === "success") expect(onOpenChange).toHaveBeenCalledWith(false);
+      else {
+        expect(screen.getByRole("alert").textContent).toContain("clone failed");
+        expect(onOpenChange).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+      }
+    });
+
+    test(`a previous clone's ${outcome} cannot reset a reopened selection`, async () => {
+      const pending = deferred<void>();
+      const notice = spyOn(toast, outcome === "success" ? "success" : "error").mockImplementation(
+        () => "notice",
+      );
+      try {
+        const { onOpenChange, rerenderOpen } = renderDialog({ onAdd: () => pending.promise });
+        await chooseClone();
+        // A parent may force the controlled dialog closed even though UI dismissal is blocked.
+        rerenderOpen(false);
+        rerenderOpen(true);
+        await openGitHubRepositories();
+        fireEvent.click(screen.getByRole("button", { name: /^billing/ }));
+        fireEvent.change(screen.getByLabelText(/Local path/), {
+          target: { value: "/code/new-billing" },
+        });
+        await act(async () => {
+          if (outcome === "success") pending.resolve();
+          else pending.reject(new Error("old clone failed"));
+        });
+        expect(onOpenChange).not.toHaveBeenCalled();
+        expect((screen.getByLabelText(/Local path/) as HTMLInputElement).value).toBe(
+          "/code/new-billing",
+        );
+        expect(screen.queryByRole("alert") === null).toBe(true);
+        expect(notice).toHaveBeenCalledTimes(1);
+      } finally {
+        notice.mockRestore();
+      }
+    });
+
+    test(`surfaces clone ${outcome} after the dialog component unmounts`, async () => {
+      const pending = deferred<void>();
+      const notice = spyOn(toast, outcome === "success" ? "success" : "error").mockImplementation(
+        () => "notice",
+      );
+      try {
+        const { unmount, onOpenChange } = renderDialog({ onAdd: () => pending.promise });
+        await chooseClone();
+        unmount();
+        await act(async () => {
+          if (outcome === "success") pending.resolve();
+          else pending.reject(new Error("background clone failed"));
+        });
+        expect(onOpenChange).not.toHaveBeenCalled();
+        expect(notice).toHaveBeenCalledTimes(1);
+      } finally {
+        notice.mockRestore();
+      }
+    });
+  }
+
+  test("retries repository failures and shows truncation, then reuses cached data from the path step", async () => {
+    const loadGitHubRepositories = mock(async () => ({
+      repositories: GITHUB_REPOSITORIES,
+      truncated: true,
+    }));
+    loadGitHubRepositories.mockRejectedValueOnce(new Error("repository listing failed"));
+    renderDialog({ loadGitHubRepositories });
+    fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
+    await screen.findByRole("list", { name: "organizations" });
+    fireEvent.click(screen.getByRole("button", { name: /^acme/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("repository listing failed");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByRole("list", { name: "repositories" });
+    expect(screen.getByText(/first 3 repositories/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^api/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+    await screen.findByRole("list", { name: "repositories" });
+    expect(loadGitHubRepositories).toHaveBeenCalledTimes(2);
+  });
+
+  test("ignores cancelled owner responses and refetches when returning to a loading owner", async () => {
+    const old = deferred<GitHubCloneRepositoryList>();
+    const other = deferred<GitHubCloneRepositoryList>();
+    const fresh = deferred<GitHubCloneRepositoryList>();
+    const loadGitHubRepositories = mock(() => fresh.promise);
+    loadGitHubRepositories.mockReturnValueOnce(old.promise).mockReturnValueOnce(other.promise);
+    renderDialog({ loadGitHubRepositories });
+    fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
+    await screen.findByRole("list", { name: "organizations" });
+    fireEvent.click(screen.getByRole("button", { name: /^acme/ }));
+    await waitFor(() => expect(loadGitHubRepositories).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Organizations" }));
+    fireEvent.click(screen.getByRole("button", { name: /^zeta-labs/ }));
+    await waitFor(() => expect(loadGitHubRepositories).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Organizations" }));
+    fireEvent.click(screen.getByRole("button", { name: /^acme/ }));
+    await waitFor(() => expect(loadGitHubRepositories).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      old.resolve({ repositories: [githubRepository("stale", "")], truncated: false });
+      other.reject(new Error("cancelled owner failed"));
+    });
+    expect(screen.queryByRole("list", { name: "repositories" }) === null).toBe(true);
+    expect(screen.queryByRole("alert") === null).toBe(true);
+    await act(async () => fresh.resolve({ repositories: GITHUB_REPOSITORIES, truncated: false }));
+    expect(listedNames("repositories")).toEqual(["web", "billing", "api"]);
+  });
+
+  test("folder selection appends the repository name and clears a clone error", async () => {
+    renderDialog({
+      onAdd: async () => {
+        throw new Error("destination occupied");
+      },
+    });
+    await chooseClone();
+    expect((await screen.findByRole("alert")).textContent).toContain("destination occupied");
+    fireEvent.click(screen.getByRole("button", { name: "Choose clone folder" }));
+    expect(useHostPathPickerStore.getState().request?.defaultPath).toBe("/code");
+    await act(async () => useHostPathPickerStore.getState().settle("/new-parent/"));
+    expect((screen.getByLabelText(/Local path/) as HTMLInputElement).value).toBe("/new-parent/api");
+    expect(screen.queryByRole("alert") === null).toBe(true);
   });
 });

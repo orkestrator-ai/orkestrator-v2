@@ -1,3 +1,4 @@
+import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import {
   fs,
@@ -379,6 +380,39 @@ async function inspectProjectPath(projectPath: string): Promise<ProjectPathInspe
   }
 }
 
+/** Retry registration only for a checkout rooted here with the selected origin. */
+async function assertMatchingCloneDestination(
+  projectPath: string,
+  gitUrl: string,
+  run: typeof runCommand,
+): Promise<void> {
+  const rejection =
+    "Clone destination is not empty. Choose an empty folder or a checkout of the selected repository";
+  try {
+    const { stdout } = await run("git", ["-C", projectPath, "rev-parse", "--show-toplevel"], {
+      timeoutMs: 10_000,
+    });
+    if (
+      comparableProjectPath(await fs.realpath(stdout.trim())) !==
+      comparableProjectPath(await fs.realpath(projectPath))
+    ) {
+      throw new Error(rejection);
+    }
+    const origin = await readOriginUrl(projectPath, run);
+    const selected = parseGitHubRepositoryRemote(gitUrl);
+    const existing = parseGitHubRepositoryRemote(origin);
+    const matches =
+      origin === gitUrl ||
+      (selected.ok &&
+        existing.ok &&
+        selected.repository.owner.toLowerCase() === existing.repository.owner.toLowerCase() &&
+        selected.repository.name.toLowerCase() === existing.repository.name.toLowerCase());
+    if (!matches) throw new Error(rejection);
+  } catch {
+    throw new Error(rejection);
+  }
+}
+
 /**
  * Adds a remote-only project, adopts an existing local checkout, or clones the
  * remote when the requested local path is missing or an empty directory.
@@ -389,6 +423,7 @@ export async function addExistingProject(
   storage: StorageService,
   run: typeof runCommand,
   lockTimeouts?: AddExistingProjectLockTimeouts,
+  cloneOnly = false,
 ): Promise<Project> {
   const urlLockTimeoutMs = lockTimeouts?.urlLockTimeoutMs ?? PROJECT_CREATION_URL_LOCK_TIMEOUT_MS;
   const pathLockTimeoutMs =
@@ -397,6 +432,8 @@ export async function addExistingProject(
     storage.withProjectCreationLock(projectGitUrlLockKey(gitUrl), operation, {
       acquireTimeoutMs: urlLockTimeoutMs,
     });
+
+  if (cloneOnly && requestedPath === undefined) throw new Error("Clone destination is required");
 
   if (requestedPath === undefined) {
     return withGitUrlLock(async () => {
@@ -413,7 +450,7 @@ export async function addExistingProject(
   const assertPathIsFree = duplicateLocalPathGuard(targetKey, projectPath);
   const target = await inspectProjectPath(projectPath);
 
-  if (target.kind === "existing") {
+  if (target.kind === "existing" && !cloneOnly) {
     return withGitUrlLock(async () => {
       const projects = await storage.loadProjects();
       if (projects.some((project) => project.gitUrl === gitUrl)) {
@@ -436,6 +473,7 @@ export async function addExistingProject(
 
         const targetAfterLock = await inspectProjectPath(projectPath);
         if (targetAfterLock.kind === "existing") {
+          if (cloneOnly) await assertMatchingCloneDestination(projectPath, gitUrl, run);
           return storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
         }
 

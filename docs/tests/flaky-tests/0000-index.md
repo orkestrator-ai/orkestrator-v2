@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0203 | open | `new environments use an updated project remote when created and started` | tests/unit/electron/commands-integration.test.ts:1531 | Five-second aggregate timeout; unchanged owning file passed alone in 24.5 seconds. | [0203-updated-project-remote-aggregate-timeout.md](0203-updated-project-remote-aggregate-timeout.md) |
 | 0202 | open | `renames environments from prompts using codex exec output` | tests/unit/electron/commands-registry-environments-create.test.ts:934 | Five-second aggregate timeout; unchanged owning file passed independently in 64.0s. | [0202-environment-naming-aggregate-timeout.md](0202-environment-naming-aggregate-timeout.md) |
 | 0199 | open | Firewall refresh shell fixtures | tests/unit/firewall-refresh.test.ts | Five five-second timeouts in the aggregate; owner passed unchanged alone in 16.3 seconds. | [0199-firewall-refresh-aggregate-timeouts.md](0199-firewall-refresh-aggregate-timeouts.md) |
 | 0200 | open | Configured askpass through a controlling terminal | apps/backend/src/core/shell.test.ts:357 | `runCommand git environment > uses configured askpass in a Git SSH transport even with a controlling terminal` failed after 2235.34 ms. | [0200-git-askpass-aggregate-deadline.md](0200-git-askpass-aggregate-deadline.md) |

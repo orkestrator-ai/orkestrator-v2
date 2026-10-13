@@ -382,13 +382,15 @@ export function registerProjectCommands(
   register("get_projects", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects()),
   );
-  register("add_project", async ({ gitUrl, localPath }, { storage }) => {
+  register("add_project", async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);
     return addExistingProject(
       asString(gitUrl, "gitUrl"),
       requestedLocalPath,
       storage,
       runProjectCreationCommand,
+      undefined,
+      cloneOnly === undefined ? false : asRequiredBoolean(cloneOnly, "cloneOnly"),
     );
   });
   register("create_project_from_scratch", (args, { storage }) => {

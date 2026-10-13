@@ -99,8 +99,16 @@ export async function getProjects(): Promise<Project[]> {
   return invoke<Project[]>("get_projects");
 }
 
-export async function addProject(gitUrl: string, localPath?: string): Promise<Project> {
-  return invoke<Project>("add_project", { gitUrl, localPath });
+export async function addProject(
+  gitUrl: string,
+  localPath?: string,
+  cloneOnly?: boolean,
+): Promise<Project> {
+  return invoke<Project>("add_project", {
+    gitUrl,
+    localPath,
+    ...(cloneOnly === undefined ? {} : { cloneOnly }),
+  });
 }
 
 export async function createProjectFromScratch(localPath: string): Promise<Project> {

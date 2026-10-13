@@ -339,7 +339,7 @@ export function GitHubRepositoryPicker({
 
   if (step.kind === "account") {
     return (
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <div className="flex items-center gap-2">
           <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
             <ArrowLeft className="mr-1 h-4 w-4" />
@@ -386,8 +386,10 @@ export function GitHubRepositoryPicker({
 
   if (step.kind === "repository") {
     const { account } = step;
+    // min-w-0 keeps this dialog grid item from growing to fit long, untruncated
+    // repository descriptions, which pushed the list past the dialog edge.
     return (
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -440,7 +442,9 @@ export function GitHubRepositoryPicker({
                   <>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate font-medium">{repository.name}</span>
+                        <span className="truncate font-medium" title={repository.name}>
+                          {repository.name}
+                        </span>
                         {repository.isPrivate && (
                           <LockKeyhole
                             className="h-3 w-3 shrink-0 text-muted-foreground"
@@ -461,7 +465,10 @@ export function GitHubRepositoryPicker({
                         )}
                       </div>
                       {repository.description && (
-                        <p className="truncate text-xs text-muted-foreground">
+                        <p
+                          className="truncate text-xs text-muted-foreground"
+                          title={repository.description}
+                        >
                           {repository.description}
                         </p>
                       )}
@@ -516,7 +523,7 @@ export function GitHubRepositoryPicker({
 
   const { account, repository } = step;
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex items-center gap-2">
         <Button
           type="button"

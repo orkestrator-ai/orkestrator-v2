@@ -227,6 +227,25 @@ describe("AddProjectDialog", () => {
     expect(listedNames("repositories")).toEqual(["billing"]);
   });
 
+  test("truncates long repository descriptions within the dialog width", async () => {
+    const description = "A very long repository description ".repeat(10).trim();
+    renderDialog({
+      loadGitHubRepositories: mock(async () => ({
+        repositories: [{ ...githubRepository("web", "2026-09-01T00:00:00Z"), description }],
+        truncated: false,
+      })),
+    });
+    await openGitHubRepositories();
+
+    const descriptionText = screen.getByText(description);
+    expect(descriptionText.className).toContain("truncate");
+    expect(descriptionText.getAttribute("title")).toBe(description);
+    // The picker sits in the dialog's grid; without min-w-0 the unwrapped
+    // description widens the grid column past the dialog edge.
+    const pickerRoot = screen.getByLabelText("Search repositories").closest(".space-y-3");
+    expect(pickerRoot?.className).toContain("min-w-0");
+  });
+
   test("clones the chosen repository into the chosen local path", async () => {
     const { onAdd, onOpenChange } = renderDialog({
       defaultCloneDirectory: "/Users/dev/Projects/",

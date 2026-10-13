@@ -1,8 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import {
-  GITHUB_CLONE_ACCOUNT_LIMIT,
-  GITHUB_CLONE_REPOSITORY_LIMIT,
-} from "@orkestrator/protocol/github-clone";
+import { GITHUB_CLONE_REPOSITORY_LIMIT } from "@orkestrator/protocol/github-clone";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { CommandFailedError, type runCommand } from "./shell.js";
 
@@ -230,15 +227,16 @@ describe("GitHub listing edge cases", () => {
     }
   });
 
-  test("caps accounts at 500 while retaining the viewer", async () => {
+  test("returns every organization without a cap, alongside the viewer", async () => {
     const run = runner(({ args }) =>
       args.includes("user")
         ? "viewer"
-        : Array.from({ length: 550 }, (_, i) => `org-${i}`).join("\n"),
+        : Array.from({ length: 1200 }, (_, i) => `org-${i}`).join("\n"),
     );
     const accounts = await listGitHubCloneAccounts(run);
-    expect(accounts).toHaveLength(GITHUB_CLONE_ACCOUNT_LIMIT);
+    expect(accounts).toHaveLength(1201);
     expect(accounts).toContainEqual({ login: "viewer", kind: "user" });
+    expect(accounts).toContainEqual({ login: "org-1199", kind: "organization" });
   });
 
   test("falls back to HTTPS when an SSH-preferred repository has no SSH URL", async () => {

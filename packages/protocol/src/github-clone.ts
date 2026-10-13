@@ -3,9 +3,6 @@
  * repositories when adding a project by cloning from GitHub.
  */
 
-/** Upper bound on organizations returned to the add-project picker. */
-export const GITHUB_CLONE_ACCOUNT_LIMIT = 500;
-
 /** Upper bound on repositories listed for one account. */
 export const GITHUB_CLONE_REPOSITORY_LIMIT = 1000;
 

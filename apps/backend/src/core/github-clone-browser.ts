@@ -1,7 +1,6 @@
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
   compareGitHubNames,
-  GITHUB_CLONE_ACCOUNT_LIMIT,
   GITHUB_CLONE_REPOSITORY_LIMIT,
   isGitHubLogin,
   type GitHubCloneAccount,
@@ -44,7 +43,8 @@ function outputLogins(stdout: string): string[] {
 
 /**
  * The signed-in GitHub CLI user and the organizations they belong to, sorted
- * by name. The user's own account is always included.
+ * by name. The user's own account is always included, and every organization
+ * page is fetched so none are left out.
  */
 export async function listGitHubCloneAccounts(
   run: typeof runCommand,
@@ -80,7 +80,6 @@ export async function listGitHubCloneAccounts(
   const seen = new Set([login.toLowerCase()]);
   const accounts: GitHubCloneAccount[] = [{ login, kind: "user" }];
   for (const organization of organizations) {
-    if (accounts.length >= GITHUB_CLONE_ACCOUNT_LIMIT) break;
     const key = organization.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);

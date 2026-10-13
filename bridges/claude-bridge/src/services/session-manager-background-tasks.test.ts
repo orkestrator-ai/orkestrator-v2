@@ -2369,6 +2369,55 @@ describe("background task reducer", () => {
     ).toBe(true);
   });
 
+  test("a terminal task_updated before the edge keeps the CLI alive for the continuation", async () => {
+    const { created, call, promptPromise, closedState } =
+      await releaseTurnHoldingOneBackgroundTask("patch before edge");
+
+    // The SDK's documented order for a finishing task: the terminal patch, then
+    // the notification, then the level. The patch lands first, while the CLI is
+    // queueing the notification it will answer.
+    call.push({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "bash-task-lf",
+      patch: { status: "completed", end_time: Date.now() },
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["bash-task-lf"]?.status === "completed",
+    );
+    expect(getSession(created.id)?.retainedContinuationRequestIds?.has("background-report")).toBe(
+      true,
+    );
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash-task-lf",
+      tool_use_id: "bash-tool-lf",
+      status: "completed",
+      summary: "Tests passed",
+    });
+    call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-patch-first-continuation",
+        content: [{ type: "text", text: "The suite finished; here is the report." }],
+      },
+    });
+    await waitFor(() => getSession(created.id)?.status === "running");
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => closedState.inputClosed);
+    call.finish();
+    await promptPromise;
+    expect(getSession(created.id)?.status).toBe("idle");
+  });
+
   test("the continuation watchdog still releases a query parked by a level signal", async () => {
     const created = createSession("level before edge, no continuation");
     track(created.id);

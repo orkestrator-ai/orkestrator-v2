@@ -217,7 +217,7 @@ describe("AddProjectDialog", () => {
     const { loadGitHubRepositories } = renderDialog();
     await openGitHubRepositories();
 
-    expect(loadGitHubRepositories).toHaveBeenCalledWith("acme");
+    expect(loadGitHubRepositories).toHaveBeenCalledWith("acme", undefined);
     expect(listedNames("repositories")).toEqual(["web", "billing", "api"]);
 
     fireEvent.click(screen.getByRole("button", { name: "A–Z" }));
@@ -389,13 +389,13 @@ describe("GitHub clone lifecycle and navigation", () => {
           "/code/new-billing",
         );
         expect(screen.queryByRole("alert") === null).toBe(true);
-        expect(notice).toHaveBeenCalledTimes(1);
+        expect(notice).not.toHaveBeenCalled();
       } finally {
         notice.mockRestore();
       }
     });
 
-    test(`surfaces clone ${outcome} after the dialog component unmounts`, async () => {
+    test(`leaves clone ${outcome} notifications to the caller after the dialog component unmounts`, async () => {
       const pending = deferred<void>();
       const notice = spyOn(toast, outcome === "success" ? "success" : "error").mockImplementation(
         () => "notice",
@@ -409,17 +409,18 @@ describe("GitHub clone lifecycle and navigation", () => {
           else pending.reject(new Error("background clone failed"));
         });
         expect(onOpenChange).not.toHaveBeenCalled();
-        expect(notice).toHaveBeenCalledTimes(1);
+        expect(notice).not.toHaveBeenCalled();
       } finally {
         notice.mockRestore();
       }
     });
   }
 
-  test("retries repository failures and shows truncation, then reuses cached data from the path step", async () => {
+  test("retries repository failures and shows pagination, then reuses cached data from the path step", async () => {
     const loadGitHubRepositories = mock(async () => ({
       repositories: GITHUB_REPOSITORIES,
       truncated: true,
+      nextCursor: "next",
     }));
     loadGitHubRepositories.mockRejectedValueOnce(new Error("repository listing failed"));
     renderDialog({ loadGitHubRepositories });
@@ -429,11 +430,40 @@ describe("GitHub clone lifecycle and navigation", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("repository listing failed");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByRole("list", { name: "repositories" });
-    expect(screen.getByText(/first 3 repositories/i)).toBeTruthy();
+    expect(screen.getByText(/3 repositories loaded/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^api/ }));
     fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
     await screen.findByRole("list", { name: "repositories" });
     expect(loadGitHubRepositories).toHaveBeenCalledTimes(2);
+  });
+
+  test("retains loaded repositories and retries a failed next page using the same cursor", async () => {
+    const loadGitHubRepositories = mock(
+      async (_owner: string, _cursor?: string): Promise<GitHubCloneRepositoryList> => ({
+        repositories: [githubRepository("later", "")],
+        truncated: false,
+      }),
+    );
+    loadGitHubRepositories.mockResolvedValueOnce({
+      repositories: GITHUB_REPOSITORIES,
+      truncated: true,
+      nextCursor: "page-two",
+    });
+    loadGitHubRepositories.mockRejectedValueOnce(new Error("page failed"));
+    renderDialog({ loadGitHubRepositories });
+    await openGitHubRepositories();
+    fireEvent.click(screen.getByRole("button", { name: "Load more repositories" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("page failed");
+    expect(listedNames("repositories")).toEqual(["web", "billing", "api"]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading more" }));
+    await screen.findByRole("button", { name: /^later/ });
+    expect(loadGitHubRepositories.mock.calls).toEqual([
+      ["acme", undefined],
+      ["acme", "page-two"],
+      ["acme", "page-two"],
+    ]);
+    expect(screen.queryByRole("button", { name: "Load more repositories" }) === null).toBe(true);
+    expect(listedNames("repositories")).toEqual(["web", "billing", "api", "later"]);
   });
 
   test("ignores cancelled owner responses and refetches when returning to a loading owner", async () => {

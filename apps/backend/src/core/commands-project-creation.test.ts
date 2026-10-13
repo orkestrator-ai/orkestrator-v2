@@ -1680,7 +1680,17 @@ describe("GitHub clone command boundaries", () => {
     const run: Run = mock(async (_command, args = []) => {
       calls.push(args);
       return {
-        stdout: args.includes("user") ? "octocat_acme" : args[0] === "repo" ? "[]" : "",
+        stdout: args.includes("user")
+          ? "octocat_acme"
+          : args.includes("graphql")
+            ? JSON.stringify({
+                data: {
+                  repositoryOwner: {
+                    repositories: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  },
+                },
+              })
+            : "",
         stderr: "",
       };
     });
@@ -1691,7 +1701,7 @@ describe("GitHub clone command boundaries", () => {
       await expect(
         command("list_github_clone_repositories", { owner: "  octocat_acme  " }),
       ).resolves.toEqual({ repositories: [], truncated: false });
-      expect(calls.find((args) => args[0] === "repo")?.[2]).toBe("octocat_acme");
+      expect(calls.find((args) => args.includes("graphql"))).toContain("owner=octocat_acme");
       const count = calls.length;
       for (const [name, args] of [
         ["list_github_clone_accounts", { extra: true }],
@@ -1738,6 +1748,71 @@ describe("GitHub clone command boundaries", () => {
       }
       expect(await storage.loadProjects()).toEqual([]);
       expect(await fs.readFile(path.join(plain, "keep.txt"), "utf8")).toBe("keep");
+    });
+  });
+
+  test("clone-only rejects a subdirectory even when its checkout origin matches", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const checkout = path.join(root, "matching");
+      await createCloneSource(checkout);
+      const selected = "https://github.com/acme/api.git";
+      await shellRunCommand("git", ["-C", checkout, "remote", "add", "origin", selected]);
+      const nested = path.join(checkout, "nested");
+      await fs.mkdir(nested);
+      await fs.writeFile(path.join(nested, "keep.txt"), "keep");
+      await expect(
+        command("add_project", { gitUrl: selected, localPath: nested, cloneOnly: true }),
+      ).rejects.toThrow("Clone destination is not empty");
+      expect(await storage.loadProjects()).toEqual([]);
+      expect(await fs.readFile(path.join(nested, "keep.txt"), "utf8")).toBe("keep");
+    });
+  });
+
+  for (const stage of ["root", "origin"] as const) {
+    for (const [failure, message] of [
+      [
+        new CommandFailedError("spawn git ENOENT", { executableMissing: true }),
+        "Git is not installed or available on PATH",
+      ],
+      [new CommandFailedError("", { timedOut: true }), "Git inspection timed out"],
+      [new CommandFailedError("permission denied", { exitCode: 128 }), "permission denied"],
+      [new CommandFailedError("unable to read config", { exitCode: 1 }), "unable to read config"],
+    ] as const) {
+      test(`preserves ${message} during ${stage} inspection`, async () => {
+        const run: Run = mock(async (_command, args = []) => {
+          if (stage === "root" || args.includes("config")) throw failure;
+          return { stdout: args[1]!, stderr: "" };
+        });
+        await withProjectCreation(run, async (_invoke, storage, root, _args, command) => {
+          const localPath = path.join(root, "occupied");
+          await fs.mkdir(localPath);
+          await fs.writeFile(path.join(localPath, "keep.txt"), "keep");
+          await expect(
+            command("add_project", {
+              gitUrl: "https://github.com/acme/api.git",
+              localPath,
+              cloneOnly: true,
+            }),
+          ).rejects.toThrow(message);
+          expect(await storage.loadProjects()).toEqual([]);
+          expect(await fs.readFile(path.join(localPath, "keep.txt"), "utf8")).toBe("keep");
+        });
+      });
+    }
+  }
+
+  test("clone-only rejects a checkout without an origin as a mismatch", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const localPath = path.join(root, "no-origin");
+      await createCloneSource(localPath);
+      await expect(
+        command("add_project", {
+          gitUrl: "https://github.com/acme/api.git",
+          localPath,
+          cloneOnly: true,
+        }),
+      ).rejects.toThrow("Clone destination is not empty");
+      expect(await storage.loadProjects()).toEqual([]);
     });
   });
 

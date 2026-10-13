@@ -398,7 +398,13 @@ async function assertMatchingCloneDestination(
     ) {
       throw new Error(rejection);
     }
-    const origin = await readOriginUrl(projectPath, run);
+    // A missing origin is a mismatch; operational failures must still reject.
+    const { stdout: originOutput } = await run(
+      "git",
+      ["-C", projectPath, "config", "--get", "--default", "", "remote.origin.url"],
+      { timeoutMs: 10_000 },
+    );
+    const origin = withoutUrlCredentials(originOutput.trim());
     const selected = parseGitHubRepositoryRemote(gitUrl);
     const existing = parseGitHubRepositoryRemote(origin);
     const matches =
@@ -408,8 +414,16 @@ async function assertMatchingCloneDestination(
         selected.repository.owner.toLowerCase() === existing.repository.owner.toLowerCase() &&
         selected.repository.name.toLowerCase() === existing.repository.name.toLowerCase());
     if (!matches) throw new Error(rejection);
-  } catch {
-    throw new Error(rejection);
+  } catch (error) {
+    if (error instanceof Error && error.message === rejection) throw error;
+    if (error instanceof CommandFailedError) {
+      if (error.executableMissing) throw new Error("Git is not installed or available on PATH");
+      if (error.timedOut)
+        throw new Error("Could not inspect the clone destination: Git inspection timed out");
+      // Only this specific rev-parse failure establishes that it is not a checkout.
+      if (/^fatal: not a git repository/i.test(error.message.trim())) throw new Error(rejection);
+    }
+    throw new Error(`Could not inspect the clone destination: ${conciseError(error)}`);
   }
 }
 

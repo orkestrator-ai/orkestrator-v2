@@ -167,7 +167,11 @@ describe("useProjects", () => {
       addedProject = await result.current.addProject("git@github.com:test/repo.git");
     });
 
-    expect(mockAddProject).toHaveBeenCalledWith("git@github.com:test/repo.git", undefined);
+    expect(mockAddProject).toHaveBeenCalledWith(
+      "git@github.com:test/repo.git",
+      undefined,
+      undefined,
+    );
     expect(addedProject?.id).toBe("new-project-id");
     expect(result.current.projects).toHaveLength(1);
     expect(result.current.error).toBeNull();

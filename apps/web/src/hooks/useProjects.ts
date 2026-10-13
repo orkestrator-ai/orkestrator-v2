@@ -107,9 +107,7 @@ export function useProjects() {
       setLoading(true);
       setError(null);
       try {
-        const project = await (cloneOnly === undefined
-          ? backend.addProject(gitUrl, localPath)
-          : backend.addProject(gitUrl, localPath, cloneOnly));
+        const project = await backend.addProject(gitUrl, localPath, cloneOnly);
         addProjectToStore(project);
         toast.success("Project added", { description: project.name });
         return project;

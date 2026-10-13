@@ -3,8 +3,8 @@
  * repositories when adding a project by cloning from GitHub.
  */
 
-/** Upper bound on repositories listed for one account. */
-export const GITHUB_CLONE_REPOSITORY_LIMIT = 1000;
+/** Maximum number of repositories in one GitHub API page. */
+export const GITHUB_CLONE_REPOSITORY_PAGE_SIZE = 100;
 
 export interface GitHubCloneAccount {
   login: string;
@@ -28,8 +28,10 @@ export interface GitHubCloneRepository {
 
 export interface GitHubCloneRepositoryList {
   repositories: GitHubCloneRepository[];
-  /** True when the account has more repositories than the listing limit. */
+  /** True when more pages are available for this account. */
   truncated: boolean;
+  /** Opaque cursor for the next page; absent on the final page. */
+  nextCursor?: string;
 }
 
 /** Existing GitHub logins, including managed users; never an argv flag or path. */

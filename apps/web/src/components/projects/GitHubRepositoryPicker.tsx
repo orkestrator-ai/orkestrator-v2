@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
 
 type LoadState<T> =
   | { status: "loading" }
-  | { status: "ready"; value: T }
+  | { status: "ready"; value: T; loadingMore?: boolean; pageError?: string }
   | { status: "error"; message: string };
 
 type PickerStep =
@@ -145,7 +145,7 @@ function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }
 
 export interface GitHubRepositoryPickerProps {
   loadAccounts: () => Promise<GitHubCloneAccount[]>;
-  loadRepositories: (owner: string) => Promise<GitHubCloneRepositoryList>;
+  loadRepositories: (owner: string, cursor?: string) => Promise<GitHubCloneRepositoryList>;
   /** Clones the repository into the path and adds it as a project. */
   onClone: (cloneUrl: string, localPath: string) => Promise<void>;
   /** Leaves the picker for the manual Git URL form. */
@@ -215,22 +215,35 @@ export function GitHubRepositoryPicker({
     if (!activeOwner) return;
     // Settled listings are cached per owner for the life of the picker.
     const cached = repositoriesRef.current.get(activeOwner);
-    if (cached && cached.status !== "loading") return;
+    if (cached && cached.status !== "loading" && !(cached.status === "ready" && cached.loadingMore))
+      return;
+    const previous = cached?.status === "ready" ? cached.value : undefined;
     let cancelled = false;
     const update = (state: LoadState<GitHubCloneRepositoryList>) => {
       setRepositories((current) => new Map(current).set(activeOwner, state));
     };
-    update({ status: "loading" });
-    loadRepositoriesRef.current(activeOwner).then(
+    if (!previous) update({ status: "loading" });
+    loadRepositoriesRef.current(activeOwner, previous?.nextCursor).then(
       (value) => {
-        if (!cancelled) update({ status: "ready", value });
+        if (!cancelled) {
+          const merged = new Map(
+            previous?.repositories.map((repository) => [repository.fullName, repository]),
+          );
+          for (const repository of value.repositories) merged.set(repository.fullName, repository);
+          update({
+            status: "ready",
+            value: { ...value, repositories: Array.from(merged.values()) },
+          });
+        }
       },
       (error: unknown) => {
         if (!cancelled) {
-          update({
-            status: "error",
-            message: errorMessage(error, `Could not list repositories for ${activeOwner}`),
-          });
+          const message = errorMessage(error, `Could not list repositories for ${activeOwner}`);
+          update(
+            previous
+              ? { status: "ready", value: previous, pageError: message }
+              : { status: "error", message },
+          );
         }
       },
     );
@@ -460,11 +473,40 @@ export function GitHubRepositoryPicker({
                 );
               }}
             />
-            {activeRepositories.value.truncated && (
-              <p className="text-xs text-muted-foreground">
-                Showing the first {activeRepositories.value.repositories.length} repositories.
-                Search narrows this list only.
-              </p>
+            {activeRepositories.value.nextCursor && (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {activeRepositories.value.repositories.length} repositories loaded. Load more to
+                  search the rest.
+                </p>
+                {activeRepositories.pageError && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {activeRepositories.pageError}
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={activeRepositories.loadingMore}
+                  onClick={() => {
+                    setRepositories((current) =>
+                      new Map(current).set(account.login, {
+                        ...activeRepositories,
+                        loadingMore: true,
+                        pageError: undefined,
+                      }),
+                    );
+                    setRepositoriesAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  {activeRepositories.loadingMore
+                    ? "Loading more…"
+                    : activeRepositories.pageError
+                      ? "Retry loading more"
+                      : "Load more repositories"}
+                </Button>
+              </div>
             )}
           </>
         )}

@@ -408,10 +408,11 @@ export function registerProjectCommands(
     return listGitHubCloneAccounts(runProjectCreationCommand);
   });
   register("list_github_clone_repositories", (args) => {
-    assertOnlyKeys(args, ["owner"], "arguments");
+    assertOnlyKeys(args, ["owner", "cursor"], "arguments");
     return listGitHubCloneRepositories(
       asNonBlankString(args.owner, "owner").trim(),
       runProjectCreationCommand,
+      args.cursor === undefined ? undefined : asNonBlankString(args.cursor, "cursor"),
     );
   });
   register("remove_project", async ({ projectId }, context) => {

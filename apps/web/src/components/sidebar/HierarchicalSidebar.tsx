@@ -762,9 +762,7 @@ export function HierarchicalSidebar() {
 
   const handleAddProject = async (gitUrl: string, localPath?: string, cloneOnly?: boolean) => {
     try {
-      await (cloneOnly === undefined
-        ? addProject(gitUrl, localPath)
-        : addProject(gitUrl, localPath, cloneOnly));
+      await addProject(gitUrl, localPath, cloneOnly);
     } catch (err) {
       console.error("Failed to add project:", err);
       throw err; // Re-throw so the dialog can handle it

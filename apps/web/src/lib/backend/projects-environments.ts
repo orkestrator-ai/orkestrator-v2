@@ -121,8 +121,12 @@ export async function listGitHubCloneAccounts(): Promise<GitHubCloneAccount[]> {
 
 export async function listGitHubCloneRepositories(
   owner: string,
+  cursor?: string,
 ): Promise<GitHubCloneRepositoryList> {
-  return invoke<GitHubCloneRepositoryList>("list_github_clone_repositories", { owner });
+  return invoke<GitHubCloneRepositoryList>("list_github_clone_repositories", {
+    owner,
+    ...(cursor === undefined ? {} : { cursor }),
+  });
 }
 
 export async function removeProject(projectId: string): Promise<void> {

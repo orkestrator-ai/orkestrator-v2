@@ -1,7 +1,7 @@
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
   compareGitHubNames,
-  GITHUB_CLONE_REPOSITORY_LIMIT,
+  GITHUB_CLONE_REPOSITORY_PAGE_SIZE,
   isGitHubLogin,
   type GitHubCloneAccount,
   type GitHubCloneRepository,
@@ -14,18 +14,16 @@ const GITHUB_HOST = "github.com";
 const GITHUB_API_TIMEOUT_MS = 30_000;
 const GITHUB_REPOSITORY_LIST_TIMEOUT_MS = 90_000;
 const DESCRIPTION_MAX_CHARS = 300;
-const REPOSITORY_FIELDS = [
-  "name",
-  "nameWithOwner",
-  "description",
-  "isPrivate",
-  "isFork",
-  "isArchived",
-  "pushedAt",
-  "updatedAt",
-  "url",
-  "sshUrl",
-].join(",");
+const REPOSITORY_QUERY = `query($owner: String!, $endCursor: String) {
+  repositoryOwner(login: $owner) {
+    repositories(first: 100, after: $endCursor, orderBy: {field: PUSHED_AT, direction: DESC}) {
+      nodes { name nameWithOwner description isPrivate isFork isArchived pushedAt updatedAt url sshUrl }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+const CURSOR_MAX_CHARS = 512;
+const PAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 function gitHubCliError(action: string, error: unknown): Error {
   if (error instanceof CommandFailedError && error.executableMissing) {
@@ -142,31 +140,32 @@ function parseRepository(value: unknown, protocol: "ssh" | "https"): GitHubClone
   };
 }
 
-/** Repositories owned by one GitHub user or organization, in GitHub's order. */
+/** One bounded page of repositories owned by a GitHub user or organization. */
 export async function listGitHubCloneRepositories(
   owner: string,
   run: typeof runCommand,
+  cursor?: string,
 ): Promise<GitHubCloneRepositoryList> {
   if (!isGitHubLogin(owner)) throw new Error("Invalid GitHub account name");
-
+  if (cursor !== undefined && (!cursor || cursor.length > CURSOR_MAX_CHARS)) {
+    throw new Error("Invalid GitHub repository cursor");
+  }
   const [protocol, stdout] = await Promise.all([
     preferredGitProtocol(run),
     run(
       "gh",
       [
-        "repo",
-        "list",
-        owner,
-        // One past the limit reveals whether the listing was cut short.
-        "--limit",
-        String(GITHUB_CLONE_REPOSITORY_LIMIT + 1),
-        "--json",
-        REPOSITORY_FIELDS,
+        "api",
+        "--hostname",
+        GITHUB_HOST,
+        "graphql",
+        "-f",
+        `query=${REPOSITORY_QUERY}`,
+        "-f",
+        `owner=${owner}`,
+        ...(cursor === undefined ? [] : ["-f", `endCursor=${cursor}`]),
       ],
-      {
-        timeoutMs: GITHUB_REPOSITORY_LIST_TIMEOUT_MS,
-        env: { ...process.env, GH_HOST: GITHUB_HOST },
-      },
+      { timeoutMs: GITHUB_REPOSITORY_LIST_TIMEOUT_MS },
     ).then(
       (result) => result.stdout,
       (error: unknown) => {
@@ -174,20 +173,40 @@ export async function listGitHubCloneRepositories(
       },
     ),
   ]);
-
-  let parsed: unknown;
+  if (Buffer.byteLength(stdout) > PAGE_MAX_BYTES) {
+    throw new Error(
+      `Could not list repositories for ${owner}: GitHub CLI output exceeded the page limit`,
+    );
+  }
+  let parsed;
   try {
     parsed = JSON.parse(stdout);
   } catch {
     throw new Error(`Could not list repositories for ${owner}: GitHub CLI returned invalid JSON`);
   }
-  if (!Array.isArray(parsed)) {
+  const page = parsed?.data?.repositoryOwner?.repositories;
+  const info = page?.pageInfo;
+  if (
+    parsed?.errors ||
+    !Array.isArray(page?.nodes) ||
+    page.nodes.length > GITHUB_CLONE_REPOSITORY_PAGE_SIZE ||
+    typeof info?.hasNextPage !== "boolean" ||
+    (info.hasNextPage &&
+      (typeof info.endCursor !== "string" ||
+        !info.endCursor ||
+        info.endCursor.length > CURSOR_MAX_CHARS ||
+        info.endCursor === cursor))
+  ) {
     throw new Error(`Could not list repositories for ${owner}: unexpected GitHub CLI output`);
   }
-
-  const repositories = parsed
-    .slice(0, GITHUB_CLONE_REPOSITORY_LIMIT)
-    .map((entry) => parseRepository(entry, protocol))
-    .filter((repository): repository is GitHubCloneRepository => repository !== null);
-  return { repositories, truncated: parsed.length > GITHUB_CLONE_REPOSITORY_LIMIT };
+  return {
+    repositories: page.nodes
+      .map((entry: unknown) => parseRepository(entry, protocol))
+      .filter(
+        (repository: GitHubCloneRepository | null): repository is GitHubCloneRepository =>
+          repository !== null,
+      ),
+    truncated: info.hasNextPage,
+    ...(info.hasNextPage ? { nextCursor: info.endCursor as string } : {}),
+  };
 }

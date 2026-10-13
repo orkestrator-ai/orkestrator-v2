@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { GITHUB_CLONE_REPOSITORY_LIMIT } from "@orkestrator/protocol/github-clone";
+import { GITHUB_CLONE_REPOSITORY_PAGE_SIZE } from "@orkestrator/protocol/github-clone";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { CommandFailedError, type runCommand } from "./shell.js";
 
@@ -30,6 +30,19 @@ function ghRepository(name: string, overrides: Record<string, unknown> = {}) {
     sshUrl: `git@github.com:acme/${name}.git`,
     ...overrides,
   };
+}
+
+function pageJson(nodes: unknown[], nextCursor?: string): string {
+  return JSON.stringify({
+    data: {
+      repositoryOwner: {
+        repositories: {
+          nodes,
+          pageInfo: { hasNextPage: nextCursor !== undefined, endCursor: nextCursor ?? null },
+        },
+      },
+    },
+  });
 }
 
 describe("listGitHubCloneAccounts", () => {
@@ -76,7 +89,7 @@ describe("listGitHubCloneRepositories", () => {
     const calls: Call[] = [];
     const run = runner(({ args }) => {
       if (args[0] === "config") return "https\n";
-      return JSON.stringify([
+      return pageJson([
         ghRepository("api", { isPrivate: true, updatedAt: "2026-06-01T00:00:00Z" }),
         ghRepository("web", { description: "" }),
         { name: "broken" },
@@ -110,37 +123,62 @@ describe("listGitHubCloneRepositories", () => {
         },
       ],
     });
-    const list = calls.find((call) => call.args[0] === "repo");
-    expect(list?.args.slice(0, 5)).toEqual([
-      "repo",
-      "list",
-      "acme",
-      "--limit",
-      String(GITHUB_CLONE_REPOSITORY_LIMIT + 1),
-    ]);
+    const list = calls.find((call) => call.args.includes("graphql"));
+    expect(list?.args).toContain("owner=acme");
+    expect(list?.args.find((arg) => arg.startsWith("query="))).toContain("first: 100");
   });
 
   test("uses SSH remotes when the GitHub CLI prefers SSH", async () => {
     const run = runner(({ args }) =>
-      args[0] === "config" ? "ssh\n" : JSON.stringify([ghRepository("api")]),
+      args[0] === "config" ? "ssh\n" : pageJson([ghRepository("api")]),
     );
     const result = await listGitHubCloneRepositories("acme", run);
     expect(result.repositories[0]?.cloneUrl).toBe("git@github.com:acme/api.git");
   });
 
-  test("reports truncation past the listing limit", async () => {
-    const run = runner(({ args }) =>
-      args[0] === "config"
-        ? new Error("unset")
-        : JSON.stringify(
-            Array.from({ length: GITHUB_CLONE_REPOSITORY_LIMIT + 1 }, (_, index) =>
-              ghRepository(`repo-${index}`),
-            ),
-          ),
-    );
-    const result = await listGitHubCloneRepositories("acme", run);
-    expect(result.truncated).toBe(true);
-    expect(result.repositories).toHaveLength(GITHUB_CLONE_REPOSITORY_LIMIT);
+  test("pages through more than 1,000 repositories without losing the last repository", async () => {
+    const calls: Call[] = [];
+    const all = Array.from({ length: 1001 }, (_, index) => ghRepository(`repo-${index}`));
+    const run = runner(({ args }) => {
+      if (args[0] === "config") return "https";
+      const offset = Number(args.find((arg) => arg.startsWith("endCursor="))?.slice(10) ?? 0);
+      const next = offset + GITHUB_CLONE_REPOSITORY_PAGE_SIZE;
+      return pageJson(all.slice(offset, next), next < all.length ? String(next) : undefined);
+    }, calls);
+    const names: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await listGitHubCloneRepositories("acme", run, cursor);
+      expect(page.repositories.length).toBeLessThanOrEqual(GITHUB_CLONE_REPOSITORY_PAGE_SIZE);
+      names.push(...page.repositories.map((repository) => repository.name));
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(names).toHaveLength(1001);
+    expect(names.at(-1)).toBe("repo-1000");
+    expect(calls.filter((call) => call.args.includes("graphql"))).toHaveLength(11);
+  });
+
+  test("rejects oversized pages, malformed and non-advancing cursors", async () => {
+    for (const output of [
+      pageJson(Array.from({ length: 101 }, (_, i) => ghRepository(`repo-${i}`))),
+      pageJson([], "same"),
+      pageJson([], "x".repeat(513)),
+    ]) {
+      await expect(
+        listGitHubCloneRepositories(
+          "acme",
+          runner(({ args }) => (args[0] === "config" ? "https" : output)),
+          "same",
+        ),
+      ).rejects.toThrow("unexpected GitHub CLI output");
+    }
+    const run = runner(() => "");
+    for (const cursor of ["", "x".repeat(513)]) {
+      await expect(listGitHubCloneRepositories("acme", run, cursor)).rejects.toThrow(
+        "Invalid GitHub repository cursor",
+      );
+    }
+    expect(run).not.toHaveBeenCalled();
   });
 
   test("rejects owners that are not GitHub logins without running gh", async () => {
@@ -166,7 +204,7 @@ describe("GitHub listing edge cases", () => {
   test("accepts managed-user logins in accounts and repository lookups", async () => {
     const run = runner(({ args }) => {
       if (args.includes("user")) return "octocat_acme\n";
-      if (args[0] === "repo") return "[]";
+      if (args.includes("graphql")) return pageJson([]);
       return "";
     });
     expect(await listGitHubCloneAccounts(run)).toEqual([{ login: "octocat_acme", kind: "user" }]);
@@ -185,7 +223,8 @@ describe("GitHub listing edge cases", () => {
     const calls: Call[] = [];
     try {
       const run = runner(
-        ({ args }) => (args.includes("user") ? "octocat" : args[0] === "repo" ? "[]" : ""),
+        ({ args }) =>
+          args.includes("user") ? "octocat" : args.includes("graphql") ? pageJson([]) : "",
         calls,
       );
       await listGitHubCloneAccounts(run);
@@ -195,7 +234,6 @@ describe("GitHub listing edge cases", () => {
           expect(call.args.slice(1, 3)).toEqual(["--hostname", "github.com"]);
         if (call.args[0] === "config")
           expect(call.args.slice(-2)).toEqual(["--host", "github.com"]);
-        if (call.args[0] === "repo") expect(call.options?.env?.GH_HOST).toBe("github.com");
       }
       expect(process.env.GH_HOST).toBe("github.enterprise.test");
     } finally {
@@ -243,7 +281,7 @@ describe("GitHub listing edge cases", () => {
     const result = await listGitHubCloneRepositories(
       "acme",
       runner(({ args }) =>
-        args[0] === "config" ? "ssh" : JSON.stringify([ghRepository("api", { sshUrl: null })]),
+        args[0] === "config" ? "ssh" : pageJson([ghRepository("api", { sshUrl: null })]),
       ),
     );
     expect(result.repositories[0]?.cloneUrl).toBe("https://github.com/acme/api.git");

@@ -19,7 +19,6 @@ import {
   LockKeyhole,
   Plus,
 } from "lucide-react";
-import { toast } from "sonner";
 import { pickHostPath } from "@/lib/host-path-picker";
 import {
   getGitRemoteUrl,
@@ -312,13 +311,7 @@ export function AddProjectDialog({
         if (isCurrent()) {
           resetForm();
           onOpenChange(false);
-        } else {
-          toast.success("Repository cloned and added as a project");
         }
-      } catch (error) {
-        if (!isCurrent())
-          toast.error(error instanceof Error ? error.message : "Failed to clone the repository");
-        throw error;
       } finally {
         gitHubCloneInFlightRef.current = false;
         if (mountedRef.current) setIsGitHubCloning(false);

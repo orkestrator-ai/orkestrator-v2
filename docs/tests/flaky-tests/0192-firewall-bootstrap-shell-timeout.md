@@ -21,3 +21,22 @@
 - **Isolated rerun:** the same GNU-tool `PATH` prefix with `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed in 8.3 seconds.
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.zbwgoU/root-and-agent-support-tests.log.gz`.
 - **Hypothesis:** both shell-fixture cases exhausted their outer five-second deadline during aggregate validation. Their owning file passed alone; the root cause remains unconfirmed. The merge resolution changes only flake documentation.
+
+## Recurrence 2026-10-13 (GitHub clone review fixes)
+
+- **Original command:** the GNU-tool `PATH` prefix above with
+  `mise run test:logged -- --name fix-full-tests -- mise run test`.
+- **Worker configuration:** three root workers alongside workspace and bridge
+  groups; browser validation was also running.
+- **Test:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache`.
+- **Failure:** expected exit code `0`, received `null`; outer five-second timeout
+  after 5,018.58 ms.
+- **Root-suite counts:** 5,047 total, 5,018 passed, 24 skipped, 5 failed;
+  221.60 seconds. The other failures were three diff-stat timeouts and a new
+  bounded-diagnostics assertion corrected in this change.
+- **Isolated rerun:** the same GNU-tool `PATH` prefix with
+  `mise run test:logged -- --name isolate-firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`
+  passed in 12.1 seconds.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FOIo01/root-and-agent-support-tests.log.gz`.
+- **Hypothesis:** another shell-fixture case exhausted the same outer deadline
+  during aggregate validation and passed unchanged alone; root cause unconfirmed.

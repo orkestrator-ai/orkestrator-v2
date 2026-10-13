@@ -164,6 +164,13 @@ function captureTextPasteFallback(event: ClipboardEvent, target: Element): (() =
   return null;
 }
 
+function isLockedComposerInput(element: Element): boolean {
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    return element.readOnly || element.disabled;
+  }
+  return element.getAttribute("aria-disabled") === "true";
+}
+
 /**
  * Document-level paste handler shared by the native compose bars (Claude,
  * Codex, OpenCode). Reads an image from a browser/iOS paste event or the
@@ -187,6 +194,12 @@ export function useNativeComposeBarPaste({
     const handlePaste = async (event: ClipboardEvent) => {
       const activeEl = document.activeElement;
       if (!activeEl || !inputContainerRef.current?.contains(activeEl)) return;
+      // The composer keeps focus while a send is in flight but must not take
+      // new content: the send clears the draft when it completes.
+      if (isLockedComposerInput(activeEl)) {
+        event.preventDefault();
+        return;
+      }
 
       // Browser and iOS paste data is only guaranteed to be readable during
       // the event itself. Claim an image paste synchronously so the editable

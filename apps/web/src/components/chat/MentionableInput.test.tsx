@@ -461,6 +461,127 @@ describe("MentionableInput", () => {
     expect(input!.getAttribute("aria-disabled")).toBe("true");
   });
 
+  test("stays focusable but out of the tab order while disabled", () => {
+    const { container, rerender } = render(
+      <MentionableInput value="" mentions={[]} onChange={() => {}} />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    expect(input.hasAttribute("tabindex")).toBe(false);
+
+    rerender(<MentionableInput value="" mentions={[]} onChange={() => {}} disabled />);
+    expect(input.getAttribute("tabindex")).toBe("-1");
+
+    rerender(<MentionableInput value="" mentions={[]} onChange={() => {}} />);
+    expect(input.hasAttribute("tabindex")).toBe(false);
+  });
+
+  test("keeps focus and restores the caret when a send re-enables the input", () => {
+    const inputRef = createRef<MentionableInputRef>();
+
+    function Harness({ text, sending }: { text: string; sending: boolean }) {
+      return (
+        <MentionableInput
+          ref={inputRef}
+          value={text}
+          mentions={[]}
+          onChange={() => {}}
+          disabled={sending}
+        />
+      );
+    }
+
+    const { container, rerender } = render(<Harness text="Ship it" sending={false} />);
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    act(() => inputRef.current!.focus());
+    expect(document.activeElement).toBe(input);
+
+    rerender(<Harness text="Ship it" sending />);
+    expect(document.activeElement).toBe(input);
+
+    // The send completes: the draft clears and editing is allowed again.
+    window.getSelection()!.removeAllRanges();
+    rerender(<Harness text="" sending={false} />);
+
+    expect(document.activeElement).toBe(input);
+    const selection = window.getSelection()!;
+    expect(selection.rangeCount).toBe(1);
+    expect(input.contains(selection.getRangeAt(0).startContainer)).toBe(true);
+    expect(inputRef.current!.getCursorPosition()).toBe(0);
+  });
+
+  test("places the caret at the end of a draft restored after a failed send", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    const { container, rerender } = render(
+      <MentionableInput ref={inputRef} value="Retry me" mentions={[]} onChange={() => {}} />,
+    );
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    act(() => inputRef.current!.focus());
+
+    rerender(
+      <MentionableInput
+        ref={inputRef}
+        value="Retry me"
+        mentions={[]}
+        onChange={() => {}}
+        disabled
+      />,
+    );
+    window.getSelection()!.removeAllRanges();
+    rerender(
+      <MentionableInput ref={inputRef} value="Retry me" mentions={[]} onChange={() => {}} />,
+    );
+
+    expect(document.activeElement).toBe(input);
+    expect(inputRef.current!.getCursorPosition()).toBe("Retry me".length);
+  });
+
+  test("does not take focus when re-enabled after focus moved elsewhere", () => {
+    function Harness({ sending }: { sending: boolean }) {
+      return (
+        <>
+          <button type="button" data-testid="elsewhere">
+            Elsewhere
+          </button>
+          <MentionableInput value="" mentions={[]} onChange={() => {}} disabled={sending} />
+        </>
+      );
+    }
+
+    const { getByTestId, rerender } = render(<Harness sending />);
+    const elsewhere = getByTestId("elsewhere");
+    elsewhere.focus();
+
+    rerender(<Harness sending={false} />);
+
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  test("ignores pastes while disabled", () => {
+    const onChange = mock(() => {});
+    const { container } = render(
+      <MentionableInput value="Hello " mentions={[]} onChange={onChange} disabled />,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, "Hello ".length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const pasteWasNotCancelled = fireEvent.paste(input, {
+      clipboardData: {
+        getData: () => "world",
+      },
+    });
+
+    expect(pasteWasNotCancelled).toBe(false);
+    expect(input.textContent).toBe("Hello ");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   test("focusAtEnd parks the cursor after a wholesale value replacement", () => {
     const inputRef = createRef<MentionableInputRef>();
 

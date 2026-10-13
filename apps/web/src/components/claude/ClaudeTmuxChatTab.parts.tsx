@@ -1287,13 +1287,17 @@ export function TmuxComposeBar({
           placeholder={
             disabled ? "Session not running" : "Ask Claude anything… (@ to mention, / for commands)"
           }
-          disabled={disabled || submitting || queueSubmitting}
+          disabled={disabled}
+          // A disabled textarea drops focus, so an in-flight send only locks
+          // editing; focus stays here for the next prompt.
+          readOnly={submitting || queueSubmitting}
+          aria-busy={submitting || queueSubmitting}
           rows={2}
           autoFocus={autoFocus && !isMobile}
           className={cn(
             "w-full resize-none bg-transparent text-sm leading-5",
             "px-1 py-1 focus:outline-none placeholder:text-muted-foreground/60",
-            "disabled:opacity-60",
+            "disabled:opacity-60 read-only:opacity-60",
           )}
           style={{ minHeight: 28, maxHeight: 12 * 20 + 16 }}
         />
@@ -1428,6 +1432,8 @@ export function TmuxComposeBar({
         {/* Send / Stop button */}
         <Button
           size="sm"
+          // Keep focus in the prompt input when sending with the mouse.
+          onMouseDown={(event) => event.preventDefault()}
           onClick={busy && !value.trim() && attachments.length === 0 ? onInterrupt : handleSubmit}
           disabled={
             disabled ||

@@ -54,6 +54,7 @@ Refreshed 2026-09-17 against the current tree.
 | [disk-usage.md](development/disk-usage.md) | Living | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [linting.md](development/linting.md) | Living | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 | [releasing.md](development/releasing.md) | Living | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
+| [dependency-upgrade-schedule-2026-10-13.md](development/dependency-upgrade-schedule-2026-10-13.md) | Active | Phased upgrade plan for every non-agent dependency, runtime and image tool: security fixes, Electron 42 EOL, Vite 8, lucide 1.x, oxlint React Compiler rules, PR boundaries and validation. Agent SDKs stay in `upgrade-agents.md`. |
 
 ## Tests
 

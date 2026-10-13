@@ -1890,7 +1890,32 @@ describe("GlobalSettings", () => {
     render(<GlobalSettings activeSection="debug" />);
 
     await waitFor(() => expect(screen.getAllByText(BUNDLED_APP_VERSION)).toHaveLength(2));
-    expect(screen.queryByText(/versions differ/)).toBeNull();
+    expect(screen.queryByText(/versions differ/) === null).toBe(true);
+  });
+
+  test("shows the remote backend gateway hostname and port", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.example.ts.net:34121/",
+    };
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("2.15.1")).toBeTruthy();
+    expect(screen.getByText("workstation.example.ts.net:34121")).toBeTruthy();
+    expect(screen.getAllByText("this machine")).toHaveLength(1);
+  });
+
+  test("uses a generic remote backend label when its gateway URL is invalid", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "invalid gateway URL",
+    };
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("2.15.1")).toBeTruthy();
+    expect(screen.getByText("remote backend")).toBeTruthy();
+    expect(screen.getAllByText("this machine")).toHaveLength(1);
   });
 
   test("marks the backend as unreachable when it does not answer", async () => {

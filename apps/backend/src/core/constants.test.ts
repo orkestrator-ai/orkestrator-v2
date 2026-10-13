@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import backendPackage from "../../package.json" with { type: "json" };
 import {
   AGENT_NETWORK_DOMAINS_BY_PLATFORM,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
@@ -6,6 +7,46 @@ import {
   requiredAgentNetworkDomains,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
+
+describe("APP_VERSION", () => {
+  test.each([
+    ["absent", undefined, backendPackage.version],
+    ["empty", "", backendPackage.version],
+    ["whitespace", " \t\n ", backendPackage.version],
+    ["explicit override", "9.8.7-test+build.1", "9.8.7-test+build.1"],
+    ["trimmed override", " 9.8.7-test ", "9.8.7-test"],
+    ["shell metacharacters", '"$(untrusted-command)"', "0.0.0"],
+    ["embedded whitespace", "9.8.7 test", "0.0.0"],
+    ["overlong override", "1".repeat(65), "0.0.0"],
+  ])("resolves a %s environment value on import", async (_label, raw, expected) => {
+    // A fresh process exercises the exported constant without reusing Bun's
+    // module cache or mutating the test worker's environment. Set the value
+    // after startup so automatic .env loading cannot replace the absent case.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+          delete process.env.ORKESTRATOR_VERSION;
+          const raw = ${JSON.stringify(raw) ?? "undefined"};
+          if (raw !== undefined) process.env.ORKESTRATOR_VERSION = raw;
+          const { APP_VERSION } = await import(${JSON.stringify(import.meta.dir + "/constants.ts")});
+          process.stdout.write(APP_VERSION);
+        `,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toBe(expected!);
+  });
+});
 
 describe("resolveCodexMaxConcurrentThreads", () => {
   test.each([

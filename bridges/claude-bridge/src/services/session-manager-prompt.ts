@@ -3339,6 +3339,10 @@ export async function sendPrompt(
               // shell command at its `timeout` (30 minutes by default, 2 hours at
               // most), so a dev server Claude starts here does not outlive that.
               "Background shell commands in this session are stopped when they reach their timeout (30 minutes by default, 2 hours at most). For a dev server or watcher that must keep running longer, tell the user to start it in an Orkestrator terminal tab instead of running it yourself.",
+              // The claude.ai Claude Docs connector and docs skill steer reports
+              // into remote docs that only an Artifact tool can open, and
+              // Orkestrator has none, so the report never shows up here.
+              "When the user asks for a document (a report, design doc, plan, analysis, guide, or other writing to keep), prefer writing it as a Markdown file in a `docs/` folder at the root of the working directory over creating a Claude Doc or claude.ai artifact, and tell the user the file's path. Project instructions (such as CLAUDE.md or AGENTS.md), local skills, and the user's own request take priority over this default when they say where or how to write documents.",
             ].join("\n\n"),
           },
           // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)

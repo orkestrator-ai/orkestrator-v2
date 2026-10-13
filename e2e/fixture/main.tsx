@@ -84,6 +84,10 @@ const TerminalLinksFixture = lazy(async () => ({
   default: (await import("./TerminalLinksFixture")).TerminalLinksFixture,
 }));
 
+const ProjectNavigationFixture = lazy(async () => ({
+  default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
+}));
+
 declare global {
   interface Window {
     lastCreateEnvironmentOptions?: ClaudeOptions;
@@ -1596,6 +1600,13 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/project-navigation") {
+    return (
+      <Suspense fallback={null}>
+        <ProjectNavigationFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/terminal-corner-toolbar") {
     return (
       <Suspense fallback={null}>

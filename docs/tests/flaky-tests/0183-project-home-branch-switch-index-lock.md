@@ -109,3 +109,21 @@ Failure evidence:
 and `/tmp/orkestrator-test-run.xZCLLJ/summary.json`. The isolated pass again
 supports intermittent fixture Git contention without identifying the lock
 owner. No assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-13 (project navigation validation)
+
+The GNU-tool PATH command `mise run test:logged -- --name full-tests -- mise run test`
+hit the same existing fixture `.git/index.lock` during branch switching at
+259.22 ms. Workspace packages used one Bun worker each with two package tasks;
+root, bridge and protocol groups ran alongside them.
+
+Backend totals were 5,875 passed, 15 skipped and 27 failed across 329 files in
+442.53 seconds. Twenty-two failures reproduced as tmux cleanup errors on this
+host and are separate from the index-lock flake.
+
+The unchanged owning file passed alone (exit 0) in 6.2 seconds with the same PATH:
+`mise run test:logged -- --name project-home-rerun -- bun --cwd=apps/backend test ./src/core/commands-registry-project-home.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+
+Evidence: `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The isolated pass supports the existing fixture-contention hypothesis; the lock
+owner remains unknown. No assertion, timeout or skip was changed.

@@ -568,7 +568,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           "max-w-[min(100%,40rem)] gap-0.5 overflow-x-auto rounded-none border-0 bg-transparent p-0",
           isGrid && "col-span-2 w-full justify-start",
         )}
-        buttonClassName="h-6 shrink-0 px-2 text-xs"
+        buttonClassName="h-6 shrink-0 px-2 text-xs focus-visible:ring-inset"
         options={
           [
             ...(hasProjectCheckout

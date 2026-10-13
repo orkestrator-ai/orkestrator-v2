@@ -13,6 +13,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
+import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
@@ -561,11 +562,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         disabled={!selectedProject}
         semantics={isProjectView ? "tabs" : "buttons"}
         ariaLabel="Project navigation"
+        // Bare icon-and-label tabs, sized to sit within the workspace bar row
+        // alongside the sidebar's project search bar.
         className={cn(
-          "max-w-[min(100%,40rem)] overflow-x-auto bg-zinc-900/80",
+          "max-w-[min(100%,40rem)] gap-0.5 overflow-x-auto rounded-none border-0 bg-transparent p-0",
           isGrid && "col-span-2 w-full justify-start",
         )}
-        buttonClassName="shrink-0 px-2 text-xs"
+        buttonClassName="h-6 shrink-0 px-2 text-xs"
         options={
           [
             ...(hasProjectCheckout
@@ -621,7 +624,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         <Button
           variant={isGrid ? "ghost" : "outline"}
           size={isGrid ? "icon" : "sm"}
-          className={cn("gap-1.5", !isGrid && "h-7 shrink-0")}
+          className={cn("gap-1.5", !isGrid && "h-6 shrink-0 text-xs")}
           onClick={openProjectNotes}
           aria-label="Project notes"
           disabled={!selectedProject}
@@ -1466,7 +1469,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         {!isGrid && isProjectView && (
           <div
             data-testid="project-navigation-bar"
-            className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border/80 bg-chrome px-2 md:px-4 [&::-webkit-scrollbar]:hidden"
+            className={cn(
+              "flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border/80 bg-chrome px-2 md:px-4 [&::-webkit-scrollbar]:hidden",
+              WORKSPACE_BAR_HEIGHT_CLASS,
+            )}
             style={{ scrollbarWidth: "none" }}
           >
             {projectNavigation}

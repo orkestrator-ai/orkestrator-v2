@@ -1,5 +1,17 @@
 import { Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, Copy, FolderOpen, Layers, Loader2, Square } from "lucide-react";
+import {
+  Activity,
+  Check,
+  ChevronRight,
+  Coins,
+  Copy,
+  FolderOpen,
+  Layers,
+  Loader2,
+  Square,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -297,6 +309,69 @@ function AgentResultBlock({ result }: { result?: string }) {
   );
 }
 
+function formatUpdateCount(count: number): string {
+  return `${count} ${count === 1 ? "update" : "updates"}`;
+}
+
+/**
+ * One usage figure as icon + number. The full phrase stays available to
+ * assistive tech and as a hover tooltip, so the compact form loses nothing.
+ */
+function UsageStat({
+  icon: Icon,
+  value,
+  label,
+}: {
+  icon: LucideIcon;
+  value: string;
+  label: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 tabular-nums" title={label}>
+      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span aria-hidden="true">{value}</span>
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
+/** "122k tokens" reads as "122k" beside the token icon. */
+function compactTokenCount(text: string): string {
+  return text.replace(/\s*tokens?$/i, "") || text;
+}
+
+/** Tools, tokens and updates side by side on a single line. */
+function UsageStatsRow({
+  toolUses,
+  toolLabel,
+  tokenCountText,
+  updates,
+}: {
+  toolUses?: number;
+  toolLabel?: string;
+  tokenCountText?: string;
+  updates?: number;
+}) {
+  if (toolUses === undefined && !tokenCountText && updates === undefined) return null;
+  return (
+    <div className="flex items-center justify-end gap-2.5 whitespace-nowrap text-[11px] text-muted-foreground/70">
+      {toolUses !== undefined ? (
+        <UsageStat
+          icon={Wrench}
+          value={String(toolUses)}
+          label={toolLabel ?? formatToolUseCount(toolUses)}
+        />
+      ) : null}
+      {tokenCountText ? (
+        <UsageStat icon={Coins} value={compactTokenCount(tokenCountText)} label={tokenCountText} />
+      ) : null}
+      {updates !== undefined ? (
+        <UsageStat icon={Activity} value={String(updates)} label={formatUpdateCount(updates)} />
+      ) : null}
+    </div>
+  );
+}
+
 function AgentUsageStats({
   hasExternalUsage,
   tokenOnlyUsage,
@@ -313,21 +388,12 @@ function AgentUsageStats({
   durationLabel?: string;
 }) {
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
-  if (hideCounts) {
+  if (hideCounts || tokenOnlyUsage) {
     if (!durationLabel && !tokenCountText) return null;
     return (
-      <div className="shrink-0 self-end text-right text-[11px] text-muted-foreground/70">
-        {durationLabel ? <div className="tabular-nums">{durationLabel}</div> : null}
-        {tokenCountText ? <div>{tokenCountText}</div> : null}
-      </div>
-    );
-  }
-
-  if (tokenOnlyUsage && tokenCountText) {
-    return (
-      <div className="shrink-0 self-end text-right text-[11px] text-muted-foreground/70">
-        <div>{tokenCountText}</div>
-        {durationLabel ? <div className="tabular-nums">{durationLabel}</div> : null}
+      <div className="flex shrink-0 self-end flex-col items-end gap-1">
+        <UsageStatsRow tokenCountText={tokenCountText} />
+        <RuntimeLabel value={durationLabel} />
       </div>
     );
   }
@@ -337,16 +403,18 @@ function AgentUsageStats({
   if (!showTools && !showUpdates && !durationLabel) return null;
 
   const toolCountLabel = hasExternalUsage
-    ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
+    ? formatToolUseCount(toolCount)
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
 
   return (
-    <div className="shrink-0 self-end text-right text-[11px] text-muted-foreground/70">
-      {showTools ? <div>{toolCountLabel}</div> : null}
-      {showUpdates ? (
-        <div>{tokenCountText ?? `${updateCount} ${updateCount === 1 ? "update" : "updates"}`}</div>
-      ) : null}
-      {durationLabel ? <div className="tabular-nums">{durationLabel}</div> : null}
+    <div className="flex shrink-0 self-end flex-col items-end gap-1">
+      <UsageStatsRow
+        toolUses={showTools ? toolCount : undefined}
+        toolLabel={toolCountLabel}
+        tokenCountText={showUpdates ? tokenCountText : undefined}
+        updates={showUpdates && !tokenCountText ? updateCount : undefined}
+      />
+      <RuntimeLabel value={durationLabel} />
     </div>
   );
 }
@@ -579,15 +647,11 @@ function BackgroundTaskRail({
   if (!hasUsage && !durationLabel) return null;
   return (
     <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
-      {hasUsage ? (
-        <div className="text-right text-[11px] text-muted-foreground/70">
-          {usage.toolUses !== undefined ? <div>{formatToolUseCount(usage.toolUses)}</div> : null}
-          {usage.tokenCountText ? <div>{usage.tokenCountText}</div> : null}
-          {usage.updates !== undefined ? (
-            <div>{`${usage.updates} ${usage.updates === 1 ? "update" : "updates"}`}</div>
-          ) : null}
-        </div>
-      ) : null}
+      <UsageStatsRow
+        toolUses={usage.toolUses}
+        tokenCountText={usage.tokenCountText}
+        updates={usage.updates}
+      />
       {/* A lone timer still sits bottom-right, where it does beside usage. */}
       <RuntimeLabel value={durationLabel} className="mt-auto" />
     </div>

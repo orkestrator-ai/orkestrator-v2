@@ -38,6 +38,7 @@
     "./gateway-token": "./src/gateway-token.ts",
     "./image-manifest": "./src/image-manifest.ts",
     "./git-remote-url": "./src/git-remote-url.ts",
+    "./github-clone": "./src/github-clone.ts",
     "./github-repository": "./src/github-repository.ts",
     "./host-test-scheduler": "./src/host-test-scheduler.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",

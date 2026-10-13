@@ -72,6 +72,7 @@ import {
   addExistingProject,
   createProjectFromScratch,
 } from "./commands-helpers.js";
+import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 
 /**
  * Total extra time a first-use catalogue read may spend starting a bridge and
@@ -395,6 +396,19 @@ export function registerProjectCommands(
     return createProjectFromScratch(
       asNonBlankString(args.localPath, "localPath"),
       storage,
+      runProjectCreationCommand,
+    );
+  });
+  // Read-only listings for the "From GitHub" add-project picker. The clone
+  // itself goes through `add_project`, which owns locking and rollback.
+  register("list_github_clone_accounts", (args) => {
+    assertOnlyKeys(args, [], "arguments");
+    return listGitHubCloneAccounts(runProjectCreationCommand);
+  });
+  register("list_github_clone_repositories", (args) => {
+    assertOnlyKeys(args, ["owner"], "arguments");
+    return listGitHubCloneRepositories(
+      asNonBlankString(args.owner, "owner").trim(),
       runProjectCreationCommand,
     );
   });

@@ -42,6 +42,7 @@ import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
+import { suggestedCloneDirectory } from "@/components/projects/GitHubRepositoryPicker";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
 import {
   CreateEnvironmentFlowDialog,
@@ -531,6 +532,11 @@ export function HierarchicalSidebar() {
     () => sortEnvironmentsByActivity(sidebarEnvironments, projects),
     [sidebarEnvironments, projects],
   );
+  const defaultCloneDirectory = useMemo(
+    () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
+    [projects],
+  );
+  const projectGitUrls = useMemo(() => projects.map((project) => project.gitUrl), [projects]);
   const projectsById = useMemo(
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
@@ -1403,6 +1409,8 @@ export function HierarchicalSidebar() {
         onAdd={handleAddProject}
         onCreate={handleCreateProject}
         validateGitUrl={validateGitUrl}
+        defaultCloneDirectory={defaultCloneDirectory}
+        existingGitUrls={projectGitUrls}
       />
 
       {/* Add to Folder Dialog */}

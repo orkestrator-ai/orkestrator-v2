@@ -139,5 +139,6 @@ That isolated failure is preserved in `orkestrator-test-run.TutH0T/project-home-
   starts the background scanner in this direct-Git suite. Production tracking
   and the branch/PR assertions are unchanged; watcher behavior has separate
   integration coverage.
+- **Fix commit:** `993b2df8`.
 - **Verification:** `mise run test:logged -- --name project-home-stress -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-registry-project-home.test.ts --parallel=1 --rerun-each=10 --only-failures`
   passed in 20.8 seconds (exit 0).

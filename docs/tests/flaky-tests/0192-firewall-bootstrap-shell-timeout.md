@@ -40,3 +40,18 @@
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FOIo01/root-and-agent-support-tests.log.gz`.
 - **Hypothesis:** another shell-fixture case exhausted the same outer deadline
   during aggregate validation and passed unchanged alone; root cause unconfirmed.
+
+
+## Recurrence during dependency-review validation (2026-10-13)
+
+- **Original command:** the same GNU-tool `PATH` prefix with
+  `mise run test:logged -- --name review-full-after-fixture-fix -- mise run test`.
+- **Worker configuration:** three isolated root workers; workspace and bridge groups ran concurrently under the aggregate runner.
+- **Test:** `container firewall policy > policy 2 narrows host access to named ports and records what it applied`.
+- **Failure:** expected exit code `0`, received `null` at line 332; outer five-second timeout at 5,004.28 ms.
+- **Root-suite counts:** 5,061 total, 5,036 passed, 24 skipped, 1 failed (192.17 seconds).
+- **Isolated rerun:** the same GNU-tool `PATH` prefix with
+  `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`
+  passed unchanged in 12.6 seconds, exit 0.
+- **Evidence:** `orkestrator-test-run.DSYU0h/root-and-agent-support-tests.log.gz` and `summary.json` in the macOS temporary directory.
+- **Hypothesis:** repeats the previously recorded policy-2 shell-fixture deadline under aggregate load. Root cause remains unconfirmed; no assertion, timeout or skip was changed.

@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@cursor/sdk": "1.0.37",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@orkestrator/protocol": "workspace:*"
   },
   "devDependencies": {

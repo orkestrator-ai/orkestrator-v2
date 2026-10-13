@@ -16,14 +16,14 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "@anthropic-ai/sdk": "0.133.0",
     "@hono/node-server": "^1.19.17",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@orkestrator/protocol": "workspace:*",
-    "hono": "^4.13.8",
-    "zod": "4.6.5"
+    "hono": "^4.13.13",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "typescript": "~7.0.2"
   }
 }

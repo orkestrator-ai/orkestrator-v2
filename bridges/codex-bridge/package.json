@@ -14,11 +14,11 @@
   "dependencies": {
     "@hono/node-server": "^1.19.17",
     "@orkestrator/protocol": "workspace:*",
-    "hono": "^4.13.8"
+    "hono": "^4.13.13"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "typescript": "~7.0.2"
   }
 }

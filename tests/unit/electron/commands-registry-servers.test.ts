@@ -1150,6 +1150,115 @@ exit 0
     }
   });
 
+  test.each([24, 2])(
+    "reuses an authenticated Claude bridge after changing its limit to %s hours until a fresh start",
+    async (updatedLimitHours) => {
+      const hostPort = await reserveFreePort();
+      const stateDir = await createTempDir("ork-claude-limit-reuse-");
+      const tokenFile = path.join(stateDir, "token");
+      const healthyFile = path.join(stateDir, "healthy");
+      const globalConfig = { claudeBackgroundCommandLimitHours: 8 };
+      const environment = createEnvironment({
+        id: "env-container-claude-limit",
+        environmentType: "containerized",
+        containerId: "container-claude-limit",
+        status: "running",
+      });
+      const { context } = createContext(environment, { globalConfig });
+      const commands = createCommandRegistry();
+      const previous = {
+        FAKE_BRIDGE_HOST_PORT: process.env.FAKE_BRIDGE_HOST_PORT,
+        FAKE_BRIDGE_TOKEN_FILE: process.env.FAKE_BRIDGE_TOKEN_FILE,
+        FAKE_BRIDGE_HEALTHY_FILE: process.env.FAKE_BRIDGE_HEALTHY_FILE,
+      };
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+      process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
+
+      const bridge = await startAuthenticatedContainerServer(hostPort, {
+        isHealthy: () => existsSync(healthyFile),
+        isAuthorized: (request) =>
+          request.headers["x-orkestrator-claude-token"] === readTestCredential(tokenFile),
+      });
+      const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"cat /tmp/orkestrator-ai/claude-github-env-fingerprint"*)
+        printf '%s' '${commandTesting.CLAUDE_GITHUB_ENV_FINGERPRINT}'
+        exit 0 ;;
+      *pkill*)
+        rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE"
+        exit 0 ;;
+    esac
+    if [ "$2" = "-d" ]; then
+      token=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+      : > "$FAKE_BRIDGE_HEALTHY_FILE"
+    fi
+    exit 0 ;;
+esac
+exit 0
+`;
+
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          const start = () =>
+            commands.get("start_claude_server")!(
+              { containerId: environment.containerId },
+              context,
+            ) as Promise<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+          const first = await start();
+          expect(first).toMatchObject({ hostPort, wasRunning: false });
+          const initialLog = await fs.readFile(logs.exec, "utf8");
+          expect(initialLog).toContain("export BASH_MAX_TIMEOUT_MS='28800000'");
+          expect(initialLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(
+            1,
+          );
+
+          globalConfig.claudeBackgroundCommandLimitHours = updatedLimitHours;
+          expect(await start()).toEqual({ ...first, wasRunning: true });
+          const reuseLog = await fs.readFile(logs.exec, "utf8");
+          expect(reuseLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(
+            1,
+          );
+          expect(reuseLog).not.toContain("pkill");
+          expect(reuseLog.slice(initialLog.length)).not.toContain("BASH_MAX_TIMEOUT_MS");
+
+          // Only an explicit stop ends this bridge. A later start uses the
+          // current setting, including returning to the CLI's default.
+          await commands.get("stop_claude_server")!(
+            { containerId: environment.containerId },
+            context,
+          );
+          expect(existsSync(healthyFile)).toBe(false);
+          const beforeRestart = await fs.readFile(logs.exec, "utf8");
+          const restarted = await start();
+          expect(restarted).toMatchObject({ hostPort, wasRunning: false });
+          expect(restarted.authToken).not.toBe(first.authToken);
+          const restartLog = (await fs.readFile(logs.exec, "utf8")).slice(beforeRestart.length);
+          expect(restartLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(
+            1,
+          );
+          if (updatedLimitHours === 2) expect(restartLog).not.toContain("BASH_MAX_TIMEOUT_MS");
+          else expect(restartLog).toContain("export BASH_MAX_TIMEOUT_MS='86400000'");
+        });
+      } finally {
+        await bridge.close();
+        for (const [name, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    },
+  );
+
   test("replaces a healthy Claude bridge when its persisted token does not authenticate", async () => {
     const hostPort = await reserveFreePort();
     const stateDir = await createTempDir("ork-claude-stale-identity-");

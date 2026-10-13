@@ -31,7 +31,7 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("session system prompt", () => {
-  test("tells Claude that background commands stop at their timeout", async () => {
+  test("tells Claude about background command timeouts and local Markdown docs", async () => {
     const session = createSession("system-prompt");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "hello");
@@ -39,6 +39,8 @@ describe("session system prompt", () => {
     const systemPrompt = call.options.systemPrompt as { append?: string };
     expect(systemPrompt.append).toContain("MUST read a file before editing");
     expect(systemPrompt.append).toContain("Orkestrator terminal tab");
+    expect(systemPrompt.append).toContain("Markdown file in a `docs/` folder");
+    expect(systemPrompt.append).toContain("local skills, and the user's own request take priority");
     call.push({ type: "result", subtype: "success", is_error: false, result: "" });
     call.finish();
     await promptPromise.catch(() => undefined);

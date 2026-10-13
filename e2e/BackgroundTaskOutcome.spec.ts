@@ -8,8 +8,8 @@ async function openOutcome(page: Page, label: "Task" | "Agent") {
   }
   await expect(page.getByText("Two checks failed", { exact: true })).toBeVisible();
   await expect(page.getByText("Error", { exact: true })).toBeVisible();
-  await expect(page.getByText("Tool uses", { exact: true })).toBeVisible();
-  await expect(page.getByText("Tokens", { exact: true })).toBeVisible();
+  await expect(page.getByText("7 tool uses", { exact: true })).toBeVisible();
+  await expect(page.getByText("12k tokens", { exact: true })).toBeVisible();
   await expect(page.getByText("/tmp/tasks/shared.output", { exact: true })).toBeVisible();
 }
 

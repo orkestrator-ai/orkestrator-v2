@@ -3590,8 +3590,8 @@ describe("NativeMessage task list rendering", () => {
     ).toBeTruthy();
     expect(screen.getByText(outputFile)).toBeTruthy();
     // A shell task reports zero counts, which would only be noise.
-    expect(screen.queryByText("Tool uses") === null).toBe(true);
-    expect(screen.queryByText("Tokens") === null).toBe(true);
+    expect(screen.queryByText(/tool uses?$/) === null).toBe(true);
+    expect(screen.queryByText(/tokens$/) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Reveal output file" }));
     expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", { path: outputFile });
@@ -3638,9 +3638,8 @@ describe("NativeMessage task list rendering", () => {
       if (screen.queryByText("Summary") === null) fireEvent.click(row);
       expect(screen.getByText("Error")).toBeTruthy();
       expect(screen.getByText("Two checks failed")).toBeTruthy();
-      expect(screen.getByText("Tool uses")).toBeTruthy();
-      expect(screen.getByText("7")).toBeTruthy();
-      expect(screen.getByText("Tokens")).toBeTruthy();
+      expect(screen.getByText("7 tool uses")).toBeTruthy();
+      expect(screen.getByText("12k tokens")).toBeTruthy();
       expect(screen.getByText(task.outputFile)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Reveal output file" }));
       expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", { path: task.outputFile });
@@ -3675,11 +3674,13 @@ describe("NativeMessage task list rendering", () => {
     // Once in the collapsed row, once in the body — never a second "Summary".
     expect(screen.getAllByText("exit code 2")).toHaveLength(2);
     expect(screen.queryByText("Summary") === null).toBe(true);
-    expect(screen.getByText("Tool uses")).toBeTruthy();
-    expect(screen.getByText("7")).toBeTruthy();
+    expect(screen.getByText("7 tool uses")).toBeTruthy();
+    expect(screen.getByText("12k tokens")).toBeTruthy();
   });
 
-  test("omits a repeated description from the expanded outcome body", () => {
+  test("leaves a task whose only details are its counts unexpandable", () => {
+    // Usage used to be the whole body of such a task. It now sits in the
+    // header, so there is nothing left to expand.
     render(
       <BackgroundTaskCard
         task={{
@@ -3695,7 +3696,86 @@ describe("NativeMessage task list rendering", () => {
     );
     expect(screen.getAllByText("Build")).toHaveLength(1);
     expect(screen.queryByText("Summary") === null).toBe(true);
-    expect(screen.getByText("Tool uses")).toBeTruthy();
+    expect(screen.getByText("1 tool use")).toBeTruthy();
+    expect(screen.getByText("100 tokens")).toBeTruthy();
+    expect(screen.queryByText("Task ID") === null).toBe(true);
+    expect((screen.getByRole("button", { name: /Task Build/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  test("shows a live task's usage in the header's top-right rail above its timer", () => {
+    const startedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(startedAt) + 125_000;
+    try {
+      render(
+        <BackgroundTaskCard
+          task={{
+            id: "task-1",
+            description: "Review validation",
+            status: "running",
+            startedAt,
+            usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 },
+          }}
+          open={false}
+          onOpenChange={() => {}}
+          onStop={async () => true}
+        />,
+      );
+
+      const tools = screen.getByText("7 tool uses");
+      const rail = screen.getByText("2m 5s").parentElement;
+      expect(getClassTokens(rail)).toEqual(
+        expect.arrayContaining(["self-stretch", "items-end", "justify-between"]),
+      );
+      expect(rail?.firstElementChild?.contains(tools)).toBe(true);
+      expect(rail?.contains(screen.getByText("12k tokens"))).toBe(true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("puts an icon-only stop control in the spinner's slot, revealed on hover", () => {
+    render(
+      <BackgroundTaskCard
+        task={{ id: "task-1", description: "Run validation", status: "running" }}
+        command="mise run test"
+        open={false}
+        onOpenChange={() => {}}
+        onStop={async () => true}
+      />,
+    );
+
+    const stop = screen.getByRole("button", { name: "Stop Run validation" });
+    // No label: the icon alone takes the spinner's place.
+    expect(stop.textContent).toBe("");
+    expect(screen.queryByText("Stop") === null).toBe(true);
+    expect(getClassTokens(stop)).toEqual(
+      expect.arrayContaining([
+        "absolute",
+        "inset-0",
+        "size-7",
+        "opacity-100",
+        "md:hover-fine:opacity-0",
+        "md:hover-fine:group-hover/stoppable:opacity-100",
+      ]),
+    );
+
+    // The spinner and the control share one fixed 28px slot, so the reveal
+    // never reflows the row.
+    const slot = stop.parentElement;
+    expect(getClassTokens(slot)).toEqual(expect.arrayContaining(["relative", "size-7"]));
+    const spinner = slot?.querySelector(".animate-spin");
+    expect(spinner).toBeTruthy();
+    expect(getClassTokens(spinner?.parentElement?.parentElement)).toContain(
+      "md:hover-fine:group-hover/stoppable:opacity-0",
+    );
+
+    // The hover that reveals it is the whole tile's.
+    const trigger = screen.getByRole("button", { name: /Task Run validation/ });
+    expect(trigger.contains(stop)).toBe(false);
+    expect(stop.closest(".group\\/stoppable")).toBeTruthy();
   });
 
   test("leaves a task with nothing to add unexpandable", () => {

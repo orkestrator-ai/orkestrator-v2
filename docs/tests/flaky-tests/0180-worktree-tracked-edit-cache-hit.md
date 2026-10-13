@@ -29,3 +29,9 @@ Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run
 and its compressed group logs. Status remains open; the isolated pass confirms
 recurrence but does not establish a root cause. No assertion, timeout or skip
 was changed.
+
+- **Recurrence 2026-10-13:** `mise run test` on `deps/upgrade-2026-10`
+  (Bun 1.4.3, Vite 8, Electron 44 batch) failed the same cache-hit assertion
+  (`Expected: 1, Received: 0` at line 136) in the workspace group; the file
+  passed alone three times in a row (4 pass, 0 fail each). The change touches
+  no worktree-snapshot code.

@@ -1,7 +1,7 @@
 # Project-home branch switching encounters an index lock in the aggregate
 
 - **ID:** 0183
-- **Status:** open
+- **Status:** resolved
 
 Observed: 2026-10-07 on macOS with Bun 1.4.2.
 
@@ -109,3 +109,35 @@ Failure evidence:
 and `/tmp/orkestrator-test-run.xZCLLJ/summary.json`. The isolated pass again
 supports intermittent fixture Git contention without identifying the lock
 owner. No assertion, timeout or skip was changed.
+
+## Reproduction and fixture isolation fix (2026-10-13)
+
+`mise run test:logged -- --name review-full-suite -- mise run test`, with the
+GNU-tool PATH from the testing guide, reproduced the index-lock conflict in
+135.94 ms. Aggregate slots were 2/3/2/1; backend used one isolated worker.
+Backend totals were 5,906 passed, 15 skipped and 2 failed across 331 files.
+Evidence is in `orkestrator-test-run.lgjNH5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `summary.json` in the macOS temporary directory.
+
+The unchanged owner also failed alone in 2.2 seconds (89.17 ms for this test):
+
+```bash
+mise run test:logged -- --name project-home-isolated -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+```
+
+That isolated failure is preserved in `orkestrator-test-run.TutH0T/project-home-isolated.log.gz`.
+
+- **Root cause:** the fixture tried to disable background diff scanning by
+  untracking the home *after* ensuring it. `track()` had already requested a
+  scan, and `untrack()` fences publication without waiting for an executing
+  scan's Git process. That process could still refresh the index while the
+  fixture switched branches.
+- **Fix:** the owning test file now spies on the narrow `diffStatsService.track`
+  boundary before creating its fixture and restores it in teardown. It never
+  starts the background scanner in this direct-Git suite. Production tracking
+  and the branch/PR assertions are unchanged; watcher behavior has separate
+  integration coverage.
+- **Verification:** `mise run test:logged -- --name project-home-stress -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-registry-project-home.test.ts --parallel=1 --rerun-each=10 --only-failures`
+  passed in 20.8 seconds (exit 0).

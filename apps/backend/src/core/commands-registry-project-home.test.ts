@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, realpath, rm, writeFile, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,18 +32,22 @@ let storage: StorageService;
 let context: CommandContext;
 let projectId: string;
 let commands: ReturnType<typeof createCommandRegistry>;
+let restoreDiffTracking: () => void;
 
 const ensure = async () => {
   const environment = (await commands.get("ensure_project_home_environment")!(
     { projectId },
     context,
   )) as Environment;
-  // This suite drives Git directly; watcher behavior has its own integration suite.
-  diffStatsService.untrack(environment.id);
   return environment;
 };
 
 beforeEach(async () => {
+  // This suite drives Git directly; watcher behavior has its own integration
+  // suite. Untracking after ensure was too late: an in-flight background scan
+  // could still refresh Git's index while the fixture switched branches.
+  const tracking = spyOn(diffStatsService, "track").mockImplementation(() => undefined);
+  restoreDiffTracking = () => tracking.mockRestore();
   root = await mkdtemp(path.join(tmpdir(), "ork-project-home-"));
   checkout = path.join(root, "checkout");
   await mkdir(checkout);
@@ -69,11 +73,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  projectHomeTesting.reset();
-  // Ensuring a home starts tracking it; stop before its checkout is removed.
-  for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
-  prMonitorService.sync([]);
-  await rm(root, { recursive: true, force: true });
+  try {
+    projectHomeTesting.reset();
+    for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
+    prMonitorService.sync([]);
+    await rm(root, { recursive: true, force: true });
+  } finally {
+    restoreDiffTracking();
+  }
 });
 
 test("ensure creates one ready home in the project checkout and reuses it", async () => {

@@ -275,8 +275,8 @@ function applyToolCall(
   const message = currentAssistantMessage(state);
   closeTextParts(state, context.parentTaskUseId);
   const part = upsertToolPart(state, message, callId, context.parentTaskUseId);
-  if (phase === "settled" && rendered.generatedImage) {
-    appendGeneratedImage(state, message, callId, rendered.generatedImage);
+  if (phase === "settled" && rendered.toolImage) {
+    appendToolImage(state, message, callId, rendered.toolImage);
   }
 
   part.toolName = rendered.toolName;
@@ -291,6 +291,12 @@ function applyToolCall(
   if (rendered.toolOutput !== undefined) part.toolOutput = rendered.toolOutput;
   if (rendered.toolError !== undefined) part.toolError = rendered.toolError;
   if (rendered.toolDiff) part.toolDiff = rendered.toolDiff;
+  // Only a settled result carries a duration; the guard keeps a late
+  // `partial-tool-call` frame from putting one on a running card.
+  if (phase === "settled" && rendered.toolDurationMs !== undefined) {
+    part.toolDurationMs = rendered.toolDurationMs;
+  }
+  if (rendered.subagent?.modelId) part.subagentModelId = rendered.subagent.modelId;
 
   if (phase === "settled") {
     part.toolState = rendered.toolError === undefined ? "success" : "failure";
@@ -574,16 +580,18 @@ function lastLine(text: string): string {
 }
 
 /**
- * Show an image the agent generated.
+ * Show an image a tool call left on disk: one the agent generated, or the
+ * screenshot a computer-use call took.
  *
  * Keyed on the call id so a re-rendered settled call cannot append a second
- * copy. The bytes stay on disk: only the path travels.
+ * copy. The bytes stay on disk: only the path travels, and the backend grants
+ * one exact lazy read of it when the row is shown.
  */
-function appendGeneratedImage(
+function appendToolImage(
   state: SessionState,
   message: BridgeMessage,
   callId: string,
-  image: { filePath: string; caption: string },
+  image: NonNullable<RenderedToolCall["toolImage"]>,
 ): void {
   const sourcePartId = `image:${callId}`;
   if (message.parts.some((candidate) => candidate.sourcePartId === sourcePartId)) return;
@@ -595,7 +603,7 @@ function appendGeneratedImage(
     createdAt: new Date().toISOString(),
     fileUrl: `file://${image.filePath}`,
     filename: image.filePath,
-    imageSource: "generated",
+    imageSource: image.imageSource,
   };
   message.parts.push(part);
   chargeNewEntry(state, part);

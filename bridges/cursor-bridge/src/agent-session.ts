@@ -1265,6 +1265,10 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
         ...(rendered.toolOutput !== undefined ? { toolOutput: rendered.toolOutput } : {}),
         ...(rendered.toolError !== undefined ? { toolError: rendered.toolError } : {}),
         ...(rendered.toolDiff ? { toolDiff: rendered.toolDiff } : {}),
+        ...(rendered.toolDurationMs !== undefined
+          ? { toolDurationMs: rendered.toolDurationMs }
+          : {}),
+        ...(rendered.subagent?.modelId ? { subagentModelId: rendered.subagent.modelId } : {}),
         toolState: rendered.toolError === undefined ? "success" : "failure",
         // Replayed history is settled by definition: whatever these sub-agents
         // were doing, they are not doing it on this bridge's watch.
@@ -1357,6 +1361,9 @@ function appendHistoricShellTurn(state: SessionState, body: Record<string, unkno
         toolTitle: rendered.toolTitle,
         ...(rendered.toolArgs ? { toolArgs: rendered.toolArgs } : {}),
         ...(rendered.toolOutput !== undefined ? { toolOutput: rendered.toolOutput } : {}),
+        ...(rendered.toolDurationMs !== undefined
+          ? { toolDurationMs: rendered.toolDurationMs }
+          : {}),
         toolState: "success",
       },
     ],

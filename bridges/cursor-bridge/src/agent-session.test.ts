@@ -1849,6 +1849,43 @@ describe("resumeSession", () => {
     expect(state.activeSubagentDescriptors.size).toBe(0);
   });
 
+  test("replayed calls keep their reported duration and sub-agent model", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              steps: [
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "task",
+                    args: { description: "audit", model: "m-2" },
+                    result: { status: "success", value: { isBackground: false, durationMs: 900 } },
+                  },
+                },
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "computerUse",
+                    args: { actions: [{ type: "screenshot" }] },
+                    result: { status: "success", value: { actionCount: 1, durationMs: 60 } },
+                  },
+                },
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    const [task, computerUse] = state.messages[0]!.parts;
+    expect(task).toMatchObject({ subagentModelId: "m-2", toolDurationMs: 900 });
+    expect(computerUse).toMatchObject({ toolName: "computerUse", toolDurationMs: 60 });
+  });
+
   test("renders a shell turn from its own record", async () => {
     runs = {
       items: [

@@ -102,6 +102,13 @@ export interface BridgeToolPart {
   toolError?: string;
   toolDiff?: BridgeToolDiff;
   /**
+   * How long the call ran, as the SDK reported it in a settled result. Absent
+   * when it reported none, and never present on a running call.
+   */
+  toolDurationMs?: number;
+  /** The model a sub-agent launch asked for, when the call named one. */
+  subagentModelId?: string;
+  /**
    * What a shell call changed in the worktree, measured by this bridge (see
    * `command-changes.ts`). Set once the call settles, and only when something
    * changed; the SDK reports nothing like it.

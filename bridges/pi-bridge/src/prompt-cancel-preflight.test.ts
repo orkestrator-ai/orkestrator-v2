@@ -2,14 +2,17 @@
  * Cancellation while Pi's own prompt preflight is pending (INC-05).
  *
  * `AgentSession.prompt` reports acceptance through `preflightResult`, and the
- * bridge has no run to cancel until then. Pi 0.99's `abort()` during preflight
- * cancels an auto-compaction in progress but cannot pre-empt the run:
- * `_runAgentPrompt` resets the abort request when the run starts. So a cancel
- * during preflight is applied twice over — at once (reaching any compaction)
- * and again the moment Pi accepts, because `preflightResult` reports a disposition
- * synchronously just before the run is created. These cases hold preflight
- * with a deferred gate and prove that the cancel is retained, applied once per
- * phase, scoped to its own turn, and never leaves an approval waiting.
+ * bridge has no run to cancel until then. In Pi 1.2 preflight has two stages:
+ * before `_startRun` (input handlers, auth) `abort()` reaches nothing, and
+ * `_startRun` resets the abort request as it begins; from there until
+ * acceptance (auto-compaction, `before_agent_start`) `abort()` aborts the
+ * compaction, pre-empts the run at `agent_start` and waits for it to settle.
+ * So a cancel during preflight is applied twice over — at once (reaching a
+ * compaction or a starting run) and again the moment Pi accepts, because
+ * `preflightResult` reports a disposition synchronously before `agent_start`.
+ * These cases hold preflight with a deferred gate and prove that the cancel is
+ * retained, applied once per phase, scoped to its own turn, and never leaves an
+ * approval waiting.
  *
  * Gates are released in `finally`; no sleeps are used.
  */
@@ -42,6 +45,7 @@ const { newSessionState, setAgentSessionTestHooks } = await import("./agent-sess
 const { claimPromptTurn, sessions } = await import("./state.js");
 const { dispatchPrompt, setStartupTimeoutForTests } = await import("./prompt.js");
 const { denyAllApprovals, requestToolApproval } = await import("./interactions.js");
+const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 type SessionState = ReturnType<typeof newSessionState>;
@@ -116,6 +120,8 @@ function preflightSession(
     holdPreflight?: boolean;
     abortGate?: Promise<void>;
     onPreflightAbort?: () => void;
+    /** Pi 1.2: an abort while `_startRun` prepares the run waits for it to settle. */
+    preflightAbortWaitsForRun?: boolean;
   } = {},
 ) {
   const runs: Deferred<void>[] = [];
@@ -147,7 +153,9 @@ function preflightSession(
       counts.aborts += 1;
       if (accepted < runs.length) {
         counts.abortsBeforeAcceptance += 1;
+        const starting = runs.at(-1);
         options.onPreflightAbort?.();
+        if (options.preflightAbortWaitsForRun) await starting?.promise;
         return;
       }
       counts.abortsAfterAcceptance += 1;
@@ -523,6 +531,68 @@ describe("cancel while preflight is compacting", () => {
       expect(state.promptJournal.get("compaction-cancel")?.state).toBe("completed");
       expect(state.promptClaim).toBeUndefined();
       expect(state.promptStartup).toBeUndefined();
+    } finally {
+      pi.settleAll();
+      release(state);
+    }
+  });
+});
+
+describe("cancel while Pi 1.2 is starting the run", () => {
+  test("pre-empts the starting run and settles the turn as cancelled", async () => {
+    // Models `_startRun` in Pi 1.2: the cancel lands during `_prepareRun`, so
+    // `abort()` sets the abort request and waits; Pi then reports acceptance,
+    // `agent_start` sees the request and stops the run before any model
+    // request, and `agent_settled` reports it aborted.
+    let state!: SessionState;
+    let startupAbortSettled = false;
+    const pi = preflightSession({
+      holdPreflight: true,
+      preflightAbortWaitsForRun: true,
+      onPreflightAbort: () => {
+        queueMicrotask(() => {
+          pi.accept();
+          queueMicrotask(() => {
+            expect(startupAbortSettled).toBe(false);
+            applySessionEvent(state, { type: "agent_settled", aborted: true });
+            pi.finishRun();
+          });
+        });
+      },
+    });
+    state = seed(pi.session);
+    const originalAbort = pi.raw.abort;
+    pi.raw.abort = async () => {
+      const before = pi.counts.abortsBeforeAcceptance;
+      await originalAbort();
+      if (pi.counts.abortsBeforeAcceptance > before) startupAbortSettled = true;
+    };
+    try {
+      const prompt = post(`/session/${state.id}/prompt`, {
+        prompt: "cancel me while starting",
+        requestId: "preempted",
+        outputSchema: { type: "object" },
+      });
+      await waitFor(() => pi.preflights.length === 1);
+
+      // Answered at once although Pi's abort is still waiting on the run.
+      const cancelled = await post(`/session/${state.id}/cancel`);
+      expect(cancelled.status).toBe(202);
+      expect(await cancelled.json()).toEqual({ cancelled: false, pending: true });
+
+      expect((await prompt).status).toBe(202);
+      await waitFor(() => state.status === "idle" && startupAbortSettled);
+      expect(pi.counts.abortsBeforeAcceptance).toBe(1);
+      expect(state.error).toBeUndefined();
+      expect(state.promptJournal.get("preempted")?.state).toBe("completed");
+      // Cancelled, not completed: the structured caller is told to retry.
+      expect(state.structured.get("preempted")).toMatchObject({
+        ok: false,
+        error: { code: "interrupted", retryable: true },
+      });
+      expect(state.promptClaim).toBeUndefined();
+      expect(state.promptStartup).toBeUndefined();
+      expect(state.cancelRequestedClaim).toBeUndefined();
     } finally {
       pi.settleAll();
       release(state);

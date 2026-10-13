@@ -370,6 +370,7 @@ function restoreUsage(value: unknown): SessionState["usage"] {
               "reasoningTokens",
               "totalTokens",
               "durationMs",
+              "apiDurationMs",
               "toolCalls",
             ] as const) {
               const number = candidate[key];
@@ -387,6 +388,7 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     ...readNumber(value, "sessionTokens"),
     ...readNumber(value, "sessionToolCalls"),
     ...readNumber(value, "durationMs"),
+    ...readNumber(value, "apiDurationMs"),
     ...readNumber(value, "costUsd"),
     ...readNumber(value, "contextTokens"),
     ...readNumber(value, "contextWindow"),

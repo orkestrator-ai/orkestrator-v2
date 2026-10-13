@@ -284,6 +284,58 @@ describe("loading", () => {
     expect(restored.composer.models).toEqual([]);
   });
 
+  test("restores the provider-measured durations Pi 1.1 reports", async () => {
+    await writeState({
+      version: 1,
+      provider: "pi",
+      sessions: [
+        {
+          id: "session-durations",
+          status: "idle",
+          revision: 1,
+          messages: [
+            {
+              id: "m1",
+              role: "assistant",
+              content: "",
+              createdAt: "2026-01-01T00:00:00Z",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "ls",
+                  sourcePartId: "m1:0",
+                  sourceMessageId: "m1",
+                  toolUseId: "call-1",
+                  toolState: "success",
+                  toolDurationMs: 42,
+                },
+              ],
+            },
+          ],
+          structured: [],
+          promptJournal: [],
+          usage: {
+            turn: { inputTokens: 10, outputTokens: 5 },
+            durationMs: 3_000,
+            apiDurationMs: 2_000,
+            turns: [{ turnId: "t1", durationMs: 3_000, apiDurationMs: 2_000 }],
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+        },
+      ],
+    });
+
+    await loadPersistedState();
+
+    const restored = sessions.get("session-durations")!;
+    expect(restored.messages[0]?.parts[0]).toMatchObject({ toolDurationMs: 42 });
+    expect(restored.usage).toMatchObject({
+      durationMs: 3_000,
+      apiDurationMs: 2_000,
+      turns: [{ turnId: "t1", durationMs: 3_000, apiDurationMs: 2_000 }],
+    });
+  });
+
   test("downgrades a journal state it cannot vouch for", async () => {
     await writeState({
       version: 1,

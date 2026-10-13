@@ -570,8 +570,12 @@ When touching the Pi bridge:
   abort that hangs or rejects (the next request retries it). The prompt route
   checks for it after every preparation await and settles without calling Pi.
   In Pi's preflight the cancel calls `session.abort()` at once (pinned SDK
-  0.87 aborts an auto-compaction there) and again when Pi accepts, because the
-  run resets the abort flag when it starts. Acceptance is bounded by
+  1.2 aborts an auto-compaction and pre-empts a run `_startRun` is preparing;
+  that abort waits for the run to settle, so it is never awaited) and again
+  when Pi accepts, because `_startRun` resets the abort flag when it begins.
+  A run Pi reports settled with `aborted: true` — whoever aborted it,
+  including an extension — ends the turn cancelled (idle, structured result
+  `interrupted`), never completed. Acceptance is bounded by
   `PI_BRIDGE_STARTUP_TIMEOUT_MS` (default 5 min, floor 30 s): past it the route
   answers 424 with an explicit error, but the claim and `dispatching` are kept
   until Pi settles the prompt — a late acceptance is aborted and observed — so

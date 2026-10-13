@@ -222,6 +222,7 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ...(turn.reasoningTokens !== undefined ? { reasoningTokens: turn.reasoningTokens } : {}),
     lastTurnTokens: turnTokens,
     ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
+    ...(usage.apiDurationMs !== undefined ? { apiDurationMs: usage.apiDurationMs } : {}),
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage.sessionTokens !== undefined ? { sessionTokens: usage.sessionTokens } : {}),
     ...(usage.turns?.length ? { turns: usage.turns } : {}),

@@ -1,4 +1,5 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { OPENCODE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import { existsSync, promises as fs } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -315,6 +316,7 @@ async function refreshOpenCode(
       headers,
       env: {
         ...process.env,
+        ...OPENCODE_PINNED_RUNTIME_ENV,
         OPENCODE_SERVER_USERNAME: "opencode",
         OPENCODE_SERVER_PASSWORD: token,
         ORKESTRATOR_PARENT_PID: String(process.pid),

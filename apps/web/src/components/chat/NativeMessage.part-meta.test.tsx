@@ -89,7 +89,7 @@ describe("tool card duration", () => {
       shellPart({ toolUseId: "b", toolDurationMs: -5 }),
       shellPart({ toolUseId: "c", toolDurationMs: Number.NaN }),
     ]);
-    expect(container.querySelector('[title^="Ran for"]')).toBeNull();
+    expect(container.querySelector('[title^="Ran for"]') === null).toBe(true);
   });
 
   test("a refused call never ran, so it has no runtime", () => {
@@ -151,7 +151,7 @@ describe("sub-agent model and effort", () => {
     renderParts([subagentPart({ subagentModelId: "opencode/sonnet" })]);
     fireEvent.click(screen.getByRole("button", { name: /explorer/i }));
     expect(screen.getByText("opencode/sonnet")).toBeTruthy();
-    expect(screen.queryByText("Effort")).toBeNull();
+    expect(screen.queryByText("Effort") === null).toBe(true);
   });
 
   test("prefers the reported model over a launch argument", () => {
@@ -163,7 +163,7 @@ describe("sub-agent model and effort", () => {
     ]);
     fireEvent.click(screen.getByRole("button", { name: /explorer/i }));
     expect(screen.getByText("gpt-5.6-sol")).toBeTruthy();
-    expect(screen.queryByText("requested-model")).toBeNull();
+    expect(screen.queryByText("requested-model") === null).toBe(true);
   });
 
   test("a task-shaped agent card reads the same fields", () => {

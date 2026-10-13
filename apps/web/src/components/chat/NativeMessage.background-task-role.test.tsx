@@ -16,7 +16,7 @@ describe("background task agent role", () => {
     render(<NativeMessage message={row!} />);
 
     expect(screen.getByRole("button", { name: /Agent Explore Running/ })).toBeTruthy();
-    expect(screen.queryByText("Background task agent-1")).toBeNull();
+    expect(screen.queryByText("Background task agent-1") === null).toBe(true);
   });
 
   test("a backgrounded main session is not presented as a delegated agent", () => {
@@ -31,7 +31,7 @@ describe("background task agent role", () => {
     expect(
       screen.getByRole("button", { name: /Main session Backgrounded conversation Running/ }),
     ).toBeTruthy();
-    expect(screen.queryByText("main-session")).toBeNull();
+    expect(screen.queryByText("main-session") === null).toBe(true);
   });
 
   test("a described agent keeps its description and shows its type in the details", () => {

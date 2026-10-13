@@ -680,7 +680,7 @@ contract.
    status because those use different portions of the v2 client.
 8. Confirm the pinned binary still honours `OPENCODE_DISABLE_AUTOUPDATE`
    (`grep -a -c -F OPENCODE_DISABLE_AUTOUPDATE <binary>`, and the release's
-   `packages/opencode/src/cli/upgrade.ts`). Since 1.19 the TUI checks for
+   upstream `cli/upgrade.ts`). Since 1.19 the TUI checks for
    updates and its `/update` dialog installs over the running binary,
    including OpenCode 2 through `opencode upgrade --major`; the container's
    `~/.opencode/bin` reads as a curl install, so the in-place upgrade would

@@ -39,3 +39,22 @@ host. The owning file passed unchanged in 2.1 seconds with
 Aggregate evidence is in
 `/tmp/orkestrator-test-run.w2YALW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No test was skipped or loosened.
+
+## Recurrence on 2026-10-13 (project navigation validation)
+
+The GNU-tool PATH command `mise run test:logged -- --name full-tests -- mise run test`
+failed `AgentMailService > converges the mailbox directory after tabs open and close`
+at 695.82 ms: the directory still contained `agent-2` after its removal and the
+fixed 325 ms wait. Workspace packages used one Bun worker each with two package
+tasks; root, bridge and protocol groups were also active.
+
+Backend totals were 5,875 passed, 15 skipped and 27 failed across 329 files in
+442.53 seconds. Twenty-two failures reproduced as tmux cleanup errors on this
+host and are separate from this convergence flake.
+
+The owning file passed unchanged, exit 0, in 4.7 seconds with the same PATH:
+`mise run test:logged -- --name agent-mail-rerun -- bun --cwd=apps/backend test ./src/core/agent-mail-service.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+
+Evidence: `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The fixed-wait convergence failure matches this existing aggregate timing case.
+No test was skipped or loosened.

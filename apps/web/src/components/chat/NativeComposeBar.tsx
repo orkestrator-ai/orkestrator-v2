@@ -340,6 +340,9 @@ export function NativeComposeBar({
                     : "bg-primary text-primary-foreground hover:bg-primary/85",
                 )}
                 disabled={sendDisabled}
+                // Clicking Send must not pull focus out of the prompt input, so
+                // the next prompt can be typed straight away.
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => void onSend()}
                 title={sendTitle ?? (isLoading ? "Add to queue" : "Send message")}
               >

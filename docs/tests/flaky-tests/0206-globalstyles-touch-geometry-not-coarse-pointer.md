@@ -1,6 +1,6 @@
 # Touch compose input geometry spec: coarse-pointer media query false under load (`e2e/GlobalStyles.spec.ts`)
 
-- **ID:** 0204
+- **ID:** 0206
 - **Status:** open
 - **Date observed:** 2026-10-13
 - **Test:** `[mobile-chromium] › e2e/GlobalStyles.spec.ts:90 › touch compose

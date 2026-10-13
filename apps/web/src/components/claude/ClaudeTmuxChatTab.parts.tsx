@@ -795,6 +795,7 @@ export interface TmuxComposeBarProps {
   disabled: boolean;
   busy: boolean;
   submitting: boolean;
+  settingsSwitching?: boolean;
   autoFocus?: boolean;
   onSubmit: (text: string, attachments: TmuxAttachment[]) => Promise<boolean> | boolean | void;
   onQueue?: (text: string, attachments: TmuxAttachment[]) => Promise<void> | void;
@@ -829,6 +830,7 @@ export function TmuxComposeBar({
   disabled,
   busy,
   submitting,
+  settingsSwitching = false,
   autoFocus,
   onSubmit,
   onQueue,
@@ -862,6 +864,7 @@ export function TmuxComposeBar({
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const [queueSubmitting, setQueueSubmitting] = useState(false);
   const queueSubmittingRef = useRef(false);
+  const composerLocked = disabled || settingsSwitching || submitting || queueSubmitting;
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
     useCallback(
@@ -971,6 +974,7 @@ export function TmuxComposeBar({
   }, [value]);
 
   const selectSlashCommand = (command: SlashCommand) => {
+    if (composerLocked || queueSubmittingRef.current) return;
     // Drop the user back in the input after the command + a space so they
     // can type any arguments (e.g. `/model opus`) before pressing Enter.
     // Without the pending position React restores the caret to the offset it
@@ -983,10 +987,12 @@ export function TmuxComposeBar({
   };
 
   const updateFileMentionDetection = (position: number, currentValue: string) => {
+    if (composerLocked || queueSubmittingRef.current) return;
     detectFileMention(position, currentValue);
   };
 
   const selectFileMention = (file: FileCandidate) => {
+    if (composerLocked || queueSubmittingRef.current) return;
     const textarea = textareaRef.current;
     const cursorPosition = textarea?.selectionStart ?? value.length;
     const textBeforeCursor = value.slice(0, cursorPosition);
@@ -1038,7 +1044,7 @@ export function TmuxComposeBar({
   });
 
   const handleSubmit = async () => {
-    if (submitting || queueSubmittingRef.current || disabled) return;
+    if (composerLocked || queueSubmittingRef.current) return;
     const serializedText = serializeTmuxFileMentions(
       value.trim(),
       fileMentions,
@@ -1187,7 +1193,7 @@ export function TmuxComposeBar({
       )}
 
       <div className="relative" ref={inputContainerRef}>
-        {fileMentionMenuOpen && (
+        {!composerLocked && fileMentionMenuOpen && (
           <FileMentionMenu
             files={filteredFiles}
             selectedIndex={fileMentionSelectedIndex}
@@ -1196,7 +1202,7 @@ export function TmuxComposeBar({
           />
         )}
 
-        {slashMenuOpen && filteredSlashCommands.length > 0 && (
+        {!composerLocked && slashMenuOpen && filteredSlashCommands.length > 0 && (
           <SlashCommandMenu
             commands={filteredSlashCommands}
             selectedIndex={slashSelectedIndex}
@@ -1208,6 +1214,7 @@ export function TmuxComposeBar({
           ref={textareaRef}
           value={value}
           onChange={(e) => {
+            if (composerLocked || queueSubmittingRef.current) return;
             const nextValue = e.target.value;
             setValue(sessionKey, nextValue);
             const currentMentions = useClaudeTmuxStore.getState().getDraftMentions(sessionKey);
@@ -1233,6 +1240,10 @@ export function TmuxComposeBar({
             }
           }}
           onKeyDown={(e) => {
+            if (composerLocked || queueSubmittingRef.current) {
+              if (e.key === "Enter") e.preventDefault();
+              return;
+            }
             if (fileMentionMenuOpen) {
               const handled = handleFileMentionKeyDown(e, selectFileMention);
               if (handled) return;
@@ -1288,13 +1299,17 @@ export function TmuxComposeBar({
           placeholder={
             disabled ? "Session not running" : "Ask Claude anything… (@ to mention, / for commands)"
           }
-          disabled={disabled || submitting || queueSubmitting}
+          disabled={disabled || settingsSwitching}
+          // A disabled textarea drops focus, so an in-flight send only locks
+          // editing; focus stays here for the next prompt.
+          readOnly={submitting || queueSubmitting}
+          aria-busy={submitting || queueSubmitting}
           rows={2}
           autoFocus={autoFocus && !isMobile}
           className={cn(
             "w-full resize-none bg-transparent text-sm leading-5",
             "px-1 py-1 focus:outline-none placeholder:text-muted-foreground/60",
-            "disabled:opacity-60",
+            "disabled:opacity-60 read-only:opacity-60",
           )}
           style={{ minHeight: 28, maxHeight: 12 * 20 + 16 }}
         />
@@ -1390,7 +1405,7 @@ export function TmuxComposeBar({
             size="sm"
             variant="secondary"
             onClick={() => onAddressAll?.()}
-            disabled={disabled || submitting}
+            disabled={composerLocked}
             className="h-7 rounded-full px-3 text-xs"
             title="Send the review follow-up prompt"
           >
@@ -1429,13 +1444,10 @@ export function TmuxComposeBar({
         {/* Send / Stop button */}
         <Button
           size="sm"
+          // Keep focus in the prompt input when sending with the mouse.
+          onMouseDown={(event) => event.preventDefault()}
           onClick={busy && !value.trim() && attachments.length === 0 ? onInterrupt : handleSubmit}
-          disabled={
-            disabled ||
-            submitting ||
-            queueSubmitting ||
-            (!busy && !value.trim() && attachments.length === 0)
-          }
+          disabled={composerLocked || (!busy && !value.trim() && attachments.length === 0)}
           className="h-7 w-7 p-0 rounded-full"
           title={
             busy

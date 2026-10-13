@@ -646,7 +646,8 @@ export async function createCommandFixtures() {
     environmentMarkerPath?: string,
     modelCatalog?: Record<string, unknown>,
     versionMarkerPath?: string,
-    maxConcurrentThreadsMarkerPath?: string,
+    /** Records Codex's thread limit, or Claude's background command ceiling. */
+    launchLimitMarkerPath?: string,
   ): Promise<void> {
     const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");
     await fs.mkdir(bridgeDist, { recursive: true });
@@ -666,8 +667,8 @@ export async function createCommandFixtures() {
           : ""
       }
       ${
-        maxConcurrentThreadsMarkerPath
-          ? `require("node:fs").writeFileSync(${JSON.stringify(maxConcurrentThreadsMarkerPath)}, process.env.CODEX_MAX_CONCURRENT_THREADS_PER_SESSION ?? "");`
+        launchLimitMarkerPath
+          ? `require("node:fs").writeFileSync(${JSON.stringify(launchLimitMarkerPath)}, process.env.${bridgeName === "claude-bridge" ? "BASH_MAX_TIMEOUT_MS" : "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION"} ?? "");`
           : ""
       }
       http.createServer((req, res) => {

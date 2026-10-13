@@ -1441,7 +1441,8 @@ export function ClaudeTmuxChatTab({
               worktreePath={worktreePath}
               disabled={!running}
               busy={isThinking}
-              submitting={sending || settingsSwitching}
+              submitting={sending}
+              settingsSwitching={settingsSwitching}
               autoFocus={isActive}
               onSubmit={handleSubmit}
               onQueue={handleQueue}

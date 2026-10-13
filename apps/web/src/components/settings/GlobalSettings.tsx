@@ -27,6 +27,10 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import {
+  DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
+  resolveClaudeBackgroundCommandLimitHours,
+} from "@orkestrator/protocol/claude-background-commands";
+import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
   isValidDebugLogRetentionDays,
@@ -104,6 +108,7 @@ interface CoreFieldsSnapshot {
   agentSettings: AgentSettingsTier;
   openCodeModelProviders: string[];
   codexMaxConcurrentThreads: number;
+  claudeBackgroundCommandLimitHours: number;
   terminalAppearance: TerminalAppearance;
   terminalScrollback: number;
   terminalHistoryEnabled: boolean;
@@ -137,6 +142,9 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     openCodeModelProviders: normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     codexMaxConcurrentThreads:
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+    claudeBackgroundCommandLimitHours: resolveClaudeBackgroundCommandLimitHours(
+      global.claudeBackgroundCommandLimitHours,
+    ),
     terminalAppearance: {
       fontFamily: appearance.fontFamily,
       fontSize: appearance.fontSize,
@@ -207,6 +215,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+    resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     global.terminalAppearance?.fontFamily ?? "",
     global.terminalAppearance?.fontSize ?? 0,
     global.terminalAppearance?.backgroundColor ?? "",
@@ -273,6 +282,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [codexMaxConcurrentThreads, setCodexMaxConcurrentThreads] = useState(
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+  );
+  const [claudeBackgroundCommandLimitHours, setClaudeBackgroundCommandLimitHours] = useState(() =>
+    resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
   );
   const [terminalFontFamily, setTerminalFontFamily] = useState(
     global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
@@ -375,6 +387,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
     setCodexMaxConcurrentThreads(
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+    );
+    setClaudeBackgroundCommandLimitHours(
+      resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     );
     const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
     setTerminalFontFamily(appearance.fontFamily);
@@ -534,6 +549,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       agentSettings: normalizeAgentSettings(agentSettings),
       openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
       codexMaxConcurrentThreads,
+      claudeBackgroundCommandLimitHours,
       terminalAppearance: {
         fontFamily: terminalFontFamily,
         fontSize: terminalFontSize,
@@ -564,6 +580,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       agentSettings,
       openCodeModelProviders,
       codexMaxConcurrentThreads,
+      claudeBackgroundCommandLimitHours,
       terminalFontFamily,
       terminalFontSize,
       terminalBackgroundColor,
@@ -733,6 +750,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         agentSettings: AgentSettingsTier;
         openCodeModelProviders: string[];
         codexMaxConcurrentThreads: number;
+        claudeBackgroundCommandLimitHours?: number;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         terminalHistoryEnabled: boolean;
@@ -759,6 +777,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         agentSettings: normalizeAgentSettings(agentSettings),
         openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
         codexMaxConcurrentThreads,
+        // Absent keeps the Claude CLI's own ceiling and its foreground limit.
+        ...(claudeBackgroundCommandLimitHours !== DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS
+          ? { claudeBackgroundCommandLimitHours }
+          : {}),
         terminalAppearance: {
           fontFamily: terminalFontFamily,
           fontSize: terminalFontSize,
@@ -987,6 +1009,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,
     setCodexMaxConcurrentThreads,
+    claudeBackgroundCommandLimitHours,
+    setClaudeBackgroundCommandLimitHours,
     terminalFontFamily,
     setTerminalFontFamily,
     terminalFontSize,

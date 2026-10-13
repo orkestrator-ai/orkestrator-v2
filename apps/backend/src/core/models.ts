@@ -891,6 +891,11 @@ export interface AppConfig {
     openCodeModelProviders?: string[];
     /** Maximum concurrently open spawned-agent threads per native Codex session. */
     codexMaxConcurrentThreads: number;
+    /**
+     * Longest a Claude native session may keep a background shell command
+     * running, in hours. Absent means the Claude CLI's own 2-hour ceiling.
+     */
+    claudeBackgroundCommandLimitHours?: number;
     terminalAppearance: {
       fontFamily: string;
       fontSize: number;

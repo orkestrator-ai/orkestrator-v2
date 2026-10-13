@@ -1874,35 +1874,69 @@ describe("GlobalSettings", () => {
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
-  test("shows the running app version on the debug tab", async () => {
+  test("shows the client and backend versions on the debug tab", async () => {
     mockGetAppVersion.mockResolvedValue("9.8.7-test");
     render(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("App version")).toBeTruthy();
     expect(await screen.findByText("9.8.7-test")).toBeTruthy();
-    expect(screen.queryByText(/from this bundle/) === null).toBe(true);
+    expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
+    expect(screen.getByText(/client and backend versions differ/)).toBeTruthy();
     expect(mockGetAppVersion).toHaveBeenCalled();
   });
 
-  test("marks the debug version as bundled when the backend does not answer", async () => {
+  test("does not flag matching client and backend versions", async () => {
+    mockGetAppVersion.mockResolvedValue(BUNDLED_APP_VERSION);
+    render(<GlobalSettings activeSection="debug" />);
+
+    await waitFor(() => expect(screen.getAllByText(BUNDLED_APP_VERSION)).toHaveLength(2));
+    expect(screen.queryByText(/versions differ/) === null).toBe(true);
+  });
+
+  test("shows the remote backend gateway hostname and port", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.example.ts.net:34121/",
+    };
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("2.15.1")).toBeTruthy();
+    expect(screen.getByText("workstation.example.ts.net:34121")).toBeTruthy();
+    expect(screen.getAllByText("this machine")).toHaveLength(1);
+  });
+
+  test("uses a generic remote backend label when its gateway URL is invalid", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "invalid gateway URL",
+    };
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("2.15.1")).toBeTruthy();
+    expect(screen.getByText("remote backend")).toBeTruthy();
+    expect(screen.getAllByText("this machine")).toHaveLength(1);
+  });
+
+  test("marks the backend as unreachable when it does not answer", async () => {
     // Without the marker an unreachable backend is indistinguishable from a
     // healthy one, on the single tab whose job is to say what is running.
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
     mockGetAppVersion.mockRejectedValue(new Error("backend offline"));
     render(<GlobalSettings activeSection="debug" />);
 
-    expect(await screen.findByText(/from this bundle/)).toBeTruthy();
+    expect(await screen.findByText("Unreachable")).toBeTruthy();
     expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
     await waitFor(() => expect(consoleError).toHaveBeenCalled());
     consoleError.mockRestore();
   });
 
-  test("marks the debug version as bundled when the backend reports the unset placeholder", async () => {
+  test("never shows the client version as the backend's when it reports the unset placeholder", async () => {
     mockGetAppVersion.mockResolvedValue("0.0.0");
     render(<GlobalSettings activeSection="debug" />);
 
-    expect(await screen.findByText(/from this bundle/)).toBeTruthy();
-    expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
+    expect(await screen.findByText("Did not report a version")).toBeTruthy();
+    expect(screen.getAllByText(BUNDLED_APP_VERSION)).toHaveLength(1);
   });
 
   test("reads the app version only while the debug tab is active", async () => {

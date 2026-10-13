@@ -1,3 +1,4 @@
+import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
@@ -5,6 +6,7 @@ import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
+import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -82,6 +84,10 @@ const TerminalCornerToolbarFixture = lazy(async () => ({
 
 const TerminalLinksFixture = lazy(async () => ({
   default: (await import("./TerminalLinksFixture")).TerminalLinksFixture,
+}));
+
+const ProjectNavigationFixture = lazy(async () => ({
+  default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
 }));
 
 declare global {
@@ -1596,6 +1602,13 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/project-navigation") {
+    return (
+      <Suspense fallback={null}>
+        <ProjectNavigationFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/terminal-corner-toolbar") {
     return (
       <Suspense fallback={null}>
@@ -1613,6 +1626,7 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
+  if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
   if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;
   if (window.location.pathname === "/browser") return <BrowserFixture />;
@@ -1664,6 +1678,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
+  if (window.location.pathname === "/tmux-compose-focus") return <TmuxComposeFocusFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }

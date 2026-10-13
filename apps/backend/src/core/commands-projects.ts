@@ -57,12 +57,16 @@ export async function refreshClaudeModelCatalog(
     const started = await dependencies.enqueueContainerBridgeOperation(
       "claude",
       containerId,
-      async () =>
-        dependencies.startContainerClaudeServer(
+      async () => {
+        const { global } = await context.storage.loadConfig();
+        // A bridge started for discovery stays up and serves later sessions.
+        return dependencies.startContainerClaudeServer(
           containerId,
           undefined,
-          (await context.storage.loadConfig()).global.debugLogging === true,
-        ),
+          global.debugLogging === true,
+          global.claudeBackgroundCommandLimitHours,
+        );
+      },
     );
     port = started.hostPort;
     authToken = started.authToken;

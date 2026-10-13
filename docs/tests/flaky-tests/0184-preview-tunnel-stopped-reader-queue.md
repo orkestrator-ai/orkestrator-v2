@@ -34,6 +34,16 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.zbwgoU/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** this repeats the existing intermittent queue-sampling failure. The isolated pass does not establish its root cause; the merge resolution changes only flake documentation.
 
+## Recurrence during merge validation (2026-10-13)
+
+- **Original command:** `mise run test:logged -- --name merge-suite -- mise run test`, with the GNU-tool `PATH` prefix from the testing guide.
+- **Worker configuration:** aggregate groups used 2/3/2/1 slots; backend had one Bun worker alongside the web package.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `565806` after the stopped-reader delay (314.43 ms), at line 279.
+- **Suite counts:** backend package: 5,888 passed, 15 skipped and 23 failed across 329 files. The other 22 failures reported environment-move tmux cleanup errors on a host without `tmux`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-preview-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged in 0.8 seconds, exit 0.
+- **Failure evidence:** `/tmp/orkestrator-test-run.UPNQcn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; aggregate summary: `/tmp/orkestrator-test-run.UPNQcn/summary.json`.
+- **Hypothesis:** this repeats the existing intermittent queue-sampling failure; the isolated pass does not establish a root cause. No assertion, timeout or skip was changed.
+
 ## Recurrence during dependency-review fixes (2026-10-13)
 
 - **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`, with the GNU-tool `PATH` prefix from the testing guide.

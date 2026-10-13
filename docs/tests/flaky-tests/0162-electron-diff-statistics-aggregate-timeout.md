@@ -53,3 +53,23 @@
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FOIo01/root-and-agent-support-tests.log.gz`.
 - **Hypothesis:** the same scan timeouts recur under aggregate contention;
   the owning file passes unchanged alone. The root cause remains unconfirmed.
+
+## Recurrence during merge conflict validation (2026-10-13)
+
+- **Original command:** the GNU-tool `PATH` prefix from the testing guide with
+  `mise run test:logged -- --name merge-suite -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol used 2/3/2/1 slots;
+  root files used three isolated Bun workers. Browser validation also ran.
+- **Root-suite counts:** 5,073 total, 5,044 passed, 24 skipped, 5 failed and
+  1 additional error across 256 files in 238.08 seconds. Workspace, bridges,
+  protocol and browser groups passed.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.6mi44l/root-and-agent-support-tests.log.gz`
+  and the adjacent `summary.json`.
+- **Test:** `computes counts for a tracked local environment and announces them`
+  exceeded its five-second deadline at 5,812.47 ms.
+- **Isolated rerun:** the same GNU-tool PATH with
+  `mise run test:logged -- --name merge-diffstats-isolated -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0) in 24.6 seconds.
+- **Hypothesis:** the aggregate deadline failures match earlier observations;
+  unchanged owning files pass alone. Contention may contribute, but the root
+  cause remains unconfirmed. No assertion, timeout or skip was changed.

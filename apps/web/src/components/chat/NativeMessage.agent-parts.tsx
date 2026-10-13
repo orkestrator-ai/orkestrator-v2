@@ -165,9 +165,13 @@ function backgroundTaskDurationMs(
   return settledAtMs - startedAtMs;
 }
 
-function RuntimeLabel({ value }: { value?: string }) {
+function RuntimeLabel({ value, className }: { value?: string; className?: string }) {
   if (!value) return null;
-  return <div className="shrink-0 tabular-nums text-[11px] text-muted-foreground/70">{value}</div>;
+  return (
+    <div className={cn("shrink-0 tabular-nums text-[11px] text-muted-foreground/70", className)}>
+      {value}
+    </div>
+  );
 }
 
 function usefulAgentOutput(output?: string): string | undefined {
@@ -512,18 +516,82 @@ function backgroundTaskOutcome(task: NativeBackgroundTask): BackgroundTaskOutcom
   return lines;
 }
 
-/** Usage worth a row: a shell task reports zeros, which would only be noise. */
-function backgroundTaskUsageEntries(
-  task: NativeBackgroundTask,
-): Array<{ label: string; value: string }> {
+interface BackgroundTaskUsageCounts {
+  toolUses?: number;
+  tokenCountText?: string;
+  updates?: number;
+}
+
+/** Usage worth showing: a shell task reports zeros, which would only be noise. */
+function backgroundTaskUsageCounts(task: NativeBackgroundTask): BackgroundTaskUsageCounts {
   const usage = task.usage;
-  if (!usage) return [];
-  return [
-    ...(usage.toolUses > 0 ? [{ label: "Tool uses", value: String(usage.toolUses) }] : []),
+  if (!usage) return {};
+  return {
+    ...(usage.toolUses > 0 ? { toolUses: usage.toolUses } : {}),
     ...(usage.totalTokens > 0
-      ? [{ label: "Tokens", value: formatTokenCount(usage.totalTokens) }]
-      : []),
-  ];
+      ? { tokenCountText: `${formatTokenCount(usage.totalTokens)} tokens` }
+      : {}),
+  };
+}
+
+/**
+ * A background Agent's snapshot usage, falling back to whatever the launch row
+ * itself reported, then captured child activity. Cursor reports no activity
+ * counts, so none is invented for it.
+ */
+function backgroundAgentUsageCounts(
+  task: NativeBackgroundTask,
+  launch: NativeMessagePart,
+  hideToolCount: boolean,
+  capturedToolCount: number,
+  childCount: number,
+): BackgroundTaskUsageCounts {
+  const counts = backgroundTaskUsageCounts(task);
+  const toolUses = task.usage?.toolUses ?? launch.toolUseCount ?? capturedToolCount;
+  const tokenCountText = counts.tokenCountText ?? launch.tokenCountText;
+  return {
+    ...(toolUses > 0 && !hideToolCount ? { toolUses } : {}),
+    ...(tokenCountText ? { tokenCountText } : {}),
+    ...(!tokenCountText && childCount > 0 && !hideToolCount ? { updates: childCount } : {}),
+  };
+}
+
+function formatToolUseCount(count: number): string {
+  return `${count} ${count === 1 ? "tool use" : "tool uses"}`;
+}
+
+/**
+ * The header's right rail: usage on top, runtime below. Usage lives here
+ * rather than in the expanded body so a task whose only details are its counts
+ * never needs expanding to read them.
+ */
+function BackgroundTaskRail({
+  usage,
+  durationLabel,
+}: {
+  usage: BackgroundTaskUsageCounts;
+  durationLabel?: string;
+}) {
+  const hasUsage =
+    usage.toolUses !== undefined ||
+    usage.tokenCountText !== undefined ||
+    usage.updates !== undefined;
+  if (!hasUsage && !durationLabel) return null;
+  return (
+    <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
+      {hasUsage ? (
+        <div className="text-right text-[11px] text-muted-foreground/70">
+          {usage.toolUses !== undefined ? <div>{formatToolUseCount(usage.toolUses)}</div> : null}
+          {usage.tokenCountText ? <div>{usage.tokenCountText}</div> : null}
+          {usage.updates !== undefined ? (
+            <div>{`${usage.updates} ${usage.updates === 1 ? "update" : "updates"}`}</div>
+          ) : null}
+        </div>
+      ) : null}
+      {/* A lone timer still sits bottom-right, where it does beside usage. */}
+      <RuntimeLabel value={durationLabel} className="mt-auto" />
+    </div>
+  );
 }
 
 function backgroundTaskAgentTypeEntries(
@@ -624,11 +692,7 @@ function BackgroundTaskDetails({
         </div>
       ))}
       <AgentMetaRows
-        entries={[
-          ...backgroundTaskAgentTypeEntries(task),
-          { label: "Task ID", value: task.id },
-          ...backgroundTaskUsageEntries(task),
-        ]}
+        entries={[...backgroundTaskAgentTypeEntries(task), { label: "Task ID", value: task.id }]}
       />
       {task.outputFile ? (
         <BackgroundTaskOutputFile path={task.outputFile} containerId={containerId} />
@@ -637,13 +701,26 @@ function BackgroundTaskDetails({
   );
 }
 
-function StopBackgroundTaskButton({
+/** Hover group for a card whose activity icon turns into its stop control. */
+const STOPPABLE_CARD_GROUP = "group/stoppable";
+
+/**
+ * The card's activity icon, which becomes its stop control while the task is
+ * live. Both occupy the same 28px circle, so revealing the control on hover
+ * never moves the rest of the row.
+ *
+ * The control is revealed on hover only where a precise hover pointer exists;
+ * a touch screen has no hover, so there the control simply replaces the icon.
+ */
+function BackgroundTaskActivitySlot({
   task,
+  presentation,
   onStop,
   onStopped,
   onFailed,
 }: {
   task: NativeBackgroundTask;
+  presentation: BackgroundTaskPresentation;
   onStop?: (taskId: string) => Promise<boolean>;
   onStopped: () => void;
   onFailed: (message: string) => void;
@@ -683,25 +760,43 @@ function StopBackgroundTaskButton({
     onFailed(`Could not stop “${label}”. Try again or use the main Stop control.`);
   }, [label, onFailed, onStopped, stopBackgroundTask, stopping, taskId]);
 
-  if (!stopBackgroundTask) return null;
+  const icon = <AgentActivityIcon status={presentation.status} spinning={presentation.spinning} />;
+  if (!presentation.live || !stopBackgroundTask) return icon;
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 shrink-0 px-2 text-xs"
-      disabled={stopping}
-      aria-label={`Stop ${label}`}
-      onClick={() => void stop()}
-    >
-      {stopping ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-      ) : (
-        <Square className="h-3 w-3 fill-current" aria-hidden />
-      )}
-      {stopping ? "Stopping" : "Stop"}
-    </Button>
+    <span className="group/stop-slot relative flex size-7 shrink-0">
+      {/* While a stop is in flight the control stays up, showing its progress. */}
+      <span
+        className={cn(
+          "flex transition-opacity duration-150",
+          stopping
+            ? "opacity-0"
+            : "opacity-0 md:hover-fine:opacity-100 md:hover-fine:group-hover/stoppable:opacity-0 md:hover-fine:group-focus-within/stop-slot:opacity-0",
+        )}
+      >
+        {icon}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className={cn(
+          "absolute inset-0 size-7 rounded-full bg-cyan-400/10 p-0 text-cyan-300 transition-opacity duration-150 hover:bg-destructive/15 hover:text-destructive",
+          !stopping &&
+            "opacity-100 md:hover-fine:opacity-0 md:hover-fine:group-hover/stoppable:opacity-100 md:hover-fine:focus-visible:opacity-100",
+        )}
+        disabled={stopping}
+        aria-label={`Stop ${label}`}
+        title={stopping ? "Stopping…" : "Stop task"}
+        onClick={() => void stop()}
+      >
+        {stopping ? (
+          <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+        ) : (
+          <Square className="size-3 fill-current" aria-hidden />
+        )}
+      </Button>
+    </span>
   );
 }
 
@@ -709,10 +804,9 @@ function StopBackgroundTaskButton({
  * A provider-owned background task, rendered as the agent card every other
  * long-running child uses.
  *
- * It carries a stop control where an agent carries its tool and update counts:
- * a background shell command reports neither, so those slots would always read
- * zero. It says "Task" unless the provider named the agent running it, which
- * is all a card with no launch row can say about what kind of work it is.
+ * It says "Task" unless the provider names the agent running it. A live task's
+ * activity icon doubles as its stop control, and whatever usage the task reports
+ * sits in the header's right rail rather than behind an expansion.
  */
 export function BackgroundTaskCard({
   task,
@@ -756,7 +850,7 @@ export function BackgroundTaskCard({
   );
   const description = task.description?.trim();
   const outcome = backgroundTaskOutcome(task);
-  const usageEntries = backgroundTaskUsageEntries(task);
+  const usage = backgroundTaskUsageCounts(task);
   const agentType = backgroundTaskAgentType(task);
   // The header already carries the description, so the collapsed second line is
   // for what it does not say: the command actually running, or — when no launch
@@ -765,13 +859,7 @@ export function BackgroundTaskCard({
   const outcomePreview = preview ? undefined : outcome[0];
   const hasPreview = Boolean(preview || outcomePreview);
   const hasBody = Boolean(
-    command ||
-    result ||
-    resultPending ||
-    outcome.length > 0 ||
-    task.outputFile ||
-    usageEntries.length > 0 ||
-    agentType,
+    command || result || resultPending || outcome.length > 0 || task.outputFile || agentType,
   );
 
   // The failure belongs to the attempt, not the task: a later status change
@@ -784,18 +872,24 @@ export function BackgroundTaskCard({
     <Collapsible
       open={open && hasBody}
       onOpenChange={onOpenChange}
-      className={cn(!embedded && agentCardClassName)}
+      className={cn(STOPPABLE_CARD_GROUP, !embedded && agentCardClassName)}
     >
-      <div className="flex items-start gap-2 px-3 py-2.5">
+      <div className="flex items-start gap-3 px-3 py-2.5">
+        <BackgroundTaskActivitySlot
+          task={task}
+          presentation={presentation}
+          onStop={onStop}
+          onStopped={() => setStopError(null)}
+          onFailed={setStopError}
+        />
         <CollapsibleTrigger
           className={cn(
-            "flex min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            "flex min-h-7 min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
             hasPreview ? "items-start" : "items-center",
             hasBody ? "cursor-pointer hover:bg-white/[0.025]" : "cursor-default",
           )}
           disabled={!hasBody}
         >
-          <AgentActivityIcon status={presentation.status} spinning={presentation.spinning} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs">
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
@@ -839,19 +933,7 @@ export function BackgroundTaskCard({
             )}
           />
         </CollapsibleTrigger>
-        {presentation.live || durationLabel ? (
-          <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
-            {presentation.live ? (
-              <StopBackgroundTaskButton
-                task={task}
-                onStop={onStop}
-                onStopped={() => setStopError(null)}
-                onFailed={setStopError}
-              />
-            ) : null}
-            <RuntimeLabel value={durationLabel} />
-          </div>
-        ) : null}
+        <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
       </div>
 
       {stopError ? (
@@ -1185,6 +1267,15 @@ export function TaskGroupPart({
     includeDuration: isTerminalAgentStatus(status),
     ...modelOptions,
   });
+  const backgroundUsage = backgroundAgentTask
+    ? backgroundAgentUsageCounts(
+        backgroundAgentTask,
+        part.task,
+        hideCounts,
+        capturedToolCount,
+        childCount,
+      )
+    : undefined;
 
   if (standaloneBackgroundTask) {
     return (
@@ -1206,12 +1297,21 @@ export function TaskGroupPart({
     <Collapsible
       open={isOpen}
       onOpenChange={setIsOpen}
-      className={cn(!embedded && agentCardClassName)}
+      className={cn(backgroundAgentTask && STOPPABLE_CARD_GROUP, !embedded && agentCardClassName)}
     >
-      <div className="flex items-start gap-2 px-3 py-2.5">
+      <div className="flex items-start gap-3 px-3 py-2.5">
+        {backgroundAgentTask && backgroundPresentation ? (
+          <BackgroundTaskActivitySlot
+            task={backgroundAgentTask}
+            presentation={backgroundPresentation}
+            onStopped={() => setStopError(null)}
+            onFailed={setStopError}
+          />
+        ) : (
+          <AgentActivityIcon status={status} />
+        )}
         <CollapsibleTrigger className="min-w-0 flex-1 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
-          <div className={cn("flex gap-3", preview ? "items-start" : "items-center")}>
-            <AgentActivityIcon status={status} spinning={backgroundPresentation?.spinning} />
+          <div className={cn("flex min-h-7 gap-3", preview ? "items-start" : "items-center")}>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs">
                 <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
@@ -1243,7 +1343,7 @@ export function TaskGroupPart({
                 </div>
               ) : null}
             </div>
-            {backgroundPresentation?.live && !hideCounts ? null : (
+            {backgroundUsage ? null : (
               <AgentUsageStats
                 hasExternalUsage={hasExternalUsage}
                 tokenOnlyUsage={tokenOnlyUsage}
@@ -1262,15 +1362,8 @@ export function TaskGroupPart({
             />
           </div>
         </CollapsibleTrigger>
-        {backgroundPresentation?.live && backgroundAgentTask ? (
-          <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
-            <StopBackgroundTaskButton
-              task={backgroundAgentTask}
-              onStopped={() => setStopError(null)}
-              onFailed={setStopError}
-            />
-            <RuntimeLabel value={durationLabel} />
-          </div>
+        {backgroundUsage ? (
+          <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
         ) : null}
       </div>
       {stopError ? (

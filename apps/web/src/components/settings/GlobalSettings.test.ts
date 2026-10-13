@@ -4,7 +4,12 @@ import {
   getSshAgentSocketPathValidationError,
   globalFormSignature,
   sshAgentSocketPathForSave,
+  storedCoreFields,
 } from "./GlobalSettings";
+import {
+  claudeBackgroundCommandLimitOptions,
+  formatClaudeBackgroundCommandLimit,
+} from "./GlobalSettings.sections";
 
 function globalConfig(): GlobalConfig {
   return {
@@ -40,6 +45,22 @@ describe("global settings synchronization", () => {
     ).toBe(globalFormSignature(current));
   });
 
+  test("tracks the Claude background task time limit", () => {
+    const current = globalConfig();
+    expect(globalFormSignature({ ...current, claudeBackgroundCommandLimitHours: 12 })).not.toBe(
+      globalFormSignature(current),
+    );
+    // Absent and the CLI's own 2-hour ceiling are the same choice.
+    expect(globalFormSignature({ ...current, claudeBackgroundCommandLimitHours: 2 })).toBe(
+      globalFormSignature(current),
+    );
+    expect(storedCoreFields(current).claudeBackgroundCommandLimitHours).toBe(2);
+    expect(
+      storedCoreFields({ ...current, claudeBackgroundCommandLimitHours: 24 })
+        .claudeBackgroundCommandLimitHours,
+    ).toBe(24);
+  });
+
   test("tracks the durable terminal-history opt-out", () => {
     const current = globalConfig();
     expect(globalFormSignature({ ...current, terminalHistoryEnabled: false })).not.toBe(
@@ -66,5 +87,20 @@ describe("global settings synchronization", () => {
       "/run/user/1000/agent.sock",
     );
     expect(sshAgentSocketPathForSave("   ")).toBeUndefined();
+  });
+});
+
+describe("Claude background task time limit options", () => {
+  test("offers presets and keeps a stored value outside them selectable", () => {
+    expect(claudeBackgroundCommandLimitOptions(2)).toEqual([2, 4, 6, 8, 12, 24, 48, 72, 168]);
+    expect(claudeBackgroundCommandLimitOptions(10)).toEqual([2, 4, 6, 8, 10, 12, 24, 48, 72, 168]);
+  });
+
+  test("labels hours and whole days", () => {
+    expect(formatClaudeBackgroundCommandLimit(2)).toBe("2 hours (default)");
+    expect(formatClaudeBackgroundCommandLimit(12)).toBe("12 hours");
+    expect(formatClaudeBackgroundCommandLimit(24)).toBe("1 day");
+    expect(formatClaudeBackgroundCommandLimit(168)).toBe("7 days");
+    expect(formatClaudeBackgroundCommandLimit(36)).toBe("36 hours");
   });
 });

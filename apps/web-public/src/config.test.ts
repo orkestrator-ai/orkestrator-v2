@@ -29,7 +29,9 @@ describe("public client deployment configuration", () => {
     };
     expect(tsconfig.compilerOptions.strict).toBe(true);
     expect(tsconfig.compilerOptions.paths).toBeDefined();
-    expect(read("vite.config.ts")).toContain('"@": path.resolve(__dirname, "../web/src")');
+    expect(read("vite.config.ts")).toContain(
+      '"@": path.resolve(import.meta.dirname, "../web/src")',
+    );
     expect(read("bunfig.toml")).toContain(
       'preload = ["../../tests/register-dom.ts", "../../tests/setup.ts"]',
     );

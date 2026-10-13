@@ -33,7 +33,6 @@ import {
   Eye,
   EyeOff,
   Key,
-  Github,
   CheckCircle2,
   XCircle,
   AlertCircle,
@@ -52,6 +51,7 @@ import {
   X,
   Trash2,
 } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { CursorSdkSignIn } from "./agent/CursorSdkSignIn";
 import { Textarea } from "@/components/ui/textarea";
@@ -629,7 +629,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <div className="space-y-3">
         <div>
           <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-            <Github className="h-4 w-4" />
+            <GithubIcon className="h-4 w-4" />
             GitHub authentication
           </h3>
           <p className="text-xs text-muted-foreground mt-1">
@@ -998,6 +998,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               size="icon"
               className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
               onClick={() => setShowApiKey(!showApiKey)}
+              aria-label={showApiKey ? "Hide Anthropic API key" : "Show Anthropic API key"}
             >
               {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>

@@ -59,6 +59,7 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
               className="h-7 w-7"
               onClick={onRefresh}
               disabled={isLoading}
+              aria-label="Refresh"
             >
               <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             </Button>
@@ -68,7 +69,13 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={closePanel}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={closePanel}
+              aria-label="Close panel"
+            >
               <X className="h-4 w-4" />
             </Button>
           </TooltipTrigger>

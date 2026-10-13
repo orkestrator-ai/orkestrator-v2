@@ -27,13 +27,13 @@ import {
 import {
   FolderInput,
   FolderMinus,
-  Github,
   Trash2,
   ChevronRight,
   Plus,
   Settings2,
   LayoutGrid,
 } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 import type { Project, Environment, EnvironmentType } from "@/types";
 import { cn } from "@/lib/utils";
 import { openInBrowser } from "@/lib/backend";
@@ -259,7 +259,7 @@ export function SortableProjectGroup({
                       });
                     }}
                   >
-                    <Github className="h-4 w-4 mr-2" />
+                    <GithubIcon className="h-4 w-4 mr-2" />
                     Open Repo on GitHub
                   </ContextMenuItem>
                 )}

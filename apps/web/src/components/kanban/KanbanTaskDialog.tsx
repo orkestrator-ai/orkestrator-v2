@@ -782,6 +782,7 @@ export function KanbanTaskDialog({
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label={`Remove image ${img.filename}`}
                       className="absolute top-0 right-0 h-5 w-5 bg-background/80 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-none rounded-bl-md"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -979,6 +980,7 @@ export function KanbanTaskDialog({
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
                     onClick={handleDelete}
+                    aria-label="Delete task"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -1145,6 +1147,7 @@ export function KanbanTaskDialog({
                             size="icon"
                             className="h-5 w-5 shrink-0 opacity-0 group-hover/comment:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
                             onClick={() => void deleteComment(task.id, comment.id)}
+                            aria-label="Delete comment"
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>
@@ -1174,6 +1177,7 @@ export function KanbanTaskDialog({
               variant="ghost"
               onClick={handleAddComment}
               disabled={!commentText.trim()}
+              aria-label="Add comment"
             >
               <Send className="h-4 w-4" />
             </Button>

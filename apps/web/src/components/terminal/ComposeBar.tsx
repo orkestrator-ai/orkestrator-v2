@@ -480,6 +480,7 @@ export function ComposeBar({
                   e.stopPropagation();
                   removeImage(img.id);
                 }}
+                aria-label="Remove attachment"
                 className="absolute top-0.5 right-0.5 w-4 h-4 bg-black/80 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 <X className="w-2.5 h-2.5 text-white" />
@@ -532,6 +533,7 @@ export function ComposeBar({
           variant="default"
           onClick={handleSend}
           disabled={isSending || (pendingPasteCount === 0 && images.length === 0 && !text.trim())}
+          aria-label="Send"
           className="shrink-0 h-7 w-7"
         >
           <Send className="w-3.5 h-3.5" />
@@ -556,6 +558,7 @@ export function ComposeBar({
             />
             <button
               onClick={() => setPreviewImage(null)}
+              aria-label="Close preview"
               className="absolute -top-3 -right-3 w-8 h-8 bg-card border border-zinc-600 rounded-full flex items-center justify-center hover:bg-muted transition-colors"
             >
               <X className="w-4 h-4 text-foreground" />

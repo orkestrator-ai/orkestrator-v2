@@ -13,7 +13,8 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { AlertCircle, Github, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -229,7 +230,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-3 sm:px-6 sm:py-4">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card">
-          <Github className="h-4.5 w-4.5" />
+          <GithubIcon className="h-4.5 w-4.5" />
         </div>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-base font-semibold text-foreground">
@@ -289,7 +290,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
       ) : snapshot?.issues.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-6">
           <div className="max-w-sm rounded-xl border border-dashed border-border p-8 text-center">
-            <Github className="mx-auto h-7 w-7 text-muted-foreground" />
+            <GithubIcon className="mx-auto h-7 w-7 text-muted-foreground" />
             <h3 className="mt-3 text-sm font-semibold">No open issues</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               New open issues from {snapshot.repository.fullName} will appear here after refresh.

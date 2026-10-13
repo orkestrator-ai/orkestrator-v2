@@ -10,15 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  FolderGit2,
-  FolderOpen,
-  Github,
-  GitBranch,
-  Loader2,
-  LockKeyhole,
-  Plus,
-} from "lucide-react";
+import { FolderGit2, FolderOpen, GitBranch, Loader2, LockKeyhole, Plus } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 import { pickHostPath } from "@/lib/host-path-picker";
 import {
   getGitRemoteUrl,
@@ -382,7 +375,7 @@ export function AddProjectDialog({
                       }}
                       disabled={isLoading}
                     >
-                      <Github className="mr-2 h-4 w-4" />
+                      <GithubIcon className="mr-2 h-4 w-4" />
                       From GitHub
                     </Button>
                   </div>
@@ -488,7 +481,7 @@ export function AddProjectDialog({
                   </li>
                   <li className="flex items-center gap-2 px-3 py-3">
                     <span className="relative shrink-0">
-                      <Github className="h-4 w-4 text-muted-foreground" />
+                      <GithubIcon className="h-4 w-4 text-muted-foreground" />
                       <LockKeyhole className="absolute -bottom-1 -right-1 h-2.5 w-2.5 fill-background" />
                     </span>
                     Private origin

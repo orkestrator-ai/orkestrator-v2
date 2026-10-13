@@ -44,7 +44,6 @@ import {
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
-  Github,
   Globe2,
   ListChecks,
   Loader2,
@@ -61,6 +60,7 @@ import {
   Upload,
   Workflow,
 } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 import {
   ClaudeIcon,
   CodexIcon,
@@ -593,7 +593,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             {
               value: "github",
               label: "GitHub",
-              icon: <Github className="size-3.5" />,
+              icon: <GithubIcon className="size-3.5" />,
               panelId: "project-panel-github",
             },
             {

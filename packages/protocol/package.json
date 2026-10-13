@@ -17,6 +17,7 @@
     "./backend-instance": "./src/backend-instance.ts",
     "./browser-preview": "./src/browser-preview.ts",
     "./bridge-readiness": "./src/bridge-readiness.ts",
+    "./claude-background-commands": "./src/claude-background-commands.ts",
     "./claude-model-catalog": "./src/claude-model-catalog.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",

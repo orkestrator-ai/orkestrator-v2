@@ -58,6 +58,7 @@ import { structuredOutputFailure } from "@orkestrator/protocol/structured-output
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
+import { backgroundCommandInstruction } from "./background-commands.js";
 import { debugLog, flushDebugLogs, isDebugLoggingEnabled } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -3351,9 +3352,9 @@ export async function sendPrompt(
             append: [
               "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
               // Since Claude Code 2.1.285 an Agent SDK session stops a background
-              // shell command at its `timeout` (30 minutes by default, 2 hours at
-              // most), so a dev server Claude starts here does not outlive that.
-              "Background shell commands in this session are stopped when they reach their timeout (30 minutes by default, 2 hours at most). For a dev server or watcher that must keep running longer, tell the user to start it in an Orkestrator terminal tab instead of running it yourself.",
+              // shell command at its `timeout`, so a dev server Claude starts here
+              // does not outlive the ceiling configured in Settings.
+              backgroundCommandInstruction(queryEnvironment),
               // The claude.ai Claude Docs connector and docs skill steer reports
               // into remote docs that only an Artifact tool can open, and
               // Orkestrator has none, so the report never shows up here.

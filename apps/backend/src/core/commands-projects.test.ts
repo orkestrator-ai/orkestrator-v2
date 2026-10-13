@@ -19,7 +19,9 @@ describe("refreshClaudeModelCatalog", () => {
           environmentType: "docker",
           containerId: "container-123",
         }),
-        loadConfig: async () => ({ global: { debugLogging: true } }),
+        loadConfig: async () => ({
+          global: { debugLogging: true, claudeBackgroundCommandLimitHours: 6 },
+        }),
         updateEnvironment,
         cacheAgentModelCatalog,
       },
@@ -43,7 +45,7 @@ describe("refreshClaudeModelCatalog", () => {
       }),
     } as never);
 
-    expect(startContainer).toHaveBeenCalledWith("container-123", undefined, true);
+    expect(startContainer).toHaveBeenCalledWith("container-123", undefined, true, 6);
     expect(snapshot).toMatchObject({
       environmentId: "docker-env",
       source: "sdk",

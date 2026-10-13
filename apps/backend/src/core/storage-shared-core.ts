@@ -122,6 +122,11 @@ import {
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
+import {
+  isValidClaudeBackgroundCommandLimitHours,
+  MAX_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
+  MIN_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
+} from "@orkestrator/protocol/claude-background-commands";
 import { isAgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type {
   AgentActivityState,
@@ -1545,6 +1550,17 @@ export function validateCodexMaxConcurrentThreads(value: unknown): number {
   return value;
 }
 
+/** Absent means the Claude CLI's own 2-hour ceiling. */
+export function validateClaudeBackgroundCommandLimitHours(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (!isValidClaudeBackgroundCommandLimitHours(value)) {
+    throw new Error(
+      `claudeBackgroundCommandLimitHours must be an integer between ${MIN_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS} and ${MAX_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS}.`,
+    );
+  }
+  return value;
+}
+
 export function migrateLegacyReviewInstruction(global: JsonRecord): JsonRecord {
   if (
     global.reviewInstruction === undefined &&
@@ -1572,6 +1588,7 @@ export function validateConfigReviewInstruction(value: unknown): AppConfig {
   const global = migrateLegacyReviewInstruction(value.global);
   parseReviewInstruction(global.reviewInstruction);
   validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
+  validateClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours);
   return {
     ...value,
     global,
@@ -1585,6 +1602,7 @@ export function validateGlobalReviewInstruction(value: unknown): AppConfig["glob
   const global = migrateLegacyReviewInstruction(value);
   parseReviewInstruction(global.reviewInstruction);
   validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
+  validateClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours);
   return global as unknown as AppConfig["global"];
 }
 
@@ -1633,6 +1651,11 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
+  const claudeBackgroundCommandLimitHours = isValidClaudeBackgroundCommandLimitHours(
+    global.claudeBackgroundCommandLimitHours,
+  )
+    ? global.claudeBackgroundCommandLimitHours
+    : undefined;
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
   const terminalHistoryRetention = normalizeTerminalHistoryRetention({
     enabled: global.terminalHistoryEnabled,
@@ -1762,6 +1785,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   if (
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
+    global.claudeBackgroundCommandLimitHours === claudeBackgroundCommandLimitHours &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
     global.terminalHistoryEnabled === terminalHistoryRetention.enabled &&
     global.terminalHistoryRetentionMb === terminalHistoryRetention.sessionMb &&
@@ -1789,6 +1813,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global: {
       ...nextGlobal,
       codexMaxConcurrentThreads,
+      claudeBackgroundCommandLimitHours,
       debugLogRetentionDays,
       terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,

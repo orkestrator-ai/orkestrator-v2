@@ -45,6 +45,26 @@ describe("session system prompt", () => {
     call.finish();
     await promptPromise.catch(() => undefined);
   });
+
+  test("states the background command ceiling the CLI is launched with", async () => {
+    const previous = process.env.BASH_MAX_TIMEOUT_MS;
+    process.env.BASH_MAX_TIMEOUT_MS = String(12 * 3_600_000);
+    try {
+      const session = createSession("system-prompt-background-limit");
+      track(session.id);
+      const promptPromise = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      const systemPrompt = call.options.systemPrompt as { append?: string };
+      expect((call.options.env as NodeJS.ProcessEnv).BASH_MAX_TIMEOUT_MS).toBe("43200000");
+      expect(systemPrompt.append).toContain("(30 minutes by default, 12 hours at most)");
+      call.push({ type: "result", subtype: "success", is_error: false, result: "" });
+      call.finish();
+      await promptPromise.catch(() => undefined);
+    } finally {
+      if (previous === undefined) delete process.env.BASH_MAX_TIMEOUT_MS;
+      else process.env.BASH_MAX_TIMEOUT_MS = previous;
+    }
+  });
 });
 
 describe("AskUserQuestion flow", () => {

@@ -936,24 +936,31 @@ exit 0
     }
   });
 
-  test("keeps the in-container Claude bridge on its bun entrypoint", async () => {
-    const hostPort = await reserveFreePort();
-    const pidFile = path.join(await createTempDir("ork-claude-bridge-pid-"), "pid");
-    const environment = createEnvironment({
-      id: "env-container-claude",
-      environmentType: "containerized",
-      containerId: "container-claude",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  test.each([
+    ["the CLI default", undefined, undefined],
+    ["a configured", 8, "export BASH_MAX_TIMEOUT_MS='28800000'"],
+  ])(
+    "keeps the in-container Claude bridge on its bun entrypoint with %s background command limit",
+    async (_label, limitHours, expectedExport) => {
+      const hostPort = await reserveFreePort();
+      const pidFile = path.join(await createTempDir("ork-claude-bridge-pid-"), "pid");
+      const environment = createEnvironment({
+        id: "env-container-claude",
+        environmentType: "containerized",
+        containerId: "container-claude",
+        status: "running",
+      });
+      const { context } = createContext(environment, {
+        globalConfig: { claudeBackgroundCommandLimitHours: limitHours },
+      });
+      const commands = createCommandRegistry();
 
-    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
-    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
-    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
-    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+      const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+      const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      process.env.FAKE_BRIDGE_PID_FILE = pidFile;
 
-    const dockerScript = `#!/bin/sh
+      const dockerScript = `#!/bin/sh
 case "$1" in
   inspect) printf 'running\\n'; exit 0 ;;
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
@@ -966,41 +973,44 @@ esac
 exit 0
 `;
 
-    try {
-      await withFakeDocker(dockerScript, async (logs) => {
-        const result = (await commands.get("start_claude_server")?.(
-          { containerId: "container-claude" },
-          context,
-        )) as { hostPort: number; wasRunning: boolean; authToken: string };
-        expect(result).toMatchObject({ hostPort, wasRunning: false });
-        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          const result = (await commands.get("start_claude_server")?.(
+            { containerId: "container-claude" },
+            context,
+          )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          expect(result).toMatchObject({ hostPort, wasRunning: false });
+          expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
-        expect(execLog).not.toContain("setsid node");
-        expect(execLog).toContain("/tmp/claude-bridge-token");
-        expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
-        expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
-        expect(execLog).toContain(
-          "export ORKESTRATOR_GITHUB_CREDENTIAL_FILE='/tmp/orkestrator-ai/github-token'",
-        );
-        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
-      });
-    } finally {
-      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
-      if (pid) {
-        try {
-          process.kill(Number(pid));
-        } catch {
-          // already gone
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
+          expect(execLog).not.toContain("setsid node");
+          expect(execLog).toContain("/tmp/claude-bridge-token");
+          expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
+          expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
+          expect(execLog).toContain(
+            "export ORKESTRATOR_GITHUB_CREDENTIAL_FILE='/tmp/orkestrator-ai/github-token'",
+          );
+          expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
+          if (expectedExport) expect(execLog).toContain(expectedExport);
+          else expect(execLog).not.toContain("BASH_MAX_TIMEOUT_MS");
+        });
+      } finally {
+        const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+        if (pid) {
+          try {
+            process.kill(Number(pid));
+          } catch {
+            // already gone
+          }
         }
+        if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+        else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+        if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+        else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
       }
-      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
-      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
-      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
-      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
-    }
-  });
+    },
+  );
 
   test("starts, replaces, and reuses an authenticated container OpenCode server", async () => {
     const hostPort = await reserveFreePort();

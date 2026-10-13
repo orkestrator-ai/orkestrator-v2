@@ -59,6 +59,10 @@ import {
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
+  CLAUDE_BASH_MAX_TIMEOUT_ENV,
+  claudeBashMaxTimeoutEnvValue,
+} from "@orkestrator/protocol/claude-background-commands";
+import {
   invalidateDockerContainerStateCache,
   isContainerRunning,
   getHostPort,
@@ -718,12 +722,18 @@ export async function startContainerOpenCodeServer(
  * lives in `/tmp/claude-bridge-token` so later starts can return it, and a
  * healthy bridge without a readable token (from before per-process
  * authentication) is replaced rather than served unauthenticated.
+ *
+ * `backgroundCommandLimitHours` only reaches a bridge this call starts: a
+ * running bridge is not replaced for it, since that would stop the background
+ * commands the setting exists to keep alive.
  */
 export async function startContainerClaudeServer(
   containerId: string,
   agentToolConnection?: AgentToolConnection,
   debugLogging = false,
+  backgroundCommandLimitHours?: number,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
+  const bashMaxTimeout = claudeBashMaxTimeoutEnvValue(backgroundCommandLimitHours);
   const expectedAgentToolsFingerprint = agentToolConnection
     ? agentToolConnectionFingerprint(agentToolConnection)
     : null;
@@ -786,6 +796,7 @@ export async function startContainerClaudeServer(
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
       export ORKESTRATOR_BRIDGE_DEBUG=${debugLogging ? "1" : "0"}
+      ${bashMaxTimeout ? `export ${CLAUDE_BASH_MAX_TIMEOUT_ENV}=${quoteShell(bashMaxTimeout)}` : ""}
       ${
         agentToolConnection
           ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}

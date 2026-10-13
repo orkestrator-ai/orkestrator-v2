@@ -205,10 +205,12 @@ export function registerServerCommands(
         containerBridgeControl(id, CLAUDE_BRIDGE_PORT, "[c]laude-bridge/dist/index.js"),
       );
       const connection = await resolveContainerAgentToolConnection(context, id);
+      const { global } = await context.storage.loadConfig();
       return startContainerClaudeServer(
         id,
         connection,
-        (await context.storage.loadConfig()).global.debugLogging === true,
+        global.debugLogging === true,
+        global.claudeBackgroundCommandLimitHours,
       );
     });
   });

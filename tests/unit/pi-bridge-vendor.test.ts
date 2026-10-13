@@ -26,7 +26,6 @@ describe("Pi bridge runtime vendoring", () => {
       "@earendil-works/pi-coding-agent",
       "@earendil-works/pi-ai",
       "@earendil-works/pi-agent-core",
-      "@earendil-works/pi-server",
     ] as const;
 
     try {

@@ -30,6 +30,7 @@ import { randomUUID } from "node:crypto";
 import { browserPreviewAnchorKit } from "./browser-preview-anchor-script.js";
 import {
   boundedScreenshotDataUrl,
+  captureImageRepresentation,
   documentMask,
   maskCaptureImage,
 } from "./browser-preview-capture-image.js";
@@ -259,7 +260,7 @@ export async function captureResponsiveSet(
           fail(width, "unsupported");
           continue;
         }
-        const nativeSize = image.getSize();
+        const nativeSize = captureImageRepresentation(image);
         const decoded = decodePngDataUrl(boundedScreenshotDataUrl(masked.image));
         if (evidenceBytes + decoded.bytes.length > WEB_ANNOTATION_LIMITS.briefAttachmentBytes) {
           fail(width, "too-large");

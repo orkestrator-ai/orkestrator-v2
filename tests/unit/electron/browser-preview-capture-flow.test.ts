@@ -4,6 +4,7 @@ import { validateWebAnnotationCaptureInput } from "@orkestrator/protocol/web-ann
 import {
   createHarness,
   elementSelection,
+  fakeImage,
   start,
   type CaptureContents,
   type Json,
@@ -43,6 +44,58 @@ async function captured(harness: ReturnType<typeof createHarness>) {
 }
 
 describe("geometry at multiple zoom levels, device scales, and scroll offsets", () => {
+  test.each([0.75, 1.25, 2])(
+    "maps every sensitive pixel with retained native scale %s",
+    async (factor) => {
+      const harness = createHarness({ cropping: true });
+      const contents = await harness.attach();
+      // CSS viewport and NativeImage DIPs differ too (zoom/emulation).
+      const viewport = { width: 1_000, height: 600 };
+      const width = 800 * factor;
+      const height = 500 * factor;
+      const scaleX = width / viewport.width;
+      const scaleY = height / viewport.height;
+      const image = fakeImage(width, height);
+      image.getSize = () => ({ width: 800, height: 500 });
+      image.getScaleFactors = () => [factor];
+      const toBitmap = spyOn(image, "toBitmap");
+      contents.capturePage.mockResolvedValue(image);
+      contents.probe = {
+        connected: true,
+        rect: { x: 100, y: 50, width: 320, height: 120 },
+        viewport,
+        scroll: { x: 0, y: 0 },
+        devicePixelRatio: 3,
+        sensitive: [{ x: 500.25, y: 400.25, width: 99.5, height: 39.5 }],
+      };
+      await start(harness.manager, "region");
+      contents.selection = regionSelection(viewport, { x: 0, y: 0 }, 3);
+      const { pending } = await captured(harness);
+      expect(toBitmap).toHaveBeenCalledWith({ scaleFactor: factor });
+      expect(pending.capture.redaction.imageExcluded).toBe(false);
+      expect(pending.capture.geometry?.image).toEqual({
+        width,
+        height,
+        scale: scaleX,
+        reduced: false,
+      });
+      const bitmap = harness.bitmaps[0]!;
+      const x0 = Math.floor(500.25 * scaleX);
+      const x1 = Math.ceil(599.75 * scaleX);
+      const y0 = Math.floor(400.25 * scaleY);
+      const y1 = Math.ceil(439.75 * scaleY);
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = x0; x < x1; x += 1) expect(pixel(bitmap, width, x, y)).toEqual(MASK);
+      }
+      expect(pixel(bitmap, width, x0 - 1, y0)).not.toEqual(MASK);
+      expect(pixel(bitmap, width, x1, y0)).not.toEqual(MASK);
+      expect(pending.regionCrop).toMatchObject({
+        width: Math.round(320 * scaleX),
+        height: Math.round(120 * scaleX),
+      });
+    },
+  );
+
   const cases = [
     { zoom: 0.5, dpr: 1 },
     { zoom: 1, dpr: 2 },

@@ -35,6 +35,9 @@ uploads to a **draft** release, so nothing is visible until `release:publish`,
 which also refuses to publish unless macOS and Linux artifacts and their updater
 feeds are present (Linux uses `latest-linux.yml` for x64 or
 `latest-linux-arm64.yml` for arm64).
+macOS builds replace every generated macOS channel feed in the draft with a
+Darwin 22 minimum; publication downloads those feeds and verifies the floor
+before making the draft public.
 Tags with a `-suffix` publish as prereleases, which the updater ignores.
 
 To rehearse a build without uploading or needing the tag, run
@@ -90,13 +93,14 @@ Electron 44 dropped macOS 12 (Monterey), so the app requires macOS 13
 it on Monterey with its standard "can't use this version" message instead of
 the app crashing at launch. Raise it when an Electron upgrade raises the floor.
 
-This does not stop the updater from *offering* the build: electron-builder 26
-does not copy the value into `latest-mac.yml`. electron-updater skips an update
-only when that file carries its own `minimumSystemVersion`, written as a Darwin
-kernel version (`22.0.0` for macOS 13). Until the release flow adds it, a
-Monterey user on an Electron 42 build will download the update and then be
-unable to open it; say so in the release notes for the first Electron 44
-release.
+electron-builder 26 does not copy this floor into `latest-mac.yml`.
+`scripts/mac-update-feed.ts` adds `minimumSystemVersion: '22.0.0'` (the Darwin
+kernel version for macOS 13) to all generated macOS channel feeds after the
+draft build. `release:desktop` uploads these replacements, and `release:publish`
+validates the actual uploaded feeds before publication, refusing an ungated
+draft left by an old or interrupted build. Existing Electron 42 clients on
+Darwin 21 therefore skip the update and keep their working app; Darwin 22 may
+accept it. Update both the plist floor and feed floor when support changes.
 
 ## Linux and Omarchy
 

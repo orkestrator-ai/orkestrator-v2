@@ -34,14 +34,15 @@ export class CaptureFailure extends Error {
 }
 
 export interface CaptureImageLike {
-  getSize(): { width: number; height: number };
+  getSize(scaleFactor?: number): { width: number; height: number };
+  getScaleFactors?(): number[];
   resize(options: {
     width: number;
     height: number;
     quality?: "good" | "better" | "best";
   }): CaptureImageLike;
-  toDataURL(): string;
-  toBitmap?(): Buffer;
+  toDataURL(options?: { scaleFactor: number }): string;
+  toBitmap?(options?: { scaleFactor: number }): Buffer;
   /** Electron `NativeImage.crop`; used for region crops. */
   crop?(rect: { x: number; y: number; width: number; height: number }): CaptureImageLike;
 }

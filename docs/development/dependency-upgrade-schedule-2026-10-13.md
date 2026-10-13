@@ -13,7 +13,7 @@ Applied on `deps/upgrade-2026-10`, one commit per unit:
 | 1c Bun 1.4.3 | Done, with two follow-ups it exposed: `signalCode` may now be a number, and a reused keep-alive connection whose body was refused with 413 kept `server.close()` waiting, so every 413 now sends `Connection: close` |
 | 1a / 1b in-range batch | Done. `dompurify` override raised to 3.4.17 rather than deleted: monaco 0.57 still declares 3.4.15 exactly. turbo 2.11 sets `agentGuidance: false` so it stops rewriting AGENTS.md |
 | 1c Playwright 1.64, mise 2026.10.9, git-delta 0.20.1 | Done |
-| 2a Electron 44.7.0 | Done. Clipboard moved to `apps/desktop/electron/clipboard.ts`; `mac.minimumSystemVersion` is 13.0, but electron-builder 26 still offers the update to macOS 12 (see releasing.md) |
+| 2a Electron 44.7.0 | Done. Clipboard moved to `apps/desktop/electron/clipboard.ts`; the plist requires macOS 13, and release feeds gate existing clients at Darwin 22 before publication (see releasing.md) |
 | 2b lucide-react 1.56.0 | Done. Local `GithubIcon`, plus `aria-label`s for 15 icon-only buttons that had no accessible name |
 | 2c–2f | Done. The one iframe test enables happy-dom page loading for its own iframe |
 | 3a Vite 8.3.4 + plugin-react 6.1.2 | Done. `server.hmr` → `server.ws`; `test-fixtures/preview-vite` stays on 7 |
@@ -317,10 +317,9 @@ What affects us:
   mocks in `tests/unit/electron/main-ipc.test.ts`. Renderers already go through
   IPC (`preload-api.ts`), so the removal of `clipboard` from renderers does not
   affect us.
-- **Electron 44 drops macOS 12.** A Monterey user would auto-update to a build
-  that does not launch. Decide before release: accept it (and say so in the
-  release notes), or set `mac.minimumSystemVersion` so the updater stops
-  offering it. The repo declares no minimum today.
+- **Electron 44 drops macOS 12.** The plist floor is macOS 13. The release
+  workflow also adds Darwin 22 to every macOS update feed and verifies the
+  uploaded feeds before publication, so Monterey clients skip the update.
 - **Electron 43 `NativeImage.toBitmap()` converts to sRGB.**
   `browser-preview-capture-image.ts` masks screenshots through `toBitmap` →
   `createFromBitmap`; Display P3 captures may shift colour slightly.

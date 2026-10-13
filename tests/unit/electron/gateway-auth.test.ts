@@ -120,6 +120,7 @@ describe("remote gateway", () => {
       body: JSON.stringify({ padding: "x".repeat(64 * 1024) }),
     });
     expect(oversized.status).toBe(413);
+    expect(oversized.headers.connection).toBe("close");
     expect(oversized.json()).toEqual({ error: "Request body is too large" });
 
     const sanitized = await requestUrl(clientMetricsUrl, {

@@ -13,6 +13,7 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { assertMacUpdateFeed, prepareMacUpdateFeeds } from "./mac-update-feed.js";
 
 const root = path.resolve(import.meta.dir, "..");
 const REPOSITORY = "orkestrator-ai/orkestrator-v2";
@@ -97,6 +98,7 @@ export type ReleaseRuntime = {
   run(command: string[], env?: NodeJS.ProcessEnv): void;
   releaseTag(): string;
   artifacts(): string[];
+  prepareMacUpdateFeeds(): string[];
 };
 
 const defaultRuntime: ReleaseRuntime = {
@@ -108,6 +110,7 @@ const defaultRuntime: ReleaseRuntime = {
   run,
   releaseTag,
   artifacts: () => readdirSync(path.join(root, "release")),
+  prepareMacUpdateFeeds: () => prepareMacUpdateFeeds(path.join(root, "release")),
 };
 
 function githubToken(runtime: ReleaseRuntime): string {
@@ -157,6 +160,14 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
     env,
   );
 
+  if (platform === "darwin") {
+    // Builder 26 omits mac.minimumSystemVersion from updater metadata. Its
+    // uploads are draft-only; replace every feed before the draft can go public.
+    const feeds = runtime.prepareMacUpdateFeeds();
+    if (publish)
+      run(["gh", "release", "upload", tag, "--repo", REPOSITORY, "--clobber", ...feeds], env);
+  }
+
   const artifacts = runtime.artifacts().filter((name) => !name.includes("unpacked"));
   console.log(`\nBuilt ${tag}:\n  ${artifacts.join("\n  ")}`);
   console.log(
@@ -185,6 +196,25 @@ function publish(runtime: ReleaseRuntime): void {
   }
   if (missing.length > 0) {
     fail(`release ${tag} is missing ${missing.join(", ")}. Build the other platform first.`);
+  }
+
+  // Validate the uploaded bytes, not just a local copy or an asset name. This
+  // also fences old drafts and interrupted builds that uploaded an ungated feed.
+  for (const name of names.filter((name) => /^[a-zA-Z0-9_-]+-mac\.yml$/.test(name))) {
+    assertMacUpdateFeed(
+      capture([
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        REPOSITORY,
+        "--pattern",
+        name,
+        "--output",
+        "-",
+      ]),
+    );
   }
 
   const prerelease = tag.includes("-");

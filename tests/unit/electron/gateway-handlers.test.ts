@@ -37,6 +37,8 @@ describe("remote gateway", () => {
       body: JSON.stringify({ token: "x".repeat(2 * 1024 * 1024) }),
     });
     expect(oversized.status).toBe(413);
+    expect(oversized.headers.connection).toBe("close");
+    expect(oversized.json()).toEqual({ error: "Request body is too large" });
 
     const wrongMethod = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
       method: "POST",

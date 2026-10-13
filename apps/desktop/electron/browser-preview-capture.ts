@@ -48,6 +48,7 @@ import {
 } from "./browser-preview-annotation-script.js";
 import {
   boundedScreenshotDataUrl,
+  captureImageRepresentation,
   clampRect,
   cropPng,
   documentMask,
@@ -568,7 +569,7 @@ export class BrowserPreviewCaptureSessions {
       const painted: BrowserPreviewCaptureMask[] = [];
       let sensitiveCount = 0;
       if (outcome.image) {
-        const nativeSize = outcome.image.getSize();
+        const nativeSize = captureImageRepresentation(outcome.image);
         if (nativeSize.width < 1 || nativeSize.height < 1)
           throw new CaptureFailure("capture-failed");
         const sensitive = outcome.probe?.sensitive ?? [];

@@ -931,7 +931,7 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toBeNull();
   });
 
-  test("returns null when the clipboard holds no decodable image type", async () => {
+  test("returns null for an unconverted TIFF payload without a PNG or JPEG representation", async () => {
     const harness = createHarness();
     const textItem: ClipboardItemLike = {
       types: ["text/plain", "image/tiff"],

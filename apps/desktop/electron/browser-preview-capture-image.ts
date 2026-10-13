@@ -14,6 +14,23 @@ import {
 const MAX_SCREENSHOT_DIMENSION = 2_000;
 const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 
+/** Captures retain their native scale; getSize() is in DIPs, not bitmap pixels. */
+export function captureImageRepresentation(image: CaptureImageLike): {
+  width: number;
+  height: number;
+  scaleFactor: number;
+} {
+  const scales = image.getScaleFactors?.() ?? [1];
+  const validScales = scales.filter((scale) => Number.isFinite(scale) && scale > 0);
+  const scaleFactor = validScales.length > 0 ? Math.max(...validScales) : 1;
+  const size = image.getSize(scaleFactor);
+  return {
+    width: Math.round(size.width * scaleFactor),
+    height: Math.round(size.height * scaleFactor),
+    scaleFactor,
+  };
+}
+
 function pngDataUrlByteLength(dataUrl: string): number {
   const prefix = "data:image/png;base64,";
   if (!dataUrl.startsWith(prefix)) throw new Error("The browser frame did not return a PNG image");
@@ -27,15 +44,16 @@ function pngDataUrlByteLength(dataUrl: string): number {
 
 /** Longest side ≤ 2000 px and ≤ 8 MiB; shrinks further only when the PNG is too large. */
 export function boundedScreenshotDataUrl(image: CaptureImageLike): string {
-  const originalSize = image.getSize();
+  const originalSize = captureImageRepresentation(image);
   const longestSide = Math.max(originalSize.width, originalSize.height);
   const initialScale = Math.min(1, MAX_SCREENSHOT_DIMENSION / longestSide);
   let width = Math.max(1, Math.round(originalSize.width * initialScale));
   let height = Math.max(1, Math.round(originalSize.height * initialScale));
   let candidate = initialScale < 1 ? image.resize({ width, height, quality: "best" }) : image;
+  let scaleFactor = initialScale < 1 ? 1 : originalSize.scaleFactor;
 
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const dataUrl = candidate.toDataURL();
+    const dataUrl = candidate.toDataURL({ scaleFactor });
     const byteLength = pngDataUrlByteLength(dataUrl);
     if (byteLength <= MAX_SCREENSHOT_BYTES) return dataUrl;
     if (width === 1 && height === 1) break;
@@ -46,6 +64,7 @@ export function boundedScreenshotDataUrl(image: CaptureImageLike): string {
     width = nextWidth === width && width > 1 ? width - 1 : nextWidth;
     height = nextHeight === height && height > 1 ? height - 1 : nextHeight;
     candidate = image.resize({ width, height, quality: "best" });
+    scaleFactor = 1;
   }
   throw new CaptureFailure("too-large");
 }
@@ -61,12 +80,12 @@ export function maskCaptureImage(
 ): { image: CaptureImageLike; masked: boolean } {
   if (rects.length === 0 || !api || typeof image.toBitmap !== "function")
     return { image, masked: false };
-  const { width, height } = image.getSize();
   try {
-    // Since Electron 43 toBitmap() returns sRGB-normalized pixels, so a Display
-    // P3 capture may shift colour slightly once rebuilt below. Accepted: the
-    // mask is opaque and the byte layout (width * height * 4) is unchanged.
-    const bitmap = Buffer.from(image.toBitmap());
+    const { width, height, scaleFactor } = captureImageRepresentation(image);
+    // Select the same representation for dimensions and pixels. Electron 44
+    // retains the capture scale, while toBitmap defaults to the 1x representation.
+    // toBitmap normalizes colours to sRGB; the rebuilt opaque mask stays sRGB.
+    const bitmap = Buffer.from(image.toBitmap({ scaleFactor }));
     if (bitmap.length !== width * height * 4 || viewport.width <= 0 || viewport.height <= 0) {
       return { image, masked: false };
     }

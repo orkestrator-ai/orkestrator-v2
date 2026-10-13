@@ -47,7 +47,11 @@ export const MAX_CLIPBOARD_TRANSFER_DIMENSION = 2000;
  */
 export const MAX_CLIPBOARD_IMAGE_BYTES = 128 * 1024 * 1024;
 
-/** The encodings `nativeImage.createFromBuffer` decodes, in preference order. */
+/**
+ * The encodings nativeImage decodes, in preference order. Electron's native
+ * clipboard reader exposes a PNG conversion for TIFF-only macOS pasteboards;
+ * electron-main.spec.ts exercises that OS conversion with a real public.tiff.
+ */
 const CLIPBOARD_IMAGE_TYPES = ["image/png", "image/jpeg"] as const;
 
 type BlobLike = { readonly size: number; arrayBuffer(): Promise<ArrayBuffer> };

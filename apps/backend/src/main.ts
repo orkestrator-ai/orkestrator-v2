@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
+import { APP_VERSION } from "./core/constants.js";
 import { fixPath } from "./core/fix-path.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
@@ -44,6 +45,7 @@ await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // Installed before startup logs anything worth keeping. A no-op under Electron,
 // which already records this process's output.
 const standaloneLogging = installStandaloneBackendLogging(options);
+console.info(`[Backend] Starting Orkestrator ${APP_VERSION}`);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
   runtimeFlavor: options.runtimeFlavor,
@@ -223,7 +225,7 @@ try {
       ...(info.browserUrl && info.browserUrl !== info.url ? { browserUrl: info.browserUrl } : {}),
       authFile: info.authFile,
       dataDir: options.dataDir,
-      appVersion: process.env.ORKESTRATOR_VERSION ?? "development",
+      appVersion: APP_VERSION,
       publicApiSchemaVersion: PUBLIC_API_SCHEMA_VERSION,
     });
   }

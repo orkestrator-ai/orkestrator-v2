@@ -495,6 +495,8 @@ mock.module("react-virtuoso", () => ({
   }),
 }));
 
+const { TmuxComposeBar } = await import("@/components/claude/ClaudeTmuxChatTab.parts");
+
 const { ClaudeTmuxChatTab } = await import("@/components/claude/ClaudeTmuxChatTab");
 
 const { parseTmuxAgentObservation, parseTmuxSelectionPrompt } =
@@ -1729,6 +1731,88 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
   });
+
+  for (const menu of ["slash", "file"] as const) {
+    for (const lock of ["send", "queue", "settings"] as const) {
+      test(`${menu} completion cannot edit a draft during a ${lock} lock`, async () => {
+        getFileTreeMock.mockResolvedValue([
+          { name: "Button.tsx", path: "Button.tsx", isDirectory: false, extension: ".tsx" },
+        ]);
+        let finish!: () => void;
+        const pending = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        const submit = mock(async () => {
+          await pending;
+          return false;
+        });
+        const queue = mock(async () => {
+          await pending;
+          throw new Error("keep draft");
+        });
+        const props = {
+          sessionKey: "tab-1",
+          environmentId: "env-1",
+          containerId: "container-1",
+          disabled: false,
+          busy: lock === "queue",
+          submitting: false,
+          onSubmit: submit,
+          onQueue: queue,
+          onInterrupt: () => {},
+          models: [],
+          selectedModel: "sonnet",
+          onSelectModel: () => {},
+          selectedEffort: "high" as const,
+          effortOptions: [],
+          onSelectEffort: () => {},
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          onSelectFastMode: () => {},
+          planMode: false,
+          onTogglePlanMode: () => {},
+          modelDisabled: false,
+          modelSwitching: false,
+          effortSwitching: false,
+          planLocked: false,
+        };
+        const { rerender } = render(<TmuxComposeBar {...props} />);
+        const input = screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement;
+        const draft = menu === "slash" ? "/com" : "Review @";
+        input.focus();
+        fireEvent.change(input, { target: { value: draft, selectionStart: draft.length } });
+        await screen.findByText(menu === "slash" ? "Slash Commands" : "Button.tsx");
+        if (lock === "settings") {
+          rerender(<TmuxComposeBar {...props} settingsSwitching />);
+          expect(input.disabled).toBe(true);
+        } else {
+          fireEvent.click(screen.getByTitle(lock === "queue" ? "Add to queue" : "Send (↵)"));
+          if (lock === "send") rerender(<TmuxComposeBar {...props} submitting />);
+          expect(input.readOnly).toBe(true);
+          expect(input.disabled).toBe(false);
+          expect(document.activeElement).toBe(input);
+        }
+        for (const key of ["Enter", "Tab", "ArrowDown"]) fireEvent.keyDown(input, { key });
+        fireEvent.click(input);
+        fireEvent.keyUp(input, { key: "Home" });
+        expect(input.value).toBe(draft);
+        expect(useClaudeTmuxStore.getState().getDraftMentions("tab-1")).toEqual([]);
+        expect(
+          screen.queryByText(menu === "slash" ? "Slash Commands" : "Button.tsx") === null,
+        ).toBe(true);
+        expect(submit).toHaveBeenCalledTimes(lock === "send" ? 1 : 0);
+        expect(queue).toHaveBeenCalledTimes(lock === "queue" ? 1 : 0);
+        await act(async () => {
+          finish();
+          await pending;
+        });
+        rerender(<TmuxComposeBar {...props} />);
+        expect(input.readOnly).toBe(false);
+        expect(input.disabled).toBe(false);
+        expect(input.value).toBe(draft);
+      });
+    }
+  }
 
   test("autofocuses the compose input on desktop but not on mobile", () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {

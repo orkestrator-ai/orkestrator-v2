@@ -1,3 +1,4 @@
+import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
@@ -82,6 +83,10 @@ const TerminalCornerToolbarFixture = lazy(async () => ({
 
 const TerminalLinksFixture = lazy(async () => ({
   default: (await import("./TerminalLinksFixture")).TerminalLinksFixture,
+}));
+
+const ProjectNavigationFixture = lazy(async () => ({
+  default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
 }));
 
 declare global {
@@ -1596,6 +1601,13 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/project-navigation") {
+    return (
+      <Suspense fallback={null}>
+        <ProjectNavigationFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/terminal-corner-toolbar") {
     return (
       <Suspense fallback={null}>
@@ -1664,6 +1676,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
+  if (window.location.pathname === "/tmux-compose-focus") return <TmuxComposeFocusFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }

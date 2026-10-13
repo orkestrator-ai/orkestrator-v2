@@ -25,8 +25,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { resolveDisplayedAppVersion } from "@/lib/app-version";
+import { BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import * as backend from "@/lib/backend";
+import { getGatewayBaseUrl, isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { pickHostPath } from "@/lib/host-path-picker";
 import {
   Loader2,
@@ -325,27 +326,33 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     persistGatewayToken,
   } = settings;
 
-  const [runtimeAppVersion, setRuntimeAppVersion] = useState<string | null>(null);
+  const [backendVersion, setBackendVersion] = useState<
+    | { state: "loading" }
+    | { state: "reported"; version: string }
+    | { state: "unreported" }
+    | { state: "failed" }
+  >({ state: "loading" });
   useEffect(() => {
     if (activeSection !== "debug") return;
     let cancelled = false;
+    setBackendVersion({ state: "loading" });
     backend
       .getAppVersion()
-      .then((version) => {
-        if (!cancelled) setRuntimeAppVersion(version);
+      .then((reported) => {
+        if (cancelled) return;
+        const version = normalizeBackendVersion(reported);
+        setBackendVersion(version ? { state: "reported", version } : { state: "unreported" });
       })
       .catch((error) => {
         // The debug tab exists to diagnose the running install, so a probe that
-        // never answered has to leave a trace rather than quietly hand the
-        // reader the bundle's own version as if the backend had reported it.
-        console.error("[settings] Failed to read the running app version:", error);
-        if (!cancelled) setRuntimeAppVersion(null);
+        // never answered has to leave a trace rather than quietly look healthy.
+        console.error("[settings] Failed to read the backend app version:", error);
+        if (!cancelled) setBackendVersion({ state: "failed" });
       });
     return () => {
       cancelled = true;
     };
   }, [activeSection]);
-  const appVersion = resolveDisplayedAppVersion(runtimeAppVersion);
 
   // --- Section renderers ---
 
@@ -1897,21 +1904,54 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     );
   };
 
+  const describeBackendLocation = () => {
+    if (!isRemoteGatewayConnection()) return "this machine";
+    try {
+      return new URL(getGatewayBaseUrl()).host || "remote backend";
+    } catch {
+      return "remote backend";
+    }
+  };
+
   const renderDebug = () => (
     <div className="max-w-2xl space-y-5">
       <div>
         <h3 className="text-sm font-medium text-foreground">App version</h3>
         <p className="text-xs text-muted-foreground mt-1">
-          The Orkestrator version running on this machine
+          The Orkestrator client on this machine and the backend it is connected to
         </p>
-        <p className="mt-2 font-mono text-sm text-foreground" aria-live="polite">
-          {appVersion.version}
-          {appVersion.source === "bundled" ? (
+        <dl
+          className="mt-2 grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1 text-sm"
+          aria-live="polite"
+        >
+          <dt className="text-xs text-muted-foreground">Client</dt>
+          <dd className="font-mono text-foreground">
+            {BUNDLED_APP_VERSION}
+            <span className="ml-2 font-sans text-xs text-muted-foreground">this machine</span>
+          </dd>
+          <dt className="text-xs text-muted-foreground">Backend</dt>
+          <dd className="font-mono text-foreground">
+            {backendVersion.state === "reported" ? (
+              backendVersion.version
+            ) : (
+              <span className="font-sans text-xs text-muted-foreground">
+                {backendVersion.state === "loading"
+                  ? "Checking…"
+                  : backendVersion.state === "failed"
+                    ? "Unreachable"
+                    : "Did not report a version"}
+              </span>
+            )}
             <span className="ml-2 font-sans text-xs text-muted-foreground">
-              from this bundle; the backend did not report a version
+              {describeBackendLocation()}
             </span>
-          ) : null}
-        </p>
+          </dd>
+        </dl>
+        {backendVersion.state === "reported" && backendVersion.version !== BUNDLED_APP_VERSION ? (
+          <p className="mt-2 text-xs text-amber-500">
+            The client and backend versions differ. Update the older one if something misbehaves.
+          </p>
+        ) : null}
       </div>
       <div>
         <h3 className="text-sm font-medium text-foreground">Save Logs for Debugging</h3>

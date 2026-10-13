@@ -36,3 +36,24 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.nZjhnU/root-and-agent-support-tests.log.gz`.
 - **Hypothesis:** the timeout and late rejection match the earlier aggregate
   observation. The owning file passes alone; the underlying cause is unconfirmed.
+
+## Recurrence — 2026-10-13 (project navigation validation)
+
+- **Original command:** `mise run test:logged -- --name root-tests -- mise run test`.
+- **Worker configuration:** root `--parallel=3`, workspace packages
+  `--parallel=1` with two package tasks, bridges with two package tasks. Component
+  and isolated-stack browser checks were also active.
+- **Failure:** the artifact-excludes test timed out at 5,009.48 ms against its
+  5,000 ms deadline.
+- **Root-suite counts:** 5,017 passed, 24 skipped, 6 failed and 1 additional error
+  across 254 files in 128.80 seconds. The five other failures were shell-tool
+  prerequisite failures; migration and firewall owners passed with the documented
+  GNU-tool PATH. They are separate from this timeout.
+- **Isolated rerun:** `mise run test:logged -- --name commands-integration-rerun -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0) in 21.5 seconds, using the original PATH.
+- **Failure evidence:** `/tmp/orkestrator-test-run.T2WTk5/root-and-agent-support-tests.log.gz`.
+- **Aggregate rerun:** with the documented GNU-tool PATH,
+  `mise run test:logged -- --name full-tests -- mise run test` passed the root
+  group: 5,023 passed, 24 skipped, 0 failed across 254 files in 160.88 seconds.
+- **Hypothesis:** this matches the existing load-sensitive Git/worktree timeout.
+  No assertions, deadlines or skips were changed.

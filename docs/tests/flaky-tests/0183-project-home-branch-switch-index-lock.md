@@ -127,3 +127,41 @@ The unchanged owning file passed alone (exit 0) in 6.2 seconds with the same PAT
 Evidence: `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 The isolated pass supports the existing fixture-contention hypothesis; the lock
 owner remains unknown. No assertion, timeout or skip was changed.
+
+## Recurrence during terminal-patch coverage validation on 2026-10-13
+
+The GNU-tool PATH command `mise run test:logged -- --name review-full-suite -- mise run test`
+failed the same `toolbar and external switches clear home PR identity before selection, refresh and merge`
+test in 150.97 ms because the fixture's `.git/index.lock` already existed.
+The aggregate used 2/3/2/1 worker slots for workspace/root/bridges/protocol,
+with one Bun worker per workspace package. Backend totals were 5879 passed,
+23 failed and 15 skipped across 329 files in 339.04 seconds; the aggregate
+finished in 346.9 seconds. The other 22 failures were in
+`apps/backend/src/core/environment-move.test.ts` and reported incomplete
+Claude tmux cleanup on this host, which has no `tmux` executable.
+
+With the same GNU-tool PATH, the unchanged project-home owning file passed
+alone (exit 0) in 2.7 seconds:
+
+```bash
+mise run test:logged -- --name project-home-isolated -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+```
+
+Failure evidence: `/tmp/orkestrator-test-run.LNo8MZ/summary.json` and
+`/tmp/orkestrator-test-run.LNo8MZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The isolated pass supports the existing fixture Git-contention hypothesis;
+the lock owner remains unidentified. No assertion, timeout or skip was changed.
+
+The unchanged environment-move owning file reproduced all 22 cleanup failures
+alone (12 passed, 22 failed, exit 1) in 17.3 seconds with the same GNU-tool PATH:
+
+```bash
+mise run test:logged -- --name environment-move-isolated -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/environment-move.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.KVtJas/environment-move-isolated.log.gz`.
+These reproducible host-dependent failures are not classified as flakes.

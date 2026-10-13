@@ -12,6 +12,7 @@ import {
   headCommit,
   type PublicApiHarness,
 } from "./test-support.js";
+import { APP_VERSION } from "../constants.js";
 
 const harnesses: PublicApiHarness[] = [];
 
@@ -48,6 +49,9 @@ describe("public_action contract", () => {
     expect(capabilities.ok).toBe(true);
     if (!capabilities.ok) return;
     expect(isPublicCapabilities(capabilities.result)).toBe(true);
+    expect((capabilities.result as { backend: { version: string } }).backend.version).toBe(
+      APP_VERSION,
+    );
     expect(capabilities.backend?.installationId).toBe(
       (capabilities.result as { backend: { installationId: string } }).backend.installationId,
     );
@@ -55,6 +59,48 @@ describe("public_action contract", () => {
     expect(isPublicActionResponse(unknown)).toBe(true);
     expect(unknown.ok).toBe(false);
     if (!unknown.ok) expect(unknown.error).toMatchObject({ code: "not-found", exitCode: 3 });
+  });
+
+  test("capabilities reports the package version without launcher metadata", async () => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+          delete process.env.ORKESTRATOR_VERSION;
+          const { APP_VERSION, BACKEND_PACKAGE_VERSION } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../constants.ts"))});
+          const { createPublicApiHarness } = await import(${JSON.stringify(path.join(import.meta.dir, "test-support.ts"))});
+          const harness = await createPublicApiHarness();
+          try {
+            const response = await harness.call("capabilities", {});
+            if (!response.ok) throw new Error("capabilities failed");
+            process.stdout.write(JSON.stringify({
+              appVersion: APP_VERSION,
+              packageVersion: BACKEND_PACKAGE_VERSION,
+              capabilitiesVersion: response.result.backend.version,
+            }));
+          } finally {
+            await harness.cleanup();
+          }
+        `,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const versions = JSON.parse(stdout) as {
+      appVersion: string;
+      packageVersion: string;
+      capabilitiesVersion: string;
+    };
+    expect(versions.appVersion).toBe(versions.packageVersion);
+    expect(versions.capabilitiesVersion).toBe(versions.appVersion);
   });
 
   test("advertises exactly the actions that have handlers", async () => {

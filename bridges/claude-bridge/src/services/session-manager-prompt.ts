@@ -2074,8 +2074,23 @@ export async function sendPrompt(
           if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
             (session.backgroundTaskControls ??= new Map()).set(task.id, queryIteratorControl!);
           } else {
-            const owner = session.backgroundTaskControls?.get(task.id);
+            const owner = session.backgroundTaskControls?.get(task.id) ?? correlated.owner;
             session.backgroundTaskControls?.delete(task.id);
+            // A finishing task sends its terminal patch before the
+            // `task_notification` edge, while the CLI is still queueing the
+            // notification it will answer. For a released turn this is the
+            // same boundary as that edge: closing here kills the CLI between
+            // writing the notification and running the model on it, so the
+            // reply the model promised never comes.
+            if (
+              owner === queryIteratorControl &&
+              turnReleasedToBackgroundTasks &&
+              previous !== undefined &&
+              LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
+            ) {
+              receivedResult = false;
+              waitForContinuationAfterNotification();
+            }
             closeQueryControlIfUnused(session, owner);
           }
           closeQueryControlIfUnused(session, correlated.owner);

@@ -2242,12 +2242,18 @@ describe("background task reducer", () => {
    * `task_notification` that would have resumed the model was delivered to a
    * dead process.
    */
-  async function releaseTurnHoldingOneBackgroundTask(title: string) {
+  async function releaseTurnHoldingOneBackgroundTask(
+    title: string,
+    retainedContinuationTimeoutMs?: number,
+  ) {
     const created = createSession(title);
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "run the suite in the background", {
-      requestId: "background-report",
-    });
+    const promptPromise = sendPrompt(
+      created.id,
+      "run the suite in the background",
+      { requestId: "background-report" },
+      { retainedContinuationTimeoutMs },
+    );
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -2364,6 +2370,285 @@ describe("background task reducer", () => {
       getSession(created.id)?.messages.some((message) =>
         message.parts.some(
           (part) => part.type === "text" && part.content.includes("here is the report"),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("a terminal task_updated before the edge keeps the CLI alive for the continuation", async () => {
+    const { created, call, promptPromise, closedState } =
+      await releaseTurnHoldingOneBackgroundTask("patch before edge");
+
+    // The SDK's documented order for a finishing task: the terminal patch, then
+    // the notification, then the level. The patch lands first, while the CLI is
+    // queueing the notification it will answer.
+    call.push({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "bash-task-lf",
+      patch: { status: "completed", end_time: Date.now() },
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["bash-task-lf"]?.status === "completed",
+    );
+    expect(getSession(created.id)?.retainedContinuationRequestIds?.has("background-report")).toBe(
+      true,
+    );
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash-task-lf",
+      tool_use_id: "bash-tool-lf",
+      status: "completed",
+      summary: "Tests passed",
+    });
+    call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-patch-first-continuation",
+        content: [{ type: "text", text: "The suite finished; here is the report." }],
+      },
+    });
+    await waitFor(() => getSession(created.id)?.status === "running");
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => closedState.inputClosed);
+    call.finish();
+    await promptPromise;
+    expect(getSession(created.id)?.status).toBe("idle");
+  });
+
+  test("the continuation watchdog releases a terminal patch with no notification or continuation", async () => {
+    const { created, call, promptPromise, closedState } = await releaseTurnHoldingOneBackgroundTask(
+      "silent terminal patch",
+      100,
+    );
+    const owner = created.backgroundTaskControls?.get("bash-task-lf");
+    expect(owner).toBeDefined();
+
+    call.push({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "bash-task-lf",
+      patch: { status: "completed", end_time: 1234 },
+    });
+    await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.status === "completed");
+    expect(created.backgroundTaskControls?.has("bash-task-lf")).toBe(false);
+    expect(created.retainedQueryControls?.has(owner!)).toBe(true);
+    expect(created.retainedContinuationRequestIds?.has("background-report")).toBe(true);
+    expect(closedState.inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    // No further SDK frames arrive: the silence bound must release both stdin
+    // and the retained process, while preserving the terminal task snapshot.
+    await waitFor(() => closedState.inputClosed && call.isClosed());
+    await promptPromise;
+    expect(created.retainedQueryControls).toBeUndefined();
+    expect(created.retainedContinuationRequestIds).toBeUndefined();
+    expect(created.backgroundTaskControls?.size ?? 0).toBe(0);
+    expect(created.backgroundTasks?.["bash-task-lf"]).toMatchObject({
+      status: "completed",
+      endedAt: 1234,
+    });
+    expect(created.status).toBe("idle");
+  });
+
+  test("a terminal patch before the turn releases closes input at its own result", async () => {
+    const created = createSession("foreground terminal patch");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run the suite", {
+      requestId: "foreground-patch",
+    });
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({ type: "system", subtype: "task_started", task_id: "foreground-task" });
+    call.push({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "foreground-task",
+      patch: { status: "completed" },
+    });
+    await waitFor(() => created.backgroundTasks?.["foreground-task"]?.status === "completed");
+    expect(created.status).toBe("running");
+    expect(created.retainedQueryControls).toBeUndefined();
+    expect(created.retainedContinuationRequestIds).toBeUndefined();
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
+  test.each(["completed", "failed", "killed"] as const)(
+    "a terminal patch does not retain a released query whose prior task status is %s",
+    async (status) => {
+      const { created, call, promptPromise, closedState } =
+        await releaseTurnHoldingOneBackgroundTask(`already ${status} patch`);
+      // Keep the owning control to isolate the prior-status guard: without it,
+      // the owner guard alone would make a duplicate terminal patch pass.
+      created.backgroundTasks!["bash-task-lf"] = {
+        ...created.backgroundTasks!["bash-task-lf"]!,
+        status,
+      };
+      expect(created.backgroundTaskControls?.get("bash-task-lf")).toBeDefined();
+      call.push({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bash-task-lf",
+        patch: { status, end_time: 1234 },
+      });
+      await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.endedAt === 1234);
+      expect(created.retainedQueryControls).toBeUndefined();
+      expect(created.retainedContinuationRequestIds).toBeUndefined();
+      await waitFor(() => closedState.inputClosed && call.isClosed());
+      await promptPromise;
+      expect(created.status).toBe("idle");
+      expect(created.backgroundTasks?.["bash-task-lf"]?.status).toBe(status);
+    },
+  );
+
+  test("a terminal patch owned by another query does not retain the released query", async () => {
+    const { created, call, promptPromise, closedState } = await releaseTurnHoldingOneBackgroundTask(
+      "foreign owner terminal patch",
+    );
+    const closeOtherQuery = mock(() => {});
+    // The task is still live and this turn is released; only ownership differs.
+    created.backgroundTaskControls!.set("bash-task-lf", { close: closeOtherQuery });
+    call.push({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "bash-task-lf",
+      patch: { status: "completed" },
+    });
+    await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.status === "completed");
+    expect(closeOtherQuery).toHaveBeenCalledTimes(1);
+    expect(created.retainedQueryControls).toBeUndefined();
+    expect(created.retainedContinuationRequestIds).toBeUndefined();
+    await waitFor(() => closedState.inputClosed);
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
+  test("a first concrete terminal patch rekeys and retains provisional-only ownership until continuation settles", async () => {
+    const created = createSession("provisional terminal patch");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run the suite in the background", {
+      requestId: "provisional-patch-report",
+    });
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-provisional-patch",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-provisional-patch",
+            name: "Bash",
+            input: {
+              command: "bun run test",
+              description: "Run the full test suite",
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+    const provisionalId = "pending-bash:bash-provisional-patch";
+    const owner = created.backgroundTaskControls?.get(provisionalId);
+    expect(owner).toBeDefined();
+    expect(created.backgroundTasks?.[provisionalId]?.status).toBe("running");
+    expect(created.backgroundTasks?.["concrete-patch-task"]).toBeUndefined();
+    expect(created.backgroundTaskControls?.has("concrete-patch-task")).toBe(false);
+
+    // No tool result, start or progress frame ever assigned the concrete id.
+    // The terminal patch must obtain its owner from the provisional record.
+    call.push({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "concrete-patch-task",
+      tool_use_id: "bash-provisional-patch",
+      patch: { status: "completed", end_time: 1234 },
+    });
+    await waitFor(() => created.backgroundTasks?.["concrete-patch-task"]?.status === "completed");
+    expect(created.backgroundTasks?.[provisionalId]).toBeUndefined();
+    expect(created.backgroundTaskControls?.size ?? 0).toBe(0);
+    expect(created.backgroundTaskCandidates?.size ?? 0).toBe(0);
+    expect(created.backgroundTasks?.["concrete-patch-task"]).toMatchObject({
+      id: "concrete-patch-task",
+      toolUseId: "bash-provisional-patch",
+      description: "Run the full test suite",
+      status: "completed",
+      endedAt: 1234,
+    });
+    expect(created.retainedQueryControls?.has(owner!)).toBe(true);
+    expect(created.retainedContinuationRequestIds?.has("provisional-patch-report")).toBe(true);
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "concrete-patch-task",
+      tool_use_id: "bash-provisional-patch",
+      status: "completed",
+      summary: "Tests passed",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-provisional-patch-report",
+        content: [{ type: "text", text: "The provisional suite finished." }],
+      },
+    });
+    await waitFor(() => created.status === "running");
+    expect(created.retainedQueryControls).toBeUndefined();
+    expect(created.retainedContinuationRequestIds).toBeUndefined();
+    expect(created.queryControl).toBe(owner);
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+    expect(created.queryControl).toBeUndefined();
+    expect(created.backgroundTasks?.["concrete-patch-task"]?.status).toBe("completed");
+    expect(
+      created.messages.some((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "text" && part.content.includes("The provisional suite finished."),
         ),
       ),
     ).toBe(true);

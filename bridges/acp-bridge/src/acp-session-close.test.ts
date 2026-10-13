@@ -230,6 +230,72 @@ describe("POST /session/:id/close", () => {
     expect(events.filter((event) => event !== "start")).toEqual(["held", "cancel", "stop"]);
   });
 
+  test("releases the session through ACP session/close when advertised, and keeps it resumable", async () => {
+    const bridge = await closeFixture({
+      FAKE_CLOSE_SESSION_CAPABILITY: "1",
+      FAKE_CLOSE_CANCEL_DELAY_MS: "100",
+    });
+    const id = await bridge.create();
+    expect((await bridge.prompt(id, "Remember the lighthouse")).status).toBe(202);
+    await bridge.waitForStatus(id, "idle");
+    const token = String((await bridge.request(`/session/${id}/status`)).body.resumableSessionId);
+    expect((await bridge.prompt(id, "HOLD")).status).toBe(202);
+    await bridge.waitForEvent("held");
+
+    expect(await bridge.close(id)).toEqual(CLOSED);
+
+    const events = (await bridge.events()).map((entry) => entry.event);
+    // Cancel and its answer first, then the release, then the terminate.
+    const closeEvent = events.find((event) => event.startsWith("session-close:"));
+    expect(closeEvent).toMatch(/^session-close:close-fake-/);
+    expect(events.filter((event) => event !== "start")).toEqual([
+      "held",
+      "cancel",
+      "answered-cancelled",
+      closeEvent!,
+      "stop",
+    ]);
+    // Release is not deletion: the conversation is still listed and resumes.
+    const resumed = await bridge.request("/session/resume", {
+      method: "POST",
+      body: { sessionId: token },
+    });
+    expect(resumed.status).toBe(201);
+  });
+
+  test("does not send session/close to an agent that does not advertise it", async () => {
+    const bridge = await closeFixture();
+    const id = await bridge.create();
+    expect((await bridge.prompt(id, "Hello")).status).toBe(202);
+    await bridge.waitForStatus(id, "idle");
+
+    expect(await bridge.close(id)).toEqual(CLOSED);
+    const events = (await bridge.events()).map((entry) => entry.event);
+    expect(events.some((event) => event.startsWith("session-close:"))).toBe(false);
+    expect(events).toContain("stop");
+  });
+
+  test("an unanswered session/close does not hold the close past its budget", async () => {
+    const bridge = await closeFixture({
+      FAKE_CLOSE_SESSION_CAPABILITY: "1",
+      FAKE_CLOSE_SESSION_HANG: "1",
+      ACP_CLOSE_SESSION_WAIT_MS: "200",
+    });
+    const id = await bridge.create();
+    expect((await bridge.prompt(id, "Hello")).status).toBe(202);
+    await bridge.waitForStatus(id, "idle");
+
+    // `closed` is itself the proof the child exited: an unexited child answers
+    // pending. (The timed-out request already sent SIGTERM, and the second one
+    // can kill the fake before it logs `stop`, so that line is not asserted.)
+    const started = Date.now();
+    expect(await bridge.close(id)).toEqual(CLOSED);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    const events = (await bridge.events()).map((entry) => entry.event);
+    expect(events.filter((event) => event.startsWith("session-close:"))).toHaveLength(1);
+    expect(await bridge.close(id)).toEqual(MISSING);
+  });
+
   test("concurrent closes of one session share one operation", async () => {
     const bridge = await closeFixture({ FAKE_CLOSE_CANCEL_DELAY_MS: "400" });
     const id = await bridge.create();

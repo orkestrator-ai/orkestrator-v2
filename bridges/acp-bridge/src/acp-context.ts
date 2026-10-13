@@ -27,15 +27,22 @@ import { formatAcpRpcError } from "./acp-errors.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-methods.js";
-import { loadAcpProviderConfig, providerArgv } from "./acp-provider-config.js";
+import {
+  loadAcpProviderConfig,
+  providerArgv,
+  undeclaredPromptCapabilities,
+} from "./acp-provider-config.js";
 import {
   GrokMcpConfigWatcher,
   grokMcpConfigFiles,
   grokMcpConfigFingerprint,
   grokMcpConfigStatus,
   vendorMcpInventory,
+  vendorMcpServerStatus,
+  withVendorMcpStatuses,
   type GrokMcpConfigFingerprint,
   type GrokMcpConfigStatus,
+  type VendorMcpServerStatus,
 } from "./acp-mcp-inventory.js";
 
 export type Provider = AgentPlatform;
@@ -781,6 +788,12 @@ export const CLOSE_ATTACH_WAIT_MS = parseDuration(process.env.ACP_CLOSE_ATTACH_W
  * running `session/prompt` to answer before terminating the child.
  */
 export const CLOSE_CANCEL_WAIT_MS = parseDuration(process.env.ACP_CLOSE_CANCEL_WAIT_MS, 2_000);
+/**
+ * How long `POST /session/:id/close` waits for ACP `session/close` to answer
+ * before terminating the child anyway. A timeout terminates the child, which
+ * is the next step regardless.
+ */
+export const CLOSE_SESSION_WAIT_MS = parseDuration(process.env.ACP_CLOSE_SESSION_WAIT_MS, 2_000);
 /** Fixed, content-free refusal for work aimed at a session that is closing. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
 /**
@@ -885,6 +898,12 @@ export class AcpProcess {
   /** Return true only when the provider adapter owns and will answer the request. */
   onInteraction: (id: number, method: string, params: JsonObject) => boolean = () => false;
   onClose: (error: Error) => void = () => undefined;
+  /**
+   * Whether this child's `initialize` advertised
+   * `sessionCapabilities.close`, so tab close may ask it to release the
+   * session before the child is terminated.
+   */
+  sessionCloseSupported = false;
 
   constructor(spawnOptions: AcpSpawnOptions = {}) {
     if (!executable) {
@@ -958,6 +977,7 @@ export class AcpProcess {
       );
     }
     rememberAgentRuntime(initialized);
+    this.sessionCloseSupported = supportsSessionCapability(initialized, "close");
     await this.authenticateIfRequired(initialized, signal);
     return initialized;
   }
@@ -1377,10 +1397,14 @@ function rememberAgentRuntime(initialized: JsonObject): void {
   const promptCapabilities = isObject(capabilities?.promptCapabilities)
     ? capabilities.promptCapabilities
     : undefined;
+  // What the prompt route may send, not a verbatim copy of the declaration:
+  // a provider known to understate a capability is credited with it here.
   agentRuntime.promptCapabilities = {
     audio: promptCapabilities?.audio === true,
     embeddedContext: promptCapabilities?.embeddedContext === true,
-    image: promptCapabilities?.image === true,
+    image:
+      promptCapabilities?.image === true ||
+      undeclaredPromptCapabilities(providerConfig.id).image === true,
   };
   if (Array.isArray(initialized.authMethods)) {
     agentRuntime.authMethods = initialized.authMethods.slice(0, 32).flatMap((candidate) => {
@@ -1403,12 +1427,34 @@ function isAcpClientMethod(method: string): boolean {
 
 /** Orders `mcpLoaded` writes: only the latest listing's child may set it. */
 let mcpReportGeneration = 0;
+/** The latest vendor listing, before status reports are laid over it. */
+let vendorMcpListing: NativeAgentMcpServer[] | undefined;
+/**
+ * Latest `server_status` report per listed name. Bounded by the listing: a
+ * report for a name the listing does not hold is dropped.
+ */
+const vendorMcpStatuses = new Map<string, VendorMcpServerStatus>();
+
+function publishVendorMcp(): void {
+  if (!vendorMcpListing) return;
+  const mcp = withVendorMcpStatuses(vendorMcpListing, vendorMcpStatuses);
+  if (JSON.stringify(agentRuntime.mcp) === JSON.stringify(mcp)) return;
+  agentRuntime.mcp = mcp;
+  for (const state of sessions.values()) state.revision += 1;
+}
 
 function rememberVendorRuntime(
   method: string,
   params: JsonObject,
   loadedConfig?: Promise<GrokMcpConfigFingerprint | undefined>,
 ): void {
+  if (method.endsWith("/mcp/server_status")) {
+    const report = vendorMcpServerStatus(params);
+    if (!report || !vendorMcpListing?.some((server) => server.name === report.name)) return;
+    vendorMcpStatuses.set(report.name, report);
+    publishVendorMcp();
+    return;
+  }
   if (!method.endsWith("/mcp/servers_updated")) return;
   const mcp = vendorMcpInventory(params);
   if (!mcp) return;
@@ -1421,9 +1467,12 @@ function rememberVendorRuntime(
     if (loaded) agentRuntime.mcpLoaded = { ...loaded, observedAt };
     else delete agentRuntime.mcpLoaded;
   });
-  if (JSON.stringify(agentRuntime.mcp) === JSON.stringify(mcp)) return;
-  agentRuntime.mcp = mcp;
-  for (const state of sessions.values()) state.revision += 1;
+  // A new listing comes from a child that has just loaded its configuration
+  // and is connecting again; earlier reports describe connections it does
+  // not have yet. Its own reports follow the listing.
+  vendorMcpStatuses.clear();
+  vendorMcpListing = mcp;
+  publishVendorMcp();
 }
 
 function currentGrokMcpConfigFiles(): { user: string; project: string } {

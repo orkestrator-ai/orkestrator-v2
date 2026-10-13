@@ -2,6 +2,7 @@ import type { AcpProcess, SessionState } from "./acp-context.js";
 import {
   CLOSE_ATTACH_WAIT_MS,
   CLOSE_CANCEL_WAIT_MS,
+  CLOSE_SESSION_WAIT_MS,
   bumpCursorDiscoveryRevision,
   clientSessionKeys,
   sessions,
@@ -68,8 +69,15 @@ export function denyPendingRequests(state: SessionState): void {
  *    late child is terminated too rather than outliving the close.
  * 4. Await the running `session/prompt` answering the cancel (bounded by
  *    `ACP_CLOSE_CANCEL_WAIT_MS`), so the vendor can finish writing the turn.
- * 5. Terminate every child and require each to have exited.
- * 6. Write the state file without this session, and only then drop the
+ * 5. When the child advertised `sessionCapabilities.close`, send ACP
+ *    `session/close` (bounded by `ACP_CLOSE_SESSION_WAIT_MS`), best effort.
+ *    The spec makes it cancel-and-release, not delete (that is
+ *    `session/delete`, which this bridge never sends), and Grok 1.0.52 was
+ *    verified to keep the conversation listed and loadable with its history
+ *    after it. It lets the agent wind the session down itself rather than
+ *    learning of the close from a SIGTERM.
+ * 6. Terminate every child and require each to have exited.
+ * 7. Write the state file without this session, and only then drop the
  *    registry entry and client-key alias.
  *
  * Any step that is not proven (attach still running, a child that did not
@@ -120,6 +128,15 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
   // `session/prompt` answering (normally `stopReason: "cancelled"`).
   const settlement = state.status === "running" ? state.turnSettlement : undefined;
   if (settlement) await within(settlement, CLOSE_CANCEL_WAIT_MS);
+
+  const live = state.child;
+  if (live?.sessionCloseSupported && !exited(live)) {
+    // An error or a timeout (which terminates the child) changes nothing:
+    // the child is terminated below either way.
+    await live
+      .request("session/close", { sessionId: state.acpSessionId }, CLOSE_SESSION_WAIT_MS)
+      .catch(() => undefined);
+  }
 
   if (state.child) children.add(state.child);
   for (const child of state.cursorToolReplayChildren ?? []) children.add(child);

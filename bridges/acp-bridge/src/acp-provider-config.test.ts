@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { loadAcpProviderConfig, providerArgv } from "./acp-provider-config.js";
+import {
+  loadAcpProviderConfig,
+  providerArgv,
+  undeclaredPromptCapabilities,
+} from "./acp-provider-config.js";
 
 describe("ACP provider configuration", () => {
   test("loads Grok from the built-in launcher record", () => {
@@ -56,5 +60,11 @@ describe("ACP provider configuration", () => {
     expect(() =>
       loadAcpProviderConfig({ ACP_PROVIDER: "cursor", ACP_AGENT_PATH: "/bin/cursor-agent" }),
     ).toThrow("ACP_PROVIDER_CONFIG is required");
+  });
+
+  test("credits only Grok with the image prompts it reads but does not declare", () => {
+    expect(undeclaredPromptCapabilities("grok")).toEqual({ image: true });
+    expect(undeclaredPromptCapabilities("cursor")).toEqual({});
+    expect(undeclaredPromptCapabilities("toString")).toEqual({});
   });
 });

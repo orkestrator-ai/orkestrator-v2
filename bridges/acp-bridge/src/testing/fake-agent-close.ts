@@ -18,6 +18,11 @@
  * - anything else: recorded as the conversation's turn, answered, `end_turn`.
  *
  * `session/load` waits for `FAKE_CLOSE_LOAD_HOLD_FILE` to exist when set.
+ *
+ * `FAKE_CLOSE_SESSION_CAPABILITY=1` advertises `sessionCapabilities.close`
+ * (as Grok does); `session/close` is then recorded as `session-close:<id>`
+ * and answered, or left unanswered with `FAKE_CLOSE_SESSION_HANG=1`. Like
+ * Grok's, it releases the session but keeps it listed and loadable.
  */
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -29,6 +34,8 @@ const store = process.env.FAKE_CLOSE_STORE;
 const cancelDelayMs = Number(process.env.FAKE_CLOSE_CANCEL_DELAY_MS ?? "0");
 const ignoreCancel = process.env.FAKE_CLOSE_IGNORE_CANCEL === "1";
 const loadHoldFile = process.env.FAKE_CLOSE_LOAD_HOLD_FILE;
+const sessionCloseCapability = process.env.FAKE_CLOSE_SESSION_CAPABILITY === "1";
+const sessionCloseHangs = process.env.FAKE_CLOSE_SESSION_HANG === "1";
 
 function record(event: string): void {
   if (log) appendFileSync(log, `${process.pid} ${event}\n`);
@@ -108,7 +115,10 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line)
         id,
         result: {
           protocolVersion: 1,
-          agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+          agentCapabilities: {
+            loadSession: true,
+            sessionCapabilities: sessionCloseCapability ? { list: {}, close: {} } : { list: {} },
+          },
         },
       });
       return;
@@ -218,6 +228,13 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line)
         content: { type: "text", text: answer },
       });
       write({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    case "session/close": {
+      record(`session-close:${String(params.sessionId)}`);
+      if (sessionCloseHangs) return;
+      // Grok's answer shape; the bridge ignores the result.
+      write({ jsonrpc: "2.0", id, result: { _meta: { "x.ai/closeOutcome": "closed" } } });
       return;
     }
     default:

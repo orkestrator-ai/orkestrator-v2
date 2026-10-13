@@ -813,6 +813,19 @@ describe("unknown and ignored notifications", () => {
     }
   });
 
+  test("thread/prediction/updated (codex 0.162) is ignored rather than counted as drift", () => {
+    const result = reduceNotification(
+      notify("thread/prediction/updated", {
+        threadId: "t1",
+        sourceTurnId: "turn-1",
+        result: { type: "completed", text: "next" },
+      }),
+      1,
+    );
+    expect(result.events).toEqual([]);
+    expect(result.unknownMethod).toBeUndefined();
+  });
+
   test("every realtime notification is ignored, so voice cannot inflate the drift counter", () => {
     // All eleven `thread/realtime/*` methods the generated protocol defines.
     // Three of them (`item/started`, `item/completed`, `item/transcript/delta`)
@@ -1068,6 +1081,28 @@ describe("item adaptation", () => {
       kind: "item.started",
       startedAtMs: 1_750_000_000_000,
     });
+  });
+
+  test("preserves the backend item completion clock, and only on completion", () => {
+    const completed = reduce("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      completedAtMs: 1_750_000_000_250,
+      item: { id: "cmd-1", type: "commandExecution", command: "ls", status: "completed" },
+    });
+    expect(completed[0]).toMatchObject({
+      kind: "item.completed",
+      completedAtMs: 1_750_000_000_250,
+    });
+
+    const started = reduce("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      startedAtMs: 1_750_000_000_000,
+      completedAtMs: 1_750_000_000_250,
+      item: { id: "cmd-1", type: "commandExecution", command: "ls", status: "inProgress" },
+    });
+    expect("completedAtMs" in started[0]!).toBe(false);
   });
 
   test("drops an out-of-range backend item start clock", () => {

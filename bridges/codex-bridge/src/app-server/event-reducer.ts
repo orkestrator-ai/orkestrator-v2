@@ -134,6 +134,10 @@ const IGNORED_METHODS = new Set([
   // is the one the composer shows; mirroring a second one would give the user
   // two lists that can disagree. Plan 05 reconciles the queues that matter.
   "thread/queue/changed",
+  // A text prediction derived from a finished turn (codex 0.162). The pinned
+  // protocol has no client method that asks for one, so the bridge has no
+  // surface it could belong to.
+  "thread/prediction/updated",
   // The review-mode counterpart of the approval flow. Code review is an
   // Orkestrator-owned pipeline (see the plan index), so the strict-review
   // demand has no surface here to raise; the approval itself still arrives as
@@ -442,6 +446,7 @@ export function reduceNotification(
       if (!item) return { events: [], unsupportedItemType: unsupportedType };
       const completed = notification.method === "item/completed";
       const startedAtMs = completed ? undefined : nonNegativeDateMs(params.startedAtMs);
+      const completedAtMs = completed ? nonNegativeDateMs(params.completedAtMs) : undefined;
       return {
         events: [
           {
@@ -450,6 +455,7 @@ export function reduceNotification(
             turnId,
             item,
             ...(startedAtMs === undefined ? {} : { startedAtMs }),
+            ...(completedAtMs === undefined ? {} : { completedAtMs }),
             ...base,
           },
         ],

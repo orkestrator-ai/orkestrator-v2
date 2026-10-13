@@ -63,6 +63,12 @@ export interface ItemAccumulator {
   progress?: string;
   completed: boolean;
   /**
+   * An agent message app-server abandoned: it streamed, then a later agent
+   * message started or the turn ended without its `item/completed`. Settled
+   * as far as the bridge is concerned, but a late `item/completed` still wins.
+   */
+  interrupted?: boolean;
+  /**
    * What a command changed in its worktree. Measured after the item completes,
    * so it arrives separately from — and usually after — the item itself.
    */
@@ -158,6 +164,13 @@ export class TurnAccumulator {
 
   private readonly maxCommandOutputChars: number;
 
+  /**
+   * Agent messages that have started streaming but not completed. app-server
+   * samples one response at a time per turn, so at most one is ever really
+   * live; anything older here was cut off (see `interruptOpenAgentMessages`).
+   */
+  private readonly openAgentMessageIds = new Set<string>();
+
   constructor(options: TurnAccumulatorOptions) {
     this.threadId = options.threadId;
     this.turnId = options.turnId;
@@ -243,11 +256,20 @@ export class TurnAccumulator {
   }
 
   onItemStarted(item: EngineItem, startedAtMs?: number): void {
+    if (item.type === "agent_message") this.interruptOpenAgentMessages(item.id);
     const accumulator = this.ensureItem(item.id);
     // A repeated `item/started` must not reset text already streamed, and must
     // not clobber a final item that somehow arrived first.
     const replacesRawFallback = accumulator.rawFallback && item.type === "file_change";
-    if (!accumulator.completed || replacesRawFallback) accumulator.item = item;
+    if (!accumulator.completed || replacesRawFallback) {
+      accumulator.item =
+        accumulator.interrupted && item.type === "agent_message"
+          ? { ...item, interrupted: true }
+          : item;
+    }
+    if (item.type === "agent_message" && !accumulator.completed && !accumulator.interrupted) {
+      this.openAgentMessageIds.add(item.id);
+    }
     if (replacesRawFallback) accumulator.completed = false;
     if (item.type === "file_change") accumulator.rawFallback = false;
     accumulator.startedAt ??= startedAtMs;
@@ -266,6 +288,9 @@ export class TurnAccumulator {
     const accumulator = this.ensureItem(item.id);
     accumulator.item = item;
     accumulator.completed = true;
+    // Authoritative even for a message the bridge had given up on.
+    if (accumulator.interrupted) accumulator.interrupted = false;
+    this.openAgentMessageIds.delete(item.id);
     accumulator.rawFallback = false;
     // The item settled, so any progress line describes work that has stopped.
     accumulator.progress = undefined;
@@ -302,6 +327,14 @@ export class TurnAccumulator {
     // Deltas after the authoritative item are redundant; ignoring them prevents
     // duplicated tails when a late delta trails `item/completed`.
     if (accumulator.completed) return;
+    // A cut-off response does not resume: its text is settled as streamed.
+    if (accumulator.interrupted) return;
+    // A delta can precede its `item/started`, and only agent messages stream
+    // text deltas, so this is also where a message opens.
+    if (!this.openAgentMessageIds.has(itemId)) {
+      this.interruptOpenAgentMessages(itemId);
+      this.openAgentMessageIds.add(itemId);
+    }
     accumulator.textDelta += delta;
   }
 
@@ -410,6 +443,37 @@ export class TurnAccumulator {
     this.phase = status;
     if (error) this.error = error;
     this.completedAt = new Date().toISOString();
+    // Nothing more streams once the turn ends, whatever its status.
+    this.interruptOpenAgentMessages();
+  }
+
+  /**
+   * Settles every open agent message except `keepId` as interrupted.
+   *
+   * Since codex 0.162 `instant_interrupt` is on by default: `turn/steer` cuts
+   * the in-flight response off, and its agent message gets `item/started` and
+   * deltas but never `item/completed` — `thread/read` omits it entirely. The
+   * replacement response starts as a new agent message, which is the signal
+   * the old one is dead; turn completion is the backstop. Left open, the
+   * fragment kept its provider phase (often `final_answer`) and stayed a
+   * candidate for the turn's structured output.
+   */
+  private interruptOpenAgentMessages(keepId?: string): void {
+    for (const id of Array.from(this.openAgentMessageIds)) {
+      if (id === keepId) continue;
+      this.openAgentMessageIds.delete(id);
+      const accumulator = this.items.get(id);
+      if (!accumulator || accumulator.completed) continue;
+      accumulator.interrupted = true;
+      accumulator.version += 1;
+      const item = accumulator.item;
+      accumulator.item =
+        item?.type === "agent_message"
+          ? { ...item, interrupted: true }
+          : item === null
+            ? { id, type: "agent_message", text: "", interrupted: true }
+            : item;
+    }
   }
 
   /** Ordered accumulators for rendering. */

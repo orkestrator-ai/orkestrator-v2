@@ -26,6 +26,65 @@ describe("item adapter edge cases", () => {
     ).toEqual({ id: "unknown", type: "agent_message", text: "hello" });
   });
 
+  test("keeps codex 0.162's partial_answer phase instead of reading it as unknown", () => {
+    // Dropped to "unknown", a partial answer would be treated as a possible
+    // final answer by structured-output parsing.
+    expect(
+      adaptAppServerItem({
+        id: "partial",
+        type: "agentMessage",
+        text: "First half",
+        phase: "partial_answer",
+      }).item,
+    ).toEqual({
+      id: "partial",
+      type: "agent_message",
+      text: "First half",
+      phase: "partial_answer",
+    });
+  });
+
+  test("carries the provider's own tool durations, and only well-formed ones", () => {
+    expect(
+      adaptAppServerItem({
+        id: "cmd",
+        type: "commandExecution",
+        command: "ls",
+        status: "completed",
+        durationMs: 42,
+      }).item,
+    ).toMatchObject({ duration_ms: 42 });
+    expect(
+      adaptAppServerItem({
+        id: "mcp",
+        type: "mcpToolCall",
+        server: "s",
+        tool: "t",
+        status: "completed",
+        durationMs: 0,
+      }).item,
+    ).toMatchObject({ duration_ms: 0 });
+    expect(
+      adaptAppServerItem({
+        id: "dyn",
+        type: "dynamicToolCall",
+        tool: "t",
+        status: "completed",
+        durationMs: 7,
+      }).item,
+    ).toMatchObject({ duration_ms: 7 });
+    for (const durationMs of [null, -1, Number.NaN, "12"]) {
+      const item = adaptAppServerItem({
+        id: "cmd",
+        type: "commandExecution",
+        command: "ls",
+        status: "inProgress",
+        durationMs,
+      }).item;
+      expect(item && "duration_ms" in item).toBe(false);
+    }
+  });
+
   test("defaults malformed command and file fields without throwing", () => {
     expect(
       adaptAppServerItem({
@@ -243,6 +302,39 @@ describe("item adapter edge cases", () => {
         agent_thread_id: "child-1",
       });
     }
+  });
+
+  test("keeps the model and effort a started sub-agent was created with (codex 0.162)", () => {
+    expect(
+      adaptAppServerItem({
+        id: "sub-started",
+        type: "subAgentActivity",
+        kind: "started",
+        agentThreadId: "child-1",
+        agentPath: "/root/worker",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      }).item,
+    ).toEqual({
+      id: "sub-started",
+      type: "subagent_activity",
+      activity: "started",
+      agent_thread_id: "child-1",
+      agent_path: "/root/worker",
+      model: "gpt-5.6-sol",
+      reasoning_effort: "high",
+    });
+    // Older records and later beats report null; that is unknown, not a value.
+    const later = adaptAppServerItem({
+      id: "sub-done",
+      type: "subAgentActivity",
+      kind: "completed",
+      agentThreadId: "child-1",
+      model: null,
+      reasoningEffort: null,
+    }).item;
+    expect(later).not.toHaveProperty("model");
+    expect(later).not.toHaveProperty("reasoning_effort");
   });
 
   test("explicitly classifies every understood non-rendered item", () => {

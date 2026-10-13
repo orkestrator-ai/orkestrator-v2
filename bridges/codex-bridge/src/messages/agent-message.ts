@@ -102,14 +102,22 @@ export function agentMessageDisplayText(item: AgentMessageItem): string {
   return item.phase === "commentary" ? visibleCommentaryText(item.text) : item.text;
 }
 
-/** Commentary is progress, never the authoritative result of a structured turn. */
+/**
+ * Commentary is progress and a partial answer is still being written; neither
+ * is the authoritative result of a structured turn. An absent phase stays
+ * authoritative: legacy models never label their final answer.
+ */
 export function isAuthoritativeAgentMessagePhase(phase: unknown): boolean {
-  return phase !== "commentary";
+  return phase !== "commentary" && phase !== "partial_answer";
 }
 
 /** Select final-output candidates consistently in parsing and transcript rendering. */
 export function isAuthoritativeAgentMessage(
   item: EngineItem | null | undefined,
 ): item is AgentMessageItem {
-  return item?.type === "agent_message" && isAuthoritativeAgentMessagePhase(item.phase);
+  return (
+    item?.type === "agent_message" &&
+    item.interrupted !== true &&
+    isAuthoritativeAgentMessagePhase(item.phase)
+  );
 }

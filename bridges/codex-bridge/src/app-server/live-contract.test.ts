@@ -21,10 +21,12 @@
  * unit-tested by `live-binary.test.ts`, which runs in the default suite.
  *
  * The default live suite never starts a turn, so no credits are spent and no
- * model is called. Two contracts are the exceptions, each separately gated:
- * the MCP approval canary (RUN_LIVE_CODEX_MCP_APPROVAL_CANARY=1) and the
+ * model is called. Three contracts are the exceptions, each separately gated:
+ * the MCP approval canary (RUN_LIVE_CODEX_MCP_APPROVAL_CANARY=1), the
  * coordinator attachment contract (RUN_LIVE_CODEX_ATTACHMENT_TURN=1), which
- * cannot be proved without asking the real sandbox to open the staged image.
+ * cannot be proved without asking the real sandbox to open the staged image,
+ * and the steer interrupt canary (RUN_LIVE_CODEX_STEER_CANARY=1), which needs
+ * a real answer streaming when the steer lands.
  */
 import { describe, test, expect } from "bun:test";
 import { spawn } from "node:child_process";
@@ -37,7 +39,10 @@ import { JsonlRpcClient } from "./jsonl-rpc-client.js";
 import { AppServerRpcError, isUnmaterializedThreadError } from "./errors.js";
 import { pinnedVersion, resolveCodexBinary } from "./live-binary.js";
 import type { InboundNotification } from "./envelope-validation.js";
+import { reduceNotification } from "./event-reducer.js";
 import { BRIDGE_ATTACHMENT_ROOT_ENV, codexAppServerConfigOverrides } from "../codex-config.js";
+import { TurnAccumulator } from "../sessions/turn-accumulator.js";
+import { isAuthoritativeAgentMessage } from "../messages/agent-message.js";
 
 // The repository-wide test preload registers Happy DOM, which replaces the
 // global `Response`. `Bun.serve` refuses a handler return value that is not its
@@ -74,6 +79,8 @@ const describeLiveAttachmentTurn =
   LIVE && process.env.RUN_LIVE_CODEX_ATTACHMENT_TURN === "1" ? describe : describe.skip;
 const testLiveMcpApproval =
   LIVE && process.env.RUN_LIVE_CODEX_MCP_APPROVAL_CANARY === "1" ? test : test.skip;
+const describeLiveSteerCanary =
+  LIVE && process.env.RUN_LIVE_CODEX_STEER_CANARY === "1" ? describe : describe.skip;
 
 interface LiveSession {
   client: JsonlRpcClient;
@@ -901,6 +908,98 @@ describeLiveAttachmentTurn("live coordinator attachment permission", () => {
       await session.stop();
     }
   }, 150_000);
+});
+
+/**
+ * `features.instant_interrupt` became default-on in codex 0.162: a steer cuts
+ * the in-flight answer off instead of waiting for it. The cut-off agent
+ * message is left with `item/started` and deltas but no `item/completed`, and
+ * `thread/read` omits it. `TurnAccumulator` relies on exactly that shape to
+ * settle the fragment; this pins it and replays the real stream through the
+ * bridge's reducer and accumulator. Spends one short model turn.
+ */
+describeLiveSteerCanary("live steer interrupt", () => {
+  test("a steer cuts off the streaming answer and the bridge settles the fragment", async () => {
+    const session = await boot({ copyAuth: true });
+    try {
+      await handshake(session);
+      const started = await session.client.request<{ thread: { id: string } }>("thread/start", {
+        cwd: session.workspace,
+        sandbox: "read-only",
+        approvalPolicy: "never",
+      });
+      const threadId = started.thread.id;
+      const turnStart = await session.client.request<{ turn: { id: string } }>("turn/start", {
+        threadId,
+        input: [
+          {
+            type: "text",
+            text: "Without using any tools, write a 600-word essay on the history of lighthouses.",
+            text_elements: [],
+          },
+        ],
+      });
+      const turnId = turnStart.turn.id;
+
+      const deltas = () =>
+        session.notifications.filter((entry) => entry.method === "item/agentMessage/delta");
+      await waitUntil(() => deltas().length >= 10, 120_000, "the answer to start streaming");
+      const cutItemId = (deltas()[0]!.params as { itemId: string }).itemId;
+
+      await session.client.request("turn/steer", {
+        threadId,
+        expectedTurnId: turnId,
+        input: [{ type: "text", text: "Stop. Reply with exactly: PINEAPPLE", text_elements: [] }],
+      });
+      await waitForNotification(session, "turn/completed", 120_000);
+
+      const itemEvents = (method: string, id: string) =>
+        session.notifications.filter(
+          (entry) =>
+            entry.method === method && (entry.params as { item?: { id?: string } }).item?.id === id,
+        );
+      expect(itemEvents("item/started", cutItemId)).toHaveLength(1);
+      // The contract the accumulator depends on: no completion, ever.
+      expect(itemEvents("item/completed", cutItemId)).toHaveLength(0);
+
+      const read = await session.client.request<{
+        thread: { turns: Array<{ items: Array<{ id: string }> }> };
+      }>("thread/read", { threadId, includeTurns: true });
+      const persisted = read.thread.turns.flatMap((turn) => turn.items.map((item) => item.id));
+      expect(persisted).not.toContain(cutItemId);
+
+      const turn = new TurnAccumulator({
+        threadId,
+        turnId,
+        engineGeneration: 1,
+        assistantMessageId: "assistant-1",
+      });
+      turn.markRunning(turnId);
+      for (const notification of session.notifications) {
+        for (const event of reduceNotification(notification, 1).events) {
+          if (!("turnId" in event) || !turn.accepts(event)) continue;
+          if (event.kind === "item.started") turn.onItemStarted(event.item, event.startedAtMs);
+          else if (event.kind === "item.completed") {
+            turn.onItemCompleted(event.item, event.completedAtMs);
+          } else if (event.kind === "item.text.delta") turn.onTextDelta(event.itemId, event.delta);
+          else if (event.kind === "turn.completed") turn.complete(event.status, event.error);
+        }
+      }
+      expect(turn.phase).toBe("completed");
+      const cut = turn.items.get(cutItemId);
+      expect(cut?.interrupted).toBe(true);
+      expect(cut && turn.effectiveText(cut).length).toBeGreaterThan(0);
+      // The replacement, never the fragment, is the turn's final answer.
+      const finalAnswer = turn
+        .ordered()
+        .filter((entry) => isAuthoritativeAgentMessage(entry.item))
+        .at(-1);
+      expect(finalAnswer?.id).not.toBe(cutItemId);
+      expect(finalAnswer && turn.effectiveText(finalAnswer)).toContain("PINEAPPLE");
+    } finally {
+      await session.stop();
+    }
+  }, 300_000);
 });
 
 describeLive("live shutdown", () => {

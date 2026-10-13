@@ -44,6 +44,8 @@ export interface CommandExecutionItem {
   /** Directory the command ran in, when app-server reported one. */
   cwd?: string;
   source?: CommandExecutionSource;
+  /** How long the command ran, as app-server measured it; set once it ends. */
+  duration_ms?: number;
 }
 
 export type PatchChangeKind = "add" | "delete" | "update";
@@ -78,6 +80,8 @@ export interface McpToolCallItem {
   };
   error?: { message: string };
   status: McpToolCallStatus;
+  /** How long the call ran, as app-server measured it; set once it ends. */
+  duration_ms?: number;
 }
 
 export interface DynamicToolCallItem {
@@ -88,6 +92,8 @@ export interface DynamicToolCallItem {
   arguments: unknown;
   content_items: unknown[];
   status: McpToolCallStatus;
+  /** How long the call ran, as app-server measured it; set once it ends. */
+  duration_ms?: number;
 }
 
 export interface AgentMessageItem {
@@ -95,8 +101,19 @@ export interface AgentMessageItem {
   type: "agent_message";
   /** Either natural-language text or JSON when structured output is requested. */
   text: string;
-  /** Provider channel; commentary remains user-visible even when schema-shaped. */
-  phase?: "commentary" | "final_answer";
+  /**
+   * Provider channel; commentary remains user-visible even when schema-shaped.
+   * `partial_answer` (codex 0.162) is answer text the model is still adding to:
+   * shown like any answer, but never the turn's final output.
+   */
+  phase?: "commentary" | "partial_answer" | "final_answer";
+  /**
+   * app-server stopped streaming this message without completing it — a steer
+   * cut the response off (`instant_interrupt`, default-on since codex 0.162)
+   * or the turn ended first. The text is what had streamed; it is never the
+   * turn's final output, and app-server's own history omits it.
+   */
+  interrupted?: true;
   /** Non-blocking user input request embedded in the transcript by Codex. */
   delivery?: "async";
   questions?: AsyncUserInputQuestion[];

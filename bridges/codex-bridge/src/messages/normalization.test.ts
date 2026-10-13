@@ -464,3 +464,78 @@ describe("command normalization bounds", () => {
     ).toBe("Command failed");
   });
 });
+
+describe("tool durations", () => {
+  test("a finished call carries app-server's own duration", async () => {
+    const [command] = await itemToParts(
+      {
+        id: "cmd",
+        type: "command_execution",
+        command: "ls",
+        aggregated_output: "",
+        status: "failed",
+        duration_ms: 1_250,
+      },
+      "/tmp",
+    );
+    expect(command).toMatchObject({ toolState: "failure", toolDurationMs: 1_250 });
+
+    const [mcp] = await itemToParts(
+      {
+        id: "mcp",
+        type: "mcp_tool_call",
+        server: "s",
+        tool: "t",
+        arguments: {},
+        status: "completed",
+        duration_ms: 30,
+      },
+      "/tmp",
+    );
+    expect(mcp).toMatchObject({ toolState: "success", toolDurationMs: 30 });
+
+    const [dynamic] = await itemToParts(
+      {
+        id: "dyn",
+        type: "dynamic_tool_call",
+        tool: "lookup",
+        arguments: {},
+        content_items: [],
+        status: "completed",
+        duration_ms: 0,
+      },
+      "/tmp",
+    );
+    expect(dynamic).toMatchObject({ toolDurationMs: 0 });
+  });
+
+  test("a running call never carries a duration, even if one was reported", async () => {
+    const [command] = await itemToParts(
+      {
+        id: "cmd",
+        type: "command_execution",
+        command: "sleep 5",
+        aggregated_output: "",
+        status: "in_progress",
+        duration_ms: 1_000,
+      },
+      "/tmp",
+    );
+    expect(command).toMatchObject({ toolState: "pending" });
+    expect(command).not.toHaveProperty("toolDurationMs");
+  });
+
+  test("an unknown duration is omitted rather than reported as zero", async () => {
+    const [command] = await itemToParts(
+      {
+        id: "cmd",
+        type: "command_execution",
+        command: "ls",
+        aggregated_output: "",
+        status: "completed",
+      },
+      "/tmp",
+    );
+    expect(command).not.toHaveProperty("toolDurationMs");
+  });
+});

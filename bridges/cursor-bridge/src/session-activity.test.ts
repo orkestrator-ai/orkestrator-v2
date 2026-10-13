@@ -107,6 +107,9 @@ describe("POST /sessions/activity", () => {
   test("refuses requests outside the contract", async () => {
     expect((await batch("{")).status).toBe(400);
     expect((await batch({ version: 1, sessionIds: ["a", "a"] })).status).toBe(400);
-    expect((await batch("x".repeat(200_000))).status).toBe(413);
+    const tooLarge = await batch("x".repeat(200_000));
+    expect(tooLarge.status).toBe(413);
+    // The body was never read, so the connection must not be reused.
+    expect(tooLarge.headers.get("connection")).toBe("close");
   });
 });

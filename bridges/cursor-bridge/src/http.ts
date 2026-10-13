@@ -1394,6 +1394,10 @@ function storeAgentMcp(state: SessionState, value: unknown): void {
 
 export function json(response: ServerResponse, status: number, body: unknown): void {
   if (response.headersSent || response.destroyed) return;
+  // A 413 is answered before the request body has been read. Reusing the
+  // connection would leave those unread bytes in the keep-alive stream, and
+  // Bun 1.4.3 keeps server.close() waiting on such a connection.
+  if (status === 413) response.setHeader("connection", "close");
   const payload = Buffer.from(JSON.stringify(body) ?? "null");
   // A whole transcript is the largest thing this bridge returns and it is
   // highly compressible. Below the threshold the round trip through zlib costs

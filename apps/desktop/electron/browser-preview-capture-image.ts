@@ -63,6 +63,9 @@ export function maskCaptureImage(
     return { image, masked: false };
   const { width, height } = image.getSize();
   try {
+    // Since Electron 43 toBitmap() returns sRGB-normalized pixels, so a Display
+    // P3 capture may shift colour slightly once rebuilt below. Accepted: the
+    // mask is opaque and the byte layout (width * height * 4) is unchanged.
     const bitmap = Buffer.from(image.toBitmap());
     if (bitmap.length !== width * height * 4 || viewport.width <= 0 || viewport.height <= 0) {
       return { image, masked: false };

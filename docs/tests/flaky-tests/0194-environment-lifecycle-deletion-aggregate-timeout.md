@@ -25,3 +25,16 @@ The cases drive fake `git`, `docker` and `gh` shims under the default
 five-second budget, like the resolved fixture-shim timeouts in case 0130.
 Host contention is the likely cause; the isolated pass does not prove it. No
 test was skipped, loosened, or changed to conceal the failure.
+
+## Recurrence 2026-10-13
+
+- **Tests:** `does not delete remote branches when a merged container
+  environment is not running` (5,868 ms) and `retains the environment and
+  process ownership when deletion cannot reap a server` (6,897 ms).
+- **Original command:** `mise run test:logged -- --name electron-unit -- bun test
+  tests/unit/electron --parallel=4 --only-failures` on macOS during the Electron
+  44 upgrade (no change to the backend or this file); 1939 passed, 23 skipped,
+  2 failed across 115 files in 261.6 seconds, with a host load average near 30
+  from other concurrent agent runs.
+- **Isolated rerun:** `bun test tests/unit/electron/commands-registry-environments.test.ts`
+  passed in 81.1 seconds under the same host load.

@@ -82,6 +82,22 @@ It checks 30 seconds after launch and every 6 hours, downloads in the
 background, then asks the user to restart. "Later" installs on the next quit.
 **Orkestrator AI → Check for Updates…** runs a check on demand.
 
+## Minimum macOS version
+
+Electron 44 dropped macOS 12 (Monterey), so the app requires macOS 13
+(Ventura) or later. `build.mac.minimumSystemVersion` (`13.0`) writes
+`LSMinimumSystemVersion` into the app's `Info.plist`, so macOS refuses to open
+it on Monterey with its standard "can't use this version" message instead of
+the app crashing at launch. Raise it when an Electron upgrade raises the floor.
+
+This does not stop the updater from *offering* the build: electron-builder 26
+does not copy the value into `latest-mac.yml`. electron-updater skips an update
+only when that file carries its own `minimumSystemVersion`, written as a Darwin
+kernel version (`22.0.0` for macOS 13). Until the release flow adds it, a
+Monterey user on an Electron 42 build will download the update and then be
+unable to open it; say so in the release notes for the first Electron 44
+release.
+
 ## Linux and Omarchy
 
 - The AppImage is built with electron-builder's static AppImage runtime

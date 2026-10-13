@@ -27,6 +27,7 @@ describe("Electron packaging configuration", () => {
         extraResources: Array<{ from: string; to: string; filter: string[] }>;
         mac: {
           icon: string;
+          minimumSystemVersion: string;
           identity: string | null;
           hardenedRuntime: boolean;
           notarize: boolean;
@@ -88,6 +89,9 @@ describe("Electron packaging configuration", () => {
     });
     expect(packageJson.build.electronFuses).toEqual({ runAsNode: false });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
+    // Electron 44 requires macOS 13 (Ventura); LSMinimumSystemVersion makes
+    // macOS refuse to open the app on Monterey instead of letting it crash.
+    expect(packageJson.build.mac.minimumSystemVersion).toBe("13.0");
     expect(packageJson.build.mac.identity).toBe("-");
     expect(packageJson.build.mac.hardenedRuntime).toBe(false);
     expect(packageJson.build.mac.notarize).toBe(false);
@@ -201,6 +205,7 @@ describe("Electron packaging configuration", () => {
     expect(releaseConfig.mac?.hardenedRuntime).toBe(true);
     expect(releaseConfig.mac?.notarize).toBe(true);
     expect(releaseConfig.mac?.target).toEqual(["dmg", "zip"]);
+    expect(releaseConfig.mac?.minimumSystemVersion).toBe("13.0");
     expect(releaseConfig.publish).toEqual([
       expect.objectContaining({
         provider: "github",

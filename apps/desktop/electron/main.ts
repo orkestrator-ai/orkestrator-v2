@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   Menu,
@@ -104,10 +105,16 @@ import {
   probeMacOsPermissions,
   shouldProbeMacOsPermissionsBeforeBackend,
 } from "./macos-permissions.js";
+import { createClipboardTextWriter } from "./clipboard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = process.env.ELECTRON_DEV === "1";
+// Menu items copy synchronously; Electron 44's writeText returns a Promise whose
+// rejection would otherwise be unhandled and terminate the main process.
+const writeClipboardText = createClipboardTextWriter(clipboard, (message, error) =>
+  console.error(message, error),
+);
 const runtimeProfile = runtimeProfileFromEnvironment();
 const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "production");
 const productName = runtimeProfile?.electronTitle ?? PRODUCT_NAME;
@@ -301,7 +308,7 @@ function createWindowBrowserPreviews(
   const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
     emitToRenderers: emitToOwner,
     openExternal: (url) => shell.openExternal(url),
-    writeClipboardText: (text) => clipboard.writeText(text),
+    writeClipboardText,
     logError: (message, error) => console.error(message, error),
   });
   const runtime = initializeBrowserPreviews({
@@ -433,7 +440,7 @@ async function createWindow(connectionId?: string): Promise<void> {
     await createMainWindow({
       BrowserWindowCtor: BrowserWindow,
       menu: Menu,
-      writeClipboardText: (text) => clipboard.writeText(text),
+      writeClipboardText,
       dirname: __dirname,
       isDev,
       appPath: app.getAppPath(),
@@ -550,6 +557,7 @@ function registerIpc(): void {
     getMainWindow: (event) => contextForEvent(event).window,
     ipc: ipcMain,
     clipboardApi: clipboard,
+    createClipboardItem: (items) => new ClipboardItem(items),
     shellApi: shell,
     appApi: {
       exit: (code) => app.exit(code),
@@ -661,6 +669,9 @@ async function startApplication(): Promise<void> {
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
     ensure: ensurePinnedToolchains,
+    // Since Electron 44 a server requesting a client certificate makes net
+    // requests auto-select a matching one (select-client-certificate is not
+    // handled). Toolchain hosts do not request one, so this is left as is.
     fetchImpl: (input, init) => net.fetch(input, init),
     onProgress: (progress) => toolchainProgress.report(progress),
     showMessageBox: (options) => dialog.showMessageBox(options),

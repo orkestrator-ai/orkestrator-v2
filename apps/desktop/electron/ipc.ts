@@ -30,6 +30,13 @@ import {
 import { isTrustedRendererUrl } from "./window.js";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
 import {
+  readClipboardImage,
+  writeClipboardImage,
+  type ClipboardLike,
+  type ClipboardNativeImageApi,
+  type CreateClipboardItem,
+} from "./clipboard.js";
+import {
   captureAck,
   captureId,
   captureIdList,
@@ -58,24 +65,6 @@ type IpcMainLike = {
   ): void;
 };
 
-type ClipboardLike = {
-  readText(): string;
-  writeText(text: string): void;
-  readImage(): ClipboardNativeImageLike;
-  writeImage(image: unknown): void;
-};
-
-type ClipboardNativeImageLike = {
-  isEmpty(): boolean;
-  getSize(): { width: number; height: number };
-  resize(options: {
-    width?: number;
-    height?: number;
-    quality?: "good" | "better" | "best";
-  }): ClipboardNativeImageLike;
-  toDataURL(): string;
-};
-
 type ShellLike = {
   openExternal(url: string): Promise<void>;
 };
@@ -85,12 +74,6 @@ type AppLike = {
   quit(): void;
   relaunch(): void;
 };
-
-type NativeImageLike = {
-  createFromDataURL(dataUrl: string): unknown;
-};
-
-const MAX_CLIPBOARD_TRANSFER_DIMENSION = 2000;
 
 export type BrowserPreviewController = {
   attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState>;
@@ -137,9 +120,11 @@ export type MainIpcDependencies = {
   getMainWindow: (event?: IpcEventLike) => BrowserWindow | null;
   ipc: IpcMainLike;
   clipboardApi: ClipboardLike;
+  /** Electron's `ClipboardItem` constructor, injected so tests need no Electron. */
+  createClipboardItem: CreateClipboardItem;
   shellApi: ShellLike;
   appApi: AppLike;
-  nativeImageApi: NativeImageLike;
+  nativeImageApi: ClipboardNativeImageApi;
   getMacOsPermissions: () => Promise<MacOsPermissionsStatus>;
   getWebClientStatus: (event?: IpcEventLike) => WebClientStatus | Promise<WebClientStatus>;
   setWebClientEnabled: (enabled: boolean, event?: IpcEventLike) => Promise<WebClientStatus>;
@@ -233,6 +218,7 @@ export function registerMainIpc({
   getMainWindow,
   ipc,
   clipboardApi,
+  createClipboardItem,
   shellApi,
   appApi,
   nativeImageApi,
@@ -289,35 +275,20 @@ export function registerMainIpc({
   });
 
   handle("orkestrator:clipboard:read-text", () => clipboardApi.readText());
-  handle("orkestrator:clipboard:write-text", (_event, text: unknown) => {
-    clipboardApi.writeText(typeof text === "string" ? text : "");
-  });
-  handle("orkestrator:clipboard:read-image", () => {
-    const clipboardImage = clipboardApi.readImage();
-    if (clipboardImage.isEmpty()) return null;
-    const sourceSize = clipboardImage.getSize();
-    const image =
-      sourceSize.width > MAX_CLIPBOARD_TRANSFER_DIMENSION ||
-      sourceSize.height > MAX_CLIPBOARD_TRANSFER_DIMENSION
-        ? clipboardImage.resize({
-            ...(sourceSize.width >= sourceSize.height
-              ? { width: MAX_CLIPBOARD_TRANSFER_DIMENSION }
-              : { height: MAX_CLIPBOARD_TRANSFER_DIMENSION }),
-            quality: "best",
-          })
-        : clipboardImage;
-    const size = image.getSize();
-    return {
-      width: size.width,
-      height: size.height,
-      dataUrl: image.toDataURL(),
-    };
-  });
-  handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown) => {
-    clipboardApi.writeImage(
-      nativeImageApi.createFromDataURL(typeof dataUrl === "string" ? dataUrl : ""),
-    );
-  });
+  handle("orkestrator:clipboard:write-text", (_event, text: unknown) =>
+    clipboardApi.writeText(typeof text === "string" ? text : ""),
+  );
+  handle("orkestrator:clipboard:read-image", () =>
+    readClipboardImage(clipboardApi, nativeImageApi),
+  );
+  handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown) =>
+    writeClipboardImage(
+      clipboardApi,
+      nativeImageApi,
+      createClipboardItem,
+      typeof dataUrl === "string" ? dataUrl : "",
+    ),
+  );
   handle("orkestrator:shell:open-external", (_event, url: unknown) =>
     shellApi.openExternal(externalBrowserUrl(url)),
   );

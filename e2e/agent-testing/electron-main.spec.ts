@@ -210,6 +210,34 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
         return api.clipboard.readText();
       })
       .then((value) => expect(value).toBe("orkestrator-electron-smoke"));
+    // Electron 44 replaced readImage/writeImage with ClipboardItem payloads;
+    // round-trip a real PNG through the main-process handlers.
+    await window
+      .evaluate(async () => {
+        const api = (
+          globalThis as typeof globalThis & {
+            orkestrator: {
+              clipboard: {
+                writeImage(dataUrl: string): Promise<void>;
+                readImage(): Promise<{ width: number; height: number; dataUrl?: string } | null>;
+              };
+            };
+          }
+        ).orkestrator;
+        const canvas = document.createElement("canvas");
+        canvas.width = 3;
+        canvas.height = 2;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = "#28231f";
+        context.fillRect(0, 0, 3, 2);
+        await api.clipboard.writeImage(canvas.toDataURL("image/png"));
+        const image = await api.clipboard.readImage();
+        return image && { width: image.width, height: image.height, dataUrl: image.dataUrl };
+      })
+      .then((image) => {
+        expect(image).toMatchObject({ width: 3, height: 2 });
+        expect(image?.dataUrl).toMatch(/^data:image\/png;base64,/);
+      });
     const electronPid = await app.evaluate(() => process.pid);
     expect(electronPid).toBeTruthy();
     const backendPid = await expect

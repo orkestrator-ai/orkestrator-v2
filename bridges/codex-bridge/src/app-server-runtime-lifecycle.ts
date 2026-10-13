@@ -936,7 +936,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         if (event.kind === "item.completed") {
-          turn.onItemCompleted(event.item);
+          turn.onItemCompleted(event.item, event.completedAtMs);
           this.trackCommandChangeWindow(context, "completed", event.item);
         } else if (event.kind === "item.started") {
           turn.onItemStarted(event.item, event.startedAtMs);

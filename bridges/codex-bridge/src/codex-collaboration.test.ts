@@ -330,6 +330,61 @@ describe("Codex collaboration state", () => {
     expect(finishedAgain?.toolState).toBe("success");
   });
 
+  test("carries the creation model and effort through later beats (codex 0.162)", () => {
+    const started = {
+      id: "started",
+      type: "subagent_activity",
+      activity: "started",
+      agent_thread_id: "agent-1",
+      agent_path: "/root/worker",
+      model: "gpt-5.6-sol",
+      reasoning_effort: "high",
+    };
+    const later = [
+      {
+        id: "wait",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: { "agent-1": { status: "running" } },
+      },
+      { id: "done", type: "subagent_activity", activity: "completed", agent_thread_id: "agent-1" },
+    ];
+
+    // An orphan row built from the activity alone.
+    const [orphan] = applyCodexCollabStateToSubagentParts([], [started, ...later]);
+    expect(orphan).toMatchObject({
+      subagentId: "agent-1",
+      subagentModelId: "gpt-5.6-sol",
+      subagentReasoningEffort: "high",
+    });
+
+    // A transcript row that does not know its model learns it.
+    const [transcript] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      [started, ...later],
+    );
+    expect(transcript).toMatchObject({
+      subagentModelId: "gpt-5.6-sol",
+      subagentReasoningEffort: "high",
+    });
+
+    // The child's own rollout names what its latest turn actually ran on.
+    const [ownTurn] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { subagentModelId: "gpt-5.6", subagentReasoningEffort: "low" })],
+      [started],
+    );
+    expect(ownTurn).toMatchObject({ subagentModelId: "gpt-5.6", subagentReasoningEffort: "low" });
+
+    // Pre-0.162 beats name no model, and nothing is invented.
+    const [legacy] = applyCodexCollabStateToSubagentParts(
+      [],
+      [{ ...started, model: undefined, reasoning_effort: undefined }],
+    );
+    expect(legacy).not.toHaveProperty("subagentModelId");
+    expect(legacy).not.toHaveProperty("subagentReasoningEffort");
+  });
+
   test("uses activity as a hint without overriding terminal transcripts", () => {
     const [started] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1", { toolState: "success" })],

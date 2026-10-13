@@ -881,6 +881,9 @@ describe("agent handoff validation and tool counting", () => {
       { type: "file", content: "c", fileUrl: [] },
       { type: "file", content: "c", filename: 9 },
       { type: "subagent", content: "c", subagentName: 1 },
+      { type: "subagent", content: "c", subagentModelId: { id: "m" } },
+      { type: "subagent", content: "c", subagentReasoningEffort: 3 },
+      { type: "tool-invocation", content: "c", toolDurationMs: "2s" },
     ]) {
       const candidate = {
         ...valid,
@@ -900,6 +903,24 @@ describe("agent handoff validation and tool counting", () => {
       }).not.toThrow();
       expect(parsed).toBeNull();
     }
+  });
+
+  test("keeps well-typed neutral part metadata in the retained transcript", () => {
+    const valid = createHandoff();
+    const parts = [
+      { type: "tool-invocation", content: "c", toolState: "success", toolDurationMs: 2_400 },
+      {
+        type: "subagent",
+        content: "c",
+        subagentModelId: "gpt-5.6-sol",
+        subagentReasoningEffort: "high",
+      },
+    ];
+    const parsed = parseAgentHandoffSnapshot({
+      ...valid,
+      messages: [{ id: "m", role: "assistant", content: "c", createdAt: valid.createdAt, parts }],
+    });
+    expect(parsed?.messages[0]?.parts).toMatchObject(parts);
   });
 });
 

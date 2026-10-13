@@ -94,13 +94,14 @@ const HANDLED_SESSION_EVENTS: Record<AgentSessionEvent["type"], boolean> = {
   auto_retry_start: true,
   auto_retry_end: true,
   bash_execution_update: true,
+  // Read for its `aborted` verdict only (see `turnAborted`); never rendered.
+  agent_settled: true,
   // Turn and agent lifecycle. The bridge derives running/idle from its own
   // dispatch rather than from these, so rendering them would add rows for
   // boundaries the transcript already shows through the messages inside them.
   turn_start: false,
   agent_start: false,
   agent_end: false,
-  agent_settled: false,
   // Pi retrying its own summarization. Becomes a `retry` part in plan 03;
   // until then the compaction card is what the user sees.
   summarization_retry_scheduled: false,
@@ -152,6 +153,14 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "turn_end":
       if (!turnFramesWelcome(state)) break;
       applyTurnUsage(state, event.message);
+      break;
+    case "agent_settled":
+      // Pi 1.1: whether the run that just settled was aborted — by this
+      // bridge, by an extension's `ctx.abort()`, or by Pi itself. The turn's
+      // terminal path reads it, so an abort the bridge never asked for still
+      // ends the turn as cancelled rather than completed.
+      if (!turnFramesWelcome(state)) break;
+      if (event.aborted === true) state.turnAborted = true;
       break;
     case "queue_update":
       applyQueueUpdate(state, event);
@@ -416,6 +425,10 @@ function applyToolExecution(
 
   if (phase === "settled") {
     part.toolState = rendered.toolError === undefined ? "success" : "failure";
+    // Pi 1.1 measures `execute()` itself, for nested calls too. Never stamped
+    // on a running card, and absent when Pi did not run the tool.
+    const durationMs = providerDuration(event.durationMs);
+    if (durationMs !== undefined) part.toolDurationMs = durationMs;
     // The call is over, so its input has no further reader.
     state.toolInputs.delete(toolCallId);
   } else if (part.toolState === undefined) {
@@ -513,7 +526,14 @@ function appendToolResultImages(
  * would double-bill every thinking model.
  */
 function applyTurnUsage(state: SessionState, message: unknown): void {
-  if (!isObject(message) || !isObject(message.usage)) return;
+  if (!isObject(message)) return;
+  // Pi 1.1 times each model response (`AssistantMessage.durationMs`); summed,
+  // it is the turn's provider time, the neutral `apiDurationMs`.
+  const responseMs = providerDuration(message.durationMs);
+  if (responseMs !== undefined) {
+    state.currentTurnApiDurationMs = (state.currentTurnApiDurationMs ?? 0) + responseMs;
+  }
+  if (!isObject(message.usage)) return;
   const usage = message.usage;
   const turn: TurnUsage = { ...state.currentTurnUsage };
   add(turn, "inputTokens", usage.input);
@@ -661,34 +681,6 @@ function applyThinkingLevel(state: SessionState, level: unknown): void {
   state.revision += 1;
 }
 
-function retryNotice(event: JsonObject): string {
-  const attempt = typeof event.attempt === "number" ? event.attempt : 0;
-  const maxAttempts = typeof event.maxAttempts === "number" ? event.maxAttempts : 0;
-  const reason = nonBlank(event.errorMessage) ? event.errorMessage.trim() : "the request failed";
-  return attempt && maxAttempts
-    ? `Retrying (${attempt}/${maxAttempts}): ${reason}`
-    : `Retrying: ${reason}`;
-}
-
-/**
- * Render a transient run notice as a settled card.
- *
- * A retry is the one thing that happens *between* turns and still changes what
- * the user should expect, so it earns a line in the transcript rather than a
- * silent pause the tab cannot explain.
- */
-function applyNotice(state: SessionState, text: string): void {
-  const message = currentAssistantMessage(state);
-  closeTextParts(state);
-  const part = upsertToolPart(state, message, `notice:${nextPartOrdinal(message)}`);
-  part.toolName = "notice";
-  part.content = boundText(text, MAX_TOOL_TITLE_BYTES);
-  part.toolTitle = part.content;
-  part.toolState = "success";
-  chargeToolPart(state, part);
-  state.revision += 1;
-}
-
 /**
  * The assistant message this turn is writing into, created on first use.
  *
@@ -801,6 +793,13 @@ function chargeNewEntry(state: SessionState, entry: object): void {
 function chargeAppended(state: SessionState, before: string, after: string): void {
   if (after === before) return;
   chargeTranscript(state, jsonStringContentBytes(after.slice(before.length)));
+}
+
+/** A provider-measured duration, or undefined when it is not a usable one. */
+function providerDuration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : undefined;
 }
 
 function readText(value: unknown): string {

@@ -2392,7 +2392,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
         model: "haiku",
-        effort: undefined,
+        effort: "high",
         fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
@@ -2430,7 +2430,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
         model: "haiku",
-        effort: undefined,
+        effort: "high",
         fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
@@ -2471,7 +2471,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
         model: "haiku",
-        effort: undefined,
+        effort: "high",
         fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
@@ -2515,7 +2515,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
         model: "haiku",
-        effort: undefined,
+        effort: "high",
         fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
@@ -3461,6 +3461,25 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("hides the effort control for models without effort support", async () => {
     seedPane();
+    // Every fallback model reports effort since Haiku 5.5, so the no-effort
+    // model is seeded explicitly.
+    useClaudeStore.setState({
+      models: [
+        {
+          id: "sonnet",
+          name: "Sonnet",
+          description: "Model with effort",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high"],
+        },
+        {
+          id: "haiku",
+          name: "Haiku",
+          description: "Model without effort",
+          supportsEffort: false,
+        },
+      ] as ClaudeModel[],
+    });
 
     render(
       <ClaudeTmuxChatTab

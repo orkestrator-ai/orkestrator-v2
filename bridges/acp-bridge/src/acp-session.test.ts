@@ -2,36 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
-import { here, nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
-  // The fake agent records its own argv, so these assert the exact command line
-  // the bridge builds. They cannot prove the real CLIs accept those flags —
-  // `docs/development/upgrade-agents.md` carries that as a manual step for version bumps.
-  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
-    const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const recorded = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.trim().length > 0,
-    );
-    // One session spawns one agent. A second line would mean the child was
-    // restarted, which should fail as itself rather than as a JSON parse error
-    // on two concatenated records.
-    const lines = recorded.trim().split("\n");
-    expect(lines).toHaveLength(1);
-    return JSON.parse(lines[0]!) as string[];
-  }
-
   test("reports an ACP agent without session listing instead of showing an empty history", async () => {
     const bridge = await spawnBridge({ env: { FAKE_ACP_NO_LIST_SESSION: "1" } });
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
@@ -236,6 +209,51 @@ describe("ACP bridge", () => {
     // Absent, not an empty string: the renderer distinguishes "no model
     // recorded" from a model whose id happens to be blank.
     expect(assistant && "modelId" in assistant).toBe(false);
+  });
+
+  test("lays Grok's per-server MCP status reports over the listed inventory", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+    const session = `${bridge.base}/session/${created.id}`;
+    expect(
+      (
+        await nativeFetch(`${session}/prompt`, {
+          method: "POST",
+          headers: bridge.headers,
+          body: JSON.stringify({ prompt: "MCP_STATUS: report servers" }),
+        })
+      ).status,
+    ).toBe(202);
+    const mcp = await waitFor(
+      () =>
+        nativeFetch(`${session}/mcp`, { headers: bridge.headers }).then(
+          (response) => response.json() as Promise<{ servers: Array<{ status: string }> }>,
+        ),
+      (value) => value.servers.length === 3 && value.servers.every((s) => s.status !== "unknown"),
+    );
+    expect(mcp.servers).toEqual([
+      { id: "context7", name: "context7", status: "connected", transport: "stdio", actions: [] },
+      {
+        id: "linear",
+        name: "linear",
+        status: "needs-auth",
+        transport: "http",
+        error: "auth required",
+        actions: [],
+      },
+      {
+        id: "stripe",
+        name: "stripe",
+        status: "failed",
+        transport: "http",
+        error: "handshake failed",
+        actions: [],
+      },
+    ]);
+    expect(JSON.stringify(mcp)).not.toContain("secret");
   });
 
   test("keeps usage scoped to one turn and rehydrates the latest turn after restart", async () => {

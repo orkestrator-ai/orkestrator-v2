@@ -102,6 +102,10 @@ export interface EngineSubagentActivityItem {
   activity: "started" | "interacted" | "interrupted" | "completed";
   agent_thread_id: string;
   agent_path?: string;
+  /** Model the child was created on (codex 0.162+, `started` beats only). */
+  model?: string;
+  /** Reasoning effort the child was created with, when known. */
+  reasoning_effort?: string;
 }
 
 /** app-server `plan`: free-text plan the agent is drafting, streamed via deltas. */
@@ -384,6 +388,8 @@ export type EngineEvent = EngineEventMeta &
         threadId: string | null;
         turnId: string;
         item: EngineItem;
+        /** App-server's backend clock for the item's lifecycle end (completed only). */
+        completedAtMs?: number;
       }
     | {
         /**

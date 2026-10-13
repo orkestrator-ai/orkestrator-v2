@@ -1047,6 +1047,10 @@ export function sendJson(
 
 export function json(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent || response.destroyed) return;
+  // A 413 is answered before the request body has been read. Reusing the
+  // connection would leave those unread bytes in the keep-alive stream, and
+  // Bun 1.4.3 keeps server.close() waiting on such a connection.
+  if (status === 413) response.setHeader("connection", "close");
   const body = Buffer.from(JSON.stringify(value));
   const shouldCompress =
     body.byteLength >= 1024 &&

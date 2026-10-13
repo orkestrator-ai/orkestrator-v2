@@ -34,18 +34,25 @@ import {
 
 export interface RenderedToolCall {
   /**
-   * A generated image this call wrote to disk.
+   * An image this call left on disk: a generated image, or the screenshot a
+   * computer-use call took after its actions.
    *
    * The path only. Reading the file here would put a data URL in every
    * transcript snapshot; the renderer fetches it once, on demand.
    */
-  generatedImage?: { filePath: string; caption: string };
+  toolImage?: { filePath: string; caption: string; imageSource: "generated" | "viewed" };
   toolName: string;
   toolTitle?: string;
   toolArgs?: JsonObject;
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /**
+   * How long the call ran, as the SDK itself reported it in the result.
+   * Absent when the result carries no duration, and never set from the
+   * arguments alone, so a running call cannot acquire one.
+   */
+  toolDurationMs?: number;
   /** Present only for `task`, which launches a sub-agent. */
   subagent?: {
     description?: string;
@@ -54,6 +61,8 @@ export interface RenderedToolCall {
     agentId?: string;
     isBackground?: boolean;
     durationMs?: number;
+    /** The model the launch asked for. The SDK reports no effort for a child. */
+    modelId?: string;
   };
   /** Present only for `updateTodos`, whose list is session-wide. */
   todos?: TodoItem[];
@@ -94,6 +103,8 @@ const RENDERED_TOOL_KINDS: Record<ToolCall["type"], boolean> = {
   updateTodos: true,
   task: true,
   generateImage: true,
+  // SDK 1.0.37.
+  computerUse: true,
   // Screen recording has no transcript representation here: the artifact is a
   // video the bridge does not stage and the renderer cannot play inline. The
   // generic card at least reports that it ran.
@@ -153,6 +164,9 @@ export function renderToolCall(call: unknown, health?: RuntimeHealthRecorder): R
     case "generateImage":
       renderGenerateImage(rendered, args, result);
       break;
+    case "computerUse":
+      renderComputerUse(rendered, args, result);
+      break;
     default:
       renderGeneric(rendered, args, result);
       // A name the table holds as `false` is a documented generic render; a
@@ -191,6 +205,7 @@ function renderShell(rendered: RenderedToolCall, args: JsonObject, result: ToolR
   // reads like one transcript.
   const sections = [stdout, stderr && `[stderr]\n${stderr}`].filter(Boolean).join("\n");
   rendered.toolOutput = boundText(sections, MAX_TOOL_OUTPUT_BYTES);
+  rendered.toolDurationMs = readDuration(value.executionTime);
   if (exitCode !== undefined && exitCode !== 0) {
     rendered.toolError = `Command exited with status ${exitCode}`;
   }
@@ -403,14 +418,20 @@ function renderTask(rendered: RenderedToolCall, args: JsonObject, result: ToolRe
     model: readString(args.model),
   });
   const value = successValue(result);
+  const isBackground = value?.isBackground === true;
   rendered.subagent = {
     description,
     prompt: readRawText(args.prompt),
     subagentType,
     agentId: readString(value?.agentId) ?? readString(args.agentId),
-    isBackground: value?.isBackground === true,
+    isBackground,
     durationMs: readNumber(value?.durationMs),
+    modelId: boundTextOrUndefined(readString(args.model), MAX_TOOL_TITLE_BYTES),
   };
+  // A background launch returns as soon as the child starts, so its duration
+  // is the launch, not the work; on a card whose child is still running it
+  // would read as the child's runtime.
+  if (!isBackground) rendered.toolDurationMs = readDuration(value?.durationMs);
   if (value) {
     const suffix = readRawText(value.resultSuffix);
     if (suffix) rendered.toolOutput = boundText(suffix, MAX_TOOL_OUTPUT_BYTES);
@@ -435,11 +456,83 @@ function renderGenerateImage(
   // The path is what makes the image showable at all: the renderer reads it
   // lazily through the same container-aware fetch every file row uses.
   if (filePath) {
-    rendered.generatedImage = {
+    rendered.toolImage = {
       filePath,
       caption: readString(args.description) ?? "Generated image",
+      imageSource: "generated",
     };
   }
+}
+
+/** Distinct action kinds a computer-use title names before eliding the rest. */
+const COMPUTER_USE_TITLE_KINDS = 3;
+
+/**
+ * A batch of mouse, keyboard and screenshot actions on the user's desktop.
+ *
+ * The batch is one call, so the card summarizes it: the model's own
+ * description when it gave one, otherwise a count and the kinds of action it
+ * contained. A failure reports what ran just as a success does — the SDK's
+ * error carries the same log, duration and screenshot — and the uniform error
+ * branch in `renderToolCall` supplies its message.
+ */
+function renderComputerUse(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {
+  const description = boundTextOrUndefined(readString(args.description), MAX_TOOL_TITLE_BYTES);
+  const actions = Array.isArray(args.actions) ? args.actions : [];
+  rendered.toolTitle = boundText(description ?? computerUseSummary(actions), MAX_TOOL_TITLE_BYTES);
+  rendered.toolArgs = compact({
+    description,
+    actions: actions.length > 0 ? actions : undefined,
+  });
+  const value = successValue(result) ?? errorValue(result);
+  if (!value) return;
+  rendered.toolDurationMs = readDuration(value.durationMs);
+  const log = readRawText(value.log);
+  if (log) rendered.toolOutput = boundText(log, MAX_TOOL_OUTPUT_BYTES);
+  else if (result?.status === "success") rendered.toolOutput = computerUseOutcome(value);
+  const screenshotPath = readString(value.screenshotPath);
+  if (screenshotPath) {
+    rendered.toolImage = {
+      filePath: screenshotPath,
+      caption: description ?? "Screenshot after computer use",
+      imageSource: "viewed",
+    };
+  }
+}
+
+/** "Computer use · 5 actions (click, type, key…)" for an undescribed batch. */
+function computerUseSummary(actions: readonly unknown[]): string {
+  if (actions.length === 0) return "Computer use";
+  const kinds: string[] = [];
+  let elided = false;
+  for (const action of actions) {
+    const kind = isObject(action) ? readString(action.type) : undefined;
+    if (!kind || kinds.includes(kind)) continue;
+    if (kinds.length >= COMPUTER_USE_TITLE_KINDS) {
+      elided = true;
+      break;
+    }
+    kinds.push(kind);
+  }
+  const count = `${actions.length} ${actions.length === 1 ? "action" : "actions"}`;
+  const named = kinds.length > 0 ? ` (${kinds.join(", ")}${elided ? "…" : ""})` : "";
+  return `Computer use · ${count}${named}`;
+}
+
+/** The output line for a successful batch that returned no log. */
+function computerUseOutcome(value: JsonObject): string {
+  const count = readNumber(value.actionCount);
+  const cursor = isObject(value.cursorPosition) ? value.cursorPosition : undefined;
+  const x = readNumber(cursor?.x);
+  const y = readNumber(cursor?.y);
+  return [
+    count === undefined
+      ? "Actions completed"
+      : `${count} ${count === 1 ? "action" : "actions"} completed`,
+    x !== undefined && y !== undefined ? `cursor at (${x}, ${y})` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function renderGeneric(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {
@@ -458,6 +551,12 @@ function readResult(value: unknown): ToolResult {
 function successValue(result: ToolResult): JsonObject | undefined {
   if (result?.status !== "success") return undefined;
   return isObject(result.value) ? result.value : undefined;
+}
+
+/** A structured error payload, for tools whose failure still reports what ran. */
+function errorValue(result: ToolResult): JsonObject | undefined {
+  if (result?.status !== "error") return undefined;
+  return isObject(result.error) ? result.error : undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -542,6 +641,18 @@ function readRawText(value: unknown): string | undefined {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * A provider-reported duration in milliseconds.
+ *
+ * Zero is not a measurement: the SDK fills an unmeasured shell call's
+ * `executionTime` with `0`, and a card claiming "0 ms" would be a made-up
+ * number rather than an absent one.
+ */
+function readDuration(value: unknown): number | undefined {
+  const ms = readNumber(value);
+  return ms !== undefined && ms > 0 ? Math.round(ms) : undefined;
 }
 
 function readBoolean(value: unknown): boolean | undefined {

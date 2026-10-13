@@ -43,3 +43,13 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name merge-preview-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged in 0.8 seconds, exit 0.
 - **Failure evidence:** `/tmp/orkestrator-test-run.UPNQcn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; aggregate summary: `/tmp/orkestrator-test-run.UPNQcn/summary.json`.
 - **Hypothesis:** this repeats the existing intermittent queue-sampling failure; the isolated pass does not establish a root cause. No assertion, timeout or skip was changed.
+
+## Recurrence during dependency-review fixes (2026-10-13)
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`, with the GNU-tool `PATH` prefix from the testing guide.
+- **Worker configuration:** workspace/root/bridges/protocol used 2/3/2/1 slots; backend used one isolated Bun worker alongside the web package.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `819474` at line 279 (307.70 ms).
+- **Suite counts:** backend: 5,923 total, 5,906 passed, 15 skipped, 2 failed. Root/support, bridges and protocol passed.
+- **Isolated rerun:** `mise run test:logged -- --name preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed, exit 0, in 0.8 seconds.
+- **Evidence:** `orkestrator-test-run.lgjNH5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `summary.json` in the macOS temporary directory.
+- **Hypothesis:** same intermittent queue-sampling failure as the previous observations. This run does not establish the root cause. No assertion, timeout or skip was changed.

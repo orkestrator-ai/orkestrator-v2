@@ -36,6 +36,9 @@ interface LatestCollabAgentState {
    * terminal state.
    */
   weakTerminalActivity?: "completed" | "interrupted";
+  /** Model and effort app-server resolved when it created the child. */
+  model?: string;
+  reasoningEffort?: string;
 }
 
 interface CodexSubagentActivityItem {
@@ -44,6 +47,8 @@ interface CodexSubagentActivityItem {
   activity: "started" | "interacted" | "interrupted" | "completed";
   agent_thread_id: string;
   agent_path?: string;
+  model?: string;
+  reasoning_effort?: string;
 }
 
 export const CODEX_TIMELINE_ITEM_PREFIX = "item:";
@@ -100,6 +105,8 @@ function normalizeSubagentActivityItem(value: unknown): CodexSubagentActivityIte
   const agentThreadId = normalizeNonEmptyString(value.agent_thread_id);
   const activity = value.activity;
   const agentPath = normalizeNonEmptyString(value.agent_path);
+  const model = normalizeNonEmptyString(value.model);
+  const reasoningEffort = normalizeNonEmptyString(value.reasoning_effort);
   if (
     !id ||
     !agentThreadId ||
@@ -116,6 +123,8 @@ function normalizeSubagentActivityItem(value: unknown): CodexSubagentActivityIte
     activity,
     agent_thread_id: agentThreadId,
     ...(agentPath ? { agent_path: agentPath } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
   };
 }
 
@@ -270,6 +279,8 @@ function makeSubagentPart(
     subagentPrompt: latest?.spawnPrompt,
     subagentActions: appendFinalCollabMessage([], latest?.state?.message),
     subagentActionCount: 0,
+    ...(latest?.model ? { subagentModelId: latest.model } : {}),
+    ...(latest?.reasoningEffort ? { subagentReasoningEffort: latest.reasoningEffort } : {}),
     toolState:
       toToolState(latest?.state?.status) ??
       (latest?.weakTerminalActivity === "completed"
@@ -327,6 +338,10 @@ export function applyCodexCollabStateToSubagentParts(
       const interrupted = item.activity === "interrupted";
       const completed = item.activity === "completed";
       const terminalActivity = interrupted || completed;
+      // Only a `started` beat names the model, and it is fixed for the child's
+      // lifetime, so it is carried through every later beat and snapshot.
+      const model = item.model ?? previous?.model;
+      const reasoningEffort = item.reasoning_effort ?? previous?.reasoningEffort;
       if (item.activity !== "started" && !terminalActivity && !previous) continue;
       const previousToolState = toToolState(previous?.state?.status);
       const preserveTerminalState =
@@ -348,6 +363,8 @@ export function applyCodexCollabStateToSubagentParts(
         ...(terminalActivity && !preserveTerminalState
           ? { weakTerminalActivity: completed ? "completed" : "interrupted" }
           : {}),
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
       });
       continue;
     }
@@ -371,6 +388,8 @@ export function applyCodexCollabStateToSubagentParts(
         ...(previous?.weakTerminalActivity && !reportsStatus
           ? { weakTerminalActivity: previous.weakTerminalActivity }
           : {}),
+        ...(previous?.model ? { model: previous.model } : {}),
+        ...(previous?.reasoningEffort ? { reasoningEffort: previous.reasoningEffort } : {}),
       });
     }
   }
@@ -455,6 +474,10 @@ export function applyCodexCollabStateToSubagentParts(
     if (!latest) continue;
     part.subagentRole ??= latest.taskName;
     part.subagentPrompt ??= latest.spawnPrompt;
+    // The child's own rollout, when readable, names the model its latest turn
+    // actually ran on; the creation-time value fills in when it is not.
+    if (latest.model) part.subagentModelId ??= latest.model;
+    if (latest.reasoningEffort) part.subagentReasoningEffort ??= latest.reasoningEffort;
     part.toolState = toToolState(latest.state?.status) ?? part.toolState;
     // Resolve a terminal activity that no snapshot ever confirmed, but only for
     // a row still waiting on an outcome. An authoritative snapshot or terminal

@@ -45,9 +45,8 @@ describe("claudeModelParameters", () => {
   test("keeps the 1M-context toggle to Opus and Sonnet, resolved or aliased", () => {
     expect(ids({ id: "sonnet", resolvedModel: "claude-sonnet-5-5" })).toContain("context1m");
     expect(ids({ id: "default", resolvedModel: "claude-opus-5-5[1m]" })).toContain("context1m");
-    expect(ids({ id: "haiku", resolvedModel: "claude-haiku-4-5-20251001" })).not.toContain(
-      "context1m",
-    );
+    // Haiku 5.5 has a 1M window of its own; there is no beta to toggle.
+    expect(ids({ id: "haiku", resolvedModel: "claude-haiku-5-5" })).not.toContain("context1m");
     expect(ids({ id: "haiku" })[0]).toBe("thinking");
   });
 
@@ -60,6 +59,6 @@ describe("claudeModelParameters", () => {
     const offered = CLAUDE_FALLBACK_MODEL_CATALOG.filter(claudeModelSupportsUltracode).map(
       (model) => model.id,
     );
-    expect(offered).toEqual(["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet"]);
+    expect(offered).toEqual(["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet", "haiku"]);
   });
 });

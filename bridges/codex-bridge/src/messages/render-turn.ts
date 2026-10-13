@@ -258,8 +258,14 @@ export function effectiveItem(
       } as EngineItem;
     }
     // A final item with empty text can happen mid-stream; prefer the deltas.
-    case "agent_message":
-      return item.text.length > 0 ? item : ({ ...item, text: accumulator.textDelta } as EngineItem);
+    case "agent_message": {
+      const settled =
+        item.text.length > 0 ? item : ({ ...item, text: accumulator.textDelta } as typeof item);
+      // A response cut off before it said anything leaves nothing to show, and
+      // nothing will ever arrive to fill the empty row in.
+      if (accumulator.interrupted && !hasVisibleText(settled.text)) return null;
+      return settled;
+    }
     case "reasoning": {
       if (item.text.length > 0) return item;
       const reasoning = turn.effectiveReasoning(accumulator);
@@ -431,6 +437,10 @@ export async function loadSubagentPartsFromTranscripts(
     subagentPrompt: part.subagentPrompt,
     subagentActions: part.subagentActions as NormalizedPart[],
     subagentActionCount: part.subagentActionCount,
+    ...(part.subagentModelId ? { subagentModelId: part.subagentModelId } : {}),
+    ...(part.subagentReasoningEffort
+      ? { subagentReasoningEffort: part.subagentReasoningEffort }
+      : {}),
   }));
 }
 
@@ -454,6 +464,52 @@ function subagentEvidenceFingerprint(items: readonly EngineItem[]): string {
         : [];
     }),
   );
+}
+
+/**
+ * Item kinds that are tool calls. A plan, todo list or error also renders as a
+ * tool row, but it ran nothing, so a start-to-end gap is not a run time.
+ */
+const MEASURABLE_TOOL_ITEM_TYPES = new Set<EngineItem["type"]>([
+  "command_execution",
+  "file_change",
+  "mcp_tool_call",
+  "dynamic_tool_call",
+  "web_search",
+]);
+
+/**
+ * A finished tool call's run time from app-server's own lifecycle clocks, for
+ * the calls whose item carries no duration of its own. Both stamps come from
+ * the same backend clock (`item/started.startedAtMs`, `item/completed
+ * .completedAtMs`), so the gap is the provider's measurement, not ours.
+ */
+function measuredToolDurationMs(
+  item: EngineItem,
+  accumulator: ItemAccumulator | undefined,
+): number | undefined {
+  if (!accumulator?.completed || !MEASURABLE_TOOL_ITEM_TYPES.has(item.type)) return undefined;
+  const { startedAt, completedAt } = accumulator;
+  if (typeof startedAt !== "number" || typeof completedAt !== "number") return undefined;
+  return completedAt >= startedAt ? completedAt - startedAt : undefined;
+}
+
+function stampPart(
+  part: NormalizedPart,
+  createdAt: string | undefined,
+  measuredDurationMs: number | undefined,
+): NormalizedPart {
+  const stampCreatedAt = createdAt !== undefined && !part.createdAt;
+  const stampDuration =
+    measuredDurationMs !== undefined &&
+    part.type === "tool-invocation" &&
+    part.toolDurationMs === undefined;
+  if (!stampCreatedAt && !stampDuration) return part;
+  return {
+    ...part,
+    ...(stampCreatedAt ? { createdAt } : {}),
+    ...(stampDuration ? { toolDurationMs: measuredDurationMs } : {}),
+  };
 }
 
 export interface RenderedTurn {
@@ -621,9 +677,11 @@ export async function renderTurn(
             typeof accumulator?.startedAt === "number" && Number.isFinite(accumulator.startedAt)
               ? new Date(accumulator.startedAt).toISOString()
               : undefined;
-          const stampedParts = createdAt
-            ? itemParts.map((part) => (part.createdAt ? part : { ...part, createdAt }))
-            : itemParts;
+          const measuredDurationMs = measuredToolDurationMs(item, accumulator);
+          const stampedParts =
+            createdAt || measuredDurationMs !== undefined
+              ? itemParts.map((part) => stampPart(part, createdAt, measuredDurationMs))
+              : itemParts;
           if (accumulator?.completed) {
             options.state.completedItemParts.set(itemId, {
               source: accumulator.item,

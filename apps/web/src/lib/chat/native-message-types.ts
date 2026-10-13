@@ -62,6 +62,11 @@ export interface NativeBackgroundTask {
   /** Path of the task's full output in its environment's filesystem. */
   outputFile?: string;
   usage?: NativeAgentBackgroundTaskUsage;
+  /**
+   * The agent running the task, when it is one; see the protocol summary's
+   * `agentRole`. `main-session` is the conversation's own agent, backgrounded.
+   */
+  agentRole?: string;
 }
 
 /**
@@ -123,6 +128,13 @@ export interface NativeBasePart {
    * (for Claude: `rule`, `classifier`, `mode`…) when the provider says.
    */
   toolDenied?: { reason?: string; source?: string };
+  /**
+   * How long a settled tool call ran, as the provider reported it or as the
+   * adapter measured between the provider's own start and end events for that
+   * call. Absent when unknown, and never set while the call is still running:
+   * a live row's clock is `progress.elapsedMs`, not this.
+   */
+  toolDurationMs?: number;
   toolUseCount?: number;
   tokenCount?: number;
   tokenCountText?: string;
@@ -150,6 +162,12 @@ export interface NativeBasePart {
   subagentActionCount?: number;
   /** The model the child ran on, when the provider names one. */
   subagentModelId?: string;
+  /**
+   * The reasoning effort the child ran at, in the provider's own vocabulary
+   * (`low`, `high`, `xhigh`…), when the provider names one. Display-only: it
+   * is never mapped onto another provider's levels.
+   */
+  subagentReasoningEffort?: string;
   /**
    * How this sub-agent row was discovered.
    *

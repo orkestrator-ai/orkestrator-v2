@@ -1,5 +1,6 @@
 {
-  "$schema": "https://v2-10-12.turborepo.dev/schema.json",
+  "$schema": "https://v2-11-7.turborepo.dev/schema.json",
+  "agentGuidance": false,
   "cacheMaxAge": "7d",
   "cacheMaxSize": "10GB",
   "tasks": {

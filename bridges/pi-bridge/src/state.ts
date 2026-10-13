@@ -96,6 +96,12 @@ export interface BridgeToolPart {
    */
   parentTaskUseId?: string;
   /**
+   * How long the call ran, as Pi measured it (`tool_execution_end.durationMs`,
+   * Pi 1.1). Only on a settled call, and absent when Pi did not report one —
+   * a tool that never ran, or a result restored from an older session.
+   */
+  toolDurationMs?: number;
+  /**
    * What a shell call changed in the worktree, measured around it by
    * `command-changes.ts`. Only set when something changed; persisted with the
    * transcript and journaled so a resumed session gets it back.
@@ -233,6 +239,8 @@ export interface PersistedUsage {
   sessionToolCalls?: number;
   modelId?: string;
   durationMs?: number;
+  /** Time the last turn spent waiting on model responses; same scope as `durationMs`. */
+  apiDurationMs?: number;
   costUsd?: number;
   /** Whole-session context occupancy, which Pi reports directly. */
   contextTokens?: number;
@@ -353,13 +361,14 @@ export interface SessionState {
   /**
    * The abort path for a prompt Pi has been handed but has not yet accepted.
    *
-   * Pi 0.99's `session.prompt()` runs a preflight (input hooks, auth, a
-   * possible auto-compaction, `before_agent_start`) before it creates the run,
-   * and only the run has a cancel handle. `abort()` during preflight still
-   * cancels an auto-compaction in progress, so a cancel recorded then is
-   * applied through this at once instead of waiting for acceptance. Keyed by
-   * claim, process-local, and cleared when the prompt is accepted, refused or
-   * its abandoned startup finally settles.
+   * `session.prompt()` runs a preflight (input hooks, auth, then — inside Pi
+   * 1.2's `_startRun` — a possible auto-compaction and `before_agent_start`)
+   * before it reports acceptance, and only an accepted run has a cancel handle
+   * here. `abort()` during that last stage aborts the compaction and pre-empts
+   * the run at `agent_start`, so a cancel recorded then is applied through this
+   * at once instead of waiting for acceptance. Keyed by claim, process-local,
+   * and cleared when the prompt is accepted, refused or its abandoned startup
+   * finally settles.
    */
   promptStartup?: PromptStartupHandle;
   /** Monotonic count of turns dispatched in this process. */
@@ -404,6 +413,18 @@ export interface SessionState {
   uncheckedTranscriptBytes: number;
   usage?: PersistedUsage;
   currentTurnUsage?: TurnUsage;
+  /**
+   * Sum of `AssistantMessage.durationMs` over the current turn's model
+   * responses — the provider-side share of the turn's wall clock. Runtime-only.
+   */
+  currentTurnApiDurationMs?: number;
+  /**
+   * Pi's own verdict on the current turn's run: `agent_settled.aborted`
+   * (Pi 1.1). True whoever aborted it — this bridge, an extension's
+   * `ctx.abort()`, or Pi itself — so the turn ends as cancelled rather than
+   * completed. Runtime-only, reset when a turn is dispatched.
+   */
+  turnAborted?: boolean;
   turnStartedAt?: number;
   /** Steering and follow-up prompts Pi is holding for the running turn. */
   queue: { steering: string[]; followUp: string[] };

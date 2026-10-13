@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
   ONE_PIXEL_PNG,
-  here,
   nativeFetch,
   spawnBridge,
   stopChild,
@@ -15,33 +13,6 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
-  // The fake agent records its own argv, so these assert the exact command line
-  // the bridge builds. They cannot prove the real CLIs accept those flags —
-  // `docs/development/upgrade-agents.md` carries that as a manual step for version bumps.
-  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
-    const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const recorded = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.trim().length > 0,
-    );
-    // One session spawns one agent. A second line would mean the child was
-    // restarted, which should fail as itself rather than as a JSON parse error
-    // on two concatenated records.
-    const lines = recorded.trim().split("\n");
-    expect(lines).toHaveLength(1);
-    return JSON.parse(lines[0]!) as string[];
-  }
-
   for (const acpProvider of ["cursor", "grok"] as const) {
     test(`lists and resumes provider-owned ${acpProvider} sessions`, async () => {
       const directory = await temporaryDirectory();
@@ -1646,6 +1617,39 @@ describe("ACP bridge", () => {
     expect(catalog.models.map((model) => model.id)).toContain("grok-next");
   });
 
+  test("refuses an image a provider neither declares nor is known to read", async () => {
+    const workspace = await temporaryDirectory();
+    const stateDirectory = await temporaryDirectory();
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    await fs.writeFile(resolve(workspace, "shot.png"), ONE_PIXEL_PNG);
+    const bridge = await spawnBridge({
+      stateDirectory,
+      env: {
+        ACP_PROVIDER: "cursor",
+        CWD: workspace,
+        FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+        FAKE_ACP_IMAGE_CAPABILITY: "false",
+      },
+    });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+    const refused = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({
+        prompt: "DIRECT:describe it",
+        requestId: "image-refused",
+        attachments: [{ type: "image", path: "shot.png" }],
+      }),
+    });
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { error: string }).error).toContain("ACP image support");
+    expect(await fs.readFile(blocksFile, "utf8").catch(() => "")).toBe("");
+    await stopChild(bridge.child);
+  });
+
   for (const acpProvider of ["cursor", "grok"] as const) {
     test(`sends and rehydrates workspace images for ${acpProvider}`, async () => {
       const workspace = await temporaryDirectory();
@@ -1658,9 +1662,10 @@ describe("ACP bridge", () => {
         ACP_PROVIDER: acpProvider,
         CWD: workspace,
         FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
-        // Grok currently understates this capability but accepts the standard
-        // image block; keep that compatibility case explicit in the harness.
-        FAKE_ACP_IMAGE_CAPABILITY: "true",
+        // Real Grok declares `promptCapabilities.image: false` (1.0.52) but
+        // reads the standard image block, so the fake declares exactly that;
+        // the generic provider declares the capability honestly.
+        FAKE_ACP_IMAGE_CAPABILITY: acpProvider === "grok" ? "false" : "true",
       };
       const first = await spawnBridge({ stateDirectory, env: bridgeEnv });
       const created = (await nativeFetch(`${first.base}/session/create`, {

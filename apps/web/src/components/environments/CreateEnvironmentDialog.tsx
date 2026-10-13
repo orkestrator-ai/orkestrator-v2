@@ -2005,6 +2005,7 @@ export function CreateEnvironmentDialog({
                               size="icon"
                               onClick={() => removePortMapping(index)}
                               disabled={isLoading}
+                              aria-label="Remove port mapping"
                               className="col-start-4 row-start-2 h-8 w-8 sm:col-start-auto sm:row-start-auto"
                             >
                               <Trash2 className="h-4 w-4" />

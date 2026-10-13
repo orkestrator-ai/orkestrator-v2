@@ -1,14 +1,7 @@
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  cursorConfig,
-  grokConfig,
-  holdTurnFile,
-  isObject,
-  provider,
   state,
-  whenFileExists,
-  whenReleased,
   write,
   writeIgnoredCursorTaskMarker,
   type JsonObject,
@@ -1645,6 +1638,42 @@ export function handlePromptTools(
       id: message.id,
       result: { stopReason: "end_turn" },
     });
+    return true;
+  }
+  // Grok 1.0.52's MCP startup: the listing, then one `server_status` per
+  // server as each handshake settles, then a report for a name it never
+  // listed. `detail` is transport text the bridge must not copy.
+  if (prompt.startsWith("MCP_STATUS")) {
+    write({
+      jsonrpc: "2.0",
+      method: "_x.ai/mcp/servers_updated",
+      params: {
+        mcpServers: [
+          { name: "context7", source: "local", type: "stdio", command: "npx", args: ["secret"] },
+          { name: "linear", source: "local", type: "http", url: "https://mcp.example.test" },
+          { name: "stripe", source: "local", type: "http", url: "https://mcp.example.test/s" },
+        ],
+      },
+    });
+    const status = (name: string, value: string, reason: string, detail?: string) =>
+      write({
+        jsonrpc: "2.0",
+        method: "_x.ai/mcp/server_status",
+        params: {
+          sessionId: "fake-session",
+          name,
+          source: "local",
+          status: value,
+          reason,
+          ...(detail ? { detail } : {}),
+          tools: null,
+        },
+      });
+    status("context7", "ready", "initialized");
+    status("linear", "unavailable", "auth_required", "token secret expired");
+    status("stripe", "unavailable", "handshake_failed", "https://secret.example.test refused");
+    status("unlisted", "ready", "initialized");
+    write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
     return true;
   }
   // Standard ACP carriers Cursor's CLI schema already defines but does not

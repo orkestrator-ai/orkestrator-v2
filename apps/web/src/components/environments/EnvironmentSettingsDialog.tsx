@@ -1211,6 +1211,7 @@ export function EnvironmentSettingsDialog({
                       variant="ghost"
                       size="icon"
                       onClick={() => handleRemovePortMapping(index)}
+                      aria-label="Remove port mapping"
                       className="h-7 w-7"
                     >
                       <Trash2 className="h-4 w-4" />

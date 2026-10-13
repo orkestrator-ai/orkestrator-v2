@@ -17,7 +17,6 @@ const ENTRY_PACKAGES = [
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
-  "@earendil-works/pi-server",
 ] as const;
 
 /** Resolve a package by walking up `node_modules` from a starting directory. */
@@ -181,9 +180,10 @@ export async function stageRuntimeClosure(options: {
   }
 
   // An upstream package can import another bridge-owned runtime root without
-  // declaring it, as pi-coding-agent 0.85.0 did with pi-server. A top-level
-  // link is not visible from inside Bun's nested isolated store, so expose the
-  // explicit roots beside one another there too. Preserve any link Bun already
+  // declaring it, as pi-coding-agent 0.85.0 did with pi-server (removed
+  // upstream in 1.2.0). A top-level link is not visible from inside Bun's
+  // nested isolated store, so expose the explicit roots beside one another
+  // there too. Preserve any link Bun already
   // created for a declared dependency; it may intentionally select another
   // version.
   for (const requester of entries.values()) {

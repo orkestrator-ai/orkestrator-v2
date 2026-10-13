@@ -12,7 +12,7 @@
 # only each bridge's runtime output. Same pinned base (and glibc) as the final
 # stage, so vendored native helpers match the runtime.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73 AS bridge-build
+FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b AS bridge-build
 WORKDIR /opt/bridge-build
 # Manifests first: a source edit reuses the install layer; a lockfile, patch or
 # manifest edit invalidates it. Every workspace manifest is present so the
@@ -60,7 +60,7 @@ RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules
 # ---------------------------------------------------------------------------
 # Development runtime image.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73
+FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b
 
 ARG TZ
 ENV TZ="$TZ"
@@ -150,11 +150,11 @@ RUN mkdir -p /workspace /opencode-state /home/node/.claude /home/node/.codex /ho
 
 WORKDIR /workspace
 
-ARG GIT_DELTA_VERSION=0.19.2
+ARG GIT_DELTA_VERSION=0.20.1
 RUN ARCH=$(dpkg --print-architecture) && \
   case "$ARCH" in \
-    amd64) GIT_DELTA_SHA=ea4f0222950ee750a3d38dd80d03bce4cee07a3f63928fc47548383bcaf23093 ;; \
-    arm64) GIT_DELTA_SHA=0edc36cf514f1bd84becac3e94ee8ae9f8818c6a1f99f7b2ee67b362afa253d3 ;; \
+    amd64) GIT_DELTA_SHA=0683067a4cbbcc19b9fd2841253131d1b37ccfa724725098d811d4d0d9fcc25b ;; \
+    arm64) GIT_DELTA_SHA=6e08b734d611037eb9eb5db883cab7ac0a089216a9efdc1d2caac44319029c28 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
@@ -189,11 +189,11 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.292
-ARG CODEX_CLI_VERSION=0.160.1
-ARG OPENCODE_CLI_VERSION=1.18.35
-ARG GROK_BUILD_VERSION=1.0.46
-ARG PI_CLI_VERSION=1.0.4
+ARG CLAUDE_CLI_VERSION=2.1.296
+ARG CODEX_CLI_VERSION=0.162.1
+ARG OPENCODE_CLI_VERSION=1.19.0
+ARG GROK_BUILD_VERSION=1.0.52
+ARG PI_CLI_VERSION=1.2.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -205,8 +205,8 @@ ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 # Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=c8f888b451f5494a18f858fffb0e0b68f4e4baa9c241761c5f206884f0fa640d ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=f7f2ba59ee8aa94d388f9696575a32d20e71c2ee48def9f80fc693a60fec6c72 ;; \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \
@@ -217,6 +217,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   chmod 755 /home/node/.opencode/bin/opencode && \
   rm /tmp/opencode.tar.gz
 ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
+# Never offer /update: it would replace the pinned binary with OpenCode 2.
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
 # Install Codex CLI
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
@@ -228,8 +230,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=41626a53292324140b92556b9d42ff5542e3dcd04aff85eafb8689dd4adb44fc ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=45b0943e736f00a249b9cf02af2be9e0749d97c09a6f55cfcf3029a1a836f23e ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=1668414b047e1050a96d25fe17dfc3efe63190fbf66d8cc1c3de8633caf50d11 ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=fc32410b6883c15a39b9f33ec04a6bfb7d070b383e5dbad7efbc48c787e5050d ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
@@ -243,8 +245,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # packages/toolchain/src/manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=284c45dd28cf975a13cff6af34741dd0a0cdca6634e8bdfc0083ae7d452e86d6 ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=6a6bc66a6ac2750bd7ccd7f2109090463f564d447feefb10a5965f6b6aed2211 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=00fc36cffdebceea5a48230da62cf3fb463178f8fe185766652f96002a246847 ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=d8597ee3a2050592d38e67f6b609ab55139deed7e820020d910d84f17bb7abd6 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \
@@ -288,7 +290,7 @@ RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
 # namespaces (the default seccomp profile blocks them), so an explicit
 # `chromiumSandbox: true` dies with "Chromium sandboxing failed!". The container
 # is the isolation boundary.
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_VERSION=1.64.0
 # One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
 # root terminals, instead of a per-user ~/.cache/ms-playwright copy.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -364,11 +366,11 @@ RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
 # shared Bun install remains visible if a devcontainer mounts over the node
 # user's home. Keep both supported image architectures pinned to
 # config/mise-version.json.
-ARG MISE_VERSION=2026.9.11
+ARG MISE_VERSION=2026.10.9
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) MISE_ARCH=x64; MISE_SHA=02a19e4a5eda23cda916503ad09dbc608a249fe7a7d5686c5a74ff3a7ce3b7e0 ;; \
-    arm64) MISE_ARCH=arm64; MISE_SHA=d781ce1b4daad6ead469b0a57fef4bfb49c4e02025dc88111ff1bfaa8c90aad9 ;; \
+    amd64) MISE_ARCH=x64; MISE_SHA=7af2e3d798e9ddec142f5a968a18c3f33aa68d19aa8a4111302d4c7d04feb6fa ;; \
+    arm64) MISE_ARCH=arm64; MISE_SHA=9a58b5b72e58ed66f38d6d2550c2f6279d8c39884574c389a39a9c441a5580b9 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   MISE_TARBALL="mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" && \
@@ -378,12 +380,12 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xzf "/tmp/${MISE_TARBALL}" -C /opt/mise --strip-components=1 --no-same-owner && \
   ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
   chmod 755 /opt/mise/bin/mise && \
-  mise install --system bun@1.4.2 && \
-  BUN_INSTALL_DIR="$(mise where bun@1.4.2)" && \
+  mise install --system bun@1.4.3 && \
+  BUN_INSTALL_DIR="$(mise where bun@1.4.3)" && \
   test -x "$BUN_INSTALL_DIR/bin/bun" && \
   ln -sf "$BUN_INSTALL_DIR/bin/bun" /usr/local/bin/bun && \
-  test "$(/usr/local/bin/bun --version)" = "1.4.2" && \
-  mise exec bun@1.4.2 -- bun --version && \
+  test "$(/usr/local/bin/bun --version)" = "1.4.3" && \
+  mise exec bun@1.4.3 -- bun --version && \
   printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
   chown node:node /home/node/.zshrc && \
   rm -f "/tmp/${MISE_TARBALL}" && \
@@ -396,8 +398,8 @@ ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_SELF_UPDATE_AVAILABLE=false
 USER node
 WORKDIR /workspace
-RUN test "$(/usr/local/bin/bun --version)" = "1.4.2" \
- && test "$(/usr/local/bin/bunx --version)" = "1.4.2" \
+RUN test "$(/usr/local/bin/bun --version)" = "1.4.3" \
+ && test "$(/usr/local/bin/bunx --version)" = "1.4.3" \
  && printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
  && zsh -ic 'command -v mise >/dev/null && typeset -f _mise_hook >/dev/null && test "$ORKESTRATOR_MISE_TRUST_SMOKE" = trusted && mise --version' \
  && rm mise.toml

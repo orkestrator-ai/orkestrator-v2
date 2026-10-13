@@ -86,7 +86,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onBack}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onBack} aria-label="Back">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <h2 className="text-lg font-semibold text-foreground">

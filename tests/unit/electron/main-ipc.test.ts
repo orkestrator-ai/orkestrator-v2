@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import { registerMainIpc } from "../../../apps/desktop/electron/ipc";
+import {
+  MAX_CLIPBOARD_IMAGE_BYTES,
+  type ClipboardItemLike,
+} from "../../../apps/desktop/electron/clipboard";
 import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
 
 const CAPTURE_ID = "capture-0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -39,25 +43,48 @@ function createHarness(
       throw new Error("already resized");
     }),
     toDataURL: mock(() => "data:image/png;base64,resized"),
+    toPNG: mock(() => Buffer.from("resized-png")),
   };
   const clipboardImage = {
     isEmpty: mock(() => false),
     getSize: mock(() => ({ width: 16, height: 9 })),
     resize: mock(() => resizedClipboardImage),
     toDataURL: mock(() => "data:image/png;base64,abc"),
+    toPNG: mock(() => Buffer.from("png")),
   };
-  const nativeImage = { createFromDataURL: mock((dataUrl: string) => ({ dataUrl })) };
+  // The image decoded from a renderer data URL for clipboard writes.
+  const writtenImage = {
+    isEmpty: mock(() => false),
+    getSize: mock(() => ({ width: 2, height: 2 })),
+    resize: mock(() => writtenImage),
+    toDataURL: mock(() => "data:image/png;base64,def"),
+    toPNG: mock(() => Buffer.from([0x89, 0x50, 0x4e, 0x47])),
+  };
+  const nativeImage = {
+    createFromBuffer: mock((_buffer: Buffer) => clipboardImage),
+    createFromDataURL: mock((_dataUrl: string) => writtenImage),
+  };
   const appApi = {
     exit: mock(() => undefined),
     quit: mock(() => undefined),
     relaunch: mock(() => undefined),
   };
-  const clipboardApi = {
-    readText: mock(() => "copied"),
-    writeText: mock(() => undefined),
-    readImage: mock(() => clipboardImage),
-    writeImage: mock(() => undefined),
+  const clipboardPng = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+  const clipboardImageItem: ClipboardItemLike = {
+    types: ["text/plain", "image/png"],
+    getType: mock(async (_type: string): Promise<unknown> => clipboardPng),
   };
+  const clipboardApi = {
+    readText: mock(async () => "copied"),
+    writeText: mock(async (_text: string) => undefined),
+    read: mock(async (): Promise<ClipboardItemLike[]> => [clipboardImageItem]),
+    write: mock(async (_items: ClipboardItemLike[]) => undefined),
+  };
+  const createClipboardItem = mock((items: Record<string, Blob>) => ({
+    types: Object.keys(items),
+    getType: async (type: string): Promise<unknown> => items[type],
+    items,
+  }));
   const shellApi = {
     openExternal: mock(async () => undefined),
   };
@@ -145,6 +172,7 @@ function createHarness(
       on: (channel, listener) => syncHandlers.set(channel, listener),
     },
     clipboardApi,
+    createClipboardItem,
     shellApi,
     appApi,
     nativeImageApi: nativeImage,
@@ -198,8 +226,11 @@ function createHarness(
     window,
     setZoomFactor,
     clipboardApi,
+    clipboardImageItem,
+    createClipboardItem,
     clipboardImage,
     resizedClipboardImage,
+    writtenImage,
     nativeImage,
     appApi,
     shellApi,
@@ -244,11 +275,19 @@ describe("main IPC registration", () => {
       height: 9,
       dataUrl: "data:image/png;base64,abc",
     });
+    expect(harness.clipboardImageItem.getType).toHaveBeenCalledWith("image/png");
+    expect(harness.nativeImage.createFromBuffer).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
     await harness.invoke("orkestrator:clipboard:write-image", "data:image/png;base64,def");
     expect(harness.nativeImage.createFromDataURL).toHaveBeenCalledWith("data:image/png;base64,def");
-    expect(harness.clipboardApi.writeImage).toHaveBeenCalledWith({
-      dataUrl: "data:image/png;base64,def",
-    });
+    expect(harness.clipboardApi.write).toHaveBeenCalledTimes(1);
+    const writtenPayload = harness.createClipboardItem.mock.calls[0]![0]["image/png"]!;
+    expect(writtenPayload.type).toBe("image/png");
+    expect(new Uint8Array(await writtenPayload.arrayBuffer())).toEqual(
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+    );
+    expect(harness.clipboardApi.write.mock.calls[0]![0]).toEqual([
+      harness.createClipboardItem.mock.results[0]!.value,
+    ]);
 
     await harness.invoke("orkestrator:shell:open-external", "https://example.com/docs");
     expect(harness.shellApi.openExternal).toHaveBeenCalledWith("https://example.com/docs");
@@ -892,6 +931,70 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toBeNull();
   });
 
+  test("returns null for an unconverted TIFF payload without a PNG or JPEG representation", async () => {
+    const harness = createHarness();
+    const textItem: ClipboardItemLike = {
+      types: ["text/plain", "image/tiff"],
+      getType: mock(async () => new Blob(["text"])),
+    };
+    harness.clipboardApi.read.mockResolvedValueOnce([textItem]);
+
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toBeNull();
+    expect(textItem.getType).not.toHaveBeenCalled();
+    expect(harness.nativeImage.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  test("prefers PNG over JPEG and falls back to JPEG", async () => {
+    const harness = createHarness();
+    const jpegItem: ClipboardItemLike = {
+      types: ["image/jpeg"],
+      getType: mock(async () => new Blob([new Uint8Array([9])], { type: "image/jpeg" })),
+    };
+    harness.clipboardApi.read.mockResolvedValueOnce([jpegItem, harness.clipboardImageItem]);
+    await harness.invoke("orkestrator:clipboard:read-image");
+    expect(harness.clipboardImageItem.getType).toHaveBeenCalledWith("image/png");
+    expect(jpegItem.getType).not.toHaveBeenCalled();
+
+    harness.clipboardApi.read.mockResolvedValueOnce([jpegItem]);
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toMatchObject({
+      width: 16,
+      height: 9,
+    });
+    expect(jpegItem.getType).toHaveBeenCalledWith("image/jpeg");
+    expect(harness.nativeImage.createFromBuffer).toHaveBeenLastCalledWith(Buffer.from([9]));
+  });
+
+  test("refuses clipboard images over the byte bound before copying them", async () => {
+    const harness = createHarness();
+    const arrayBuffer = mock(async () => new ArrayBuffer(0));
+    const oversizedItem: ClipboardItemLike = {
+      types: ["image/png"],
+      getType: mock(async () => ({ size: MAX_CLIPBOARD_IMAGE_BYTES + 1, arrayBuffer })),
+    };
+    harness.clipboardApi.read.mockResolvedValueOnce([oversizedItem]);
+
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).rejects.toThrow(
+      "Clipboard image is too large to transfer",
+    );
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(harness.nativeImage.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  test("propagates clipboard read and write failures to the renderer", async () => {
+    const harness = createHarness();
+    harness.clipboardApi.readText.mockRejectedValueOnce(new Error("read failed"));
+    harness.clipboardApi.writeText.mockRejectedValueOnce(new Error("write failed"));
+    harness.clipboardApi.write.mockRejectedValueOnce(new Error("image write failed"));
+
+    await expect(harness.invoke("orkestrator:clipboard:read-text")).rejects.toThrow("read failed");
+    await expect(harness.invoke("orkestrator:clipboard:write-text", "x")).rejects.toThrow(
+      "write failed",
+    );
+    await expect(
+      harness.invoke("orkestrator:clipboard:write-image", "data:image/png;base64,def"),
+    ).rejects.toThrow("image write failed");
+  });
+
   test("resizes large clipboard images before sending them to the renderer", async () => {
     const harness = createHarness();
     harness.clipboardImage.getSize.mockReturnValueOnce({
@@ -981,8 +1084,12 @@ describe("main IPC registration", () => {
 
     await harness.invoke("orkestrator:clipboard:write-text", 42);
     expect(harness.clipboardApi.writeText).toHaveBeenCalledWith("");
-    await harness.invoke("orkestrator:clipboard:write-image", null);
+    harness.writtenImage.isEmpty.mockReturnValueOnce(true);
+    await expect(harness.invoke("orkestrator:clipboard:write-image", null)).rejects.toThrow(
+      "Expected an image data URL",
+    );
     expect(harness.nativeImage.createFromDataURL).toHaveBeenCalledWith("");
+    expect(harness.clipboardApi.write).not.toHaveBeenCalled();
 
     await harness.invoke("orkestrator:process:exit", "invalid");
     expect(harness.appApi.exit).toHaveBeenCalledWith(0);

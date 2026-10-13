@@ -186,8 +186,19 @@ describe("agent chat find controls", () => {
   });
 
   test("listens on the owner document instead of the ambient document", () => {
+    // happy-dom 21 no longer loads iframe pages by default; this test needs
+    // the iframe's own document, so it enables loading for its iframe only.
+    const settings = (
+      globalThis as unknown as { happyDOM: { settings: { enableIframePageLoading: boolean } } }
+    ).happyDOM.settings;
+    const previous = settings.enableIframePageLoading;
+    settings.enableIframePageLoading = true;
     const iframe = document.createElement("iframe");
-    document.body.append(iframe);
+    try {
+      document.body.append(iframe);
+    } finally {
+      settings.enableIframePageLoading = previous;
+    }
     const ownerDocument = iframe.contentDocument!;
     const container = ownerDocument.createElement("div");
     ownerDocument.body.append(container);

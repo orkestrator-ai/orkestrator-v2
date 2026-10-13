@@ -59,6 +59,12 @@ export interface NormalizedPart {
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
   /**
+   * How long a finished tool call ran: app-server's own measurement when it
+   * reports one, otherwise the gap between its start and completion events.
+   * Absent while the call runs and whenever neither is known.
+   */
+  toolDurationMs?: number;
+  /**
    * What a shell command changed in its worktree, measured around it (see
    * `sessions/command-changes.ts`). Set only on `bash` rows that changed
    * something; the renderer shows it as the row's +N −M badge.
@@ -70,6 +76,10 @@ export interface NormalizedPart {
   subagentPrompt?: string;
   subagentActions?: NormalizedPart[];
   subagentActionCount?: number;
+  /** The model the child ran on, when the provider names one. */
+  subagentModelId?: string;
+  /** The reasoning effort the child ran with, when the provider names one. */
+  subagentReasoningEffort?: string;
   /** Context occupancy before a compaction boundary. */
   compactedTokensBefore?: number;
   /** Where an `image` part came from. */

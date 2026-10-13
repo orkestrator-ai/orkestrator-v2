@@ -217,6 +217,7 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     toolOutput: asString(raw.toolOutput),
     toolError: asString(raw.toolError),
     toolDiff: asToolDiff(raw.toolDiff),
+    toolDurationMs: asNumber(raw.toolDurationMs),
     toolUseCount: asNumber(raw.toolUseCount),
     tokenCount: asNumber(raw.tokenCount),
     tokenCountText: asString(raw.tokenCountText),
@@ -250,6 +251,8 @@ function toNativePart(value: unknown): NativeMessagePart | null {
         subagentPrompt: asString(raw.subagentPrompt),
         subagentActions: toNativeParts(raw.subagentActions),
         subagentActionCount: asNumber(raw.subagentActionCount),
+        subagentModelId: asString(raw.subagentModelId),
+        subagentReasoningEffort: asString(raw.subagentReasoningEffort),
       };
     case "tool-group": {
       const parts = toNativeParts(raw.parts);

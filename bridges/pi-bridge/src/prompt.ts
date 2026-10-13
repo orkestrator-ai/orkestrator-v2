@@ -107,12 +107,17 @@ export function setStartupTimeoutForTests(timeoutMs?: number): void {
 /**
  * Apply a cancel to a prompt Pi has not accepted yet.
  *
- * Pinned SDK 1.0.4 (`dist/core/agent-session.js`): `abort()` calls
- * `abortCompaction()`, which aborts the auto-compaction `prompt()` may be
- * running in preflight (`_checkCompaction`), and waits for idle. It cannot
- * pre-empt the run itself — `_runAgentPrompt` resets `_agentRunAbortRequested`
- * when the run starts — so the dispatcher still aborts on acceptance. Concurrent
- * cancels share one abort in flight. Never rejects.
+ * Pinned SDK 1.2.0 (`dist/core/agent-session.js`): preflight has two stages.
+ * Before `_startRun` (input handlers, auth) no run is active, so `abort()`
+ * reaches nothing and returns at once. `_startRun` then marks the run active
+ * and resets `_agentRunAbortRequested` *before* `_prepareRun` (auto-compaction,
+ * `before_agent_start`); an `abort()` from there on sets the flag, aborts the
+ * compaction, pre-empts the run at `agent_start` and waits until it settles
+ * (`agent_settled` with `aborted: true`). Acceptance (`preflightResult`) is
+ * reported only after `_prepareRun`, so the dispatcher still aborts on
+ * acceptance to cover a cancel from the first stage, whose request the reset
+ * erased. Not awaited here, because an abort may now wait out a whole run.
+ * Concurrent cancels share one abort in flight. Never rejects.
  */
 export function abortPromptStartup(state: SessionState, claim: number | undefined): void {
   const startup = state.promptStartup;
@@ -133,8 +138,9 @@ export function abortPromptStartup(state: SessionState, claim: number | undefine
  * Synchronous up to the returned promise, so the record lands before any
  * await: parked approvals are denied (and a hook reached meanwhile is refused,
  * see `requestToolApproval`), a prompt still preparing settles at its next
- * boundary, one in Pi's preflight has its auto-compaction aborted and its run
- * aborted on acceptance, and an accepted run is aborted through its handle.
+ * boundary, one in Pi's preflight is aborted at once (stopping an
+ * auto-compaction and pre-empting the starting run) and again on acceptance,
+ * and an accepted run is aborted through its handle.
  * `cancel` is that handle's operation — it may reject (the abort failed) or
  * hang — and is absent when there is no accepted run to wait on.
  */
@@ -194,6 +200,9 @@ export async function dispatchPrompt(
   const commandRun = input.extensionCommand
     ? beginCommandRun(state, input.extensionCommand)
     : undefined;
+  // Pi's verdict and provider time belong to this turn's run alone.
+  state.turnAborted = undefined;
+  state.currentTurnApiDurationMs = undefined;
   let run: Promise<void>;
   try {
     run = session.prompt(text, {
@@ -312,14 +321,16 @@ export async function dispatchPrompt(
   };
   state.cancelTurn = cancelTurn;
 
-  // A cancel that arrived while Pi was still in preflight had no run to abort,
-  // so it was recorded against this claim (and `abortPromptStartup` already
-  // stopped any auto-compaction). `_runAgentPrompt` resets the abort request
-  // when the run starts, but `preflightResult(true)` is called synchronously
-  // just before the run is created, so by the time this continuation runs the
-  // run exists and `abort()` stops it. Not awaited: the route's acknowledgement
-  // must not wait on the abort, and `followRun` observes the settlement.
-  // A permanent close that landed during preflight is treated the same way.
+  // A cancel that arrived while Pi was still in preflight had no handle here,
+  // so it was recorded against this claim and applied through
+  // `abortPromptStartup`. One that landed before `_startRun` was erased when
+  // the run reset its abort flag; `preflightResult("started")` is called
+  // synchronously once the run's messages are prepared, while the run is
+  // active and before `agent_start`, so aborting now pre-empts it before any
+  // model request (and is harmless when the startup abort already did). Not
+  // awaited: the route's acknowledgement must not wait on the abort, and
+  // `followRun` observes the settlement. A permanent close that landed during
+  // preflight is treated the same way.
   if (cancelRequestedFor(state, claim) || (claim !== undefined && isSessionClosed(state))) {
     void cancelTurn("user").catch(() => undefined);
   }
@@ -423,6 +434,8 @@ function abandonStartup(
         state.openTextParts.clear();
         state.toolInputs.clear();
         state.currentTurnUsage = undefined;
+        state.currentTurnApiDurationMs = undefined;
+        state.turnAborted = undefined;
         state.turnStartedAt = undefined;
       }
       if (input.requestId) {
@@ -519,13 +532,18 @@ function afterTurnSettled(state: SessionState): void {
 }
 
 function finishTurn(state: SessionState, session: AgentSession, input: DispatchInput): void {
+  // Pi's own verdict, not whether this bridge asked: an extension's
+  // `ctx.abort()` or Pi's own abort cancels a run the bridge never touched.
+  const cancelled = state.turnAborted === true;
   settleTurn(state, session);
-  // A cancelled turn is not an error: the user asked for it, and the partial
-  // transcript is the honest record of what ran.
+  // A cancelled turn is not an error: someone asked for it, and the partial
+  // transcript is the honest record of what ran. It is not a completed one
+  // either — whatever text it stopped on is not its answer.
   state.status = "idle";
   state.error = undefined;
   recordUsage(state, input);
-  recordStructuredOutput(state, session, input, true);
+  if (cancelled) recordInterruptedOutput(state, input, "The Pi turn was cancelled");
+  else recordStructuredOutput(state, session, input, true);
   journal(state, input.requestId, "completed");
   state.revision += 1;
   boundTranscript(state);
@@ -552,25 +570,28 @@ export function settleCancelledBeforeSend(
   state.status = "idle";
   state.error = undefined;
   state.dispatching = false;
-  if (input.schema && input.requestId) {
-    setStructuredResult(state, input.requestId, {
-      ok: false,
-      provider: PROVIDER,
-      requestId: input.requestId,
-      error: {
-        code: "interrupted",
-        message: "The turn was cancelled before it was sent to Pi",
-        provider: PROVIDER,
-        retryable: true,
-      },
-    });
-  }
+  recordInterruptedOutput(state, input, "The turn was cancelled before it was sent to Pi");
   journal(state, input.requestId, "completed");
   releasePromptClaim(state, claim);
   state.revision += 1;
   boundTranscript(state);
   schedulePersist();
   afterTurnSettled(state);
+}
+
+/** Settle a schema-constrained turn that was cancelled: retryable, never parsed. */
+function recordInterruptedOutput(
+  state: SessionState,
+  input: Pick<DispatchInput, "requestId" | "schema">,
+  message: string,
+): void {
+  if (!input.schema || !input.requestId) return;
+  setStructuredResult(state, input.requestId, {
+    ok: false,
+    provider: PROVIDER,
+    requestId: input.requestId,
+    error: { code: "interrupted", message, provider: PROVIDER, retryable: true },
+  });
 }
 
 function failTurn(
@@ -649,6 +670,7 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       }
     : state.currentTurnUsage;
   const elapsed = state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined;
+  const apiDurationMs = state.currentTurnApiDurationMs;
   const context = readContextUsage(state);
   const stats = readSessionStats(state);
   const sessionTokens =
@@ -693,6 +715,7 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(turn.reasoningTokens === undefined ? {} : { reasoningTokens: turn.reasoningTokens }),
       totalTokens,
       ...(elapsed === undefined ? {} : { durationMs: elapsed }),
+      ...(apiDurationMs === undefined ? {} : { apiDurationMs }),
       ...(toolCalls === undefined ? {} : { toolCalls }),
       ...(input.requestId ? { requestId: input.requestId } : {}),
       ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
@@ -709,12 +732,15 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
         : {}),
       ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
+      ...(apiDurationMs !== undefined ? { apiDurationMs } : {}),
       ...context,
       ...(sessionCost === undefined ? readCost(state) : { costUsd: sessionCost }),
       updatedAt: new Date().toISOString(),
     };
   }
   state.currentTurnUsage = undefined;
+  state.currentTurnApiDurationMs = undefined;
+  state.turnAborted = undefined;
   state.turnStartedAt = undefined;
 }
 

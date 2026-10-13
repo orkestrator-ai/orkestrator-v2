@@ -3,10 +3,10 @@ import { runCommand } from "./shell.js";
 
 export type ProcessTreeSignal = "SIGTERM" | "SIGKILL";
 
-export type ProcessTreeChild = Pick<
-  ChildProcessWithoutNullStreams,
-  "pid" | "exitCode" | "signalCode" | "kill"
->;
+export type ProcessTreeChild = Pick<ChildProcessWithoutNullStreams, "pid" | "exitCode" | "kill"> & {
+  /** Bun reports a signal with no name (e.g. a Linux real-time signal) by its number. */
+  readonly signalCode: NodeJS.Signals | number | null;
+};
 
 export type ProcessTreeRuntime = {
   listDescendants: (rootPid: number) => Promise<number[]>;

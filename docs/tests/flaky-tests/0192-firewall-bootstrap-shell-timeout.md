@@ -40,3 +40,39 @@
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FOIo01/root-and-agent-support-tests.log.gz`.
 - **Hypothesis:** another shell-fixture case exhausted the same outer deadline
   during aggregate validation and passed unchanged alone; root cause unconfirmed.
+
+
+## Recurrence during dependency-review validation (2026-10-13)
+
+- **Original command:** the same GNU-tool `PATH` prefix with
+  `mise run test:logged -- --name review-full-after-fixture-fix -- mise run test`.
+- **Worker configuration:** three isolated root workers; workspace and bridge groups ran concurrently under the aggregate runner.
+- **Test:** `container firewall policy > policy 2 narrows host access to named ports and records what it applied`.
+- **Failure:** expected exit code `0`, received `null` at line 332; outer five-second timeout at 5,004.28 ms.
+- **Root-suite counts:** 5,061 total, 5,036 passed, 24 skipped, 1 failed (192.17 seconds).
+- **Isolated rerun:** the same GNU-tool `PATH` prefix with
+  `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`
+  passed unchanged in 12.6 seconds, exit 0.
+- **Evidence:** `orkestrator-test-run.DSYU0h/root-and-agent-support-tests.log.gz` and `summary.json` in the macOS temporary directory.
+- **Hypothesis:** repeats the previously recorded policy-2 shell-fixture deadline under aggregate load. Root cause remains unconfirmed; no assertion, timeout or skip was changed.
+
+## Recurrence during merge conflict validation (2026-10-13)
+
+- **Original command:** the GNU-tool `PATH` prefix from the testing guide with
+  `mise run test:logged -- --name merge-suite -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol used 2/3/2/1 slots;
+  root files used three isolated Bun workers. Browser validation also ran.
+- **Root-suite counts:** 5,073 total, 5,044 passed, 24 skipped, 5 failed and
+  1 additional error across 256 files in 238.08 seconds. Workspace, bridges,
+  protocol and browser groups passed.
+- **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.6mi44l/root-and-agent-support-tests.log.gz`
+  and the adjacent `summary.json`.
+- **Test:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache`
+  expected exit code `0`, received `null`, and exceeded its five-second
+  deadline at 5,010.75 ms.
+- **Isolated rerun:** the same GNU-tool PATH with
+  `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0) in 8.7 seconds.
+- **Hypothesis:** the aggregate deadline failures match earlier observations;
+  unchanged owning files pass alone. Contention may contribute, but the root
+  cause remains unconfirmed. No assertion, timeout or skip was changed.

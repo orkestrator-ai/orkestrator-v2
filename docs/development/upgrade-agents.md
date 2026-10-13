@@ -7,15 +7,15 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.292`, Anthropic SDK `0.131.0`, CLI `2.1.292` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.160.1` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.35` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.36` (latest stable, verified 2026-10-07) |
-| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.46` (stable channel; verified 2026-10-07) |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` is pinned and vendored but no longer imported by the SDK | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.0.4` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.296`, Anthropic SDK `0.133.0`, CLI `2.1.296` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.162.1` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.0` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.37` (latest stable, verified 2026-10-13) |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.52` (stable channel; verified 2026-10-13), ACP SDK `1.8.0` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.2.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-10-07.
+Verified against upstream stable releases on 2026-10-13.
 
 ## What is enforced, and what is not
 
@@ -62,7 +62,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.36 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.0.37 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -72,8 +72,8 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.0.36 those are `aE0`,
-`Xn0` and `dE0` (1.0.32: `LA0`, `Im0`, `BA0`). Run the Cursor
+`serverStream;clientStream;controlledExecManager`. In 1.0.37 those are `eR0`,
+`Er0` and `aR0` (1.0.36: `aE0`, `Xn0`, `dE0`). Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.
@@ -544,6 +544,27 @@ hermetic `codex exec` exception.
      bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
    ```
 
+   Any canary that runs a model turn needs `codex-code-mode-host` beside the
+   binary `CODEX_PROTOCOL_BINARY` names (step 3's companion). Without it code
+   mode fails closed, no tool is ever dispatched, and the approval canary
+   fails for a reason unrelated to approvals.
+
+   Codex 0.162 turned `features.instant_interrupt` on by default: `turn/steer`
+   cuts the in-flight answer off instead of waiting for it. The cut-off agent
+   message gets `item/started` and deltas but never `item/completed`, and
+   `thread/read` omits it. `TurnAccumulator` settles it as `interrupted` (kept
+   visible, never a structured-output candidate) when the next agent message
+   starts or the turn ends, so the fragment is shown live but is absent after a
+   re-attach rehydrates from history. A separately gated canary pins that
+   shape; it spends one short model turn:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     RUN_LIVE_CODEX_STEER_CANARY=1 \
+     bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
+   ```
+
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns
    `list_turns is not supported yet` until the first user message indexes the
@@ -657,6 +678,19 @@ contract.
 7. Smoke-test both UI native chat and a build-pipeline OpenCode phase. Exercise
    streaming, question and permission rehydration, abort, resume, and session
    status because those use different portions of the v2 client.
+8. Confirm the pinned binary still honours `OPENCODE_DISABLE_AUTOUPDATE`
+   (`grep -a -c -F OPENCODE_DISABLE_AUTOUPDATE <binary>`, and the release's
+   upstream `cli/upgrade.ts`). Since 1.19 the TUI checks for
+   updates and its `/update` dialog installs over the running binary,
+   including OpenCode 2 through `opencode upgrade --major`; the container's
+   `~/.opencode/bin` reads as a curl install, so the in-place upgrade would
+   succeed and break every native session (2.x has no legacy HTTP API). The
+   variable is set by `OPENCODE_PINNED_RUNTIME_ENV`
+   (`packages/protocol/src/terminal-agent-launch.ts`) on the terminal-tab
+   command and the local `opencode serve` spawn, and by an `ENV` in
+   `docker/Dockerfile`. It suppresses the check and the notice; `/update`
+   stays reachable from the command palette as a deliberate user action.
+   1.x now ships from upstream's `v1` branch; see `docs/todo/opencode-v2.md`.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -669,15 +703,16 @@ Pi is pinned in three places that must move together, because the SDK the
 bridge drives and the `pi` binary a terminal tab runs are the same program
 published two ways:
 
-- `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent`, the two
-  packages it exposes types from (`@earendil-works/pi-ai` and
-  `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
-  `0.85.0` public entry point imported without declaring. Since `0.85.1` no
-  published SDK file imports it — as of `1.0.4` pi-coding-agent lists it only
-  as a devDependency — so nothing at runtime needs it. It stays pinned and
-  vendored as a runtime root anyway: dropping it means changing the vendor
-  script, its test and the drift test together, for no behavioural gain. Check
-  on each bump that the SDK still does not import it.
+- `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent` and the
+  two packages it exposes types from (`@earendil-works/pi-ai` and
+  `@earendil-works/pi-agent-core`). `@earendil-works/pi-server`, which the
+  `0.85.0` entry point imported without declaring, is no longer pinned or
+  vendored: no published SDK file had imported it since `0.85.1`, and Pi
+  `1.2.0` removed the experimental server stack and stopped publishing it.
+  Check on each bump that every `@earendil-works/*` package an SDK file
+  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.2.0`) is a declared
+  dependency of `pi-coding-agent`, which is what the vendor step follows —
+  the `0.85.0` failure mode was an undeclared import.
 - `packages/toolchain/src/manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.
@@ -687,14 +722,14 @@ Dockerfile pins the same archive digests the manifest does.
 
 ### Procedure
 
-1. Bump the four SDK dependencies in `bridges/pi-bridge/package.json`, then
+1. Bump the three SDK dependencies in `bridges/pi-bridge/package.json`, then
    `bun install`.
 
-   Pin all four SDK packages at the **CLI's** version even when npm has a newer
-   patch for some of them: `pi-ai`, `pi-agent-core` and `pi-server` sometimes
-   publish an extra patch (0.99.1) with no matching `pi-coding-agent` or `pi`
-   release, and `pi-coding-agent` depends on them by `^` range. An exact pin keeps
-   the SDK and the shipped binary on the set the release was tested with.
+   Pin all three SDK packages at the **CLI's** version even when npm has a newer
+   patch for some of them: `pi-ai` and `pi-agent-core` sometimes publish an
+   extra patch (0.99.1) with no matching `pi-coding-agent` or `pi` release, and
+   `pi-coding-agent` depends on them by `^` range. An exact pin keeps the SDK
+   and the shipped binary on the set the release was tested with.
 2. Bump `PINNED_TOOLCHAIN_VERSIONS.pi` and `ARG PI_CLI_VERSION` to the same
    version.
 3. Refresh the four artifact records. Unlike the single-file agents, Pi ships a
@@ -720,7 +755,14 @@ Dockerfile pins the same archive digests the manifest does.
 5. Review `bridges/pi-bridge/src/translate.ts` against the SDK's
    `AgentSessionEvent` union. This is the compatibility surface: a new event
    type degrades to "not rendered", which is safe but silent, so a bump that
-   adds one is a bump that may quietly stop showing something.
+   adds one is a bump that may quietly stop showing something. Since Pi 1.1 the
+   bridge also reads three provider measurements here, so check they still
+   exist: `agent_settled.aborted` (a run anyone aborted — the bridge, an
+   extension's `ctx.abort()`, Pi itself — ends the turn cancelled, with a
+   retryable `interrupted` structured result, instead of completed),
+   `tool_execution_end.durationMs` (the card's `toolDurationMs`, nested
+   `ctx.executeTool()` calls included) and `AssistantMessage.durationMs`
+   (summed per turn into the usage row's `apiDurationMs`).
 6. Review `src/models.ts` against `Model` and `ThinkingLevel`. A new thinking
    level that is not in `THINKING_LEVELS` is simply never offered. Remember the
    rule is asymmetric: `xhigh` and `max` need an *explicit* mapping, while every
@@ -732,7 +774,14 @@ Dockerfile pins the same archive digests the manifest does.
      `preflightResult(disposition)` with `started`, `queued` or `handled` (0.99;
      0.87 passed a boolean and also called it with `false` before rethrowing). It
      is never called for a refusal, so refusal is only the rejected promise.
-     `prompt.ts` treats any disposition as accepted.
+     `prompt.ts` treats any disposition as accepted. Since 1.2, `started` is
+     reported from inside `_startRun`, after `_prepareRun` (auto-compaction,
+     `before_agent_start`): the session already counts as busy there, an
+     `abort()` in that window sets `_agentRunAbortRequested`, pre-empts the run
+     at `agent_start` and waits for it to settle, while an `abort()` earlier in
+     preflight (input handlers, auth) reaches nothing and is erased when
+     `_startRun` resets the flag. That is why the bridge aborts both at once and
+     on acceptance, and never awaits the startup abort.
    - **Steer and follow-up.** `steer()` and `followUp()` resolve to
      `queued` or `handled`. `handled` means an extension's `input` handler
      consumed the instruction, so no delivery event will follow; `handleSteer`
@@ -890,11 +939,25 @@ Upstream reference: [`@cursor/sdk` on npm](https://www.npmjs.com/package/@cursor
 ### Where the CLI contract lives
 
 This section covers the `grok` CLI the ACP bridge spawns. It is pinned in
-`packages/toolchain/src/manifest.ts` and `docker/Dockerfile` and has no
-SDK: the ACP bridge speaks ACP with the CLI over stdio. That makes its
+`packages/toolchain/src/manifest.ts` and `docker/Dockerfile`. There is no
+Grok SDK: the ACP bridge speaks ACP with the CLI over stdio. That makes its
 **command-line flags a versioned contract**, and it is the part of an upgrade
 nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
+
+The bridge does pin the protocol's own package,
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`1.8.0`). It
+supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
+still hand-written over the bridge's own JSON-RPC loop.
+`tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
+`tracksCli: false`, because it versions the protocol, not Grok. When bumping
+it, diff `dist/schema/types.gen.d.ts` against the previous release for changed
+session capabilities, `session/*` request shapes, prompt capabilities, stop
+reasons and session-update variants, then run the bridge typecheck and suite.
+1.5.1 → 1.8.0 changed only unstable surface the bridge does not use (MCP over
+ACP was reshaped; `subagent_update`, `session_message` and state updates were
+added); `session/close`, `session/resume`, `session/list`, `promptCapabilities`
+and `StopReason` are unchanged.
 
 The bridge launches Grok with `--always-approve agent stdio`.
 
@@ -915,8 +978,8 @@ grok --help | rg -- '--always-approve'
 (sleep 4 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
-# (typed `headers` array, `additionalDirectories: []`). 1.0.44 and 1.0.46
-# answer both. Run it signed in (`grok login`): signed out, `session/new` ends
+# (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
+# 1.0.52 answer both. Run it signed in (`grok login`): signed out, `session/new` ends
 # in `Authentication required`, and once signed in `authMethods[0]` (the id the
 # bridge authenticates with) is `cached_token` rather than `grok.com`.
 ```
@@ -926,6 +989,42 @@ Run these against the pinned version, not whatever is on `PATH` — compare
 `GROK_BUILD_VERSION` first. `--always-approve` is deliberate: an ACP tab is an
 interactive session and matches the Claude bridge's local bypass-permissions
 default.
+
+### What Grok declares versus what it does
+
+Re-check these against the real binary on a bump; the fake agents in the suite
+encode them and cannot notice a change. Last verified against 1.0.52.
+
+- **Images.** `initialize` answers `promptCapabilities.image: false`, but Grok
+  reads an inline ACP `image` block (a red PNG sent with no path in the text
+  was named correctly). The bridge refuses image attachments a provider does
+  not declare, so Grok is credited with the capability in
+  `undeclaredPromptCapabilities` (`bridges/acp-bridge/src/acp-provider-config.ts`).
+  Drop that entry once Grok declares `image: true` itself; if Grok ever stops
+  reading the block, remove it and set Grok's `attachments.images` to `false`
+  in `nativeAgentCapabilities`.
+- **`session/close`.** Advertised in `sessionCapabilities`. It answers
+  `_meta["x.ai/closeOutcome"]: "closed"` (`"notResident"` for an unknown id)
+  and emits `_x.ai/sessions/changed` with the id under `removed`, but the
+  conversation stays in `session/list` and `session/load` restores its
+  history, including from a fresh process. Tab close sends it, bounded and
+  best effort, before terminating the child (`acp-session-close.ts`). If a
+  release ever makes it delete history, stop sending it: closing a tab must
+  never delete a conversation.
+- **`session/resume`.** Works and keeps model context, but measured no faster
+  than `session/load` (about 70 ms either way), and `session/load` is still
+  needed to hydrate an empty transcript from Grok's replay, so the bridge
+  keeps one path.
+- **`_x.ai/mcp/server_status`.** One report per server after the
+  `servers_updated` listing: `status` `ready` or `unavailable`, a `reason`
+  code (`initialized`, `handshake_failed`, `auth_required`, …) and free-text
+  `detail`. The bridge maps it onto the process-level MCP inventory
+  (`connected`, `needs-auth`, `failed`) and never copies `detail`, which can
+  name hosts and URLs.
+- **`_x.ai/interject` (steer).** Since 1.0.52 it rejects an unknown session
+  (`-32602 session not found`) instead of accepting it, but it still answers
+  `queued` on an idle session. It cannot be pinned to a run, so a steer racing
+  the end of a turn would land in the next one; `actions.steer` stays off.
 
 ### How to upgrade Grok
 
@@ -943,7 +1042,8 @@ default.
    executable digests are the same value.
 5. Confirm the argv contract by hand using the checks above. This is the
    step nothing else covers.
-6. Smoke-test an interactive tab, including the inactive-environment path.
+6. Re-check [what Grok declares versus what it does](#what-grok-declares-versus-what-it-does).
+7. Smoke-test an interactive tab, including the inactive-environment path.
 
 The `stable` pointer, not the binary, decides the channel. `grok --version` for
 1.0.44 printed `[alpha]` although `…/cli/stable` named it; a build can be promoted

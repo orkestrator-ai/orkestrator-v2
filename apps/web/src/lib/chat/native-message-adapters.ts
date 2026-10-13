@@ -913,7 +913,7 @@ function startedAtField(startedAt: string | undefined): { startedAt?: string } {
 
 type BackgroundTaskDetails = Pick<
   NativeBackgroundTask,
-  "error" | "summary" | "outputFile" | "usage"
+  "error" | "summary" | "outputFile" | "usage" | "agentRole"
 >;
 
 /** What the task's record says beyond its lifecycle, carrying only fields it has. */
@@ -924,6 +924,7 @@ function backgroundTaskDetails(task: BackgroundTaskDetails | undefined): Backgro
     ...(task.summary ? { summary: task.summary } : {}),
     ...(task.outputFile ? { outputFile: task.outputFile } : {}),
     ...(task.usage ? { usage: task.usage } : {}),
+    ...(task.agentRole ? { agentRole: task.agentRole } : {}),
   };
 }
 
@@ -995,6 +996,8 @@ export interface ClaudeBackgroundTaskState {
   summary?: string;
   outputFile?: string;
   usage?: NativeBackgroundTask["usage"];
+  /** Projection only; see the protocol summary's `agentRole`. */
+  agentRole?: string;
 }
 
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
@@ -1221,6 +1224,8 @@ export interface BackgroundTaskSnapshot {
   summary?: string;
   outputFile?: string;
   usage?: NativeBackgroundTask["usage"];
+  /** See the protocol summary's `agentRole`. */
+  agentRole?: string;
 }
 
 function backgroundTaskAgentStateFromStatus(status: NativeBackgroundTaskStatus): NativeAgentState {

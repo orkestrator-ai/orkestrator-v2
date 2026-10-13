@@ -31,6 +31,7 @@ export const FALLBACK_CLAUDE_MODELS: Array<ClaudeModel & { resolvedModel?: strin
  * `sonnet` alias resolves to `claude-sonnet-5-5`, not `claude-sonnet-5`. 2.1.287
  * renamed the Fable 5.1 row from `claude-fable-5-1` to the `fable` alias (its
  * `resolvedModel` is unchanged), so a saved `[1m]` row id needs a successor.
+ * 2.1.293 moved the `haiku` alias from Haiku 4.5 to `claude-haiku-5-5`.
  * Successors are followed in a chain. Without this a saved choice silently
  * became the first catalogue entry. Consulted only after an exact match fails,
  * so an environment still on an older CLI keeps the id it reports.
@@ -42,4 +43,6 @@ export const SUPERSEDED_CLAUDE_MODEL_IDS: Readonly<Record<string, string>> = {
   "claude-opus-5": "claude-opus-5-5",
   "claude-opus-5[1m]": "claude-opus-5-5[1m]",
   "claude-sonnet-5": "claude-sonnet-5-5",
+  "claude-haiku-4-5": "claude-haiku-5-5",
+  "claude-haiku-4-5-20251001": "claude-haiku-5-5",
 };

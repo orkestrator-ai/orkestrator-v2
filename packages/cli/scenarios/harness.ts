@@ -284,7 +284,8 @@ export class CliDriver {
     const result: CliResult = {
       argv,
       code,
-      signal: child.signalCode,
+      // Bun reports an unnamed (e.g. real-time) signal by its number.
+      signal: child.signalCode === null ? null : String(child.signalCode),
       stdout,
       stderr,
       durationMs: Date.now() - started,

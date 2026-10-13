@@ -51,6 +51,13 @@ export const MessageExpansionScopeContext = createContext("native-message");
 export const AgentExpansionScopeContext = createContext("native-message");
 export const AgentPlatformContext = createContext<AgentPlatform | undefined>(undefined);
 /**
+ * The tab's model id → display name lookup, for model ids that appear inside a
+ * transcript (a sub-agent's model). Absent means the raw id is shown.
+ */
+export const ModelLabelResolverContext = createContext<((modelId: string) => string) | undefined>(
+  undefined,
+);
+/**
  * Durable Multi Review report a Fix tab pins above its opening prompt.
  *
  * Absent means the bubble uses whatever framed findings the prompt itself

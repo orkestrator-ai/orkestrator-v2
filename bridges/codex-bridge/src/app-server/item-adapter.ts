@@ -26,6 +26,11 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** A provider-reported duration; anything but a finite, non-negative number is unknown. */
+function durationMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function strArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
@@ -157,8 +162,12 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
         raw.delivery === "async" && id.length <= MAX_ASYNC_ITEM_ID_LENGTH
           ? asyncQuestions(raw.questions)
           : undefined;
+      // An unrecognised phase becomes "unknown", which downstream treats as a
+      // possible final answer — so every real phase must be listed here.
       const phase =
-        raw.phase === "commentary" || raw.phase === "final_answer" ? raw.phase : undefined;
+        raw.phase === "commentary" || raw.phase === "partial_answer" || raw.phase === "final_answer"
+          ? raw.phase
+          : undefined;
       return {
         item: {
           id,
@@ -186,6 +195,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
       // user shell commands and writes to an already-running process.
       const cwd = str(raw.cwd);
       const source = str(raw.source);
+      const duration = durationMs(raw.durationMs);
       return {
         item: {
           id,
@@ -196,6 +206,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           ...(exitCode === undefined ? {} : { exit_code: exitCode }),
           ...(cwd ? { cwd } : {}),
           ...(source ? { source } : {}),
+          ...(duration === undefined ? {} : { duration_ms: duration }),
         } as EngineItem,
       };
     }
@@ -220,6 +231,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
             structured_content: raw.result.structuredContent ?? null,
           }
         : undefined;
+      const duration = durationMs(raw.durationMs);
       return {
         item: {
           id,
@@ -230,6 +242,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           status: commandStatus(raw.status),
           ...(result ? { result } : {}),
           ...(error ? { error: { message: error } } : {}),
+          ...(duration === undefined ? {} : { duration_ms: duration }),
         } as EngineItem,
       };
     }
@@ -237,6 +250,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
     case "dynamicToolCall": {
       const tool = str(raw.tool);
       if (!tool) return { item: null, unsupportedType: type };
+      const duration = durationMs(raw.durationMs);
       return {
         item: {
           id,
@@ -255,6 +269,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
               : raw.success === false
                 ? "failed"
                 : commandStatus(raw.status),
+          ...(duration === undefined ? {} : { duration_ms: duration }),
         } as EngineItem,
       };
     }
@@ -315,6 +330,10 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
       ) {
         return { item: null, unsupportedType: type };
       }
+      // Resolved at creation, so only a `started` beat carries them (0.162+);
+      // older records and other beats report null.
+      const model = str(raw.model)?.trim();
+      const reasoningEffort = str(raw.reasoningEffort)?.trim();
       return {
         item: {
           id,
@@ -322,6 +341,8 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           activity: kind,
           agent_thread_id: agentThreadId,
           ...(str(raw.agentPath) ? { agent_path: str(raw.agentPath)! } : {}),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         },
       };
     }

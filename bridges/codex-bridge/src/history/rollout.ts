@@ -539,6 +539,10 @@ function normalizedSubagentPart(part: TranscriptSubagentPart): NormalizedPart {
     subagentPrompt: part.subagentPrompt,
     subagentActions: part.subagentActions,
     subagentActionCount: part.subagentActionCount,
+    ...(part.subagentModelId ? { subagentModelId: part.subagentModelId } : {}),
+    ...(part.subagentReasoningEffort
+      ? { subagentReasoningEffort: part.subagentReasoningEffort }
+      : {}),
     toolState: part.toolState,
   };
 }

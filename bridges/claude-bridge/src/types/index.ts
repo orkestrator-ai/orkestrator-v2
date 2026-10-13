@@ -738,8 +738,8 @@ export interface SessionState {
    *
    * The SDK leaves the order of `background_tasks_changed` and
    * `task_notification` for one transition unspecified. Through Agent SDK
-   * 0.3.284 the level came first; 0.3.292 documents a finishing task leaving
-   * the level *after* its edge. When the level does come first, the task
+   * 0.3.284 the level came first; 0.3.292 (still in 0.3.296) documents a
+   * finishing task leaving the level *after* its edge. When the level does come first, the task
    * leaves the live set with no outcome attached. Parking the
    * snapshot here keeps liveness honest — the task is gone from
    * {@link backgroundTasks}, so no stale running indicator can wedge — while
@@ -875,6 +875,13 @@ export interface BackgroundTaskSnapshot {
   outputFile?: string;
   /** Latest usage the SDK reported for the task (progress or terminal edge). */
   usage?: BackgroundTaskUsage;
+  /**
+   * Agent type of a subagent task (`general-purpose`, a custom agent's name),
+   * or `main-session` for a backgrounded main session. From the
+   * `background_tasks_changed` level (Agent SDK 0.3.296+) or a `SubagentStart`
+   * hook; absent for shell and other non-agent tasks.
+   */
+  subagentType?: string;
 }
 
 export interface BackgroundTaskUsage {

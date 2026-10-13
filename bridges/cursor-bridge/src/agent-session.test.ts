@@ -1849,6 +1849,113 @@ describe("resumeSession", () => {
     expect(state.activeSubagentDescriptors.size).toBe(0);
   });
 
+  test("replayed calls keep their reported duration and sub-agent model", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              steps: [
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "task",
+                    args: { description: "audit", model: "m-2" },
+                    result: { status: "success", value: { isBackground: false, durationMs: 900 } },
+                  },
+                },
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "computerUse",
+                    args: { actions: [{ type: "screenshot" }] },
+                    result: { status: "success", value: { actionCount: 1, durationMs: 60 } },
+                  },
+                },
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    const [task, computerUse] = state.messages[0]!.parts;
+    expect(task).toMatchObject({ subagentModelId: "m-2", toolDurationMs: 900 });
+    expect(computerUse).toMatchObject({ toolName: "computerUse", toolDurationMs: 60 });
+  });
+
+  test.each(["success", "error"] as const)(
+    "computer-use screenshots survive resume and recovered %s runs without duplicates",
+    async (status) => {
+      const screenshotPath = "/workspace/screenshots/computer-use.png";
+      const message = {
+        type: "computerUse",
+        args: { description: "Inspect the page", actions: [{ type: "screenshot" }] },
+        result:
+          status === "success"
+            ? { status, value: { screenshotPath, actionCount: 1 } }
+            : { status, error: { screenshotPath, message: "Click failed" } },
+      };
+      const turns = [
+        { type: "conversationTurn", turn: { steps: [{ type: "toolCall", message }] } },
+      ];
+      const assertScreenshot = (state: Awaited<ReturnType<typeof resumeSession>>) => {
+        const assistant = state.messages.find((entry) => entry.role === "assistant")!;
+        const tools = assistant.parts.filter((part) => part.type === "tool-invocation");
+        const images = assistant.parts.filter((part) => part.type === "image");
+        expect(tools).toHaveLength(1);
+        expect(tools[0]).toMatchObject({ toolState: status === "success" ? "success" : "failure" });
+        expect(images).toHaveLength(1);
+        expect(images[0]).toMatchObject({
+          content: "Inspect the page",
+          sourcePartId: `image:${tools[0]!.toolUseId}`,
+          sourceMessageId: assistant.id,
+          imageSource: "viewed",
+          filename: screenshotPath,
+          fileUrl: `file://${screenshotPath}`,
+        });
+      };
+
+      runs = { items: [conversationRun(turns)] };
+      assertScreenshot(await resumeSession("agent-screenshot", undefined));
+
+      let settled = false;
+      runs = {
+        items: [
+          {
+            ...conversationRun([]),
+            id: "run-screenshot",
+            get status() {
+              return settled ? (status === "error" ? "error" : "finished") : "running";
+            },
+            createdAt: Date.now(),
+            conversation: async () => (settled ? turns : []),
+            async *stream() {
+              const event = {
+                type: "tool-call-completed",
+                callId: "computer-1",
+                toolCall: message,
+              };
+              yield event;
+              yield event;
+            },
+            wait: async () => {
+              settled = true;
+            },
+            cancel: async () => undefined,
+            onDidChangeStatus: () => () => undefined,
+          },
+        ],
+      };
+      const recovered = await resumeSession("agent-recovered-screenshot", undefined);
+      await recovered.recoveringRun;
+      assertScreenshot(recovered);
+      expect(recovered.status).toBe(status === "error" ? "error" : "idle");
+    },
+  );
+
   test("renders a shell turn from its own record", async () => {
     runs = {
       items: [

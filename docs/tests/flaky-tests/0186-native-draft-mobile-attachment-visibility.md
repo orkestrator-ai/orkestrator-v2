@@ -27,3 +27,34 @@ Both failures occurred after switching to the mobile layout. The isolated pass
 establishes intermittent behavior, but does not identify whether a delayed mount,
 a draft-state update or another interaction caused the chip to disappear. No
 assertion, timeout or skip was changed.
+
+## Recurrence 2026-10-13 (Vite 8 upgrade)
+
+- **Test:** `a saved image draft survives reload and the autosave after it (pre-session picker with cursor selected, attachment only)`
+- **Original command:** `mise run test:logged -- --name agent-browser-isolated -- mise run test:agent:browser:isolated`
+  on the Vite 8.3.4 / `@vitejs/plugin-react` 6.1.2 branch, one Playwright worker, no
+  repository aggregate running.
+- **Failure:** Same as above: `expect(chip).toBeInViewport({ ratio: 1 })` at line 348
+  found no element within 5000 ms after the switch to the mobile layout.
+- **Suite counts:** 17 passed, 4 failed, 13 skipped (34 total). The other failures were
+  the Codex-recovery and CLI specs (the fresh worktree had no built bridge `dist/` or
+  CLI; both passed once built) and design export, which also fails alone on the
+  Vite 7.3.6 baseline.
+- **Isolated rerun:** On a fresh `--fixture --no-agent-credentials --agent-platforms codex`
+  profile the owning file's six cases had no failures: 4 passed (including the
+  failing pre-session case, which has no skip path) and 2 assigned-tab cases took
+  the spec's own "bridge did not connect" skip:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=vite8-rerun ORKESTRATOR_AGENT_TEST_RUN_ID=vite8-rerun \
+  mise run test:logged -- --name agent-rerun-4 -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/browser-gateway.spec.ts:784 e2e/agent-testing/cli-ui.spec.ts:169 \
+  e2e/agent-testing/design-canvas.spec.ts:9 \
+  e2e/agent-testing/native-draft-attachments.spec.ts --workers=1
+```
+
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.E7kROr/agent-browser-isolated.log.gz`.
+The recurrence on an unrelated bundler change is consistent with an app-side
+timing issue rather than a toolchain regression. No assertion, timeout or skip was
+changed.

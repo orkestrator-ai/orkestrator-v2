@@ -3,7 +3,6 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.VITE_DEV_HOST;
 const configuredPort = Number.parseInt(process.env.VITE_DEV_PORT ?? "1420", 10);
 const port =
@@ -20,7 +19,7 @@ export default defineConfig(async () => ({
 
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
 
@@ -29,7 +28,7 @@ export default defineConfig(async () => ({
     port,
     strictPort: true,
     host: host || "127.0.0.1",
-    hmr: host
+    ws: host
       ? {
           protocol: "ws",
           host,

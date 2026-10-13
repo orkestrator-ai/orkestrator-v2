@@ -8,7 +8,8 @@
  * launch settings, not health, and it is not correlated to one session: every
  * child of this bridge writes the same shared inventory. So:
  *
- * - a listed server is `unknown` unless the entry itself states a status;
+ * - a listed server is `unknown` unless the entry itself states a status, or
+ *   a later `*\/mcp/server_status` report for that name gives one;
  * - the inventory is labelled process-level, never exact per-session truth;
  * - the configuration a child loaded is fingerprinted when it spawns, so a
  *   status read can say whether the saved files changed since then.
@@ -88,6 +89,68 @@ export function vendorMcpInventory(params: JsonObject): NativeAgentMcpServer[] |
         actions: [],
       },
     ];
+  });
+}
+
+/** One vendor `*\/mcp/server_status` report, reduced to what may be shown. */
+export interface VendorMcpServerStatus {
+  name: string;
+  status: NativeAgentMcpServer["status"];
+  /** The vendor's reason code, only when it is a bare identifier. */
+  reason?: string;
+}
+
+/**
+ * Normalize a vendor `server_status` report, or undefined when the params are
+ * not one. Grok 1.0.52 sends `{ sessionId, name, source, status, reason,
+ * detail?, tools }` with `status` `ready` or `unavailable` and `reason` such
+ * as `initialized`, `handshake_failed` or `auth_required`. `detail` is free
+ * transport error text that can name hosts and URLs, so it is never copied.
+ */
+export function vendorMcpServerStatus(params: JsonObject): VendorMcpServerStatus | undefined {
+  const name =
+    typeof params.name === "string" && params.name.trim()
+      ? params.name.trim().slice(0, 128)
+      : undefined;
+  const raw = typeof params.status === "string" ? params.status.trim().toLowerCase() : "";
+  if (!name || !raw) return undefined;
+  const reason =
+    typeof params.reason === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(params.reason)
+      ? params.reason
+      : undefined;
+  const status: NativeAgentMcpServer["status"] =
+    raw === "ready"
+      ? "connected"
+      : raw === "unavailable"
+        ? reason === "auth_required"
+          ? "needs-auth"
+          : "failed"
+        : VENDOR_STATUSES.has(raw as NativeAgentMcpServer["status"])
+          ? (raw as NativeAgentMcpServer["status"])
+          : "unknown";
+  return { name, status, ...(reason ? { reason } : {}) };
+}
+
+/**
+ * Lay the latest status report for each listed server over the listing. A
+ * report for a name the listing does not hold is ignored; a failure carries
+ * only the reason code as its error text.
+ */
+export function withVendorMcpStatuses(
+  servers: readonly NativeAgentMcpServer[],
+  statuses: ReadonlyMap<string, VendorMcpServerStatus>,
+): NativeAgentMcpServer[] {
+  return servers.map((server) => {
+    const report = statuses.get(server.name);
+    if (!report) return server;
+    const { error: _previous, ...rest } = server;
+    return {
+      ...rest,
+      status: report.status,
+      ...((report.status === "failed" || report.status === "needs-auth") && report.reason
+        ? { error: report.reason.replaceAll("_", " ") }
+        : {}),
+    };
   });
 }
 

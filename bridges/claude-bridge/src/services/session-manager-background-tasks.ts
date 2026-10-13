@@ -14,6 +14,8 @@ type BackgroundTaskLaunch = {
   id: string;
   toolUseId?: string;
   description?: string;
+  /** Agent type, when the launch is a subagent's `SubagentStart` hook. */
+  subagentType?: string;
 };
 const PROVISIONAL_BACKGROUND_TASK_PREFIX = "pending-bash:";
 const MAX_BACKGROUND_TASK_CANDIDATES = 128;
@@ -176,6 +178,7 @@ export function recordBackgroundTaskLaunch(
       summary: previous?.summary,
       outputFile: previous?.outputFile,
       usage: previous?.usage,
+      subagentType: launch.subagentType ?? previous?.subagentType,
     },
   });
   const task = session.backgroundTasks[launch.id]!;

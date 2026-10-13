@@ -386,7 +386,7 @@ export async function connectPreviewWebSocket(
       options.signal?.removeEventListener("abort", abort);
       resolve(connection);
     });
-    connection.once("error", (error) => {
+    connection.once("error", (error: Error) => {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
       reject(error);

@@ -312,11 +312,6 @@ const AGENT_PINS: Record<string, AgentPins> = {
         dep: "@earendil-works/pi-agent-core",
         tracksCli: true,
       },
-      {
-        file: "bridges/pi-bridge/package.json",
-        dep: "@earendil-works/pi-server",
-        tracksCli: true,
-      },
     ],
   },
 };

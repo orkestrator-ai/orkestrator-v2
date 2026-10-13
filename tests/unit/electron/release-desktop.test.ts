@@ -23,6 +23,7 @@ const assets = [
 function harness(overrides: Partial<ReleaseRuntime> = {}) {
   const run = mock((_command: string[], _env?: NodeJS.ProcessEnv) => {});
   const capture = mock((command: string[]) => {
+    if (command[0] === "gh" && command[2] === "download") return "minimumSystemVersion: '22.0.0'\n";
     if (command[0] === "gh")
       return JSON.stringify({ isDraft: true, assets: assets.map((name) => ({ name })) });
     if (command[1] === "status") return "";
@@ -39,6 +40,7 @@ function harness(overrides: Partial<ReleaseRuntime> = {}) {
     capture,
     releaseTag: () => tag,
     artifacts: () => ["app.dmg", "mac-arm64-unpacked"],
+    prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
     ...overrides,
   };
   return { runtime, run, capture };
@@ -131,6 +133,19 @@ describe("release checkout guards", () => {
 });
 
 describe("desktop release commands", () => {
+  test.each(["version: 2.19.15\n", "minimumSystemVersion: '21.0.0'\n"])(
+    "refuses to publish an uploaded macOS feed without the required floor: %s",
+    (feed) => {
+      const { runtime, run, capture } = harness();
+      const original = capture.getMockImplementation()!;
+      capture.mockImplementation((command) =>
+        command[2] === "download" ? feed : original(command),
+      );
+      expect(() => runDesktopRelease(["publish"], runtime)).toThrow("Darwin 22");
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
   test.each([
     ["darwin", "arm64", "--mac", "electron-builder.release.config.ts"],
     ["linux", "x64", "--linux", "electron-builder.release.linux.config.ts"],
@@ -152,6 +167,20 @@ describe("desktop release commands", () => {
         ["mise", "run", "download:bun"],
         ["mise", "run", "build:all"],
         ["bunx", "electron-builder", flag, `--${arch}`, "--config", config, "--publish", "always"],
+        ...(platform === "darwin"
+          ? [
+              [
+                "gh",
+                "release",
+                "upload",
+                tag,
+                "--repo",
+                "orkestrator-ai/orkestrator-v2",
+                "--clobber",
+                "release/latest-mac.yml",
+              ],
+            ]
+          : []),
       ]);
       expect(run.mock.calls[2]?.[1]).toMatchObject({
         GH_TOKEN: "test-only",
@@ -232,13 +261,15 @@ describe("desktop release commands", () => {
 
   test("accepts the architecture-specific arm64 Linux updater feed", () => {
     const { runtime, run } = harness({
-      capture: () =>
-        JSON.stringify({
-          isDraft: true,
-          assets: assets.map((name) => ({
-            name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name,
-          })),
-        }),
+      capture: (command) =>
+        command[2] === "download"
+          ? "minimumSystemVersion: '22.0.0'\n"
+          : JSON.stringify({
+              isDraft: true,
+              assets: assets.map((name) => ({
+                name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name,
+              })),
+            }),
     });
     runDesktopRelease(["publish"], runtime);
     expect(run).toHaveBeenCalledTimes(1);

@@ -263,7 +263,15 @@ describe("Claude Agent SDK runtime compatibility", () => {
           response: { behavior: string; updatedInput: { answers: Record<string, string> } };
         };
       };
-      expect(captured.argv).toContain("bypassPermissions");
+      // SDK 0.3.295 joins option values (`--permission-mode=bypassPermissions`);
+      // earlier releases pass the value as the next argument.
+      const modeIndex = captured.argv.indexOf("--permission-mode");
+      const permissionMode = captured.argv.includes("--permission-mode=bypassPermissions")
+        ? "bypassPermissions"
+        : modeIndex >= 0
+          ? captured.argv[modeIndex + 1]
+          : undefined;
+      expect(permissionMode).toBe("bypassPermissions");
       expect(captured.response).toMatchObject({
         subtype: "success",
         response: {

@@ -411,6 +411,47 @@ describe("reused child thread status", () => {
     expect(childSucceeded?.toolState).toBe("success");
   });
 
+  test("shows a child's partial answer without settling it (codex 0.162)", () => {
+    const partial: TranscriptRecord = {
+      type: "event_msg",
+      payload: { type: "agent_message", phase: "partial_answer", message: "Half of it" },
+    };
+    const working = deriveSingleSubagent([partial]);
+    expect(working?.toolState).toBe("pending");
+    expect(working?.subagentActions).toEqual([{ type: "text", content: "Half of it" }]);
+
+    // A partial answer after an earlier task's final answer is new work.
+    expect(deriveSingleSubagent([firstFinal, partial])?.toolState).toBe("pending");
+
+    const finished = deriveSingleSubagent([
+      partial,
+      {
+        type: "event_msg",
+        payload: { type: "agent_message", phase: "final_answer", message: "All of it" },
+      },
+    ]);
+    expect(finished?.toolState).toBe("success");
+    expect(finished?.subagentActions.map((action) => action.content)).toEqual([
+      "Half of it",
+      "All of it",
+    ]);
+  });
+
+  test("names the model and effort of the child's latest turn", () => {
+    expect(deriveSingleSubagent([])).not.toHaveProperty("subagentModelId");
+    const part = deriveSingleSubagent([
+      { type: "turn_context", payload: { turn_id: "turn-1", model: "gpt-5.6", effort: "low" } },
+      firstFinal,
+      { type: "turn_context", payload: { turn_id: "turn-2", model: "gpt-5.6-sol" } },
+    ]);
+    // A turn that names no effort keeps the last known one.
+    expect(part).toMatchObject({
+      subagentModelId: "gpt-5.6-sol",
+      subagentReasoningEffort: "low",
+      toolState: "pending",
+    });
+  });
+
   test("reopens independently for every active child-record shape", () => {
     const activeRecords: TranscriptRecord[] = [
       { type: "turn_context", payload: { turn_id: "turn-2" } },
@@ -2505,7 +2546,7 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
       ["unknown", "pending"],
     ] as const;
     const parentRecords: TranscriptRecord[] = [];
-    for (const [index, [status]] of statuses.entries()) {
+    for (const index of statuses.keys()) {
       parentRecords.push(
         {
           type: "response_item",

@@ -1023,6 +1023,8 @@ export interface BackgroundTaskLaunch {
   id: string;
   toolUseId?: string;
   description?: string;
+  /** Agent type, when the launch is a subagent's `SubagentStart` hook. */
+  subagentType?: string;
 }
 
 export const PROVISIONAL_BACKGROUND_TASK_PREFIX = "pending-bash:";
@@ -1521,6 +1523,7 @@ export function reducePersistedBackgroundTaskMessage(
         summary: message.summary ?? previous?.summary,
         outputFile: message.output_file ?? previous?.outputFile,
         usage: message.usage ?? previous?.usage,
+        subagentType: previous?.subagentType,
       },
     });
   }
@@ -1555,6 +1558,7 @@ export function reducePersistedBackgroundTaskMessage(
         previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) && previous.usage
           ? previous.usage
           : (message.usage ?? previous?.usage),
+      subagentType: previous?.subagentType,
     },
   });
 }

@@ -43,6 +43,18 @@ Clean them up opportunistically in files you are already touching. Do not
 silence the rule, and do not raise it to `error` until the backlog is actually
 gone.
 
+The React Compiler rules oxlint 1.79 moved into `correctness` are warnings for
+the same reason: `react/refs`, `react/set-state-in-effect`,
+`react/immutability`, `react/preserve-manual-memoization`, `react/globals`,
+`react/purity` and `react/use-memo`. When oxlint 1.88 was adopted (2026-10-13)
+they reported 337 findings in 129 files, almost all in `apps/web` — 149 refs
+read or written during render and 125 synchronous `setState` calls in effects.
+Several are genuine React 19 correctness issues, but the fixes touch hot
+rendering paths such as the chat transcript, so they are burned down in their
+own reviewed changes rather than in a linter bump. Do not add new findings for
+these rules, fix them in files you are already changing, and raise each rule
+back to `error` once its count reaches zero.
+
 The `jsx-a11y` plugin is not enabled. Its interaction rules reported 58
 findings that are real accessibility gaps, but fixing them means adding keyboard
 handlers, roles and focus targets to live UI — behaviour changes that belong in

@@ -58,6 +58,16 @@ describe("Claude startup failure diagnostics", () => {
     expect(claudeStartupFailureMessage("provider_not_allowed")).toContain("API provider");
   });
 
+  test("separates a retryable org-config outage from a refusal that needs sign-in", () => {
+    const unavailable = claudeStartupFailureMessage("org_config_required_unavailable");
+    expect(unavailable).toContain("could not load");
+    expect(unavailable).toContain("retry");
+    const refused = claudeStartupFailureMessage("org_config_refused");
+    expect(refused).toContain("Sign in to Claude again");
+    expect(refused).toContain("administrator");
+    expect(refused).not.toContain("retry");
+  });
+
   test("surfaces a numbered startup failure without a prompt uuid", async () => {
     const session = createSession("numbered-startup-failure");
     track(session.id);

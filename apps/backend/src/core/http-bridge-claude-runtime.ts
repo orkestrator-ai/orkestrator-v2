@@ -65,6 +65,24 @@ function outputFileField(value: unknown): { outputFile?: string } {
     : {};
 }
 
+const BACKGROUND_TASK_AGENT_ROLE_MAX_LENGTH = 256;
+
+/**
+ * Claude's `subagentType` (a `local_agent` task's agent type, or `main-session`
+ * for a backgrounded main session) is the neutral `agentRole`. A role is a
+ * name, so one that is too long or carries control characters is dropped
+ * rather than cut down to a different name.
+ */
+function agentRoleField(value: unknown): { agentRole?: string } {
+  if (typeof value !== "string") return {};
+  const role = value.trim();
+  return role.length > 0 &&
+    role.length <= BACKGROUND_TASK_AGENT_ROLE_MAX_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(role)
+    ? { agentRole: role }
+    : {};
+}
+
 function usageField(value: unknown): { usage?: NativeAgentBackgroundTaskUsage } {
   const usage = asRecord(value);
   if (!usage) return {};
@@ -104,6 +122,7 @@ export function normalizeClaudeBackgroundTasks(
           ...textField("summary", task.summary),
           ...outputFileField(task.outputFile),
           ...usageField(task.usage),
+          ...agentRoleField(task.subagentType),
         },
       ];
     });

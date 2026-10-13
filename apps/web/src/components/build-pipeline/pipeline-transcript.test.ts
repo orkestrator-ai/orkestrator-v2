@@ -408,9 +408,11 @@ quoted context
               subagentRole: "reviewer",
               subagentPrompt: "Audit the diff",
               subagentActionCount: 2,
+              subagentModelId: "gpt-5.6-sol",
+              subagentReasoningEffort: "high",
               agentState: "finished",
               subagentActions: [
-                { type: "tool-invocation", toolName: "Read", content: "Read" },
+                { type: "tool-invocation", toolName: "Read", content: "Read", toolDurationMs: 42 },
                 { type: "mystery", content: "dropped" },
               ],
             },
@@ -429,12 +431,15 @@ quoted context
       subagentRole: "reviewer",
       subagentPrompt: "Audit the diff",
       subagentActionCount: 2,
+      subagentModelId: "gpt-5.6-sol",
+      subagentReasoningEffort: "high",
       agentState: "finished",
     });
     // The unreadable action is dropped; the readable one survives.
     expect(part?.type === "subagent" && part.subagentActions?.map((a) => a.type)).toEqual([
       "tool-invocation",
     ]);
+    expect(part?.type === "subagent" && part.subagentActions?.[0]?.toolDurationMs).toBe(42);
   });
 
   test("keeps the roles the renderer styles differently", () => {

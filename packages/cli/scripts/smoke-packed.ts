@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -60,7 +60,11 @@ try {
     ["dist/main.js", "sharp"],
     ["resources/claude-bridge/dist/index.js", "@anthropic-ai/claude-agent-sdk"],
   ] as const) {
-    const directory = path.join(installedRoot, path.dirname(artifact));
+    // Resolve from the real path, as Bun does when it loads the module: with
+    // the isolated linker `node_modules/orkestrator` is a symlink into
+    // `node_modules/.bun/`, and the package's dependencies sit beside its real
+    // directory there, not beside the link.
+    const directory = await realpath(path.join(installedRoot, path.dirname(artifact)));
     try {
       console.log(`resolved ${specifier} -> ${Bun.resolveSync(specifier, directory)}`);
     } catch (error) {

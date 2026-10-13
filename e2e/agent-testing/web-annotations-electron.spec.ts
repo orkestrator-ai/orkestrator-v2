@@ -695,9 +695,11 @@ test("a capture saved without any agent tab survives renderer reload and backend
   expect(destinations.options).toEqual([]);
 
   await navigate(ROUTE_VARIANTS.settings);
+  const { descriptor } = await captureElement(`[data-testid="${TEST_IDS.saveSettings}"]`);
+  // captureElement scrolls the selected button into view. Measure fields at
+  // that scroll offset, rather than comparing pixels to pre-scroll rectangles.
   const passwordRect = await rectOf(`[data-testid="${TEST_IDS.passwordField}"]`);
   const displayNameRect = await rectOf("#display-name");
-  const { descriptor } = await captureElement(`[data-testid="${TEST_IDS.saveSettings}"]`);
   expect(descriptor.stale).toBe(false);
   expect(descriptor.environmentId).toBe(s().environmentId);
 
@@ -713,9 +715,13 @@ test("a capture saved without any agent tab survives renderer reload and backend
   if (pending.imageDataUrl) {
     const geometry = pending.capture.geometry!;
     const scale = geometry.image?.scale ?? 1;
-    // Rects were read before selection at the same scroll offset.
     const masked = await uniformity(pending.imageDataUrl, passwordRect!, scale);
     const unmasked = await uniformity(pending.imageDataUrl, displayNameRect!, scale);
+    await testInfo.attach("masked-capture.png", {
+      body: Buffer.from(pending.imageDataUrl.split(",")[1]!, "base64"),
+      contentType: "image/png",
+    });
+    record(testInfo, "mask-geometry", JSON.stringify({ geometry, passwordRect, displayNameRect }));
     record(
       testInfo,
       "mask-uniformity",

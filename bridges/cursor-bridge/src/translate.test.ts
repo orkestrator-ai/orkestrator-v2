@@ -1083,3 +1083,139 @@ describe("the run's own system message", () => {
     expect(state.health.drift()).toBeUndefined();
   });
 });
+
+describe("computer use", () => {
+  const args = {
+    actions: [
+      { type: "click", button: "left", count: 1, coordinate: { x: 1, y: 2 } },
+      { type: "screenshot" },
+    ],
+  };
+
+  test("renders through the neutral card with duration and a viewed screenshot", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "cu-1",
+      toolCall: { type: "computerUse", args },
+    });
+    expect(toolParts(state)[0]).toMatchObject({
+      toolName: "computerUse",
+      toolTitle: "Computer use · 2 actions (click, screenshot)",
+      toolState: "pending",
+    });
+    // Never on a running tool.
+    expect(toolParts(state)[0]!.toolDurationMs).toBeUndefined();
+
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "cu-1",
+      toolCall: {
+        type: "computerUse",
+        args,
+        result: {
+          status: "success",
+          value: {
+            actionCount: 2,
+            durationMs: 512,
+            screenshotPath: "/tmp/cu/after.png",
+            log: "ok",
+          },
+        },
+      },
+    });
+
+    expect(toolParts(state)).toHaveLength(1);
+    expect(toolParts(state)[0]).toMatchObject({
+      toolState: "success",
+      toolOutput: "ok",
+      toolDurationMs: 512,
+    });
+    expect(state.messages.at(-1)!.parts.find((part) => part.type === "image")).toMatchObject({
+      type: "image",
+      imageSource: "viewed",
+      fileUrl: "file:///tmp/cu/after.png",
+    });
+    expect(state.health.drift()).toBeUndefined();
+  });
+
+  test("a failed batch settles as a failure and still reports what ran", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "cu-2",
+      toolCall: {
+        type: "computerUse",
+        args,
+        result: {
+          status: "error",
+          error: { message: "display locked", actionCount: 1, durationMs: 40, log: "clicked" },
+        },
+      },
+    });
+
+    expect(toolParts(state)[0]).toMatchObject({
+      toolState: "failure",
+      toolError: "display locked",
+      toolOutput: "clicked",
+      toolDurationMs: 40,
+    });
+    expect(state.messages.at(-1)!.parts.some((part) => part.type === "image")).toBe(false);
+  });
+
+  test("a malformed computer-use frame degrades instead of throwing", () => {
+    const state = running();
+    expect(() =>
+      applyInteractionUpdate(state, {
+        type: "tool-call-completed",
+        callId: "cu-3",
+        toolCall: { type: "computerUse", args: { actions: 5 }, result: { status: "error" } },
+      }),
+    ).not.toThrow();
+    expect(toolParts(state)[0]).toMatchObject({ toolName: "computerUse", toolState: "failure" });
+  });
+});
+
+describe("provider-reported tool metadata", () => {
+  test("a settled shell card carries its execution time", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "sh-1",
+      toolCall: {
+        type: "shell",
+        args: { command: "bun test" },
+        result: {
+          status: "success",
+          value: { exitCode: 0, signal: "", stdout: "", stderr: "", executionTime: 2500 },
+        },
+      },
+    });
+    expect(toolParts(state)[0]!.toolDurationMs).toBe(2500);
+  });
+
+  test("a sub-agent card names the model its launch asked for", () => {
+    const state = running();
+    const launch = { type: "task", args: { description: "Inline", prompt: "p", model: "m-1" } };
+    applyInteractionUpdate(state, { type: "tool-call-started", callId: "l1", toolCall: launch });
+    expect(toolParts(state)[0]).toMatchObject({ subagentModelId: "m-1" });
+    expect(toolParts(state)[0]!.toolDurationMs).toBeUndefined();
+
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "l1",
+      toolCall: {
+        ...launch,
+        result: {
+          status: "success",
+          value: { isBackground: false, backgroundReason: "unspecified", durationMs: 777 },
+        },
+      },
+    });
+    expect(toolParts(state)[0]).toMatchObject({
+      subagentModelId: "m-1",
+      toolDurationMs: 777,
+      agentState: "finished",
+    });
+  });
+});

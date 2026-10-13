@@ -22,6 +22,8 @@ export interface TranscriptSubagentPart {
   subagentPrompt?: string;
   subagentActions: TranscriptActionPart[];
   subagentActionCount: number;
+  subagentModelId?: string;
+  subagentReasoningEffort?: string;
   toolState: ToolState;
 }
 
@@ -643,6 +645,9 @@ export interface ChildTranscriptSummary {
   nickname?: string;
   /** The last `agent_role` any `session_meta` record named. */
   role?: string;
+  /** Model and reasoning effort of the child's latest `turn_context`. */
+  model?: string;
+  reasoningEffort?: string;
   state: ToolState;
   reopenedAfterTerminal: boolean;
   /**
@@ -660,6 +665,8 @@ export interface ChildTranscriptFoldState {
   actionCount: number;
   nickname?: string;
   role?: string;
+  model?: string;
+  reasoningEffort?: string;
   state: ToolState;
   sawTerminalState: boolean;
   reopenedAfterTerminal: boolean;
@@ -715,6 +722,12 @@ export function foldChildTranscriptRecord(
   // its turns, including an earlier final_answer followed by a later
   // follow-up. Starting a new turn must reopen the row; otherwise the old
   // terminal marker remains sticky while new actions stream underneath it.
+  if (record.type === "turn_context") {
+    // What the child's turn actually ran on, in every Codex version — the
+    // only source for a rollout written before app-server reported it.
+    fold.model = asString(payload.model) ?? fold.model;
+    fold.reasoningEffort = asString(payload.effort) ?? fold.reasoningEffort;
+  }
   if (
     record.type === "turn_context" ||
     (record.type === "event_msg" &&
@@ -755,7 +768,9 @@ export function foldChildTranscriptRecord(
 
   if (record.type === "event_msg" && payload.type === "agent_message") {
     const phase = asString(payload.phase);
-    if (phase === "commentary") {
+    // A partial answer (codex 0.162) is visible answer text from a child that
+    // is still working, so it shows like commentary and never settles the row.
+    if (phase === "commentary" || phase === "partial_answer") {
       markPending();
       const content = asString(payload.message);
       if (content) pushChildAction(fold, { type: "text", content });
@@ -860,6 +875,8 @@ export function childTranscriptSummary(
     actionCount: fold.actionCount,
     nickname: fold.nickname,
     role: fold.role,
+    ...(fold.model ? { model: fold.model } : {}),
+    ...(fold.reasoningEffort ? { reasoningEffort: fold.reasoningEffort } : {}),
     state: fold.state,
     reopenedAfterTerminal: fold.reopenedAfterTerminal,
     readStatus,
@@ -910,6 +927,8 @@ function partFromChildSummary(
     subagentPrompt: base.prompt,
     subagentActions: actions,
     subagentActionCount: summary.actionCount,
+    ...(summary.model ? { subagentModelId: summary.model } : {}),
+    ...(summary.reasoningEffort ? { subagentReasoningEffort: summary.reasoningEffort } : {}),
     toolState: summary.state,
     reopenedAfterTerminal: summary.reopenedAfterTerminal,
   };

@@ -1251,6 +1251,7 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
       });
     } else if (step.type === "toolCall") {
       const rendered = renderToolCall(step.message, state.health);
+      const callId = `${messageId}:tool:${parts.length}`;
       parts.push({
         type: "tool-invocation",
         content: rendered.toolTitle ?? rendered.toolName,
@@ -1258,18 +1259,34 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
         sourceMessageId: messageId,
         // A historic call has no live call id, so key it on its position. It
         // only has to be unique within this message: nothing will patch it.
-        toolUseId: `${messageId}:tool:${parts.length}`,
+        toolUseId: callId,
         toolName: rendered.toolName,
         toolTitle: rendered.toolTitle,
         ...(rendered.toolArgs ? { toolArgs: rendered.toolArgs } : {}),
         ...(rendered.toolOutput !== undefined ? { toolOutput: rendered.toolOutput } : {}),
         ...(rendered.toolError !== undefined ? { toolError: rendered.toolError } : {}),
         ...(rendered.toolDiff ? { toolDiff: rendered.toolDiff } : {}),
+        ...(rendered.toolDurationMs !== undefined
+          ? { toolDurationMs: rendered.toolDurationMs }
+          : {}),
+        ...(rendered.subagent?.modelId ? { subagentModelId: rendered.subagent.modelId } : {}),
         toolState: rendered.toolError === undefined ? "success" : "failure",
         // Replayed history is settled by definition: whatever these sub-agents
         // were doing, they are not doing it on this bridge's watch.
         ...(rendered.subagent ? { agentState: "finished" as const } : {}),
       });
+      if (rendered.toolImage) {
+        parts.push({
+          type: "image",
+          content: rendered.toolImage.caption,
+          sourcePartId: `image:${callId}`,
+          sourceMessageId: messageId,
+          createdAt: new Date().toISOString(),
+          fileUrl: `file://${rendered.toolImage.filePath}`,
+          filename: rendered.toolImage.filePath,
+          imageSource: rendered.toolImage.imageSource,
+        });
+      }
     }
   }
   if (parts.length > 0) {
@@ -1357,6 +1374,9 @@ function appendHistoricShellTurn(state: SessionState, body: Record<string, unkno
         toolTitle: rendered.toolTitle,
         ...(rendered.toolArgs ? { toolArgs: rendered.toolArgs } : {}),
         ...(rendered.toolOutput !== undefined ? { toolOutput: rendered.toolOutput } : {}),
+        ...(rendered.toolDurationMs !== undefined
+          ? { toolDurationMs: rendered.toolDurationMs }
+          : {}),
         toolState: "success",
       },
     ],

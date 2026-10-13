@@ -1276,6 +1276,17 @@ export interface NativeAgentBackgroundTaskSummary {
   outputFile?: string;
   /** Latest usage the provider reported for the task. */
   usage?: NativeAgentBackgroundTaskUsage;
+  /**
+   * The role of the agent running this task, when the task is an agent: the
+   * provider's own name for the agent type or profile (a built-in such as
+   * `general-purpose`, or a user-defined agent's name).
+   *
+   * `main-session` is reserved for the conversation's own root agent moved to
+   * the background, rather than a child it delegated to. Absent for tasks that
+   * are not agents (shell commands) and for providers that do not report one.
+   * Display text only: it is not an identifier and does not select behavior.
+   */
+  agentRole?: string;
 }
 
 export interface NativeAgentBackgroundTaskUsage {

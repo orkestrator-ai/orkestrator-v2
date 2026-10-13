@@ -150,6 +150,82 @@ describe("tool cards", () => {
     expect(byId.get("loop-1")?.parentTaskUseId).toBeUndefined();
   });
 
+  test("stamps Pi's measured duration on a settled card, never a running one", () => {
+    const state = running();
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "codemode-1",
+      toolName: "codemode",
+      args: { code: "await tools.bash({ command: 'echo hi' })" },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "nested-1",
+      parentToolCallId: "codemode-1",
+      toolName: "bash",
+      args: { command: "echo hi" },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_update",
+      toolCallId: "nested-1",
+      parentToolCallId: "codemode-1",
+      toolName: "bash",
+      args: { command: "echo hi" },
+      partialResult: { content: [{ type: "text", text: "h" }] },
+      // Not a field Pi sends here; a running card must not adopt one anyway.
+      durationMs: 5,
+    });
+    const byId = () =>
+      new Map((parts(state) as BridgeToolPart[]).map((part) => [part.toolUseId, part] as const));
+    expect(byId().get("nested-1")?.toolDurationMs).toBeUndefined();
+
+    // Pi 1.1 times nested calls (`ctx.executeTool`) the same way as top-level ones.
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "nested-1",
+      parentToolCallId: "codemode-1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "hi" }] },
+      isError: false,
+      durationMs: 41.6,
+    });
+    expect(byId().get("nested-1")).toMatchObject({ toolState: "success", toolDurationMs: 42 });
+    expect(byId().get("codemode-1")?.toolDurationMs).toBeUndefined();
+
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "codemode-1",
+      toolName: "codemode",
+      result: { content: [{ type: "text", text: "done" }] },
+      isError: false,
+      durationMs: 120,
+    });
+    expect(byId().get("codemode-1")).toMatchObject({ toolState: "success", toolDurationMs: 120 });
+  });
+
+  test("omits the duration when Pi reports none or an unusable one", () => {
+    const state = running();
+    for (const [toolCallId, durationMs] of [
+      ["absent", undefined],
+      ["negative", -1],
+      ["not-finite", Number.POSITIVE_INFINITY],
+      ["text", "12"],
+    ] as const) {
+      applySessionEvent(state, {
+        type: "tool_execution_end",
+        toolCallId,
+        toolName: "read",
+        result: { content: [{ type: "text", text: "x" }] },
+        isError: false,
+        ...(durationMs === undefined ? {} : { durationMs }),
+      });
+    }
+    for (const part of parts(state) as BridgeToolPart[]) {
+      expect(part.toolState).toBe("success");
+      expect(part).not.toHaveProperty("toolDurationMs");
+    }
+  });
+
   test("patches one card across start, update and end", () => {
     const state = running();
     applySessionEvent(state, {
@@ -396,6 +472,39 @@ describe("session events", () => {
       cacheWriteTokens: 4,
       reasoningTokens: 3,
     });
+  });
+
+  test("sums each model response's duration as the turn's provider time", () => {
+    const state = running();
+    applySessionEvent(state, {
+      type: "turn_end",
+      message: { role: "assistant", durationMs: 1_200, usage: { input: 1, output: 1 } },
+    });
+    // A legacy or deferred message carries no duration; it adds nothing.
+    applySessionEvent(state, {
+      type: "turn_end",
+      message: { role: "assistant", usage: { input: 1, output: 1 } },
+    });
+    applySessionEvent(state, { type: "turn_end", message: { role: "assistant", durationMs: 300 } });
+
+    expect(state.currentTurnApiDurationMs).toBe(1_500);
+  });
+
+  test("records Pi's aborted verdict for the turn it settles", () => {
+    const completed = running();
+    applySessionEvent(completed, { type: "agent_settled", aborted: false });
+    expect(completed.turnAborted).toBeUndefined();
+
+    const aborted = running();
+    applySessionEvent(aborted, { type: "agent_settled", aborted: true });
+    expect(aborted.turnAborted).toBe(true);
+    expect(aborted.health.drift()).toBeUndefined();
+
+    // A run nobody owns (an extension's while idle, or one already failed)
+    // must not mark the next turn cancelled.
+    const idle = newSessionState();
+    applySessionEvent(idle, { type: "agent_settled", aborted: true });
+    expect(idle.turnAborted).toBeUndefined();
   });
 
   test("tracks the steering and follow-up queue", () => {

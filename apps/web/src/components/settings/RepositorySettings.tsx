@@ -665,6 +665,7 @@ export function RepositorySettings({
                       size="icon"
                       onClick={() => removePortMapping(index)}
                       disabled={isSaving}
+                      aria-label="Remove port mapping"
                       className="h-8 w-8"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -719,6 +720,7 @@ export function RepositorySettings({
                   size="icon"
                   onClick={() => removeFileToCopy(index)}
                   disabled={isSaving}
+                  aria-label="Remove file to copy"
                   className="h-8 w-8"
                 >
                   <Trash2 className="h-4 w-4" />

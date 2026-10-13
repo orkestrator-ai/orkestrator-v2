@@ -256,9 +256,12 @@ or `mise run check` (format, lint and typecheck). Markdown and `docs/**` are not
 reformatted. Rationale and exclusions are in
 [`docs/development/linting.md`](docs/development/linting.md).
 
-- Only `correctness` is enabled, as errors. `no-unused-vars` is a warning for
-  the pre-existing backlog: clean up files you touch, never silence it or raise
-  it to `error`. Warnings do not fail the build, so read the output.
+- Only `correctness` is enabled, as errors. `no-unused-vars` and the seven
+  React Compiler rules (`react/refs`, `react/set-state-in-effect`, …; listed in
+  `.oxlintrc.json`) are warnings for the pre-existing backlog: clean up files
+  you touch, never add new findings or silence them, and raise a rule to
+  `error` only once its backlog is gone. Warnings do not fail the build, so
+  read the output.
 - Use a disable directive only when the rule is wrong about that site, with the
   reason above it. `oxlint-disable-next-line` sits above the **reported** line;
   `react-hooks/exhaustive-deps` needs a block `oxlint-disable`/`oxlint-enable`
@@ -570,8 +573,12 @@ When touching the Pi bridge:
   abort that hangs or rejects (the next request retries it). The prompt route
   checks for it after every preparation await and settles without calling Pi.
   In Pi's preflight the cancel calls `session.abort()` at once (pinned SDK
-  0.87 aborts an auto-compaction there) and again when Pi accepts, because the
-  run resets the abort flag when it starts. Acceptance is bounded by
+  1.2 aborts an auto-compaction and pre-empts a run `_startRun` is preparing;
+  that abort waits for the run to settle, so it is never awaited) and again
+  when Pi accepts, because `_startRun` resets the abort flag when it begins.
+  A run Pi reports settled with `aborted: true` — whoever aborted it,
+  including an extension — ends the turn cancelled (idle, structured result
+  `interrupted`), never completed. Acceptance is bounded by
   `PI_BRIDGE_STARTUP_TIMEOUT_MS` (default 5 min, floor 30 s): past it the route
   answers 424 with an explicit error, but the claim and `dispatching` are kept
   until Pi settles the prompt — a late acceptance is aborted and observed — so
@@ -845,7 +852,7 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.2-debian`, pinned by its multi-architecture
+The image is built from `oven/bun:1.4.3-debian`, pinned by its multi-architecture
 index digest on both stages, matching the Bun version managed in `mise.toml`
 for development and CI. Refresh the digest deliberately (`docker buildx
 imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;

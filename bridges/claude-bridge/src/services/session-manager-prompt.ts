@@ -124,6 +124,10 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
       return "Claude cannot use bypass-permissions mode while running as root. Run the agent as a non-root user.";
     case "provider_not_allowed":
       return "Managed settings do not allow the API provider this session is configured for. Ask an administrator to allow it, or switch provider.";
+    case "org_config_required_unavailable":
+      return "Claude could not load the policy limits and managed settings your organization requires. Check connectivity and any proxy, then retry.";
+    case "org_config_refused":
+      return "Anthropic refused your organization's required Claude settings for this sign-in. Sign in to Claude again; if that does not help, ask an administrator to allow Claude Code for this account.";
   }
 }
 
@@ -1418,7 +1422,11 @@ export async function sendPrompt(
                 id: hookInput.task_id,
                 description: hookInput.task_subject || hookInput.task_description,
               }
-            : { id: hookInput.agent_id, description: hookInput.agent_type },
+            : {
+                id: hookInput.agent_id,
+                description: hookInput.agent_type,
+                subagentType: hookInput.agent_type || undefined,
+              },
           queryIteratorControl,
           // The hook fires as a run starts, so a terminal record under this id
           // belongs to an earlier run: a SendMessage resume, or a subagent
@@ -1961,6 +1969,8 @@ export async function sendPrompt(
             task_id?: string;
             task_type?: string;
             description?: string;
+            /** Agent SDK 0.3.296+: agent type, or `main-session`. */
+            subagent_type?: unknown;
           }>;
           patch?: {
             status?: BackgroundTaskSnapshot["status"];
@@ -2061,6 +2071,7 @@ export async function sendPrompt(
             error: taskMessage.patch?.error ?? previous?.error,
             summary: previous?.summary,
             outputFile: previous?.outputFile,
+            subagentType: previous?.subagentType,
             // Terminal usage wins over an older progress frame delivered late.
             usage:
               previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) && previous.usage
@@ -2143,6 +2154,7 @@ export async function sendPrompt(
             summary: notification.summary ?? previous?.summary,
             outputFile: notification.output_file ?? previous?.outputFile,
             usage: notification.usage ?? previous?.usage,
+            subagentType: previous?.subagentType,
           };
           session.backgroundTasks = boundBackgroundTaskHistory({
             ...session.backgroundTasks,
@@ -2211,6 +2223,13 @@ export async function sendPrompt(
               replacement[id] = previous;
               continue;
             }
+            // Only the level names the agent type (the edges do not), and it
+            // never changes within a run, so an earlier value stands in for a
+            // CLI that predates the field.
+            const subagentType =
+              typeof entry.subagent_type === "string" && entry.subagent_type.length > 0
+                ? entry.subagent_type
+                : previous?.subagentType;
             replacement[id] = {
               id,
               toolUseId: previous?.toolUseId,
@@ -2221,6 +2240,7 @@ export async function sendPrompt(
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
               ...(previous?.usage ? { usage: previous.usage } : {}),
+              ...(subagentType ? { subagentType } : {}),
             };
             inheritBackgroundTaskHookRun(previous, replacement[id]!);
             // An id already owned by another live control keeps that owner:
@@ -3411,7 +3431,7 @@ export async function sendPrompt(
           // events a failed lifecycle hook would silently leave task or
           // compaction projection stale.
           includeHookEvents: true,
-          // Pinned against @anthropic-ai/claude-agent-sdk 0.3.292: although the
+          // Pinned against @anthropic-ai/claude-agent-sdk 0.3.296: although the
           // SDK warns that bypassPermissions shadows canUseTool for ordinary
           // tool permission checks, AskUserQuestion is a special case. A live
           // contract probe confirmed it still reaches this callback and the SDK

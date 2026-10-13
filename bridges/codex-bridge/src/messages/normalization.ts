@@ -50,6 +50,19 @@ export function capCommandOutput(
   return output.slice(0, keep) + COMMAND_OUTPUT_TRUNCATION_NOTICE;
 }
 
+/**
+ * The provider-reported run time, only once the call has finished: a duration
+ * on a running row would read as a final measurement.
+ */
+function finishedDuration(item: {
+  status: string;
+  duration_ms?: number;
+}): { toolDurationMs: number } | Record<string, never> {
+  return item.status !== "in_progress" && item.duration_ms !== undefined
+    ? { toolDurationMs: item.duration_ms }
+    : {};
+}
+
 export function stringifyUnknown(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string") return value;
@@ -343,6 +356,7 @@ export async function itemToParts(
           // error treatment, so keep the payload exactly once.
           toolOutput: failed ? undefined : output || undefined,
           toolError: failed ? output || "Command failed" : undefined,
+          ...finishedDuration(item),
         },
       ];
     }
@@ -381,6 +395,7 @@ export async function itemToParts(
           toolTitle: `${item.server}:${item.tool}`,
           toolOutput: stringifyUnknown(item.result),
           toolError: item.error?.message,
+          ...finishedDuration(item),
         },
       ];
     case "dynamic_tool_call": {
@@ -396,6 +411,7 @@ export async function itemToParts(
             toolUseId: item.id,
             toolOutput: item.status === "failed" ? undefined : output,
             toolError: item.status === "failed" ? (output ?? "Tool failed") : undefined,
+            ...finishedDuration(item),
           }));
         }
       }
@@ -412,6 +428,7 @@ export async function itemToParts(
           toolTitle: item.namespace ? `${item.namespace}:${item.tool}` : item.tool,
           toolOutput: item.status === "failed" ? undefined : output,
           toolError: item.status === "failed" ? (output ?? "Tool failed") : undefined,
+          ...finishedDuration(item),
         },
       ];
     }

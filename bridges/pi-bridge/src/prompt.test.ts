@@ -466,6 +466,66 @@ describe("structured output", () => {
     });
   });
 
+  test("a run Pi reports aborted ends cancelled, though this bridge never asked", async () => {
+    // Pi 1.1's `agent_settled.aborted`: an extension's `ctx.abort()` (or Pi
+    // itself) stopped the run. The text it stopped on parses, but it is not
+    // the turn's answer.
+    const state = runningState();
+    const stub = stubSession({ lastAssistantText: '{"verdict":"ready"}' });
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ requestId: "req-aborted", schema: { type: "object" } }),
+    );
+    applySessionEvent(state, { type: "agent_settled", aborted: true });
+    stub.finish();
+    await handle.completion;
+
+    expect(stub.aborted()).toBe(0);
+    expect(state.status).toBe("idle");
+    expect(state.error).toBeUndefined();
+    expect(state.promptJournal.get("req-aborted")?.state).toBe("completed");
+    expect(state.structured.get("req-aborted")).toMatchObject({
+      ok: false,
+      provider: "pi",
+      requestId: "req-aborted",
+      error: { code: "interrupted", retryable: true },
+    });
+    expect(state.turnAborted).toBeUndefined();
+
+    // The verdict belongs to that run alone: the next turn completes normally.
+    state.status = "running";
+    state.promptSequence += 1;
+    const next = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ requestId: "req-next", schema: { type: "object" } }),
+    );
+    applySessionEvent(state, { type: "agent_settled", aborted: false });
+    await next.completion;
+    expect(state.structured.get("req-next")).toMatchObject({
+      ok: true,
+      value: { verdict: "ready" },
+    });
+  });
+
+  test("a stale aborted verdict from an earlier run does not cancel a new turn", async () => {
+    const state = runningState();
+    state.turnAborted = true;
+    const stub = stubSession({ lastAssistantText: '{"ok":1}' });
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ requestId: "req-fresh", schema: { type: "object" } }),
+    );
+    stub.finish();
+    await handle.completion;
+
+    expect(state.structured.get("req-fresh")).toMatchObject({ ok: true, value: { ok: 1 } });
+  });
+
   test("refuses an output past the size cap instead of retaining it", async () => {
     const state = runningState();
     const withOutput = stubSession({
@@ -607,6 +667,50 @@ describe("context usage", () => {
         },
       ],
     });
+  });
+
+  test("reports the turn's summed model-response time as its API duration", async () => {
+    const state = runningState();
+    const stub = stubSession({
+      lastAssistantUsage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0 } },
+    });
+    state.session = stub.session;
+    state.turnStartedAt = Date.now();
+    // Left over from an earlier turn; dispatch must not inherit it.
+    state.currentTurnApiDurationMs = 9_999;
+    const handle = await dispatchPrompt(state, stub.session, input({ requestId: "api-1" }));
+    applySessionEvent(state, {
+      type: "turn_end",
+      message: { role: "assistant", durationMs: 1_250, usage: { input: 5, output: 2 } },
+    });
+    applySessionEvent(state, {
+      type: "turn_end",
+      message: { role: "assistant", durationMs: 750, usage: { input: 5, output: 3 } },
+    });
+    stub.finish();
+    await handle.completion;
+
+    const usage = publicContextUsage(state);
+    expect(usage?.apiDurationMs).toBe(2_000);
+    expect(usage?.durationMs).toEqual(expect.any(Number));
+    expect(usage?.turns?.at(-1)).toMatchObject({ requestId: "api-1", apiDurationMs: 2_000 });
+    expect(state.currentTurnApiDurationMs).toBeUndefined();
+  });
+
+  test("omits the API duration when Pi timed no response", async () => {
+    const state = runningState();
+    const stub = stubSession({
+      lastAssistantUsage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0 } },
+    });
+    state.session = stub.session;
+    const handle = await dispatchPrompt(state, stub.session, input({ requestId: "api-2" }));
+    applySessionEvent(state, { type: "turn_end", message: { role: "assistant", usage: {} } });
+    stub.finish();
+    await handle.completion;
+
+    const usage = publicContextUsage(state);
+    expect(usage).not.toHaveProperty("apiDurationMs");
+    expect(usage?.turns?.at(-1)).not.toHaveProperty("apiDurationMs");
   });
 });
 

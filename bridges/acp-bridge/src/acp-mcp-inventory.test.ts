@@ -9,6 +9,8 @@ import {
   grokMcpConfigFingerprint,
   grokMcpConfigStatus,
   vendorMcpInventory,
+  vendorMcpServerStatus,
+  withVendorMcpStatuses,
 } from "./acp-mcp-inventory.js";
 
 const roots: string[] = [];
@@ -85,6 +87,64 @@ describe("vendorMcpInventory", () => {
   test("params that are not a listing yield nothing", () => {
     expect(vendorMcpInventory({})).toBeUndefined();
     expect(vendorMcpInventory({ mcpServers: "nope" })).toBeUndefined();
+  });
+});
+
+describe("vendorMcpServerStatus", () => {
+  test("maps Grok's ready and unavailable reports onto inventory statuses", () => {
+    expect(
+      vendorMcpServerStatus({ name: "a", status: "ready", reason: "initialized", tools: null }),
+    ).toEqual({ name: "a", status: "connected", reason: "initialized" });
+    expect(
+      vendorMcpServerStatus({
+        name: "b",
+        status: "unavailable",
+        reason: "auth_required",
+        detail: "https://secret.example.test",
+      }),
+    ).toEqual({ name: "b", status: "needs-auth", reason: "auth_required" });
+    expect(
+      vendorMcpServerStatus({ name: "c", status: "unavailable", reason: "handshake_failed" }),
+    ).toEqual({ name: "c", status: "failed", reason: "handshake_failed" });
+    expect(vendorMcpServerStatus({ name: "d", status: "warming-up" })).toEqual({
+      name: "d",
+      status: "unknown",
+    });
+  });
+
+  test("drops reports without a name or status, and reasons that are not codes", () => {
+    expect(vendorMcpServerStatus({ status: "ready" })).toBeUndefined();
+    expect(vendorMcpServerStatus({ name: "a" })).toBeUndefined();
+    expect(
+      vendorMcpServerStatus({ name: "a", status: "unavailable", reason: "see https://x/y" }),
+    ).toEqual({ name: "a", status: "failed" });
+  });
+
+  test("overlays only listed names and carries the reason code as error text", () => {
+    const listing = vendorMcpInventory({
+      mcpServers: [
+        { name: "a", command: "x" },
+        { name: "b", url: "https://example.test" },
+      ],
+    })!;
+    const statuses = new Map([
+      [
+        "b",
+        vendorMcpServerStatus({ name: "b", status: "unavailable", reason: "handshake_failed" })!,
+      ],
+      ["ghost", vendorMcpServerStatus({ name: "ghost", status: "ready" })!],
+    ]);
+    expect(withVendorMcpStatuses(listing, statuses)).toEqual([
+      { id: "a", name: "a", status: "unknown", transport: "stdio", actions: [] },
+      {
+        id: "b",
+        name: "b",
+        status: "failed",
+        transport: "http",
+        error: "handshake failed",
+        actions: [],
+      },
+    ]);
   });
 });
 

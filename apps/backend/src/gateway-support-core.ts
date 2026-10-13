@@ -2101,6 +2101,10 @@ export function serializedJsonResponse(
   bodyResponse(response, statusCode, payload, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    // A 413 is answered before the request body has been read. Reusing the
+    // connection would leave those unread bytes in the keep-alive stream, and
+    // Bun 1.4.3 keeps server.close() waiting on such a connection.
+    ...(statusCode === 413 ? { connection: "close" } : {}),
     ...headers,
   });
 }

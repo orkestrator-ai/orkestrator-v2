@@ -22,6 +22,13 @@
   ],
   "rules": {
     "no-unused-vars": "warn",
-    "no-control-regex": "off"
+    "no-control-regex": "off",
+    "react/refs": "warn",
+    "react/set-state-in-effect": "warn",
+    "react/immutability": "warn",
+    "react/preserve-manual-memoization": "warn",
+    "react/globals": "warn",
+    "react/purity": "warn",
+    "react/use-memo": "warn"
   }
 }

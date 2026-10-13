@@ -39,6 +39,28 @@ const GROK_PROVIDER: AcpProviderConfig = {
   sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
 };
 
+/**
+ * Prompt content a provider is known to accept although its `initialize`
+ * answer does not declare it.
+ *
+ * Grok answers `promptCapabilities.image: false` yet reads a standard inline
+ * `image` block: against 1.0.52 a 64px red PNG sent only as an image block
+ * (no path in the text, no tool call) was named "Red". The declaration is
+ * conservative rather than accurate, and refusing on it would break the image
+ * attachments the platform's capability row offers. Keyed by provider id, not
+ * by launcher record, so the backend's serialized config and the built-in one
+ * agree. Remove an entry once the agent declares the capability itself.
+ */
+const UNDECLARED_PROMPT_CAPABILITIES: Readonly<Record<string, { image?: true }>> = {
+  grok: { image: true },
+};
+
+export function undeclaredPromptCapabilities(providerId: string): { image?: true } {
+  return Object.hasOwn(UNDECLARED_PROMPT_CAPABILITIES, providerId)
+    ? UNDECLARED_PROMPT_CAPABILITIES[providerId]!
+    : {};
+}
+
 export function loadAcpProviderConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): AcpProviderConfig {

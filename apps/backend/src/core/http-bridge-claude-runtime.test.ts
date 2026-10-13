@@ -1,0 +1,39 @@
+import { describe, expect, test } from "bun:test";
+import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
+
+describe("normalizeClaudeBackgroundTasks", () => {
+  test("carries Claude's subagent type as the neutral agent role", () => {
+    /*
+     * A card the transcript cannot place has only the snapshot to read, so the
+     * role is what tells a delegated agent from a backgrounded main session
+     * when neither carries a description.
+     */
+    expect(
+      normalizeClaudeBackgroundTasks({
+        agent: { status: "running", subagentType: "Explore" },
+        main: { status: "running", subagentType: " main-session " },
+        shell: { status: "running", description: "Watch" },
+      }),
+    ).toEqual([
+      { id: "agent", status: "running", agentRole: "Explore" },
+      { id: "main", status: "running", agentRole: "main-session" },
+      { id: "shell", status: "running", description: "Watch" },
+    ]);
+  });
+
+  test("drops a role that is not a usable name rather than cutting it down", () => {
+    expect(
+      normalizeClaudeBackgroundTasks({
+        blank: { status: "running", subagentType: "   " },
+        number: { status: "running", subagentType: 7 },
+        control: { status: "running", subagentType: "Explore\nInjected" },
+        long: { status: "running", subagentType: "x".repeat(257) },
+      }),
+    ).toEqual([
+      { id: "blank", status: "running" },
+      { id: "number", status: "running" },
+      { id: "control", status: "running" },
+      { id: "long", status: "running" },
+    ]);
+  });
+});

@@ -210,6 +210,81 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
         return api.clipboard.readText();
       })
       .then((value) => expect(value).toBe("orkestrator-electron-smoke"));
+    // Electron 44 replaced readImage/writeImage with ClipboardItem payloads;
+    // round-trip a real PNG through the main-process handlers.
+    await window
+      .evaluate(async () => {
+        const api = (
+          globalThis as typeof globalThis & {
+            orkestrator: {
+              clipboard: {
+                writeImage(dataUrl: string): Promise<void>;
+                readImage(): Promise<{ width: number; height: number; dataUrl?: string } | null>;
+              };
+            };
+          }
+        ).orkestrator;
+        const canvas = document.createElement("canvas");
+        canvas.width = 3;
+        canvas.height = 2;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = "#28231f";
+        context.fillRect(0, 0, 3, 2);
+        await api.clipboard.writeImage(canvas.toDataURL("image/png"));
+        const image = await api.clipboard.readImage();
+        return image && { width: image.width, height: image.height, dataUrl: image.dataUrl };
+      })
+      .then((image) => {
+        expect(image).toMatchObject({ width: 3, height: 2 });
+        expect(image?.dataUrl).toMatch(/^data:image\/png;base64,/);
+      });
+    if (process.platform === "darwin") {
+      // Native apps commonly put only public.tiff on NSPasteboard. Seed the
+      // actual OS format, not an Electron ClipboardItem that might also add PNG.
+      const png = await window.evaluate(() => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 3;
+        canvas.height = 2;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = "#d03050";
+        context.fillRect(0, 0, 3, 2);
+        return canvas.toDataURL("image/png").split(",")[1]!;
+      });
+      const swiftFile = path.join(temporaryRoot, "clipboard-tiff.swift");
+      await writeFile(
+        swiftFile,
+        `import AppKit
+let png = Data(base64Encoded: CommandLine.arguments[1])!
+let image = NSBitmapImageRep(data: png)!
+let tiff = image.representation(using: .tiff, properties: [:])!
+let board = NSPasteboard.general
+board.clearContents()
+board.declareTypes([.tiff], owner: nil)
+guard board.setData(tiff, forType: .tiff),
+      board.types?.contains(.tiff) == true,
+      board.types?.contains(.png) == false else { exit(1) }
+print("public.tiff")
+`,
+      );
+      const seeded = spawnSync("/usr/bin/swift", [swiftFile, png], {
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      expect(seeded.status, seeded.stderr).toBe(0);
+      expect(seeded.stdout.trim()).toBe("public.tiff");
+      const formats = await app.evaluate(async ({ clipboard }) =>
+        (await clipboard.read()).flatMap((item) => item.types),
+      );
+      // Electron/Chromium exposes a PNG conversion for the native TIFF image.
+      expect(formats).toContain("image/png");
+      const image = await window.evaluate(async () =>
+        (
+          globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi }
+        ).orkestrator.clipboard.readImage(),
+      );
+      expect(image).toMatchObject({ width: 3, height: 2 });
+      expect(image?.dataUrl).toMatch(/^data:image\/png;base64,/);
+    }
     const electronPid = await app.evaluate(() => process.pid);
     expect(electronPid).toBeTruthy();
     const backendPid = await expect

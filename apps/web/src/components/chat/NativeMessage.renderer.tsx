@@ -268,6 +268,7 @@ export function MessagePart({
             toolOutput={part.toolOutput}
             toolError={part.toolError}
             toolDiff={part.toolDiff}
+            durationMs={part.toolDurationMs}
             deferredDetails={deferredDetails}
           />
         );
@@ -317,6 +318,7 @@ export function MessagePart({
           progress={part.progress}
           denied={part.toolDenied}
           commandChanges={part.commandChanges}
+          durationMs={part.toolDurationMs}
           deferredDetails={deferredDetails}
         />
       );

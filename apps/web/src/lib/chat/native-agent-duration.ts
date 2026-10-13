@@ -53,3 +53,22 @@ export function formatNativeAgentElapsed(options: {
   }
   return formatAgentDurationMs(elapsedMs);
 }
+
+/**
+ * Runtime label for a settled tool row, from the part's `toolDurationMs`.
+ *
+ * Only a call that actually finished gets one: a running row's clock belongs to
+ * its progress sub-line, and a value that is missing, negative or non-finite is
+ * left out rather than shown as "0ms". Uses the agent formatter so a tool and a
+ * sub-agent that ran equally long read the same.
+ */
+export function formatSettledToolDuration(
+  toolState: "success" | "failure" | "pending" | undefined,
+  durationMs: number | undefined,
+): string | undefined {
+  if (toolState !== "success" && toolState !== "failure") return undefined;
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+    return undefined;
+  }
+  return formatAgentDurationMs(durationMs);
+}

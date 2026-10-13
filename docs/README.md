@@ -54,6 +54,7 @@ Refreshed 2026-09-17 against the current tree.
 | [disk-usage.md](development/disk-usage.md) | Living | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [linting.md](development/linting.md) | Living | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 | [releasing.md](development/releasing.md) | Living | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
+| [dependency-upgrade-schedule-2026-10-13.md](development/dependency-upgrade-schedule-2026-10-13.md) | Active | Phased upgrade plan for every non-agent dependency, runtime and image tool: security fixes, Electron 42 EOL, Vite 8, lucide 1.x, oxlint React Compiler rules, PR boundaries and validation. Agent SDKs stay in `upgrade-agents.md`. |
 
 ## Tests
 
@@ -112,6 +113,6 @@ These are the only unfinished `docs/todo/` files.
 | Document | Status | Notes |
 | --- | --- | --- |
 | [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Coordinator read-only adapters, turn-control gaps, and one live suite. |
-| [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.18.35`. |
+| [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.19.0`. |
 | [remote-stream-compression.md](todo/remote-stream-compression.md) | Deferred | Measure redundant payloads before changing compression defaults. |
 | [remote-client-data-saving-mode.md](todo/remote-client-data-saving-mode.md) | Deferred | Proposal only. Measure existing incremental reads first. |

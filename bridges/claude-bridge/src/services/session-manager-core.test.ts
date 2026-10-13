@@ -114,7 +114,7 @@ describe("getAvailableModels", () => {
       "opus[1m]": "claude-opus-5-5[1m]",
       "claude-fable-5-1[1m]": "claude-fable-5-1",
       sonnet: "claude-sonnet-5-5",
-      haiku: "claude-haiku-4-5-20251001",
+      haiku: "claude-haiku-5-5",
     });
     for (const id of ["default", "opus[1m]"]) {
       expect(catalog.models.find((m) => m.id === id)?.description).toBe(
@@ -123,7 +123,7 @@ describe("getAvailableModels", () => {
     }
   });
 
-  test("fallback marks the Opus aliases as fast-mode capable and Haiku without effort", async () => {
+  test("fallback marks the Opus aliases as fast-mode capable and every tier with effort", async () => {
     mockQuery.mockImplementationOnce(() => {
       throw new Error("SDK unavailable");
     });
@@ -139,15 +139,13 @@ describe("getAvailableModels", () => {
       "opus[1m]",
     ]);
 
-    // Reasoning-capable models expose the full effort ladder incl. xhigh/max.
-    for (const id of ["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet"]) {
+    // Every tier exposes the full effort ladder incl. xhigh/max; since Claude
+    // Code 2.1.293 that includes Haiku 5.5, which 4.5 did not.
+    for (const id of ["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet", "haiku"]) {
       const model = byId.get(id);
       expect(model?.supportsEffort).toBe(true);
       expect(model?.supportedEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
-
-    // Haiku is the fast, non-reasoning tier.
-    expect(byId.get("haiku")?.supportsEffort).toBeUndefined();
   });
 
   test("cleans up the SDK query after success, failure, and cleanup errors", async () => {

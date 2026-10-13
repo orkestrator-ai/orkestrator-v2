@@ -83,3 +83,29 @@ mise run test:logged -- --name project-home-alone -- \
 
 Failure evidence: `orkestrator-test-run.wS9yy3/backend-package-tests.log.gz`
 in the platform temporary directory. No assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-13
+
+During canonical worktree-location validation, the GNU-tool PATH command
+`mise run test:logged -- --name full-suite -- mise run test` failed the same
+Git index-lock assertion in 142.66 ms. The aggregate used 2/3/2/1 worker slots
+for workspace/root/bridges/protocol; workspace packages each used one Bun
+worker. Backend totals were 5849 passed, 23 failed and 15 skipped across 328
+files in 275.02 seconds. The other 22 failures were environment-move cleanup
+errors that reproduced alone on this host, where the `tmux` executable is
+absent; they are not evidence of this flake.
+
+With the same GNU-tool PATH, the unchanged owning file passed alone (exit 0)
+in 2.1 seconds:
+
+```bash
+mise run test:logged -- --name project-home-isolated -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+```
+
+Failure evidence:
+`/tmp/orkestrator-test-run.xZCLLJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `/tmp/orkestrator-test-run.xZCLLJ/summary.json`. The isolated pass again
+supports intermittent fixture Git contention without identifying the lock
+owner. No assertion, timeout or skip was changed.

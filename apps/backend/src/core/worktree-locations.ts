@@ -53,7 +53,8 @@ function productionDataDir(): string | null {
  * Checks a folder the user chose for new worktrees and returns it resolved.
  * A worktree folder is deleted with its environment, so the parent may not be
  * the filesystem root, Orkestrator's own data, or (for an environment) the
- * project checkout the worktree is added to.
+ * project checkout the worktree is added to. Symlinks in the chosen path are
+ * resolved, so the returned folder is the real one.
  */
 export function validateWorktreeLocation(
   value: unknown,
@@ -79,8 +80,22 @@ export function validateWorktreeLocation(
   if (options.projectPath && isSameOrInside(resolved, options.projectPath)) {
     throw new Error(`${options.label} must not be inside the project checkout`);
   }
-  assertWorktreePathUnlinked(resolved);
-  return resolved;
+  // Store the real folder: a symlink chosen by the user (a home alias for an
+  // external volume) could later be retargeted under a worktree's deletion.
+  const canonical = canonicalWorktreePath(resolved);
+  if (canonical === path.parse(canonical).root) {
+    throw new Error(`${options.label} must not be the filesystem root`);
+  }
+  // Canonicalization can reveal a name the stored-path contract would trim
+  // or discard. Reject it instead of silently selecting a different folder.
+  if (canonical !== canonical.trim()) {
+    throw new Error(`${options.label} must not resolve to a path with surrounding whitespace`);
+  }
+  if (canonical.length > MAX_WORKTREE_LOCATION_CHARS) {
+    throw new Error(`${options.label} is too long`);
+  }
+  assertWorktreePathUnlinked(canonical);
+  return canonical;
 }
 
 export function configuredWorktreeLocations(config: AppConfig): WorktreeLocationSettings {

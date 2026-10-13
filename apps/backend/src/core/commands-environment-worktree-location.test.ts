@@ -11,6 +11,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
+import { updateWorktreeLocations } from "./worktree-locations.js";
 
 const roots: string[] = [];
 
@@ -45,7 +46,7 @@ async function setup() {
       { projectId: project.id, ...args },
       context,
     ) as Promise<Environment>;
-  return { root, projectPath, storage, create, context, commands };
+  return { root, project, projectPath, storage, create, context, commands };
 }
 
 describe("create_environment worktree location", () => {
@@ -77,6 +78,26 @@ describe("create_environment worktree location", () => {
     await expect(create({ environmentType: "local", worktreeBaseDir: "trees" })).rejects.toThrow(
       "absolute",
     );
+  });
+
+  test("rejects aliases to root or whitespace-ending folders before saving an environment", async () => {
+    const { root, project, storage, create } = await setup();
+    const whitespaceTarget = path.join(root, "trees ");
+    await fs.mkdir(whitespaceTarget);
+    for (const [name, target, error] of [
+      ["root", path.parse(root).root, "filesystem root"],
+      ["whitespace", whitespaceTarget, "surrounding whitespace"],
+    ] as const) {
+      const alias = path.join(root, `${name}-alias`);
+      await fs.symlink(target, alias);
+      await expect(create({ environmentType: "local", worktreeBaseDir: alias })).rejects.toThrow(
+        error,
+      );
+      const reloaded = new StorageService(storage.getDataDir());
+      await reloaded.init();
+      expect(await reloaded.getEnvironmentsByProject(project.id)).toEqual([]);
+    }
+    expect(await fs.stat(path.join(root, "trees")).catch(() => null)).toBeNull();
   });
 });
 
@@ -138,4 +159,73 @@ test("start rejects a configured default inside its project before creating dire
   );
   expect(await fs.stat(path.join(projectPath, "nested")).catch(() => null)).toBeNull();
   expect((await storage.getEnvironment(environment.id))?.worktreePath).toBeFalsy();
+});
+
+test("retargeting an accepted alias keeps creation and cleanup at the original physical root", async () => {
+  for (const explicit of [false, true]) {
+    const { root, projectPath, storage, create, context, commands } = await setup();
+    await commitFixture(projectPath, root);
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "alias");
+    await fs.mkdir(original);
+    await fs.mkdir(replacement);
+    await fs.symlink(original, alias);
+    if (!explicit) await updateWorktreeLocations({ environments: alias }, context);
+    const environment = await create({
+      environmentType: "local",
+      branch: "feature",
+      ...(explicit ? { worktreeBaseDir: alias } : {}),
+    });
+    await storage.updateEnvironment(environment.id, { setupOverride: true });
+    await fs.unlink(alias);
+    await fs.symlink(replacement, alias);
+    const reloaded = new StorageService(storage.getDataDir());
+    await reloaded.init();
+    context.storage = reloaded;
+    await startEnvironmentOnce(environment.id, context, () => {});
+    const persisted = (await reloaded.getEnvironment(environment.id))!;
+    expect(persisted.worktreeBaseDir).toBe(original);
+    expect(path.dirname(persisted.worktreePath!)).toBe(original);
+    expect(await fs.readFile(path.join(persisted.worktreePath!, "README.md"), "utf8")).toBe(
+      "fixture",
+    );
+    expect(await fs.readdir(replacement)).toEqual([]);
+
+    // A same-named directory behind the retargeted alias must survive cleanup.
+    const decoy = path.join(replacement, path.basename(persisted.worktreePath!));
+    await fs.mkdir(decoy);
+    await fs.writeFile(path.join(decoy, "keep.txt"), "keep");
+    await commands.get("delete_environment")!({ environmentId: environment.id }, context);
+    expect(await reloaded.getEnvironment(environment.id)).toBeNull();
+    expect(await fs.stat(persisted.worktreePath!).catch(() => null)).toBeNull();
+    expect(await fs.readFile(path.join(alias, path.basename(decoy), "keep.txt"), "utf8")).toBe(
+      "keep",
+    );
+    expect(await fs.stat(original)).not.toBeNull();
+  }
+});
+
+test("start rejects persisted aliases to root or trailing whitespace without creating a worktree", async () => {
+  const { root, storage, create, context } = await setup();
+  const whitespaceTarget = path.join(root, "trees ");
+  await fs.mkdir(whitespaceTarget);
+  for (const [name, target, error] of [
+    ["root", path.parse(root).root, "filesystem root"],
+    ["whitespace", whitespaceTarget, "surrounding whitespace"],
+  ] as const) {
+    const alias = path.join(root, `${name}-alias`);
+    await fs.symlink(target, alias);
+    const environment = await create({ environmentType: "local" });
+    await storage.updateEnvironment(environment.id, { worktreeBaseDir: alias });
+    const reloaded = new StorageService(storage.getDataDir());
+    await reloaded.init();
+    context.storage = reloaded;
+    await expect(startEnvironmentOnce(environment.id, context, () => {})).rejects.toThrow(error);
+    const persisted = (await reloaded.getEnvironment(environment.id))!;
+    expect(persisted.worktreeBaseDir).toBe(alias);
+    expect(persisted.worktreePath).toBeFalsy();
+  }
+  expect(await fs.readdir(whitespaceTarget)).toEqual([]);
+  expect(await fs.stat(path.join(root, "trees")).catch(() => null)).toBeNull();
 });

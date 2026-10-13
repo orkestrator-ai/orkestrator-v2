@@ -45,6 +45,26 @@ describe("validateWorktreeLocation", () => {
     expect(() => validateWorktreeLocation("/code/a\0b", options)).toThrow("NUL");
     expect(() => validateWorktreeLocation(42, options)).toThrow("string");
   });
+
+  test("rejects a symlink to the filesystem root", async () => {
+    const service = await storage();
+    const alias = path.join(service.getDataDir(), "root-alias");
+    await fs.symlink(path.parse(service.getDataDir()).root, alias);
+    expect(() => validateWorktreeLocation(alias, options)).toThrow("filesystem root");
+  });
+
+  test("rejects canonical paths ending in whitespace without trimming their destination", async () => {
+    const fixture = await fs.mkdtemp(path.join(tmpdir(), "ork-whitespace-"));
+    directories.push(fixture);
+    for (const suffix of [" ", "\t"]) {
+      const target = path.join(fixture, `trees${suffix}`);
+      const alias = path.join(fixture, `alias-${suffix.length}-${suffix.charCodeAt(0)}`);
+      await fs.mkdir(target);
+      await fs.symlink(target, alias);
+      expect(() => validateWorktreeLocation(alias, options)).toThrow("surrounding whitespace");
+      expect(await fs.stat(path.join(fixture, "trees")).catch(() => null)).toBeNull();
+    }
+  });
 });
 
 describe("worktree location settings", () => {
@@ -93,6 +113,40 @@ describe("worktree location settings", () => {
       updateWorktreeLocations({ environments: "trees", dev: null }, { storage: service }),
     ).rejects.toThrow("absolute");
     expect((await service.loadConfig()).global.worktreeLocations).toBeUndefined();
+  });
+
+  test("preserve saved settings when aliases resolve to root or trailing whitespace", async () => {
+    const service = await storage();
+    const fixture = await fs.mkdtemp(path.join(tmpdir(), "ork-invalid-aliases-"));
+    directories.push(fixture);
+    const previous = {
+      environments: path.join(await fs.realpath(fixture), "trees"),
+      dev: path.join(await fs.realpath(fixture), "dev-trees"),
+    };
+    await updateWorktreeLocations(previous, { storage: service });
+    const whitespaceTarget = path.join(fixture, "trees ");
+    await fs.mkdir(whitespaceTarget);
+    for (const [name, target, error] of [
+      ["root", path.parse(fixture).root, "filesystem root"],
+      ["whitespace", whitespaceTarget, "surrounding whitespace"],
+    ] as const) {
+      const alias = path.join(fixture, name);
+      await fs.symlink(target, alias);
+      for (const key of ["environments", "dev"] as const) {
+        await expect(
+          updateWorktreeLocations({ ...previous, [key]: alias }, { storage: service }),
+        ).rejects.toThrow(error);
+        expect((await service.loadConfig()).global.worktreeLocations).toEqual(previous);
+        const reloaded = new StorageService(service.getDataDir());
+        await reloaded.init();
+        expect((await getWorktreeLocations({ storage: reloaded })).environments.configured).toBe(
+          previous.environments,
+        );
+        expect((await getWorktreeLocations({ storage: reloaded })).dev.configured).toBe(
+          previous.dev,
+        );
+      }
+    }
   });
 
   test("save a folder chosen through a symlink as its real path", async () => {

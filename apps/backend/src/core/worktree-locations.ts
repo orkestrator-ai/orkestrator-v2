@@ -83,6 +83,17 @@ export function validateWorktreeLocation(
   // Store the real folder: a symlink chosen by the user (a home alias for an
   // external volume) could later be retargeted under a worktree's deletion.
   const canonical = canonicalWorktreePath(resolved);
+  if (canonical === path.parse(canonical).root) {
+    throw new Error(`${options.label} must not be the filesystem root`);
+  }
+  // Canonicalization can reveal a name the stored-path contract would trim
+  // or discard. Reject it instead of silently selecting a different folder.
+  if (canonical !== canonical.trim()) {
+    throw new Error(`${options.label} must not resolve to a path with surrounding whitespace`);
+  }
+  if (canonical.length > MAX_WORKTREE_LOCATION_CHARS) {
+    throw new Error(`${options.label} is too long`);
+  }
   assertWorktreePathUnlinked(canonical);
   return canonical;
 }

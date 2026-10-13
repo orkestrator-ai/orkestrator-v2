@@ -459,6 +459,7 @@ function backgroundTaskOutcome(task: NativeBackgroundTask): BackgroundTaskOutcom
 interface BackgroundTaskUsageCounts {
   toolUses?: number;
   tokenCountText?: string;
+  updates?: number;
 }
 
 /** Usage worth showing: a shell task reports zeros, which would only be noise. */
@@ -475,23 +476,23 @@ function backgroundTaskUsageCounts(task: NativeBackgroundTask): BackgroundTaskUs
 
 /**
  * A background Agent's snapshot usage, falling back to whatever the launch row
- * itself reported. Cursor reports no tool counts, so none is invented for it.
+ * itself reported, then captured child activity. Cursor reports no activity
+ * counts, so none is invented for it.
  */
 function backgroundAgentUsageCounts(
   task: NativeBackgroundTask,
   launch: NativeMessagePart,
   hideToolCount: boolean,
+  capturedToolCount: number,
+  childCount: number,
 ): BackgroundTaskUsageCounts {
   const counts = backgroundTaskUsageCounts(task);
-  const toolUses =
-    counts.toolUses ??
-    (launch.toolUseCount !== undefined && launch.toolUseCount > 0
-      ? launch.toolUseCount
-      : undefined);
+  const toolUses = task.usage?.toolUses ?? launch.toolUseCount ?? capturedToolCount;
   const tokenCountText = counts.tokenCountText ?? launch.tokenCountText;
   return {
-    ...(toolUses !== undefined && !hideToolCount ? { toolUses } : {}),
+    ...(toolUses > 0 && !hideToolCount ? { toolUses } : {}),
     ...(tokenCountText ? { tokenCountText } : {}),
+    ...(!tokenCountText && childCount > 0 && !hideToolCount ? { updates: childCount } : {}),
   };
 }
 
@@ -511,7 +512,10 @@ function BackgroundTaskRail({
   usage: BackgroundTaskUsageCounts;
   durationLabel?: string;
 }) {
-  const hasUsage = usage.toolUses !== undefined || usage.tokenCountText !== undefined;
+  const hasUsage =
+    usage.toolUses !== undefined ||
+    usage.tokenCountText !== undefined ||
+    usage.updates !== undefined;
   if (!hasUsage && !durationLabel) return null;
   return (
     <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
@@ -519,6 +523,9 @@ function BackgroundTaskRail({
         <div className="text-right text-[11px] text-muted-foreground/70">
           {usage.toolUses !== undefined ? <div>{formatToolUseCount(usage.toolUses)}</div> : null}
           {usage.tokenCountText ? <div>{usage.tokenCountText}</div> : null}
+          {usage.updates !== undefined ? (
+            <div>{`${usage.updates} ${usage.updates === 1 ? "update" : "updates"}`}</div>
+          ) : null}
         </div>
       ) : null}
       {/* A lone timer still sits bottom-right, where it does beside usage. */}
@@ -1187,7 +1194,13 @@ export function TaskGroupPart({
     includeDuration: isTerminalAgentStatus(status),
   });
   const backgroundUsage = backgroundAgentTask
-    ? backgroundAgentUsageCounts(backgroundAgentTask, part.task, hideCounts)
+    ? backgroundAgentUsageCounts(
+        backgroundAgentTask,
+        part.task,
+        hideCounts,
+        capturedToolCount,
+        childCount,
+      )
     : undefined;
 
   if (standaloneBackgroundTask) {

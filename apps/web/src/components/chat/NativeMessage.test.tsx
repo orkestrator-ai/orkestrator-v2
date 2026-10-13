@@ -3778,6 +3778,208 @@ describe("NativeMessage task list rendering", () => {
     expect(stop.closest(".group\\/stoppable")).toBeTruthy();
   });
 
+  for (const status of ["completed", "killed"] as const) {
+    test(`retains captured activity in a ${status} background Agent's collapsed rail`, () => {
+      render(
+        <NativeMessage
+          platform="claude"
+          message={makeMessage([
+            makeAgentTaskGroupPart({
+              task: {
+                toolState: "success",
+                toolArgs: { description: "Review validation" },
+                backgroundTask: { id: "captured-agent", description: "Review validation", status },
+              },
+              childTools: [
+                {
+                  type: "tool-invocation",
+                  content: "Read",
+                  toolName: "Read",
+                  toolState: "success",
+                },
+                {
+                  type: "tool-invocation",
+                  content: "Bash",
+                  toolName: "Bash",
+                  toolState: "success",
+                },
+                { type: "text", content: "Captured progress" },
+              ],
+            }),
+          ])}
+        />,
+      );
+      const tools = screen.getByText("2 tool uses");
+      const updates = screen.getByText("3 updates");
+      expect(tools.parentElement?.contains(updates)).toBe(true);
+      expect(tools.closest("button") === null).toBe(true);
+      expect(
+        screen
+          .getByRole("button", { name: /Agent Review validation/ })
+          .getAttribute("aria-expanded"),
+      ).toBe("false");
+      expect(
+        screen
+          .getByRole("button", { name: /Agent Review validation/ })
+          .contains(screen.getByText("Captured progress")),
+      ).toBe(true);
+    });
+  }
+
+  test("retains update-only captured activity on a background Agent", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: { backgroundTask: { id: "updates-agent", status: "completed" } },
+            childTools: [{ type: "text", content: "Captured progress" }],
+          }),
+        ])}
+      />,
+    );
+    expect(screen.getByText("1 update")).toBeTruthy();
+    expect(screen.queryByText(/tool uses?$/) === null).toBe(true);
+  });
+
+  test("uses launch usage before captured activity and snapshot usage before launch usage", () => {
+    const part = makeAgentTaskGroupPart({
+      task: {
+        toolUseCount: 5,
+        tokenCountText: "8k tokens",
+        backgroundTask: { id: "usage-agent", status: "completed" },
+      },
+      childTools: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
+    });
+    const view = render(<NativeMessage message={makeMessage([part])} />);
+    expect(screen.getByText("5 tool uses")).toBeTruthy();
+    expect(screen.getByText("8k tokens")).toBeTruthy();
+    expect(screen.queryByText("1 tool use") === null).toBe(true);
+    expect(screen.queryByText("1 update") === null).toBe(true);
+
+    view.rerender(
+      <NativeMessage
+        message={makeMessage([
+          {
+            ...part,
+            task: {
+              ...part.task,
+              backgroundTask: {
+                id: "usage-agent",
+                status: "completed",
+                usage: { toolUses: 7, totalTokens: 12_000, durationMs: 1000 },
+              },
+            },
+          },
+        ])}
+      />,
+    );
+    expect(screen.getByText("7 tool uses")).toBeTruthy();
+    expect(screen.getByText("12k tokens")).toBeTruthy();
+    expect(screen.queryByText("5 tool uses") === null).toBe(true);
+    expect(screen.queryByText("8k tokens") === null).toBe(true);
+  });
+
+  test("does not replace an explicit zero tool count with captured tools", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: {
+              toolUseCount: 5,
+              backgroundTask: {
+                id: "zero-agent",
+                status: "completed",
+                usage: { toolUses: 0, totalTokens: 100, durationMs: 1000 },
+              },
+            },
+            childTools: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
+          }),
+        ])}
+      />,
+    );
+    expect(screen.getByText("100 tokens")).toBeTruthy();
+    expect(screen.queryByText(/tool uses?$/) === null).toBe(true);
+  });
+
+  for (const source of ["captured", "launch", "snapshot"] as const) {
+    test(`hides Cursor background Agent activity counts from ${source} usage`, () => {
+      render(
+        <NativeMessage
+          platform="cursor"
+          message={makeMessage([
+            makeAgentTaskGroupPart({
+              task: {
+                ...(source === "launch" ? { toolUseCount: 5, tokenCountText: "8k tokens" } : {}),
+                backgroundTask: {
+                  id: "cursor-agent",
+                  status: "completed",
+                  ...(source === "snapshot"
+                    ? { usage: { toolUses: 7, totalTokens: 12_000, durationMs: 1000 } }
+                    : {}),
+                },
+              },
+              childTools: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
+            }),
+          ])}
+        />,
+      );
+      expect(screen.queryByText(/tool uses?$/) === null).toBe(true);
+      expect(screen.queryByText(/updates?$/) === null).toBe(true);
+      if (source !== "captured")
+        expect(screen.getByText(source === "launch" ? "8k tokens" : "12k tokens")).toBeTruthy();
+    });
+  }
+
+  test("keeps the background Agent stop slot visible and disabled while stopping", async () => {
+    let finishStop!: (value: boolean) => void;
+    const onStop = mock(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishStop = resolve;
+        }),
+    );
+    render(
+      <NativeMessage
+        stopBackgroundTask={onStop}
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: {
+              toolArgs: { description: "Review validation" },
+              backgroundTask: {
+                id: "stopping-agent",
+                description: "Review validation",
+                status: "running",
+              },
+            },
+          }),
+        ])}
+      />,
+    );
+    const stop = screen.getByRole("button", {
+      name: "Stop Review validation",
+    }) as HTMLButtonElement;
+    const slot = stop.parentElement!;
+    expect(stop.closest(".group\\/stoppable")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Agent Review validation/ }).contains(stop)).toBe(
+      false,
+    );
+    expect(stop.querySelector(".lucide-square")).toBeTruthy();
+    fireEvent.click(stop);
+    await waitFor(() => expect(stop.disabled).toBe(true));
+    expect(stop.title).toBe("Stopping…");
+    expect(stop.querySelector(".animate-spin")).toBeTruthy();
+    expect(stop.querySelector(".lucide-square") === null).toBe(true);
+    expect(getClassTokens(slot.firstElementChild)).toContain("opacity-0");
+    expect(getClassTokens(stop)).not.toContain("md:hover-fine:opacity-0");
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onStop).toHaveBeenCalledWith("stopping-agent");
+    finishStop(false);
+    await waitFor(() => expect(stop.disabled).toBe(false));
+    expect(screen.getByRole("alert").textContent).toContain("Could not stop");
+    expect(stop.querySelector(".lucide-square")).toBeTruthy();
+  });
+
   test("leaves a task with nothing to add unexpandable", () => {
     render(
       <BackgroundTaskCard

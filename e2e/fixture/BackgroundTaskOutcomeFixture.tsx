@@ -6,7 +6,7 @@ import type {
   NativeMessage as Message,
 } from "../../apps/web/src/lib/chat/native-message-types";
 
-const task = {
+const outcomeTask = {
   id: "outcome-task",
   description: "Review validation",
   status: "failed",
@@ -21,6 +21,20 @@ export function BackgroundTaskOutcomeFixture() {
   const params = new URLSearchParams(window.location.search);
   const [loaded, setLoaded] = useState(params.has("loaded"));
   const [away, setAway] = useState(false);
+  const [stopped, setStopped] = useState(params.has("stopped"));
+  const [startedAt] = useState(() => new Date(Date.now() - 125_000).toISOString());
+  const running = params.has("running");
+  const task = (
+    running
+      ? {
+          id: "running-task",
+          description: "Review validation",
+          status: stopped ? "killed" : "running",
+          startedAt,
+          usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 },
+        }
+      : outcomeTask
+  ) satisfies NativeBackgroundTask;
   const toolName = params.get("tool") ?? "Agent";
   const containerId = params.has("container") ? "fixture-container" : undefined;
   const launch: Message = {
@@ -64,6 +78,16 @@ export function BackgroundTaskOutcomeFixture() {
       ) : (
         <NativeMessage
           platform="claude"
+          stopBackgroundTask={
+            running
+              ? async () => {
+                  params.set("stopped", "1");
+                  window.history.replaceState(null, "", `?${params}`);
+                  setStopped(true);
+                  return true;
+                }
+              : undefined
+          }
           containerId={containerId}
           message={
             loaded ? launch : rowlessBackgroundTaskMessages([task], [{ ...launch, parts: [] }])[0]!

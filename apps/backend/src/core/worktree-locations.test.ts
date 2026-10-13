@@ -94,9 +94,26 @@ describe("worktree location settings", () => {
     ).rejects.toThrow("absolute");
     expect((await service.loadConfig()).global.worktreeLocations).toBeUndefined();
   });
+
+  test("save a folder chosen through a symlink as its real path", async () => {
+    const service = await storage();
+    const fixture = await fs.mkdtemp(path.join(tmpdir(), "ork-volume-"));
+    directories.push(fixture);
+    const volume = path.join(fixture, "volume");
+    await fs.mkdir(volume);
+    await fs.symlink(volume, path.join(fixture, "home-alias"));
+
+    await updateWorktreeLocations(
+      { environments: path.join(fixture, "home-alias", "trees"), dev: null },
+      { storage: service },
+    );
+    expect((await service.loadConfig()).global.worktreeLocations).toEqual({
+      environments: path.join(await fs.realpath(volume), "trees"),
+    });
+  });
 });
 
-test("rejects aliases to protected roots with existing and nonexistent descendants", async () => {
+test("rejects aliases to protected roots and resolves other aliases to the real folder", async () => {
   const service = await storage();
   const root = path.dirname(service.getDataDir());
   const fixture = await fs.mkdtemp(path.join(root, "ork-aliases-"));
@@ -129,12 +146,12 @@ test("rejects aliases to protected roots with existing and nonexistent descendan
   const ordinary = path.join(fixture, "ordinary");
   await fs.mkdir(ordinary);
   await fs.symlink(ordinary, path.join(fixture, "alias"));
-  expect(() =>
+  expect(
     validateWorktreeLocation(path.join(fixture, "alias", "new"), {
       label: "Location",
       dataDir: service.getDataDir(),
     }),
-  ).toThrow("symlink");
+  ).toBe(path.join(await fs.realpath(ordinary), "new"));
 });
 
 test("rejects the profiles directory as a dev setting before saving", async () => {

@@ -11,6 +11,22 @@ import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.
 import { isOpenCodeToolSchemaRejection } from "./opencode-turn-recovery.js";
 
 /**
+ * How long a settled OpenCode tool call ran, from the provider's own
+ * `state.time` (epoch milliseconds). Only the `completed` and `error` states
+ * carry an end; a running call, or a stamp that is missing or runs backwards,
+ * has no duration.
+ */
+export function openCodeToolDurationMs(state: Record<string, unknown> | null | undefined) {
+  if (state?.status !== "completed" && state?.status !== "error") return undefined;
+  const time = asRecord(state.time);
+  const start = time?.start;
+  const end = time?.end;
+  if (typeof start !== "number" || typeof end !== "number") return undefined;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined;
+  return Math.round(end - start);
+}
+
+/**
  * Which OpenCode part kinds this normalizer accounts for.
  *
  * A `Record` over the SDK's own `Part` union rather than a list, so an OpenCode
@@ -383,6 +399,8 @@ export function normalizeOpenCodeInteractiveMessage(
           : taskEnvelope.state === "error"
             ? "failure"
             : toolState;
+    const toolDurationMs =
+      normalizedToolState === "pending" ? undefined : openCodeToolDurationMs(state);
     // The provider's own `subtask` record for this child already produced a
     // row. Keeping the heuristic one too would show one sub-agent twice.
     if (isSubagent && subagentId && subtaskSessionIds.has(subagentId)) continue;
@@ -403,6 +421,7 @@ export function normalizeOpenCodeInteractiveMessage(
       toolName,
       ...(input ? { toolArgs: input } : {}),
       ...(normalizedToolState ? { toolState: normalizedToolState } : {}),
+      ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
       ...(toolOutput === undefined ? {} : { toolOutput }),
       ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),

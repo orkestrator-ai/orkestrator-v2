@@ -217,6 +217,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   chmod 755 /home/node/.opencode/bin/opencode && \
   rm /tmp/opencode.tar.gz
 ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
+# Never offer /update: it would replace the pinned binary with OpenCode 2.
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
 # Install Codex CLI
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"

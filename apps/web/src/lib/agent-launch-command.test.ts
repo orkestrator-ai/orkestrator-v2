@@ -51,7 +51,9 @@ describe("buildAgentLaunchCommand", () => {
     // nowhere to go. Recording one on the tab would drop it silently.
     expect(buildAgentLaunchCommand({ tabType: "grok", fastMode: true })).toBe("grok");
     expect(buildAgentLaunchCommand({ tabType: "grok", fastMode: false })).toBe("grok");
-    expect(buildAgentLaunchCommand({ tabType: "opencode", fastMode: true })).toBe("opencode");
+    expect(buildAgentLaunchCommand({ tabType: "opencode", fastMode: true })).toBe(
+      "OPENCODE_DISABLE_AUTOUPDATE=1 opencode",
+    );
   });
 
   test("quotes untrusted model and prompt values as shell arguments", () => {
@@ -63,7 +65,7 @@ describe("buildAgentLaunchCommand", () => {
         reasoningEffort: "high",
       }),
     ).toBe(
-      'opencode --model "provider/model\'next" --prompt "Review Bob\'s change; \\$(touch /tmp/nope)"',
+      'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --model "provider/model\'next" --prompt "Review Bob\'s change; \\$(touch /tmp/nope)"',
     );
   });
 
@@ -75,7 +77,7 @@ describe("buildAgentLaunchCommand", () => {
         model: "default",
         reasoningEffort: "xhigh",
       }),
-    ).toBe('opencode --prompt "Review"');
+    ).toBe('OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "Review"');
   });
 
   test("omits Cursor's removed CLI and launches Grok's terminal CLI", () => {

@@ -5,6 +5,7 @@ import {
 } from "@orkestrator/protocol/container-lifecycle";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
+import { OPENCODE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
   existsSync,
@@ -1126,6 +1127,10 @@ export async function startLocalServerUnlocked(
 
   if (kind === "opencode") {
     command = resolveOpenCodeBinary(context);
+    // `serve` does not check for updates in 1.19, but this is the pinned
+    // binary every native session depends on; never let it offer to replace
+    // itself with OpenCode 2.
+    Object.assign(env, OPENCODE_PINNED_RUNTIME_ENV);
   } else if (kind === "claude") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");

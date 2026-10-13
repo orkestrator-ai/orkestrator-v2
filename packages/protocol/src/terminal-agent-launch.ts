@@ -3,6 +3,21 @@ import { claudeCliReasoningSelection } from "./claude-model-catalog.js";
 
 export type TerminalAgentTabType = AgentPlatform | "plain";
 
+/**
+ * Environment every OpenCode process Orkestrator starts must carry.
+ *
+ * OpenCode 1.19 checks for updates from the TUI and offers `/update`, which can
+ * install OpenCode 2 over the pinned 1.x binary (in a container that binary
+ * sits in `~/.opencode/bin`, which OpenCode treats as a curl install). OpenCode
+ * 2's server API is incompatible with the v2 SDK client the backend uses, so a
+ * one-click upgrade would break every native OpenCode session. With this set
+ * the TUI never checks or announces an update; `/update` stays reachable from
+ * the command palette as a deliberate user action.
+ */
+export const OPENCODE_PINNED_RUNTIME_ENV = Object.freeze({
+  OPENCODE_DISABLE_AUTOUPDATE: "1",
+});
+
 function shellArg(value: string): string {
   const escaped = value
     .replace(/\\/g, "\\\\")
@@ -46,7 +61,12 @@ export function buildTerminalAgentLaunchCommand(options: {
   }
 
   if (tabType === "opencode") {
-    const args = ["opencode"];
+    // The PTY is a shared interactive shell, so the variable rides on the
+    // command itself rather than on the terminal's environment.
+    const args = [
+      ...Object.entries(OPENCODE_PINNED_RUNTIME_ENV).map(([name, value]) => `${name}=${value}`),
+      "opencode",
+    ];
     if (hasExplicitModel) args.push("--model", shellArg(model));
     if (initialPrompt) args.push("--prompt", shellArg(initialPrompt));
     return args.join(" ");

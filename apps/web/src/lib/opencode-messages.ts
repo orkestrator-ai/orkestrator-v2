@@ -20,6 +20,24 @@ function stringifyToolPayload(value: unknown): string | undefined {
   }
 }
 
+/**
+ * How long a settled OpenCode tool call ran, from the provider's own
+ * `state.time` (epoch milliseconds). Only the `completed` and `error` states
+ * carry an end; a running call, or a stamp that is missing or runs backwards,
+ * has no duration. Mirrors the backend normalizer.
+ */
+export function openCodeToolDurationMs(state: unknown): number | undefined {
+  if (!isRecord(state) || (state.status !== "completed" && state.status !== "error")) {
+    return undefined;
+  }
+  const time = isRecord(state.time) ? state.time : undefined;
+  const start = time?.start;
+  const end = time?.end;
+  if (typeof start !== "number" || typeof end !== "number") return undefined;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined;
+  return Math.round(end - start);
+}
+
 function parseOpenCodePartCreatedAt(part: Record<string, unknown>): string | undefined {
   const time = part.time;
   if (!time || typeof time !== "object") return undefined;
@@ -442,6 +460,8 @@ export function normalizeOpenCodePart(
       if (taskEnvelope.state === "running") mappedState = "pending";
       else if (taskEnvelope.state === "completed") mappedState = "success";
       else if (taskEnvelope.state === "error") mappedState = "failure";
+      const toolDurationMs =
+        mappedState === "pending" ? undefined : openCodeToolDurationMs(p.state);
 
       return stamp({
         type: "subagent",
@@ -451,6 +471,7 @@ export function normalizeOpenCodePart(
         toolName,
         toolArgs: input,
         toolState: mappedState,
+        ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
         toolTitle,
         toolOutput,
         toolError,
@@ -471,6 +492,7 @@ export function normalizeOpenCodePart(
       output: toolOutput,
     });
 
+    const toolDurationMs = openCodeToolDurationMs(p.state);
     return stamp({
       type: "tool-invocation",
       content: toolName,
@@ -479,6 +501,7 @@ export function normalizeOpenCodePart(
       toolName,
       toolArgs: p.state?.input,
       toolState: mappedState,
+      ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
       toolDiff,
       toolTitle,
       toolOutput,

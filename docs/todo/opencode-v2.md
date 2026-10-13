@@ -2,7 +2,7 @@
 
 Status: Deferred — do not bump the OpenCode binary or SDK to 2.x.  
 Recorded: 2026-08-28; refreshed 2026-09-27 against OpenCode `v2.0.18`.  
-Orkestrator OpenCode SDK and CLI pin: `1.18.35` (`@opencode-ai/sdk`, `opencode-ai`)
+Orkestrator OpenCode SDK and CLI pin: `1.19.0` (`@opencode-ai/sdk`, `opencode-ai`)
 
 ## Summary
 
@@ -173,8 +173,12 @@ Consequences:
 
 ## Recommendation
 
-Stay on the 1.x line (pin `1.18.35`) for production. 1.x is still receiving releases and fixes
-on `dev`; no end-of-life notice for 1.x was found.
+Stay on the 1.x line (pin `1.19.0`) for production. 1.x is still receiving releases and fixes,
+now cut from upstream's `v1` branch (1.19.0, 2026-10-11) rather than `dev`; no end-of-life notice
+for 1.x was found. Upstream now treats `opencode upgrade --major` as the official 1.x → 2.x route,
+and the 1.19 TUI suggests OpenCode 2 and can install it in place from `/update`. Orkestrator sets
+`OPENCODE_DISABLE_AUTOUPDATE=1` on every OpenCode process it starts (terminal tabs, `opencode
+serve`, and the container image) so a pinned binary is never offered that upgrade.
 
 When picking this up, treat it as a new provider rather than an upgrade:
 

@@ -190,3 +190,61 @@ describe("normalizeOpenCodeInlineError", () => {
     ).toBeNull();
   });
 });
+
+describe("normalizeOpenCodeInteractiveMessage tool durations", () => {
+  const tool = (state: Record<string, unknown>, name = "bash") =>
+    firstTool(
+      normalizeOpenCodeInteractiveMessage(
+        message([{ id: "part-1", type: "tool", tool: name, callID: "call-1", state }]),
+        0,
+      ),
+    );
+
+  test("reports the provider's start-to-end time on settled calls", () => {
+    expect(
+      tool({ status: "completed", input: {}, output: "ok", time: { start: 1_000, end: 3_400 } })
+        ?.toolDurationMs,
+    ).toBe(2_400);
+    expect(
+      tool({ status: "error", input: {}, error: "boom", time: { start: 1_000, end: 1_250 } })
+        ?.toolDurationMs,
+    ).toBe(250);
+  });
+
+  test("omits the duration while running or when the stamps are unusable", () => {
+    const running = tool({ status: "running", input: {}, time: { start: 1_000 } });
+    expect(running?.toolState).toBe("pending");
+    expect(running && "toolDurationMs" in running).toBe(false);
+    expect(tool({ status: "completed", input: {}, output: "ok" })?.toolDurationMs).toBeUndefined();
+    expect(
+      tool({ status: "completed", input: {}, output: "ok", time: { start: 5, end: 4 } })
+        ?.toolDurationMs,
+    ).toBeUndefined();
+  });
+
+  test("never times a background task the envelope still reports as running", () => {
+    const running = tool(
+      {
+        status: "completed",
+        input: { description: "Explore" },
+        output: '<task id="child-1" state="running">',
+        time: { start: 1_000, end: 1_010 },
+      },
+      "task",
+    );
+    expect(running?.type).toBe("subagent");
+    expect(running?.toolState).toBe("pending");
+    expect(running?.toolDurationMs).toBeUndefined();
+    expect(
+      tool(
+        {
+          status: "completed",
+          input: { description: "Explore" },
+          output: '<task id="child-1" state="completed">',
+          time: { start: 1_000, end: 61_000 },
+        },
+        "task",
+      )?.toolDurationMs,
+    ).toBe(60_000);
+  });
+});

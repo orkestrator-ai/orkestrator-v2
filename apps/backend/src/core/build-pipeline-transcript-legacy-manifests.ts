@@ -113,6 +113,8 @@ export function legacyManifestsSettled(deps: LegacyManifestDeps): boolean {
   return !existsSync(manifestsDirectory(deps));
 }
 
+class LegacyManifestUnavailable extends Error {}
+
 interface LegacyMeta {
   v: number;
   sdkSessionId: string;
@@ -197,6 +199,8 @@ async function readLegacyManifest(
     maxPayloadBytes: deps.maxManifestBytes,
   };
   const candidates: Array<{ key: string; row: TranscriptManifestRow }> = [];
+  let present = false;
+  let unreadable = false;
   for (const extension of [KEYED_RECORD_EXTENSION, KEYED_RECORD_PREVIOUS_EXTENSION]) {
     const file = path.join(manifestsDirectory(deps), `${stem}${extension}`);
     const header = await readRecordHeader(
@@ -208,6 +212,8 @@ async function readLegacyManifest(
       },
       limits,
     );
+    if (header.status !== "missing") present = true;
+    if (header.status === "corrupt" && header.reason === "unreadable") unreadable = true;
     if (header.status !== "ok") continue;
     const key = header.header.key;
     // The file name is the namespaced hash of the key it claims.
@@ -217,9 +223,13 @@ async function readLegacyManifest(
       { schema: LEGACY_SCHEMA, key, retentionClass: "durable" },
       limits,
     );
+    if (read.status === "corrupt" && read.reason === "unreadable") unreadable = true;
     if (read.status !== "ok") continue;
     const row = toRow(read.payload, { ...read.header, key });
     if (row) candidates.push({ key, row });
+  }
+  if (unreadable || (present && candidates.length === 0)) {
+    throw new LegacyManifestUnavailable("Legacy transcript manifest is not recoverable yet");
   }
   if (preferRevision !== undefined) {
     const preferred = candidates.find((candidate) => candidate.row.revision === preferRevision);
@@ -331,7 +341,13 @@ export async function migrateLegacyManifests(
       for (const stem of batch) {
         // A key whose row exists (imported on demand, or committed since) is
         // only skipped; reading its files would be wasted work.
-        const found = await readLegacyManifest(deps, stem);
+        let found: Awaited<ReturnType<typeof readLegacyManifest>>;
+        try {
+          found = await readLegacyManifest(deps, stem);
+        } catch (error) {
+          if (error instanceof LegacyManifestUnavailable) return report;
+          throw error;
+        }
         if (!found) continue;
         const preferred = options.preferRevision?.(found.key);
         const chosen =

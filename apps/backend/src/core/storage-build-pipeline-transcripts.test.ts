@@ -427,6 +427,32 @@ describe("build pipeline transcript commit", () => {
     });
   });
 
+  test("a discarded same-base staged sibling cannot replace the committed transcript reference", async () => {
+    await withStorage(async (storage) => {
+      await checkpointed(storage, messages(5, "base"));
+      const prepared = [];
+      for (const index of [0, 1]) {
+        const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+        const record = (await storage.getBuildPipeline("p1"))!;
+        const pipeline = record.snapshot as Parameters<typeof checkpoints.prepare>[0];
+        checkpoints.observe(pipeline.sessions[0]!, messages(8 + index, `sibling-${index}`));
+        await checkpoints.prepare(pipeline);
+        prepared.push(pipeline);
+      }
+      expect(prepared[0]!.sessions[0]!.transcript!.manifestRevision).toBe(
+        prepared[1]!.sessions[0]!.transcript!.manifestRevision,
+      );
+      await storage.saveBuildPipeline("p1", "proj-1", "", 2, prepared[0]);
+      await storage.saveBuildPipeline("p1", "proj-1", "", 3, prepared[1]);
+      const [session] = await sessionsOf(storage, "p1");
+      expect(session!.transcriptCheckpointError).toBe("stage-expired");
+      expect(session!.transcript).toEqual(prepared[0]!.sessions[0]!.transcript);
+      expect(session!.messagesFingerprint).toBe(prepared[0]!.sessions[0]!.messagesFingerprint);
+      const read = await storage.readBuildPipelineTranscript("p1", session!);
+      expect(read.status === "found" ? read.messages : []).toEqual(messages(8, "sibling-0"));
+    });
+  });
+
   test("two backends checkpointing one session cannot lose or tear each other's transcript", async () => {
     await withStorage(async (storage, dataDir) => {
       await checkpointed(storage, messages(5, "base"));
@@ -511,7 +537,10 @@ describe("pre-database transcript manifests", () => {
         manifestRevision: 2,
         revision: 2,
         messageCount: body.length,
-        bytes: 1,
+        bytes: body.reduce<number>(
+          (sum, message) => sum + Buffer.byteLength(JSON.stringify(message)) + 1,
+          0,
+        ),
         complete: true,
         committedAt: "2026-09-01T00:00:00.000Z",
       };

@@ -811,6 +811,10 @@ export abstract class StorageNative extends StorageReviews {
     // Unconditional: a retry after a partial failure finds the sessions
     // already gone, and must still clear the tails that failure left.
     await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
+    await this.scrubSensitiveJsonBackups(
+      this.nativeAgentSessionsFile(),
+      (_key, record) => !isRecord(record) || record.environmentId !== environmentId,
+    );
     // The deleted rows' provider session ids and dispatch journals must not
     // survive in free pages or the WAL either.
     this.scrubDeletedDatabaseContent();

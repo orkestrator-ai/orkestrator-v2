@@ -488,6 +488,49 @@ describe("BuildPipelineTranscriptStore", () => {
 });
 
 describe("pre-database manifest migration", () => {
+  test("a transient manifest read failure keeps the migration cursor and recovery files", async () => {
+    const dataDir = await dataDirectory();
+    const directory = path.join(dataDir, BUILD_PIPELINE_TRANSCRIPT_DIRECTORY);
+    const body = messages(4, 50, "retry");
+    const key = await writeLegacySession(directory, "pipeline-1", KEY, body);
+    const file = path.join(
+      directory,
+      "manifests",
+      `${recordFileStem(BUILD_PIPELINE_TRANSCRIPT_NAMESPACE, key)}.rec`,
+    );
+    const harness = store(dataDir);
+    const original = fs.lstat.bind(fs);
+    let failed = false;
+    const failedRead = async (...args: Parameters<typeof fs.lstat>) => {
+      if (String(args[0]) === file && !failed) {
+        failed = true;
+        throw Object.assign(new Error("temporary I/O failure"), { code: "EIO" });
+      }
+      return original(...args);
+    };
+    const fault = spyOn(fs, "lstat").mockImplementation(failedRead as typeof fs.lstat);
+    try {
+      expect(await harness.transcripts.migrateLegacyManifests()).toMatchObject({
+        complete: false,
+        imported: 0,
+      });
+    } finally {
+      fault.mockRestore();
+    }
+    expect(failed).toBe(true);
+    expect((await fs.stat(file)).isFile()).toBe(true);
+    expect(await harness.transcripts.repair(0)).toMatchObject({
+      complete: false,
+      removedChunks: 0,
+    });
+    expect(await harness.transcripts.migrateLegacyManifests()).toMatchObject({
+      complete: true,
+      imported: 1,
+    });
+    const read = await harness.transcripts.read("pipeline-1", KEY, { manifestRevision: 1 });
+    expect(read.status === "found" ? read.messages : []).toEqual(body);
+  });
+
   test("imports file manifests in resumable batches, then removes the old files", async () => {
     const dataDir = await dataDirectory();
     const directory = path.join(dataDir, BUILD_PIPELINE_TRANSCRIPT_DIRECTORY);

@@ -216,6 +216,21 @@ describe("NativeAgentDisplayTailStore", () => {
     }
   });
 
+  test("deletion fences reject stale writes from another connection, including absent keys", async () => {
+    const dir = await dataDirectory();
+    const first = storeIn(dir);
+    const second = storeIn(dir);
+    const fence = second.captureFence();
+    await first.delete("key-1");
+    expect(await second.put("key-1", tail(1), { fence })).toBe(false);
+    expect(await second.get("key-1")).toBeNull();
+    const environmentFence = second.captureFence();
+    await first.deleteByEnvironment("env-odd");
+    expect(await second.put("key-3", tail(3), { fence: environmentFence })).toBe(false);
+    expect(storedKeys(dir)).toEqual([]);
+    expect(await second.put("key-2", tail(2), { fence: environmentFence })).toBe(true);
+  });
+
   test("refuses a write whose fence predates a deletion of its key or environment", async () => {
     const dataDir = await dataDirectory();
     const store = storeIn(dataDir);

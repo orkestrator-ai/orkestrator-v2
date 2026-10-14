@@ -293,7 +293,7 @@ export class DesignService {
         continue;
       }
       const revision = this.coordination.libraryRevision();
-      if (revision === this.libraryRevision) return;
+      if (revision === this.libraryRevision && !this.coordination.libraryDirty()) return;
       const scan = this.rescanLibrary()
         .then(() => {
           // A change signalled during the scan leaves the signal ahead: the
@@ -443,11 +443,7 @@ export class DesignService {
 
   /** Whether another live process may still be writing the record's pending export. */
   exportWriterAlive(record: DesignPrivateRecord): boolean {
-    return (
-      record.pendingExportOwner !== undefined &&
-      record.pendingExportOwner !== this.generation &&
-      this.coordination.isAlive(record.pendingExportOwner)
-    );
+    return !!record.pendingExport && this.coordination.exportAlive(record.pendingExport.token);
   }
 
   private async recoverPendingFor(id: string): Promise<void> {
@@ -507,6 +503,10 @@ export class DesignService {
     return read;
   }
 
+  environmentDeleted(environmentId: string): boolean {
+    return this.fences.has(environmentId) || this.coordination.environmentDeleted(environmentId);
+  }
+
   /** Loads a canvas the environment may see. Other environments get `not-found`. */
   async loadFor(
     id: string,
@@ -514,7 +514,7 @@ export class DesignService {
     options: { allowDeleted?: boolean; allowProvisional?: boolean } = {},
   ): Promise<{ record: DesignPrivateRecord; legacy: boolean }> {
     designId.parse(id);
-    if (this.fences.has(environmentId))
+    if (this.environmentDeleted(environmentId))
       throw new DesignError("not-found", "Canvas not found in this environment");
     const loaded = await this.load(id);
     if (loaded.kind === "missing")
@@ -575,8 +575,9 @@ export class DesignService {
     legacy: boolean,
     hint?: Omit<DesignChange, "canvasId">,
   ): Promise<void> {
-    if (this.fences.has(record.environmentId))
+    if (this.environmentDeleted(record.environmentId))
       throw new DesignError("not-found", "Canvas not found in this environment");
+    this.coordination.beginLibraryChange(record.canvasId);
     const started = performance.now();
     record.sequence++;
     let bytes: number;
@@ -603,19 +604,26 @@ export class DesignService {
       });
     }
     this.library.upsert(summarizeRecord(record, written ?? { size: bytes, mtimeMs: Date.now() }));
-    this.libraryChanged();
+    this.libraryChanged(record.canvasId);
     if (hint) this.publish({ canvasId: record.canvasId, ...hint });
   }
 
   /** Removes a canvas from the index after its files were removed. */
   libraryRemoved(id: string) {
     this.library.remove(id);
-    this.libraryChanged();
+    this.libraryChanged(id);
   }
 
   /** Tells every process sharing the data directory that the canvases changed. */
-  private libraryChanged() {
+  private libraryChanged(canvasId: string) {
     const signal = this.coordination.signalLibraryChange();
+    if (signal) {
+      try {
+        this.coordination.finishLibraryChange(canvasId);
+      } catch {
+        /* Keep recovery intent. */
+      }
+    }
     // Our index already holds our own change; it stays current only if no
     // other process moved the signal since our last scan.
     if (signal && !this.libraryScan && signal.before === this.libraryRevision)
@@ -1413,7 +1421,7 @@ export class DesignService {
       canvasId,
     };
     designId.parse(canvasId);
-    if (this.fences.has(environmentId)) return { kind: "missing", ...base };
+    if (this.environmentDeleted(environmentId)) return { kind: "missing", ...base };
     const loaded = await this.load(canvasId);
     if (loaded.kind === "missing") return { kind: "missing", ...base };
     if (loaded.kind === "problem") {

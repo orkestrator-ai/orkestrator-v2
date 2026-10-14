@@ -329,13 +329,18 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         }
         result.refused.push(staged);
         reason = outcome.reason;
-      } else if (
-        transcripts.rows.revisionOf(transcriptSessionKey(record.id, sessionKey)) !==
-        reference.manifestRevision
-      ) {
-        // A reference this process no longer holds staged (expired) and that
-        // is not the committed manifest either: never persist it.
-        reason = "stage-expired";
+      } else {
+        const committed = transcripts.committedReference(record.id, sessionKey);
+        if (
+          !committed ||
+          !sameReference(reference, transcripts.reference(committed)) ||
+          (session.messagesFingerprint !== undefined &&
+            session.messagesFingerprint !== committed.fingerprint)
+        ) {
+          reason = "stage-expired";
+        } else {
+          session.messagesFingerprint = committed.fingerprint;
+        }
       }
       if (reason === null) continue;
       const fields: RevertedSession["fields"] = {};

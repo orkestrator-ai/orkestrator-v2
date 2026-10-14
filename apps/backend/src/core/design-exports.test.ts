@@ -1,3 +1,5 @@
+import { DesignService } from "./design-service.js";
+import { createTestRenderer } from "./design-test-support.js";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -252,6 +254,36 @@ describe("design exports to a repository worktree", () => {
       workspace: { export: { relativePath: "lost.orkdes", lastExportedRevision: 2 } },
     });
     expect(await reconcileExport(restarted, "env-1", canvasId, context)).toEqual({ state: "none" });
+  });
+
+  test("a live owner's failed settlement leaves a reconcilable export for a peer", async () => {
+    const { canvasId } = await setup();
+    const peer = new DesignService(harness.dir, () => {}, createTestRenderer());
+    try {
+      await peer.initialize();
+      writerFaults.beforePublish = () => {
+        delete writerFaults.beforePublish;
+        recordFaults.beforeRename = (file) => {
+          if (!file.endsWith(`${canvasId}.orkrec`)) return;
+          delete recordFaults.beforeRename;
+          throw new Error("settlement failed");
+        };
+      };
+      await expect(save(canvasId, "live-owner.orkdes", 2)).rejects.toThrow("settlement failed");
+      expect(await service().snapshot("env-1", canvasId)).toMatchObject({
+        workspace: { pendingExport: { state: "writing" } },
+      });
+      expect(await reconcileExport(peer, "env-1", canvasId, context)).toMatchObject({
+        state: "exported",
+      });
+      await exportSave(peer, "env-1", canvasId, context, {
+        relativePath: "next.orkdes",
+        revision: 2,
+        expected: { state: "absent" },
+      });
+    } finally {
+      await peer.close();
+    }
   });
 
   test("a lost settlement whose destination no longer matches reconciles to not-exported", async () => {

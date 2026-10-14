@@ -1,3 +1,4 @@
+import { deletionMarker, markDeletion } from "./storage-deletion-fences.js";
 /**
  * Durable per-environment storage for web annotations.
  *
@@ -108,7 +109,7 @@ export {
 export { WEB_ANNOTATION_MAX_RECORD_BYTES } from "./web-annotation-legacy-import.js";
 
 /**
- * Failure-injection points. All but `during-cleanup` and `after-commit` run
+ * Failure-injection points. All but cleanup, after-commit and legacy batch hooks run
  * synchronously inside the commit transaction (a returned promise is not
  * awaited); throwing there rolls the whole commit back.
  */
@@ -117,7 +118,8 @@ export type WebAnnotationFaultStage =
   | "before-manifest-replace"
   | "after-commit"
   | "before-drafts-replace"
-  | "during-cleanup";
+  | "during-cleanup"
+  | "after-legacy-record-batch";
 
 export type WebAnnotationFaultHook = (
   stage: WebAnnotationFaultStage,
@@ -578,7 +580,8 @@ export class WebAnnotationEnvironmentStore {
     if (meta === null) {
       await this.importLegacy();
     } else {
-      await this.archiveLeftovers(meta);
+      await this.repairRetainedLegacy(meta);
+      await this.archiveLeftovers(readMetaRow(database, this.storeName) ?? meta);
     }
     this.refresh();
     this.applyLoadFailure();
@@ -596,6 +599,7 @@ export class WebAnnotationEnvironmentStore {
     );
     let archive = false;
     try {
+      this.assertNotDeleted();
       if (readMetaRow(database, this.storeName) !== null) return;
       const now = new Date(this.nowMs()).toISOString();
       let result: Awaited<ReturnType<typeof readLegacyEnvironment>>;
@@ -619,6 +623,7 @@ export class WebAnnotationEnvironmentStore {
       const legacy = result.legacy;
       // A crashed earlier attempt may have left record rows without a header.
       database.transaction(() => {
+        this.assertNotDeleted();
         if (readMetaRow(database, this.storeName) === null) {
           deleteAllRows(database, this.storeName);
         }
@@ -630,6 +635,7 @@ export class WebAnnotationEnvironmentStore {
         batch = [];
         batchBytes = 0;
         return database.transaction(() => {
+          this.assertNotDeleted();
           if (readMetaRow(database, this.storeName) !== null) return false;
           writeRecordRows(database, this.storeName, rows);
           return true;
@@ -640,10 +646,12 @@ export class WebAnnotationEnvironmentStore {
         batchBytes += record.bytes;
         if (batchBytes >= IMPORT_BATCH_BYTES) {
           if (!flush()) return;
+          await this.options.faults?.("after-legacy-record-batch", this.environmentId);
           await new Promise((resolve) => setImmediate(resolve));
         }
       }
       const imported = database.transaction(() => {
+        this.assertNotDeleted();
         if (readMetaRow(database, this.storeName) !== null) return false;
         if (batch.length > 0) writeRecordRows(database, this.storeName, batch);
         const manifest = legacy.manifest;
@@ -685,6 +693,102 @@ export class WebAnnotationEnvironmentStore {
     }
   }
 
+  private assertNotDeleted(): void {
+    if (deletionMarker(this.db(), "annotations", this.environmentId)) {
+      this.markDeletedElsewhere();
+      throw new WebAnnotationStorageError("Environment was deleted");
+    }
+  }
+
+  /** Retry retained recovery data on reopen, without replacing newer database edits. */
+  private async repairRetainedLegacy(metaJson: string): Promise<void> {
+    let meta: WebAnnotationStoreMeta;
+    try {
+      meta = JSON.parse(metaJson) as WebAnnotationStoreMeta;
+    } catch {
+      return;
+    }
+    if (!meta.legacyRetained) return;
+    const database = this.db();
+    const release = await database.acquireLease(`${this.storeName}/import`, "annotation repair", {
+      staleMs: 60_000,
+      acquireTimeoutMs: 120_000,
+    });
+    let archive = false;
+    try {
+      this.assertNotDeleted();
+      const now = new Date(this.nowMs()).toISOString();
+      const result = await readLegacyEnvironment(this.dir, this.environmentId, now);
+      if (result.kind !== "import" || !result.legacy.clean) return;
+      const legacy = result.legacy;
+      database.transaction(() => {
+        this.assertNotDeleted();
+        const fetched = readIndexSnapshot(database, this.storeName);
+        if (!fetched) return;
+        const base = assembleSnapshot(
+          this.environmentId,
+          fetched.revision,
+          fetched.rows,
+          this.snapshot,
+          now,
+        );
+        if (!base.meta.legacyRetained) return;
+        // A degraded manifest admitted no mutations. A ready manifest may have
+        // newer edits; only repair its damaged drafts and referenced records.
+        const manifest =
+          base.meta.status === "degraded" ? legacy.manifest : structuredClone(base.manifest);
+        if (base.meta.draftsStatus !== "ready") manifest.drafts = legacy.manifest.drafts;
+        const unreadable = new Map(base.unreadable);
+        const repairedDraftKeys = new Set(
+          Object.values(manifest.drafts).map((draft) => recordKey(draft.id, draft.revision)),
+        );
+        for (const [key, marker] of Array.from(unreadable)) {
+          if (marker.kind !== "request-text" || !marker.requestId) continue;
+          const current = manifest.requests[marker.requestId];
+          const recovered = legacy.manifest.requests[marker.requestId];
+          if (current && recovered && !legacy.unreadable.has(key)) {
+            current.instruction = recovered.instruction;
+            current.response = recovered.response;
+            unreadable.delete(key);
+          }
+        }
+        let recordBytes = base.meta.recordBytes;
+        for (const record of legacy.records) {
+          if (
+            base.meta.status !== "degraded" &&
+            !unreadable.has(record.key) &&
+            !repairedDraftKeys.has(record.key)
+          )
+            continue;
+          const existing = readRecordRow(database, this.storeName, record.key);
+          if (existing !== null && !unreadable.has(record.key)) continue;
+          recordBytes +=
+            record.bytes - (existing === null ? 0 : Buffer.byteLength(existing, "utf8"));
+          writeRecordRows(database, this.storeName, [record]);
+          unreadable.delete(record.key);
+        }
+        manifest.usage = { recordBytes };
+        const repaired: WebAnnotationStoreMeta = {
+          ...base.meta,
+          status: "ready",
+          reason: undefined,
+          draftsStatus: "ready",
+          legacyRetained: unreadable.size > 0 ? true : undefined,
+          revision: manifest.revision,
+          recordBytes,
+          createdAt: manifest.createdAt,
+          updatedAt: manifest.updatedAt,
+        };
+        const plan = planRows(base, manifest, repaired, unreadable);
+        writeIndexRows(database, this.storeName, plan.upserts, plan.deletes);
+        archive = unreadable.size === 0;
+      });
+    } finally {
+      await release();
+    }
+    if (archive) await archiveLegacyEnvironment(this.options.dataDir, this.environmentId);
+  }
+
   /** Legacy files beside an imported store: a crash before archiving, or an older backend. */
   private async archiveLeftovers(metaJson: string): Promise<void> {
     let meta: Partial<WebAnnotationStoreMeta> = {};
@@ -708,6 +812,10 @@ export class WebAnnotationEnvironmentStore {
   private refresh(): void {
     if (this.deleted) return;
     const database = this.db();
+    if (deletionMarker(database, "annotations", this.environmentId)) {
+      this.markDeletedElsewhere();
+      return;
+    }
     const revision = database.storeRevision(this.storeName);
     if (revision === this.snapshot.storeRevision) return;
     if (revision === null) {
@@ -1357,14 +1465,17 @@ export class WebAnnotationStorage {
   }
 
   isDeleted(environmentId: string): boolean {
-    return this.deleted.has(environmentId);
+    return (
+      this.deleted.has(environmentId) ||
+      !!deletionMarker(this.database(), "annotations", environmentId)
+    );
   }
 
   async environment(environmentId: string): Promise<WebAnnotationEnvironmentStore> {
     if (!isEnvironmentDirectoryName(environmentId)) {
       throw new WebAnnotationStorageError("Environment id is invalid");
     }
-    if (this.deleted.has(environmentId)) {
+    if (this.isDeleted(environmentId)) {
       throw new WebAnnotationStorageError("Environment was deleted");
     }
     const existing = this.stores.get(environmentId);
@@ -1379,7 +1490,7 @@ export class WebAnnotationStorage {
           this.host,
         );
         await store.load();
-        if (this.deleted.has(environmentId)) {
+        if (this.isDeleted(environmentId)) {
           throw new WebAnnotationStorageError("Environment was deleted");
         }
         this.stores.set(environmentId, store);
@@ -1404,7 +1515,10 @@ export class WebAnnotationStorage {
     await store?.close();
     this.stores.delete(environmentId);
     const database = this.database();
-    database.deleteStore(webAnnotationStoreName(environmentId));
+    database.transaction(() => {
+      markDeletion(database, "annotations", environmentId);
+      database.deleteStoreInTransaction(webAnnotationStoreName(environmentId));
+    });
     database.scrubDeletedContent();
     await rm(join(this.root, environmentId), { recursive: true, force: true });
     await removeArchivedLegacyEnvironment(this.options.dataDir, environmentId);

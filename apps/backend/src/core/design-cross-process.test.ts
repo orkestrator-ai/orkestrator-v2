@@ -4,10 +4,11 @@ import { join } from "node:path";
 import type { DesignOperationDescriptor } from "@orkestrator/protocol/design-operations";
 import { DESIGN_LIBRARY_SIGNAL_STORE } from "./design-coordination.js";
 import { isDesignError } from "./design-errors.js";
-import { purge } from "./design-service-lifecycle.js";
+import { executeLifecycle, purge } from "./design-service-lifecycle.js";
 import type { DesignPendingOperation, DesignPrivateRecord } from "./design-records.js";
 import { DesignService } from "./design-service.js";
 import {
+  deferred,
   createDesignHarness,
   createTestRenderer,
   trackUnhandledRejections,
@@ -253,6 +254,75 @@ describe("design canvases across processes sharing one data directory", () => {
     expect(a().hasCanvases("env-1")).toBe(true);
   });
 
+  test.each([false, true])(
+    "environment deletion fences a peer waiting to reserve (import=%s)",
+    async (importing) => {
+      await a().initialize();
+      await b().initialize();
+      const entered = deferred();
+      const release = deferred();
+      const original = b().global.bind(b());
+      const pause = spyOn(b(), "global").mockImplementation(async (work) => {
+        entered.resolve();
+        await release.promise;
+        return original(work);
+      });
+      const document = {
+        format: "orkdes",
+        version: 1,
+        id: "00000000-0000-4000-8000-000000000000",
+        environmentId: "env-gone",
+        name: "Imported",
+        revision: 1,
+        frames: [],
+      };
+      const creating = b().prepare("env-gone", "user", {
+        input: {
+          kind: "create_canvas",
+          name: "Late",
+          ...(importing ? { document: JSON.stringify(document) } : {}),
+        },
+        preconditions: {},
+      });
+      const outcome = creating.catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        await a().deleteEnvironment("env-gone");
+      } finally {
+        release.resolve();
+        pause.mockRestore();
+      }
+      expect(isDesignError(await outcome, "not-found")).toBe(true);
+      expect(await a().store.ids()).toEqual([]);
+      expect(await b().store.pendingIds()).toEqual([]);
+      expect(await b().list("env-gone")).toEqual([]);
+    },
+  );
+
+  test.each(["delete_canvas", "restore_canvas"] as const)(
+    "peer cancellation wins before the %s execution lane",
+    async (kind) => {
+      const canvas = await a().create("env-1", "Cancelable", undefined, "user");
+      if (kind === "restore_canvas") await a().delete(canvas.id, "env-1", "user");
+      const prepared = await a().prepare("env-1", "user", {
+        canvasId: canvas.id,
+        input: { kind },
+        preconditions: kind === "delete_canvas" ? { canvasRevision: 1 } : { tombstoneRevision: 1 },
+      });
+      const entry = (await a().store.readPending(canvas.id)).find(
+        (candidate) => candidate.token === prepared.token,
+      )!;
+      const snapshot = (await a().loadFor(canvas.id, "env-1", { allowDeleted: true })).record;
+      const canceled = await b().cancel("env-1", canvas.id, prepared.token);
+      expect(await executeLifecycle(a(), entry, snapshot)).toEqual(canceled);
+      const record = await recordOf(canvas.id);
+      expect(record.state).toBe(kind === "delete_canvas" ? "live" : "deleted");
+      expect(record.receipts.filter((receipt) => receipt.token === prepared.token)).toEqual([
+        canceled,
+      ]);
+    },
+  );
+
   test("environment deletion removes canvases another process created", async () => {
     const own = await a().create("env-gone", "Mine", undefined, "user");
     const foreign = await b().create("env-gone", "Theirs", undefined, "user");
@@ -311,12 +381,14 @@ describe("design canvases across processes sharing one data directory", () => {
     expect((await recordOf(canvasId)).document.frames[0]!.x).toBe(5);
   });
 
-  test("a failed change signal never fails the commit; the next signal catches the peer up", async () => {
+  test("a lost final signal is reconciled by a peer without another successful edit", async () => {
     await a().initialize();
     await b().initialize();
+    const original = StorageDatabase.prototype.writeStoreInTransaction;
     const write = spyOn(StorageDatabase.prototype, "writeStoreInTransaction");
-    write.mockImplementation(() => {
-      throw new Error("injected signal failure");
+    write.mockImplementation(function (this: StorageDatabase, store, ...args) {
+      if (store === DESIGN_LIBRARY_SIGNAL_STORE) throw new Error("injected signal failure");
+      return original.call(this, store, ...args);
     });
     let missed: { id: string };
     try {
@@ -325,10 +397,12 @@ describe("design canvases across processes sharing one data directory", () => {
       write.mockRestore();
     }
     expect((await b().get(missed.id, "env-1")).name).toBe("Unsignalled");
-    const seen = await b().create("env-1", "Signalled", undefined, "user");
-    expect((await a().list("env-1")).map((entry) => entry.id).sort()).toEqual(
-      [missed.id, seen.id].sort(),
-    );
+    for (let attempt = 0; attempt < 3; attempt++)
+      expect((await a().list("env-1")).map((entry) => entry.id)).toEqual([missed.id]);
+    await a().refreshLibrary();
+    expect(a().library.counts().live).toBe(1);
+    expect(await a().deleteEnvironment("env-1")).toBe(1);
+    expect(await b().list("env-1")).toEqual([]);
   });
 
   test("coordination keeps no design content in the database; purge leaves none", async () => {

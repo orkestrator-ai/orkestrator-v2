@@ -76,6 +76,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
  * import iterates {@link STORE_LAYOUTS} only.
  */
 const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
+  "storage-deletion-fences": { kind: "record" },
   ...NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS,
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
 };
@@ -262,6 +263,57 @@ export function retireLegacyJsonStores(dataDir: string, now = Date.now()): numbe
   }
   purgeExpiredLegacyJson(archiveRoot, now);
   return moved;
+}
+
+/** Apply privacy deletion to every retired generation, including interrupted writer temps.
+ * Unknown or oversized shapes are removed because they cannot be attributed safely.
+ * Other stores in the archive are left intact.
+ */
+export function scrubLegacyJsonStore(
+  dataDir: string,
+  store: string,
+  transform?: (value: unknown) => unknown,
+): void {
+  const root = path.join(dataDir, LEGACY_JSON_DIRECTORY);
+  let stamps: fs.Dirent[];
+  try {
+    stamps = fs.readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  for (const stamp of stamps) {
+    if (!stamp.isDirectory()) continue;
+    const directory = path.join(root, stamp.name, path.dirname(store));
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const name of legacyArtifacts(entries, `${path.basename(store)}.json`)) {
+      const file = path.join(directory, name);
+      if (transform && fs.statSync(file).isFile() && fs.statSync(file).size <= 64 * 1024 * 1024) {
+        let sanitized: unknown;
+        try {
+          sanitized = transform(JSON.parse(fs.readFileSync(file, "utf8")));
+        } catch {
+          fs.rmSync(file, { recursive: true, force: true });
+          continue;
+        }
+        const temp = `${file}.${process.pid}.scrub.tmp`;
+        try {
+          fs.writeFileSync(temp, JSON.stringify(sanitized), { mode: 0o600 });
+          fs.renameSync(temp, file);
+        } finally {
+          fs.rmSync(temp, { force: true });
+        }
+      } else {
+        fs.rmSync(file, { recursive: true, force: true });
+      }
+    }
+  }
 }
 
 function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {

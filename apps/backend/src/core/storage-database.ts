@@ -939,7 +939,7 @@ export class StorageDatabase {
         return (
           (db
             .query(
-              `SELECT collection, key, position, owner, value, octet_length(value) AS bytes
+              `SELECT collection, key, position, owner, value, length(CAST(value AS BLOB)) AS bytes
                FROM store_rows WHERE store = ? AND collection = ? AND key = ?`,
             )
             .get(store, collection, key) as StoreRowEntry | null) ?? undefined
@@ -971,7 +971,7 @@ export class StorageDatabase {
             : "collection, key, position, owner, value";
         return db
           .query(
-            `SELECT ${columns}, octet_length(value) AS bytes FROM store_rows
+            `SELECT ${columns}, length(CAST(value AS BLOB)) AS bytes FROM store_rows
              WHERE ${clauses.join(" AND ")} ORDER BY collection, position, key`,
           )
           .all(...parameters) as StoreRowEntry[];

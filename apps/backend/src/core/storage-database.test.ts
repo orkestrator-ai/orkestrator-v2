@@ -55,6 +55,15 @@ afterEach(async () => {
 });
 
 describe("StorageDatabase", () => {
+  test("row byte counts use portable SQLite SQL and count UTF-8 bytes", async () => {
+    const db = database(await dataDir());
+    const value = JSON.stringify({ text: "café 🐙" });
+    db.transaction(() => db.rows("records").put("unicode", value));
+    expect(db.rows("records").entry("unicode")?.bytes).toBe(Buffer.byteLength(value));
+    expect(db.rows("records").list()[0]?.bytes).toBe(Buffer.byteLength(value));
+    expect(db.rows("records").list({ values: false })[0]?.bytes).toBe(Buffer.byteLength(value));
+  });
+
   test("creates a private WAL database", async () => {
     const directory = await dataDir();
     const db = database(directory);

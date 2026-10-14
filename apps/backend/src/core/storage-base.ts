@@ -17,7 +17,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BACKUP_CHECK_INTERVAL_MS, takeDailySnapshotIfDue } from "./storage-backups.js";
 import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
-import { databaseStoreForPath, openBackendDatabase, storeLayout } from "./storage-stores.js";
+import {
+  databaseStoreForPath,
+  openBackendDatabase,
+  scrubLegacyJsonStore,
+  storeLayout,
+} from "./storage-stores.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -1297,7 +1302,22 @@ export abstract class StorageBase {
     options: { backup?: boolean } = {},
   ): Promise<void> {
     // The database file itself is private (0600).
-    if (this.saveStore(filePath, value)) return;
+    if (this.saveStore(filePath, value)) {
+      const store = this.storeForFile(filePath)!;
+      // Environment copies have an attributable scrub at the deleting boundary.
+      if (store !== "environments") {
+        scrubLegacyJsonStore(this.dataDir, store, (archived) => {
+          if (!isRecord(archived) || !isRecord(value))
+            throw new Error("Unattributable sensitive archive");
+          return Object.fromEntries(
+            Object.keys(archived)
+              .filter((key) => key in value)
+              .map((key) => [key, value[key]]),
+          );
+        });
+      }
+      return;
+    }
     await this.writeAtomic(
       filePath,
       `${JSON.stringify(value, null, 2)}\n`,
@@ -1366,6 +1386,10 @@ export abstract class StorageBase {
     transform: (records: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     if (this.storeForFile(filePath) !== null) {
+      scrubLegacyJsonStore(this.dataDir, this.storeForFile(filePath)!, (value) => {
+        if (!isRecord(value)) throw new Error("Unattributable legacy backup");
+        return transform(value);
+      });
       this.scrubDeletedDatabaseContent();
       return;
     }
@@ -1397,17 +1421,41 @@ export abstract class StorageBase {
   }
 
   protected async scrubPendingNativeAgentDispatchBackups(
-    _key: string,
-    _requestId: string,
+    key: string,
+    requestId: string,
   ): Promise<void> {
-    this.scrubDeletedDatabaseContent();
+    await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
+      const record = records[key];
+      if (
+        isRecord(record) &&
+        isRecord(record.pendingDispatch) &&
+        record.pendingDispatch.requestId === requestId
+      ) {
+        const next = { ...record };
+        delete next.pendingDispatch;
+        return { ...records, [key]: next };
+      }
+      return records;
+    });
   }
 
   protected async scrubPendingNativeAgentSteerBackups(
-    _key: string,
-    _requestId: string,
+    key: string,
+    requestId: string,
   ): Promise<void> {
-    this.scrubDeletedDatabaseContent();
+    await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
+      const record = records[key];
+      if (
+        isRecord(record) &&
+        isRecord(record.pendingSteer) &&
+        record.pendingSteer.requestId === requestId
+      ) {
+        const next = { ...record };
+        delete next.pendingSteer;
+        return { ...records, [key]: next };
+      }
+      return records;
+    });
   }
 }
 

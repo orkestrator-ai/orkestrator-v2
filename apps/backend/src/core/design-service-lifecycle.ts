@@ -71,10 +71,12 @@ export async function prepareCreate(
   if (descriptor.input.kind !== "create_canvas")
     throw new DesignError("invalid-input", "Not a create");
   if (descriptor.input.document !== undefined) parseImport(descriptor.input.document);
-  if (service.fences.has(environmentId))
+  if (service.environmentDeleted(environmentId))
     throw new DesignError("not-found", "Environment not found");
   await sweepProvisional(service);
   return service.global(async () => {
+    if (service.environmentDeleted(environmentId))
+      throw new DesignError("not-found", "Environment not found");
     // Quota and correlation lookups must see every process's canvases; the
     // global lease keeps another process from reserving meanwhile.
     await service.refreshLibrary();
@@ -197,7 +199,8 @@ export async function executeLifecycle(
     }
   } catch (error) {
     const failure = toDesignFailure(error);
-    if (failure.code === "not-found" && service.fences.has(entry.environmentId)) throw error;
+    if (failure.code === "not-found" && service.environmentDeleted(entry.environmentId))
+      throw error;
     return service.lane(entry.canvasId, async () => {
       const loaded = await service.load(entry.canvasId);
       const pending = await service.store.readPending(entry.canvasId);
@@ -301,6 +304,14 @@ async function executeDelete(service: DesignService, entry: DesignPendingOperati
     const { record, legacy } = await service.loadFor(entry.canvasId, entry.environmentId, {
       allowDeleted: true,
     });
+    const settled = record.receipts.find((candidate) => candidate.token === entry.token);
+    if (settled) return settled;
+    if (
+      !(await service.store.readPending(entry.canvasId)).some(
+        (candidate) => candidate.token === entry.token,
+      )
+    )
+      throw new DesignError("expired-operation", "This operation is no longer pending");
     if (record.state === "deleted")
       throw new DesignError("deleted", "This design was already deleted");
     const expected = entry.descriptor.preconditions.canvasRevision;
@@ -344,6 +355,14 @@ async function executeRestore(service: DesignService, entry: DesignPendingOperat
       const { record, legacy } = await service.loadFor(entry.canvasId, entry.environmentId, {
         allowDeleted: true,
       });
+      const settled = record.receipts.find((candidate) => candidate.token === entry.token);
+      if (settled) return settled;
+      if (
+        !(await service.store.readPending(entry.canvasId)).some(
+          (candidate) => candidate.token === entry.token,
+        )
+      )
+        throw new DesignError("expired-operation", "This operation is no longer pending");
       if (record.state !== "deleted")
         throw new DesignError("conflict", "This design is not deleted");
       const expected = entry.descriptor.preconditions.tombstoneRevision;
@@ -462,6 +481,7 @@ async function executeDuplicate(
 }
 
 export async function discardProvisional(service: DesignService, canvasId: string) {
+  service.coordination.beginLibraryChange(canvasId);
   await service.store.remove(canvasId);
   service.forget(canvasId);
   service.libraryRemoved(canvasId);
@@ -517,6 +537,7 @@ export async function purge(service: DesignService, environmentId: string, canva
 }
 
 async function removeCanvasFiles(service: DesignService, canvasId: string) {
+  service.coordination.beginLibraryChange(canvasId);
   await service.store.remove(canvasId);
   await rm(service.store.historyDir(canvasId), { recursive: true, force: true });
   await rm(service.store.exportBackupDir(canvasId), { recursive: true, force: true });
@@ -583,6 +604,7 @@ export async function deleteEnvironment(
 ): Promise<number> {
   service.fences.add(environmentId);
   return service.global(async () => {
+    service.coordination.fenceEnvironment(environmentId);
     // Includes canvases other processes created in this environment.
     await service.refreshLibrary();
     const ids = Array.from(service.library.entries.values())

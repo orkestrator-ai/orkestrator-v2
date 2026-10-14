@@ -449,6 +449,35 @@ describe("two backends sharing a data directory", () => {
     expect(existsSync(file)).toBe(true);
   });
 
+  test("a peer's empty cached environment cannot be recreated by first or queued writes", async () => {
+    harness = await createHarness();
+    const peer = await harness.peer();
+    await peer.list({ environmentId: ENV_A });
+    const store = await peer.storage.environment(ENV_A);
+    // Both calls enqueue while the authoritative store is still absent.
+    let resume!: () => void;
+    (store as unknown as { tail: Promise<void> }).tail = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const queued = store.mutate((tx) => {
+      tx.touch({});
+    });
+    const outcome = queued.catch((error: unknown) => error);
+    await harness.service.deleteEnvironment(ENV_A);
+    resume();
+    expect(await outcome).toBeInstanceOf(Error);
+    await expect(
+      peer.saveDraft({
+        environmentId: ENV_A,
+        editorId: "first",
+        expectedRevision: 0,
+        text: "late",
+      }),
+    ).rejects.toThrow("deleted");
+    await expect(createAnnotation(peer, ENV_A, "late", "late-op")).rejects.toThrow("deleted");
+    expect(readStoredEnvironment(harness.dir)).toBeUndefined();
+  });
+
   test("an environment deleted by one backend refuses writes in the other", async () => {
     harness = await createHarness();
     const peer = await harness.peer();

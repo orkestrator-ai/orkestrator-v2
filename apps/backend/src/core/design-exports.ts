@@ -175,46 +175,60 @@ export async function exportSave(
   const relativePath = validateDesignExportPath(request.relativePath);
   const repository = repositoryIdentity(environmentId, context.destination);
   const token = `ex_${randomUUID()}`;
-  const intent = await service.lane(canvasId, async () => {
-    const { record, legacy } = await service.loadFor(canvasId, environmentId);
-    // Legacy save clients match the conflict message prefix; new clients use the code.
-    if (record.document.revision !== request.revision)
-      throw designConflict(request.revision, record.document.revision, { canvasId });
-    // Only an export a live process is actually running blocks; a "writing"
-    // intent left by a failed settlement (or a dead process) is reconcilable.
-    if (
-      record.pendingExport?.state === "writing" &&
-      (activeExports(service).has(record.pendingExport.token) || service.exportWriterAlive(record))
-    )
-      throw new DesignError("capacity", "Another export of this design is still running", {
-        retryAfterMs: 1000,
-      });
-    const bytes = portableBytes(record.document);
-    const pending: DesignPendingExport = {
-      token,
-      relativePath,
-      repository,
-      revision: record.document.revision,
-      digest: designExportDigest(bytes),
-      startedAt: service.iso(),
-      state: "writing",
-    };
-    const next = cloneRecord(record);
-    next.pendingExport = pending;
-    next.pendingExportOwner = service.generation;
-    next.statusVersion++;
-    await service.commit(next, legacy, {
-      revision: next.document.revision,
-      kind: "status",
-      statusVersion: next.statusVersion,
-    });
-    activeExports(service).add(token);
-    return { bytes, pending };
-  });
+  const release = await service.coordination.claimExport(token);
   try {
-    return await writeAndSettle(service, environmentId, canvasId, context, request, token, intent);
+    const intent = await service.lane(canvasId, async () => {
+      const { record, legacy } = await service.loadFor(canvasId, environmentId);
+      // Legacy save clients match the conflict message prefix; new clients use the code.
+      if (record.document.revision !== request.revision)
+        throw designConflict(request.revision, record.document.revision, { canvasId });
+      // Only an export a live process is actually running blocks; a "writing"
+      // intent left by a failed settlement (or a dead process) is reconcilable.
+      if (
+        record.pendingExport?.state === "writing" &&
+        (activeExports(service).has(record.pendingExport.token) ||
+          service.exportWriterAlive(record))
+      )
+        throw new DesignError("capacity", "Another export of this design is still running", {
+          retryAfterMs: 1000,
+        });
+      const bytes = portableBytes(record.document);
+      const pending: DesignPendingExport = {
+        token,
+        relativePath,
+        repository,
+        revision: record.document.revision,
+        digest: designExportDigest(bytes),
+        startedAt: service.iso(),
+        state: "writing",
+      };
+      const next = cloneRecord(record);
+      next.pendingExport = pending;
+      next.pendingExportOwner = service.generation;
+      next.statusVersion++;
+      await service.commit(next, legacy, {
+        revision: next.document.revision,
+        kind: "status",
+        statusVersion: next.statusVersion,
+      });
+      activeExports(service).add(token);
+      return { bytes, pending };
+    });
+    try {
+      return await writeAndSettle(
+        service,
+        environmentId,
+        canvasId,
+        context,
+        request,
+        token,
+        intent,
+      );
+    } finally {
+      activeExports(service).delete(token);
+    }
   } finally {
-    activeExports(service).delete(token);
+    await release();
   }
 }
 

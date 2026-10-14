@@ -1,3 +1,4 @@
+import { deletionMarker, markDeletion } from "./storage-deletion-fences.js";
 import { DesignError } from "./design-errors.js";
 import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
@@ -25,6 +26,7 @@ import { openBackendDatabase } from "./storage-stores.js";
 
 /** Data-dir store whose revision is the canvases' change signal (document layout). */
 export const DESIGN_LIBRARY_SIGNAL_STORE = "design-canvases/changes";
+const DIRTY_PREFIX = "design-canvases/dirty/";
 
 /**
  * Canvas critical sections are one record read, verification, a checkpoint
@@ -121,6 +123,39 @@ export class DesignCoordination {
     } finally {
       await release().catch(() => undefined);
     }
+  }
+
+  environmentDeleted(environmentId: string): boolean {
+    return !!deletionMarker(this.db(), "design", environmentId);
+  }
+
+  fenceEnvironment(environmentId: string): void {
+    this.db().transaction(() => markDeletion(this.db(), "design", environmentId));
+  }
+
+  // Written before touching files. A failed signal or crash leaves a durable
+  // reason to reconcile, independent of the final change signal.
+  beginLibraryChange(canvasId: string): void {
+    this.db().writeStore(`${DIRTY_PREFIX}${canvasId}`, { owner: this.owner });
+  }
+  finishLibraryChange(canvasId: string): void {
+    this.db().deleteStore(`${DIRTY_PREFIX}${canvasId}`);
+  }
+  libraryDirty(): boolean {
+    return this.db().listStores(DIRTY_PREFIX).length > 0;
+  }
+
+  async claimExport(token: string): Promise<() => Promise<void>> {
+    return this.db().acquireLease(`design-export/${token}`, "design export", {
+      staleMs: OWNER_STALE_MS,
+      acquireTimeoutMs: 5_000,
+    });
+  }
+  exportAlive(token: string): boolean {
+    const row = this.db()
+      .db.query("SELECT heartbeat_at FROM leases WHERE name = ?")
+      .get(`design-export/${token}`) as { heartbeat_at: number } | null;
+    return row !== null && row.heartbeat_at >= Date.now() - OWNER_STALE_MS;
   }
 
   /** The change signal's current revision (0 before any change). */

@@ -1,3 +1,4 @@
+import { deletionFence, deletionMarker, markDeletion } from "./storage-deletion-fences.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NATIVE_AGENT_DISPLAY_TAIL_STORE } from "./native-agent-display-tail-layout.js";
@@ -47,7 +48,6 @@ export const NATIVE_DISPLAY_TAIL_LEGACY_FILE = "native-agent-display-tails.json"
 export const NATIVE_DISPLAY_TAIL_LEGACY_RECORD_DIRECTORY = "native-agent-display-tail-records";
 export const NATIVE_DISPLAY_TAIL_DECODED_CACHE_MAX_ENTRIES = 16;
 export const NATIVE_DISPLAY_TAIL_DECODED_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-const MAX_FENCE_MEMORY = 4_096;
 const MAX_LEGACY_BACKUPS = 5;
 const MAX_LEGACY_TEMP_SCAN = 4_096;
 const STORE = NATIVE_AGENT_DISPLAY_TAIL_STORE;
@@ -102,10 +102,6 @@ export class NativeAgentDisplayTailStore {
   private readonly decoded = new Map<string, DecodedEntry>();
   private decodedBytes = 0;
   private legacyCleanup: Promise<void> | null = null;
-  private deletionSequence = 0;
-  private fenceFloor = 0;
-  private readonly keyDeletions = new Map<string, number>();
-  private readonly environmentDeletions = new Map<string, number>();
   private readonly deletionListeners = new Set<(event: NativeAgentDisplayTailDeletion) => void>();
   private readonly maxSessions: number;
   private readonly maxTotalBytes: number;
@@ -136,36 +132,23 @@ export class NativeAgentDisplayTailStore {
    * write carrying a fence older than a later deletion of its key or
    * environment is refused, so a late checkpoint cannot resurrect a deleted
    * session's preview. The check and the commit run in one synchronous step,
-   * so no deletion in this process can land between them. The memory is
-   * bounded; a fence older than forgotten deletions is refused conservatively.
+   * so a deletion in any process cannot land between them. Tombstones
+   * live in the database; decoded caches remain bounded.
    */
   captureFence(): number {
-    return this.deletionSequence;
+    return deletionFence(this.options.database());
   }
 
   isFenceCurrent(key: string, environmentId: string, fence: number): boolean {
     return (
-      fence >= this.fenceFloor &&
-      (this.keyDeletions.get(key) ?? 0) <= fence &&
-      (this.environmentDeletions.get(environmentId) ?? 0) <= fence
+      deletionMarker(this.options.database(), "tail-key", key) <= fence &&
+      deletionMarker(this.options.database(), "tail-environment", environmentId) <= fence
     );
   }
 
   onDeleted(listener: (event: NativeAgentDisplayTailDeletion) => void): () => void {
     this.deletionListeners.add(listener);
     return () => this.deletionListeners.delete(listener);
-  }
-
-  private recordDeletion(map: Map<string, number>, id: string): void {
-    this.deletionSequence += 1;
-    map.delete(id);
-    map.set(id, this.deletionSequence);
-    while (map.size > MAX_FENCE_MEMORY) {
-      const oldest = map.entries().next().value as [string, number] | undefined;
-      if (!oldest) break;
-      map.delete(oldest[0]);
-      this.fenceFloor = Math.max(this.fenceFloor, oldest[1]);
-    }
   }
 
   private notifyDeleted(event: NativeAgentDisplayTailDeletion): void {
@@ -255,12 +238,15 @@ export class NativeAgentDisplayTailStore {
     let committed: { revision: number; evicted: string[] };
     try {
       const database = this.options.database();
-      committed = database.transaction(() =>
-        writeRowInTransaction(database, key, payload, {
+      const result = database.transaction(() => {
+        if (!this.isFenceCurrent(key, tail.environmentId, fence)) return null;
+        return writeRowInTransaction(database, key, payload, {
           maxSessions: this.maxSessions,
           maxTotalBytes: this.maxTotalBytes,
-        }),
-      );
+        });
+      });
+      if (!result) return false;
+      committed = result;
     } catch {
       return false;
     }
@@ -277,26 +263,28 @@ export class NativeAgentDisplayTailStore {
   }
 
   async delete(key: string): Promise<void> {
-    this.recordDeletion(this.keyDeletions, key);
     this.forgetDecoded(key);
     this.notifyDeleted({ kind: "key", key });
     void this.cleanupLegacy();
     const database = this.options.database();
-    const removed = database.transaction(() => (database.rows(STORE).delete(key) ? 1 : 0));
+    const removed = database.transaction(() => {
+      markDeletion(database, "tail-key", key);
+      return database.rows(STORE).delete(key) ? 1 : 0;
+    });
     this.afterDelete(database, removed);
   }
 
   async deleteByEnvironment(environmentId: string): Promise<void> {
-    this.recordDeletion(this.environmentDeletions, environmentId);
     for (const [key, entry] of Array.from(this.decoded)) {
       if (entry.tail.environmentId === environmentId) this.forgetDecoded(key);
     }
     this.notifyDeleted({ kind: "environment", environmentId });
     void this.cleanupLegacy();
     const database = this.options.database();
-    const removed = database.transaction(() =>
-      database.rows(STORE).deleteWhere({ owner: environmentId }),
-    );
+    const removed = database.transaction(() => {
+      markDeletion(database, "tail-environment", environmentId);
+      return database.rows(STORE).deleteWhere({ owner: environmentId });
+    });
     this.afterDelete(database, removed);
   }
 

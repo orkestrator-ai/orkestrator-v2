@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WEB_ANNOTATION_DEGRADED } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { WebAnnotationStorage } from "./web-annotation-storage.js";
 import { StorageDatabase } from "./storage-database.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
 import { webAnnotationStoreName } from "./web-annotation-store-layout.js";
@@ -236,6 +237,71 @@ describe("legacy file import", () => {
     expect((await again.list({ environmentId: ENV_A })).total).toBe(2);
   });
 
+  test.each([false, true])(
+    "legacy import batches survive interruption or concurrent deletion (delete=%s)",
+    async (deleting) => {
+      const source = await harnessFor();
+      const captures: string[] = [];
+      for (let index = 0; index < 6; index++) {
+        const receipt = await createAnnotation(
+          source.service,
+          ENV_A,
+          `Note ${index}`,
+          `op-${index}`,
+        );
+        captures.push(receipt.captureId!);
+      }
+      const dir = await mkdtemp(join(tmpdir(), "ork-wa-legacy-batches-"));
+      await exportLegacyEnvironment(source.service, dir);
+      // Valid legacy records large enough to require more than one import batch.
+      for (const id of captures) {
+        const file = legacyRecordPath(dir, id);
+        const record = JSON.parse(await readFile(file, "utf8"));
+        record.value.padding = "x".repeat(900_000);
+        await writeFile(file, JSON.stringify(record));
+      }
+      let entered!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let batches = 0;
+      const importing = harnessFor(dir, {
+        faults: async (stage: WebAnnotationFaultStage) => {
+          if (stage !== "after-legacy-record-batch" || ++batches !== 1) return;
+          entered();
+          await gate;
+          if (!deleting) throw new Error("interrupted legacy batch");
+        },
+      });
+      await started;
+      const peer = new WebAnnotationStorage({ dataDir: dir });
+      try {
+        if (deleting) await peer.deleteEnvironment(ENV_A);
+      } finally {
+        release();
+        await peer.close();
+      }
+      const imported = await importing;
+      expect(batches).toBe(1);
+      if (deleting) {
+        expect(readStoredEnvironment(dir)).toBeUndefined();
+        expect(existsSync(join(environmentDir(dir), "manifest.json"))).toBe(false);
+        await expect(imported.service.storage.environment(ENV_A)).rejects.toThrow("deleted");
+      } else {
+        expect(readStoredEnvironment(dir)?.meta.state).toBeUndefined();
+        expect(existsSync(join(environmentDir(dir), "manifest.json"))).toBe(true);
+        const restarted = await imported.restart();
+        expect((await restarted.list({ environmentId: ENV_A })).total).toBe(6);
+        expect((await restarted.capabilities(ENV_A)).storage).toBe("ready");
+        expect(Object.keys(readStoredEnvironment(dir)!.records)).toHaveLength(12);
+      }
+    },
+  );
+
   test("two backends opening the same legacy environment import it exactly once", async () => {
     const source = await harnessFor();
     for (let index = 0; index < 5; index++) {
@@ -328,6 +394,42 @@ describe("legacy file import", () => {
     expect(existsSync(join(envDir, "manifest.prev.json"))).toBe(true);
     const restarted = await imported.restart();
     expect((await restarted.capabilities(ENV_A)).storage).toBe("degraded");
+  });
+
+  test("repairing retained legacy files restores ready and writable status on reopen", async () => {
+    const { imported, envDir } = await legacy(
+      async (harness) => {
+        await createAnnotation(harness.service, ENV_A, "One", "op-1");
+        await harness.service.saveDraft({
+          environmentId: ENV_A,
+          editorId: "ed",
+          expectedRevision: 0,
+          text: "recovered",
+        });
+      },
+      async (dir) => {
+        await writeFile(join(dir, "manifest.json"), "corrupt");
+        await writeFile(join(dir, "drafts.json"), "corrupt");
+      },
+      { previous: true },
+    );
+    expect((await imported.service.capabilities(ENV_A)).storage).toBe("degraded");
+    await writeFile(
+      join(envDir, "manifest.json"),
+      await readFile(join(envDir, "manifest.prev.json")),
+    );
+    await writeFile(join(envDir, "drafts.json"), await readFile(join(envDir, "drafts.prev.json")));
+    const reopened = await imported.restart();
+    expect((await reopened.capabilities(ENV_A)).storage).toBe("ready");
+    expect((await reopened.getDraft(ENV_A, "ed"))?.text).toBe("recovered");
+    await createAnnotation(reopened, ENV_A, "Two", "op-2");
+    await reopened.saveDraft({
+      environmentId: ENV_A,
+      editorId: "new",
+      expectedRevision: 0,
+      text: "writable",
+    });
+    expect(existsSync(join(envDir, "manifest.json"))).toBe(false);
   });
 
   test("unreadable legacy storage becomes unavailable, never an empty collection", async () => {

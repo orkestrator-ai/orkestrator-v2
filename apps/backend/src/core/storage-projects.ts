@@ -1,3 +1,4 @@
+import { scrubLegacyJsonStore } from "./storage-stores.js";
 import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
 import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import * as shared from "./storage-shared.js";
@@ -451,9 +452,20 @@ export abstract class StorageProjects extends StorageBase {
    * Runs while the environment mutation lock is held.
    */
   protected async scrubEnvironmentBackups(
-    _environmentId: string,
-    _removeEnvironment: boolean,
+    environmentId: string,
+    removeEnvironment: boolean,
   ): Promise<void> {
+    scrubLegacyJsonStore(this.dataDir, "environments", (value) => {
+      if (!Array.isArray(value)) throw new Error("Unattributable environment archive");
+      return value
+        .filter((entry) => !removeEnvironment || !isRecord(entry) || entry.id !== environmentId)
+        .map((entry) => {
+          if (!isRecord(entry) || entry.id !== environmentId) return entry;
+          const next = { ...entry };
+          delete next.initialPromptAttachments;
+          return next;
+        });
+    });
     this.scrubDeletedDatabaseContent();
   }
 

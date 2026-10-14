@@ -732,7 +732,7 @@ export class BuildPipelineTranscriptStore {
     }
   }
 
-  private reference(row: TranscriptManifestRow): PipelineTranscriptReference {
+  reference(row: TranscriptManifestRow): PipelineTranscriptReference {
     return {
       version: PIPELINE_TRANSCRIPT_REFERENCE_VERSION,
       sdkSessionId: row.sdkSessionId,

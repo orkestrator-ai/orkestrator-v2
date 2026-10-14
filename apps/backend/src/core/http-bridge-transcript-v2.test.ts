@@ -125,6 +125,29 @@ describe("bridge transcript v2 negotiation", () => {
     );
   });
 
+  test("revised rows from before the window reach the provider snapshot as summaries", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json(
+          bridgeTranscriptSummaryUpdate(messages, {
+            ...readOptions,
+            limit: 1,
+            targetBytes: 512 * 1024,
+            pages: true,
+            revisedMessageIds: ["m1", "prompt"],
+          }),
+        ),
+      codexConnection,
+    );
+    const snapshot = await runtime(provider).transcriptSnapshot!("session-1", summaryRead);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    // The window is the newest row; only the prompt before it was revised.
+    expect(snapshot.messages.map((entry) => (entry as { id: string }).id)).toEqual(["m1"]);
+    expect(snapshot.revisedMessages?.map((entry) => (entry as { id: string }).id)).toEqual([
+      "prompt",
+    ]);
+  });
+
   test("an older bridge's v1 answer is used as-is and remembered", async () => {
     const { provider, requests } = bridge(1);
     const first = await runtime(provider).transcriptSnapshot!("session-1", summaryRead);

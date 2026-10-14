@@ -19,6 +19,7 @@ import type { EngineGeneration, EngineTurnConfig } from "../engine/types.js";
 import type { NormalizedMessage } from "../messages/types.js";
 import type { TurnAccumulator } from "./turn-accumulator.js";
 import type { PersistedSessionTitleSource } from "../session-titles.js";
+import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import {
   MAX_STRUCTURED_OUTPUT_TURNS,
   type StructuredOutputResult,
@@ -154,6 +155,14 @@ export interface BridgeSession {
    * thread carries a bounded copy so the model does not silently lose context.
    */
   recoveredContextPending: boolean;
+  /**
+   * Rows that changed behind a newer row, newest change first, for the
+   * transcript summary's `revisedMessages`; noted with the revision bump
+   * (`bumpMessageRevision`). A late update can land on a row newer ones have
+   * pushed out of the live window, which readers do not re-read. Ids from an
+   * earlier history name nothing in a new one, so a new epoch clears it.
+   */
+  revisedRows?: RecentlyRevisedRows;
 }
 
 export interface PromptAttachmentInput {
@@ -399,6 +408,7 @@ export class ThreadRegistry {
    */
   bumpContentEpoch(session: BridgeSession): void {
     session.contentEpoch += 1;
+    session.revisedRows?.clear();
   }
 
   /** Incrementally indexes new transcript parts without rescanning history on polls. */

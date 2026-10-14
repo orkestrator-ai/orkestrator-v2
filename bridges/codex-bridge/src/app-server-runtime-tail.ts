@@ -4,7 +4,6 @@ import {
   OrderedRuntimeEvent,
   SteerOrdering,
   HistoricalAssistantSegmentState,
-  MAX_HISTORICAL_ASSISTANT_SEGMENTS,
   ThreadRuntimeState,
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,

@@ -431,6 +431,7 @@ function abandonStartup(
         state.dispatching = false;
         denyAllApprovals(state, "The turn ended before this tool call was approved.");
         state.currentAssistantMessageId = undefined;
+        state.turnOpenedAssistantRow = undefined;
         state.openTextParts.clear();
         state.toolInputs.clear();
         state.currentTurnUsage = undefined;

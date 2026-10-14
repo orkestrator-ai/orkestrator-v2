@@ -185,13 +185,16 @@ export async function conditionalBuildPipelineRead(
       cursor.count <= read.messageCount &&
       (read.substituted
         ? cursor.revision === read.revision
-        : cursor.revision <= committed.revision);
+        : cursor.revision === committed.revision);
     if (read.status === "found" && !exactBase && tailStart > 0) {
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: 0,
         toIndex: 1,
       });
     }
+    // Without per-row change history a different revision cannot retain any
+    // prefix. Reconcile from zero, then page under that revision/count until
+    // all committed rows have arrived; never acknowledge stale held rows.
     if (read.status !== "found") {
       const unavailable: BuildPipelineMessagePatch = {
         sessionKey: session.sessionKey,

@@ -22,7 +22,8 @@ import {
   type SessionState,
 } from "./state.js";
 import { startRouterHarness, type RouterHarness } from "./testing/router-harness.js";
-import { rewindTranscriptTo } from "./transcript.js";
+import { beginAssistantTurn, rewindTranscriptTo } from "./transcript.js";
+import { applyCommandChanges, applyInteractionUpdate } from "./translate.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -141,6 +142,106 @@ describe("Cursor v2 transcript summaries", () => {
     expect((await read(transcript(state, { version: "2", knownToken: v1.token }))).status).toBe(
       "snapshot",
     );
+  });
+
+  test("a result patched onto an earlier step's row is news to a reader holding a token", async () => {
+    const state = await harness.createSession();
+    beginAssistantTurn(state);
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "read-1",
+      modelCallId: "m1",
+      toolCall: { type: "read", args: { path: "a.ts" } },
+    });
+    applyInteractionUpdate(state, { type: "step-started", stepId: 2 });
+    applyInteractionUpdate(state, { type: "text-delta", text: "Next step." });
+    const before = await read(transcript(state, { version: "2" }));
+    expect(before.value.messages).toHaveLength(2);
+
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "read-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "read",
+        args: { path: "a.ts" },
+        result: { status: "success", value: { content: "body" } },
+      },
+    });
+    const after = await read(transcript(state, { version: "2", knownToken: before.token }));
+    expect(after.status).toBe("snapshot");
+    expect(after.value.messages).toHaveLength(2);
+    expect(after.value.messages[0].parts[0]).toMatchObject({
+      toolUseId: "read-1",
+      toolState: "success",
+    });
+  });
+});
+
+describe("Cursor revised rows before the live window", () => {
+  test("a late change to a row outside the window travels with the next snapshot", async () => {
+    const state = await harness.createSession();
+    beginAssistantTurn(state);
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "slow-1",
+      modelCallId: "m1",
+      toolCall: { type: "read", args: { path: "a.ts" } },
+    });
+    const early = state.messages[0]!;
+    // Later steps push the call's row out of a small window.
+    for (let index = 2; index < 12; index += 1) {
+      applyInteractionUpdate(state, { type: "step-started", stepId: index });
+      applyInteractionUpdate(state, { type: "text-delta", text: `step ${index}` });
+    }
+    const window = { limit: "4", version: "2" };
+    const before = await read(transcript(state, window));
+    expect(before.value.startIndex).toBeGreaterThan(0);
+    expect(before.value.messages.map((m: BridgeMessage) => m.id)).not.toContain(early.id);
+    const revisedCall = (body: Body) =>
+      body.value.revisedMessages?.find((m: BridgeMessage) => m.id === early.id)?.parts[0];
+    // A row that only aged out is not revised: it changed while it was newest.
+    expect(revisedCall(before)).toBeUndefined();
+
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "slow-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "read",
+        args: { path: "a.ts" },
+        result: { status: "success", value: { content: "body" } },
+      },
+    });
+    const after = await read(transcript(state, { ...window, knownToken: before.token }));
+    expect(after.status).toBe("snapshot");
+    // Newest change first.
+    expect(after.value.revisedMessages[0].id).toBe(early.id);
+    expect(revisedCall(after)).toMatchObject({ toolUseId: "slow-1", toolState: "success" });
+
+    // A measured command change after the turn ended is a revision too.
+    beginAssistantTurn(state);
+    const change = {
+      additions: 3,
+      deletions: 1,
+      files: [{ path: "a.ts", additions: 3, deletions: 1 }],
+    };
+    expect(applyCommandChanges(state, "slow-1", change)).toBe(true);
+    const measured = await read(transcript(state, { ...window, knownToken: after.token }));
+    expect(measured.status).toBe("snapshot");
+    expect(revisedCall(measured)).toMatchObject({ commandChanges: change });
+
+    // A rewind starts a new history: what was noted against the old one goes,
+    // even for the row it kept, until that row changes again.
+    rewindTranscriptTo(state, state.messages[1]!.id);
+    for (let index = 0; index < 10; index += 1) {
+      applyInteractionUpdate(state, { type: "step-started", stepId: 100 + index });
+      applyInteractionUpdate(state, { type: "text-delta", text: `again ${index}` });
+    }
+    const rewound = await read(transcript(state, window));
+    expect(rewound.value.startIndex).toBeGreaterThan(0);
+    expect(state.messages[0]).toBe(early);
+    expect(revisedCall(rewound)).toBeUndefined();
   });
 });
 

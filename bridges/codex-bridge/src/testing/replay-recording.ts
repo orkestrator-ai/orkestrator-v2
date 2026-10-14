@@ -15,25 +15,38 @@
  *       → parseInboundLine        (envelope-validation.ts)
  *       → reduceNotification      (event-reducer.ts)
  *       → TurnAccumulator         (sessions/turn-accumulator.ts)
- *       → renderTurn              (messages/render-turn.ts)
+ *       → renderTurn              (messages/render-turn.ts), once per row
  *
  * Sub-agent loading is stubbed by default: it reads rollout files from disk, which
  * a fixture cannot carry. Pass `loadSubagentParts` to exercise it.
  */
 import { parseInboundLine } from "../app-server/envelope-validation.js";
 import { reduceNotification } from "../app-server/event-reducer.js";
-import { beginTurnRenderState, renderTurn } from "../messages/render-turn.js";
+import {
+  beginAssistantRowRenderState,
+  beginTurnRenderState,
+  renderTurn,
+} from "../messages/render-turn.js";
 import { TurnAccumulator } from "../sessions/turn-accumulator.js";
 import type { NormalizedPart } from "../messages/types.js";
 import type { EngineEvent, EngineGeneration, EngineItem } from "../engine/types.js";
 import type { RenderTurnOptions, TurnRenderState } from "../messages/render-turn.js";
 
+export interface ReplayedRow {
+  content: string;
+  parts: NormalizedPart[];
+}
+
 export interface ReplayedTurn {
   threadId: string | null;
   turnId: string;
   phase: string;
+  /** The last row's content, which is the turn's closing answer. */
   content: string;
+  /** Every row's parts, in order. */
   parts: NormalizedPart[];
+  /** The assistant rows the runtime publishes: one per model response. */
+  rows: ReplayedRow[];
   error?: { message: string; code?: string; details?: string };
   finalDiff?: string;
 }
@@ -95,6 +108,15 @@ function applyEvent(
     });
     state.turns.set(turnId, turn);
     state.order.push(turnId);
+  }
+
+  // The runtime gives each model response a row of its own; mirror it so a
+  // fixture pins the published shape, not just the item order.
+  if (turn.opensModelStep(event)) {
+    turn.startModelStep(
+      `replay-${turnId}-${turn.assistantSegmentsInOrder().length}`,
+      new Date(0).toISOString(),
+    );
   }
 
   switch (event.kind) {
@@ -211,18 +233,25 @@ export async function replayRecording(
     // Carried forward exactly as the runtime does, so a second edit to the same
     // file diffs against the previous turn rather than against git HEAD.
     state.renderState = beginTurnRenderState(state.renderState);
-    const rendered = await renderTurn(turn, {
-      threadId: turn.threadId || null,
-      cwd,
-      state: state.renderState,
-      loadSubagentParts: options.loadSubagentParts ?? NO_SUBAGENT_PARTS,
-    });
+    const rows: ReplayedRow[] = [];
+    for (const segment of turn.assistantSegmentsInOrder()) {
+      if (rows.length > 0) state.renderState = beginAssistantRowRenderState(state.renderState);
+      const rendered = await renderTurn(turn, {
+        threadId: turn.threadId || null,
+        cwd,
+        state: state.renderState,
+        segment,
+        loadSubagentParts: options.loadSubagentParts ?? NO_SUBAGENT_PARTS,
+      });
+      rows.push({ content: rendered.content, parts: rendered.parts });
+    }
     turns.push({
       threadId: turn.threadId || null,
       turnId: turn.turnId,
       phase: turn.phase,
-      content: rendered.content,
-      parts: rendered.parts,
+      content: rows.at(-1)?.content ?? "",
+      parts: rows.flatMap((row) => row.parts),
+      rows,
       ...(turn.error ? { error: turn.error } : {}),
       ...(turn.finalDiff ? { finalDiff: turn.finalDiff } : {}),
     });
@@ -255,15 +284,17 @@ export function summarizeForSnapshot(summary: ReplaySummary): unknown {
     serverRequestMethods: [...summary.serverRequestMethods].sort(),
     turns: summary.turns.map((turn) => ({
       phase: turn.phase,
-      contentLength: turn.content.length,
       ...(turn.error ? { errorCode: turn.error.code ?? "none" } : {}),
       ...(turn.finalDiff ? { finalDiffLength: turn.finalDiff.length } : {}),
-      parts: turn.parts.map((part) => ({
-        type: part.type,
-        ...(part.toolName ? { toolName: part.toolName } : {}),
-        ...(part.toolState ? { toolState: part.toolState } : {}),
-        ...(part.subagentName ? { subagentName: part.subagentName } : {}),
-        contentLength: typeof part.content === "string" ? part.content.length : 0,
+      rows: turn.rows.map((row) => ({
+        contentLength: row.content.length,
+        parts: row.parts.map((part) => ({
+          type: part.type,
+          ...(part.toolName ? { toolName: part.toolName } : {}),
+          ...(part.toolState ? { toolState: part.toolState } : {}),
+          ...(part.subagentName ? { subagentName: part.subagentName } : {}),
+          contentLength: typeof part.content === "string" ? part.content.length : 0,
+        })),
       })),
     })),
   };

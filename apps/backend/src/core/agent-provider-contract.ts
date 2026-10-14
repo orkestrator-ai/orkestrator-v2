@@ -410,8 +410,21 @@ export interface ProviderTranscriptSnapshot {
    * pushed messages out, and details resolve through `transcriptDetail`.
    */
   representation?: "summary";
-  /** Provider page cursor for history before `historyStartIndex`, scoped to `historyEpoch`. */
+  /**
+   * Provider page cursor for history before the first message, scoped to
+   * `historyEpoch`. A provider that pages by message rather than by absolute
+   * position (OpenCode) sends one without `historyStartIndex`.
+   */
   historyCursor?: string;
+  /**
+   * Rows from before `messages` that changed recently, newest change first,
+   * in the same representation as `messages`. A row is one model response,
+   * so a late tool result or subagent report can land on a row newer ones
+   * have pushed out of the window; readers replace their copies of these.
+   */
+  revisedMessages?: unknown[];
+  /** Changed recovery signal invalidates retained history, which remains pageable. */
+  historyReconciliationToken?: string;
 }
 
 /** One provider-served history page, positioned within a history epoch. */
@@ -419,14 +432,16 @@ export type ProviderTranscriptPage =
   | {
       status: "page";
       messages: unknown[];
-      historyStartIndex: number;
+      /** Absent when the provider pages by message rather than by position. */
+      historyStartIndex?: number;
       /** Cursor for the page before this one; absent when this page starts history. */
       historyCursor?: string;
       /** True when nothing before this page was ever lost. */
       complete: boolean;
       truncated: boolean;
       historyEpoch: string;
-      representation: "summary";
+      /** Absent when the page carries bodies inline rather than detail locators. */
+      representation?: "summary";
     }
   /** The cursor's epoch or generation is gone; the reader must start over. */
   | { status: "expired" };
@@ -615,8 +630,8 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     locator: string,
   ): Promise<ProviderTranscriptDetail | undefined>;
   /**
-   * History before a summary snapshot's `historyCursor`, served directly by
-   * the provider. Undefined when this provider connection cannot page.
+   * History before a snapshot's `historyCursor`, served directly by the
+   * provider. Undefined when this provider connection cannot page.
    */
   transcriptPage?(
     sessionId: string,

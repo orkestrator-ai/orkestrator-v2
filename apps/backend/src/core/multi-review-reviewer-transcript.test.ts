@@ -15,6 +15,13 @@ import {
   reviewerHistoryDigest,
   reviewerHistoryKey,
 } from "./multi-review-reviewer-transcript.js";
+import { OpenCodeStreamState } from "./opencode-stream-state.js";
+import { openCodeHistoryServer, openCodeMessageId } from "./opencode-history-test-support.js";
+import {
+  openCodeTranscriptSource,
+  openCodeTranscriptSnapshot,
+  openCodeTranscriptPage,
+} from "./opencode-snapshots.js";
 import { encodeDirectHistoryCursor } from "./native-agent-direct-history.js";
 
 function bytes(value: unknown): number {
@@ -51,6 +58,33 @@ describe("reviewer transcript bounds", () => {
     expect(bounded.messages).toEqual([]);
     expect(bounded.truncated).toBe(true);
     expect(bounded.bytes).toBeLessThanOrEqual(1_000);
+  });
+});
+
+describe("revised reviewer rows", () => {
+  test("rows the provider revised outside the tail travel beside it, not ones it shows", async () => {
+    const provider = {
+      agent: "claude",
+      async messages() {
+        throw new Error("the unbounded route must not be used");
+      },
+      async transcriptSnapshot() {
+        return {
+          messages: [{ id: "m9", role: "assistant", content: "tail", parts: [] }],
+          sourceToken: "rev-1",
+          complete: false,
+          revisedMessages: [
+            { id: "m2", role: "assistant", content: "settled late", parts: [] },
+            { id: "m9", role: "assistant", content: "tail", parts: [] },
+          ],
+        };
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(provider, "session-a", undefined);
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(read.revisedMessages).toEqual([
+      { id: "m2", role: "assistant", content: "settled late", parts: [] },
+    ]);
   });
 });
 
@@ -696,4 +730,163 @@ describe("reviewer history pages", () => {
     expect(keyless.kind === "snapshot" ? keyless.historyCursor : "x").toBeUndefined();
     expect(keyless.kind === "snapshot" ? keyless.historyEpoch : "x").toBeUndefined();
   });
+});
+
+test("Multi Review adopts inline OpenCode cursors and pages beyond the retained cache", async () => {
+  const server = openCodeHistoryServer(220);
+  const stream = new OpenCodeStreamState();
+  stream.replaceMessages("owned-session", server.read(64), undefined, 64);
+  const source = openCodeTranscriptSource(stream, "owned-session", {
+    readMessages: async (limit, before) => server.read(limit, before),
+    recordUnknown: () => undefined,
+  });
+  let pages = 0;
+  const provider = {
+    agent: "opencode",
+    messages: async () => {
+      throw new Error("legacy read must not run");
+    },
+    transcriptSnapshot: async (
+      _id: string,
+      options: Parameters<typeof openCodeTranscriptSnapshot>[1],
+    ) => openCodeTranscriptSnapshot(source, options),
+    transcriptPage: async (_id: string, options: Parameters<typeof openCodeTranscriptPage>[1]) => {
+      pages++;
+      return openCodeTranscriptPage(source, options);
+    },
+  } as unknown as BuildPipelineProvider;
+  const owner = { sessionKey: "reviewer", providerSessionId: "owned-session" };
+  const read = await readReviewerTranscript(provider, owner.providerSessionId, undefined, {
+    key: owner.sessionKey,
+  });
+  if (read.kind !== "snapshot") throw new Error("expected snapshot");
+  const held = [...read.messages];
+  let cursor = read.historyCursor;
+  for (let guard = 0; cursor && guard < 10; guard++) {
+    const page = await readReviewerHistoryPage(provider, owner, cursor, { limit: 50 });
+    if (page.kind !== "page") throw new Error("expected page");
+    expect(page.fallback).toBe(false);
+    held.unshift(...page.messages);
+    cursor = page.nextCursor;
+  }
+  expect(pages).toBeGreaterThan(0);
+  expect((held[0] as { id: string }).id).toBe(openCodeMessageId(0));
+  expect(held).toHaveLength(220);
+});
+
+test.each([1.2, 3.8])(
+  "Multi Review accepts a %s MiB whole bridge row and continues older paging",
+  async (mib) => {
+    const history = Array.from({ length: 120 }, (_, index) => ({
+      id: `oversized-${index}`,
+      role: "assistant" as const,
+      content: "small",
+      parts:
+        index === 19
+          ? Array.from({ length: Math.floor((mib * 1024) / 4) }, (_, i) => ({
+              type: "text",
+              content: `${i}:${"x".repeat(4 * 1024)}`,
+            }))
+          : [],
+      createdAt: "now",
+    }));
+    const provider = {
+      agent: "codex",
+      messages: async () => {
+        throw new Error("legacy read must not run");
+      },
+      transcriptSnapshot: async () => {
+        const update = bridgeTranscriptSummaryUpdate(history, {
+          sessionIdentity: "s",
+          generation: "g",
+          contentEpoch: 1,
+          revision: 1,
+          complete: true,
+          pages: true,
+          limit: 100,
+          targetBytes: 512 * 1024,
+        });
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        return {
+          messages: update.value.messages,
+          complete: false,
+          historyCursor: update.value.historyCursor,
+          historyEpoch: "g:1",
+          representation: "summary",
+        };
+      },
+      transcriptPage: async (
+        _id: string,
+        options: { cursor: string; limit: number; targetBytes: number },
+      ) => {
+        const page = bridgeTranscriptPage(history, {
+          ...options,
+          generation: "g",
+          contentEpoch: 1,
+          complete: true,
+        });
+        if (page.status !== "page") return { status: "expired" };
+        return {
+          status: "page",
+          messages: page.messages,
+          historyCursor: page.nextCursor,
+          historyEpoch: "g:1",
+          complete: page.complete,
+          truncated: page.truncated,
+          representation: "summary",
+        };
+      },
+    } as unknown as BuildPipelineProvider;
+    const owner = { sessionKey: "reviewer", providerSessionId: "s" };
+    const read = await readReviewerTranscript(provider, "s", undefined, { key: owner.sessionKey });
+    if (read.kind !== "snapshot" || !read.historyCursor) throw new Error("expected cursor");
+    const first = await readReviewerHistoryPage(provider, owner, read.historyCursor, {
+      limit: 100,
+      targetBytes: 256 * 1024,
+    });
+    if (first.kind !== "page") throw new Error("expected page");
+    expect(first.messages).toEqual([history[19]]);
+    expect(first.complete).toBe(false);
+    const older = await readReviewerHistoryPage(provider, owner, first.nextCursor!, {
+      limit: 100,
+      targetBytes: 256 * 1024,
+    });
+    if (older.kind !== "page") throw new Error("expected page");
+    expect(older.messages).toEqual(history.slice(0, 19));
+    expect(older.complete).toBe(true);
+  },
+);
+
+test("OpenCode revised inline steps outside a byte-bounded reviewer tail retain display identities", async () => {
+  const server = openCodeHistoryServer(64, () => "x".repeat(80 * 1024));
+  const stream = new OpenCodeStreamState();
+  stream.replaceMessages("owned-session", server.read(64), undefined, 64);
+  const id = openCodeMessageId(1);
+  const part = server.messages[1]!.parts[0]!;
+  stream.apply({
+    type: "message.part.updated",
+    properties: { sessionID: "owned-session", part: { ...part, text: "settled late" } },
+  } as never);
+  const source = openCodeTranscriptSource(stream, "owned-session", {
+    readMessages: async (limit, before) => server.read(limit, before),
+    recordUnknown: () => undefined,
+  });
+  const provider = {
+    agent: "opencode",
+    messages: async () => [],
+    transcriptSnapshot: async (
+      _id: string,
+      options: Parameters<typeof openCodeTranscriptSnapshot>[1],
+    ) => openCodeTranscriptSnapshot(source, options),
+  } as unknown as BuildPipelineProvider;
+  const read = await readReviewerTranscript(provider, "owned-session", undefined);
+  if (read.kind !== "snapshot") throw new Error("expected snapshot");
+  expect(read.messages.some((row) => (row as { id: string }).id === id)).toBe(false);
+  expect(read.revisedMessages).toEqual([
+    expect.objectContaining({
+      id,
+      content: "settled late",
+      parts: [expect.objectContaining({ type: "text", content: "settled late" })],
+    }),
+  ]);
 });

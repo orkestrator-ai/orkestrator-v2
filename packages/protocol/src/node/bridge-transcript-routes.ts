@@ -34,6 +34,13 @@ export interface BridgeTranscriptSource<T extends { content: string; parts: unkn
   complete: boolean;
   freshness?: "cached" | "current";
   title?: string;
+  /**
+   * Ids of rows the bridge changed recently, newest first (a
+   * `RecentlyRevisedRows` list). Those before the live window travel
+   * with the summary so readers refresh their copies of them.
+   */
+  revisedMessageIds?: readonly string[];
+  revisedRowsOverflowVersion?: number;
 }
 
 /** A query-string reader: `URLSearchParams#get` and Hono's `c.req.query` both fit. */
@@ -61,7 +68,12 @@ export function bridgeTranscriptRouteBody<T extends { content: string; parts: un
     title: source.title,
   };
   return query("version") === "2"
-    ? bridgeTranscriptSummaryUpdate(source.messages, { ...options, pages: true })
+    ? bridgeTranscriptSummaryUpdate(source.messages, {
+        ...options,
+        pages: true,
+        revisedRowsOverflowVersion: source.revisedRowsOverflowVersion,
+        ...(source.revisedMessageIds ? { revisedMessageIds: source.revisedMessageIds } : {}),
+      })
     : bridgeTranscriptUpdate(source.messages, options);
 }
 

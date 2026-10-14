@@ -102,16 +102,25 @@ export function publicContextUsage(state: SessionState) {
 }
 
 /**
- * Incremental transcript read. Only the last message mutates (its parts grow as
- * chunks arrive), so a client re-requests from its own last index and receives
- * that message plus anything newer — never the whole transcript, which is
- * bounded below 16 MiB and would otherwise be re-sent on every poll.
+ * Incremental transcript read. A client re-requests from its own last index
+ * and receives that message plus anything newer — never the whole transcript,
+ * which is bounded below 16 MiB and would otherwise be re-sent on every poll.
+ *
+ * The trailing message is not the only one that changes: each model response
+ * is a row of its own, and a late tool update lands on whichever row holds its
+ * call. The window therefore starts no later than the oldest row changed this
+ * turn (`mutatedMessageFloor`). `baseIndex` says where it starts, so a client
+ * merging by it replaces those rows rather than keeping a stale copy.
  */
 export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
+  const requested =
+    fromIndex === null || state.mutatedMessageFloor === undefined
+      ? fromIndex
+      : Math.min(fromIndex, state.mutatedMessageFloor);
   const start =
-    fromIndex === null
+    requested === null
       ? 0
-      : Math.min(Math.max(fromIndex - state.droppedMessages, 0), state.messages.length);
+      : Math.min(Math.max(requested - state.droppedMessages, 0), state.messages.length);
   return {
     messages: state.messages.slice(start),
     baseIndex: state.droppedMessages + start,

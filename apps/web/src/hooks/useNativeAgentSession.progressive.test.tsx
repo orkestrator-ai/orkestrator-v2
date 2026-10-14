@@ -1947,6 +1947,395 @@ describe("useNativeAgentSession progressive view", () => {
     ]);
   });
 
+  /**
+   * The delta a new prompt produces once a single oversized newest row has to
+   * leave the byte window whole: the old head is listed as deleted (it aged
+   * out), and the new tail shares no row with anything the tab holds.
+   */
+  function promptPushesHeadOut(baseToken: string, token: string, head: string) {
+    return (): NativeAgentTranscriptUpdate<TestMessage> => ({
+      viewVersion: 1,
+      status: "delta",
+      baseToken,
+      token,
+      identity,
+      delta: {
+        messageUpserts: [message("u143"), message("a144")],
+        liveMessageIds: ["u143", "a144"],
+        deletedMessageIds: [head],
+        freshness: "current",
+        historyEpoch: "epoch-1",
+        historyComplete: false,
+        historyCursor: "direct-before-u143",
+        historyPaging: "direct",
+        messageWindow: {
+          limit: 2,
+          truncated: true,
+          truncationReason: "bytes",
+          omittedMessages: 143,
+          canLoadEarlier: true,
+        },
+      },
+    });
+  }
+
+  test("pages from the new tail after a prompt pushes a part-trimmed head out of the window", async () => {
+    const turn = streamedParts(6);
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-1", [
+          message("m140"),
+          message("u141"),
+          message("a142", "turn", turn.slice(0, 4)),
+        ]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.projection?.messages[2]?.parts).toHaveLength(4));
+
+    // a142 keeps growing as the newest row until it alone overflows the byte
+    // window. The tab still holds its leading parts, so nothing is lost, and
+    // the provider starts offering a direct cursor at a142.
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-2", [message("a142", "turn", turn.slice(2))], {
+          historyCursor: "direct-before-a142",
+          historyPaging: "direct",
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 142,
+            omittedParts: 2,
+            canLoadEarlier: true,
+          },
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m140",
+      "u141",
+      "a142",
+    ]);
+    expect(result.current.projection?.messages[2]?.parts).toEqual(turn);
+
+    // A new prompt: a142 no longer fits at all, so the tail jumps past it.
+    transcriptUpdates = [promptPushesHeadOut("transcript-2", "transcript-3", "a142")];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    // The cursor held from a142's time pages strictly before a142, so it can
+    // never return it; only the tail's own cursor can.
+    messagePages = [
+      () => {
+        const before = messagePageCalls.at(-1)?.before;
+        return {
+          ...historyPage(
+            before === "direct-before-u143"
+              ? [message("m140"), message("u141"), message("a142", "turn", turn.slice(3))]
+              : [message("m140"), message("u141")],
+          ),
+          historyEpoch: "epoch-1",
+        };
+      },
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(messagePageCalls).toEqual([{ before: "direct-before-u143" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m140",
+      "u141",
+      "a142",
+      "u143",
+      "a144",
+    ]);
+  });
+
+  test("offers load earlier again when the live tail jumps past history already paged to the start", async () => {
+    const turn = streamedParts(4);
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("u141"), message("a142", "turn", turn)], {
+          historyCursor: "direct-before-u141",
+          historyPaging: "direct",
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 1,
+            canLoadEarlier: true,
+          },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [() => ({ ...historyPage([message("m140")]), historyEpoch: "epoch-1" })];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m140",
+      "u141",
+      "a142",
+    ]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeFalsy();
+
+    transcriptUpdates = [promptPushesHeadOut("transcript-1", "transcript-2", "a142")];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    // Every row the tab had paged in is off screen now. Reaching the start
+    // earlier proves nothing about them, so the control has to come back.
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["u143", "a144"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    messagePageCalls = [];
+    messagePages = [
+      () => ({
+        ...historyPage([message("m140"), message("u141"), message("a142", "turn", turn)]),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(messagePageCalls).toEqual([{ before: "direct-before-u143" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m140",
+      "u141",
+      "a142",
+      "u143",
+      "a144",
+    ]);
+  });
+
+  test("a page refreshes a held row the server has since delivered more completely", async () => {
+    const launched = {
+      type: "tool-invocation",
+      content: "agent",
+      toolUseId: "task-1",
+      toolName: "Task",
+      toolState: "running",
+    };
+    const settled = [
+      { ...launched, toolState: "completed" },
+      { type: "text", content: "summary" },
+    ];
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-1", [
+          message("u1"),
+          message("a2", "turn", [launched]),
+          message("u3"),
+        ]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.projection?.messages).toHaveLength(3));
+
+    // a2 ages out while its task still runs; the tab keeps its held copy.
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-2", [message("u3"), message("a4")], {
+          historyCursor: "direct-before-u3",
+          historyPaging: "direct",
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages[1]?.parts).toEqual([launched]);
+
+    // The task settles into a2 after it left the tail. The page carries that
+    // copy; the held one must not shadow it just because the id matches.
+    messagePages = [
+      () => ({
+        ...historyPage([message("u1"), message("a2", "turn", settled)]),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(messagePageCalls).toEqual([{ before: "direct-before-u3" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "u1",
+      "a2",
+      "u3",
+      "a4",
+    ]);
+    expect(result.current.projection?.messages[1]?.parts).toEqual(settled);
+  });
+
+  describe("revised rows", () => {
+    const launched = {
+      type: "tool-invocation",
+      content: "agent",
+      toolUseId: "task-1",
+      toolName: "Task",
+      toolState: "running",
+    };
+    const settled = [
+      { ...launched, toolState: "completed" },
+      { type: "text", content: "summary" },
+    ];
+
+    /** a2 launches a task, then ages out of the live tail while it runs. */
+    async function ageOutLaunchRow() {
+      transcriptUpdates = [
+        () =>
+          transcriptSnapshot("transcript-1", [
+            message("u1"),
+            message("a2", "turn", [launched]),
+            message("u3"),
+          ]),
+      ];
+      stateUpdates = [() => stateSnapshot("state-1")];
+      const session = renderSession();
+      await waitFor(() => expect(session.result.current.projection?.messages).toHaveLength(3));
+      transcriptUpdates = [() => truncatedTail("transcript-2", [message("u3"), message("a4")])];
+      stateUpdates = [];
+      await act(async () => {
+        await session.result.current.refresh();
+      });
+      expect(session.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "u1",
+        "a2",
+        "u3",
+        "a4",
+      ]);
+      expect(session.result.current.projection?.messages[1]?.parts).toEqual([launched]);
+      return session;
+    }
+
+    function heldHistory() {
+      return useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyMessages as TestMessage[] | undefined;
+    }
+
+    test("a snapshot replaces the retained copy of a revised row and inserts nothing", async () => {
+      const { result } = await ageOutLaunchRow();
+
+      transcriptUpdates = [
+        () =>
+          truncatedTail("transcript-3", [message("u3"), message("a4")], {
+            revisedMessages: [
+              message("a2", "turn", settled),
+              // Never held here: its position is outside the window.
+              message("a0", "unknown"),
+              // A live row is the tail's to describe, not the revision's.
+              message("u3", "stale"),
+            ],
+          }),
+      ];
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "u1",
+        "a2",
+        "u3",
+        "a4",
+      ]);
+      expect(result.current.projection?.messages[1]?.parts).toEqual(settled);
+      expect(result.current.projection?.messages[2]?.text).toBe("body-u3");
+      expect(heldHistory()?.map(({ id }) => id)).toEqual(["u1", "a2"]);
+      expect(heldHistory()?.[1]?.parts).toEqual(settled);
+    });
+
+    test("a delta that changes nothing in the live tail still shows the revision", async () => {
+      const { result } = await ageOutLaunchRow();
+      const revisionBefore = result.current.projection!.revision;
+
+      transcriptUpdates = [
+        () => ({
+          viewVersion: 1,
+          status: "delta",
+          baseToken: "transcript-2",
+          token: "transcript-3",
+          identity,
+          delta: {
+            messageUpserts: [],
+            deletedMessageIds: [],
+            freshness: "current",
+            historyEpoch: "epoch-1",
+            historyComplete: false,
+            messageWindow: {
+              limit: 2,
+              truncated: true,
+              truncationReason: "count",
+              canLoadEarlier: true,
+            },
+            revisedMessages: [message("a2", "turn", settled)],
+          },
+        }),
+      ];
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "u1",
+        "a2",
+        "u3",
+        "a4",
+      ]);
+      expect(result.current.projection?.messages[1]?.parts).toEqual(settled);
+      expect(result.current.projection!.revision).toBeGreaterThan(revisionBefore);
+      expect(heldHistory()?.[1]?.parts).toEqual(settled);
+    });
+
+    test("a remount's rebuilt view takes the revision for an aged-out row it still carries", async () => {
+      const first = await ageOutLaunchRow();
+      first.unmount();
+
+      // The remount rebuilds its delta base from everything on screen, so the
+      // aged-out a2 rides in the view itself rather than a retained prefix.
+      transcriptUpdates = [
+        () => ({
+          viewVersion: 1,
+          status: "delta",
+          baseToken: "transcript-2",
+          token: "transcript-3",
+          identity,
+          delta: {
+            messageUpserts: [message("a4", "streamed")],
+            deletedMessageIds: [],
+            freshness: "current",
+            historyEpoch: "epoch-1",
+            historyComplete: false,
+            revisedMessages: [message("a2", "turn", settled), message("a4", "stale")],
+          },
+        }),
+      ];
+      stateUpdates = [() => stateSnapshot("state-2")];
+      const remount = renderSession();
+      await waitFor(() =>
+        expect(remount.result.current.projection?.messages[1]?.parts).toEqual(settled),
+      );
+      expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "u1",
+        "a2",
+        "u3",
+        "a4",
+      ]);
+      // The row the delta delivered itself stays the delta's.
+      expect(remount.result.current.projection?.messages[3]?.text).toBe("streamed");
+    });
+  });
+
   test("does not override an incomplete preview the server marks non-pageable", async () => {
     transcriptUpdates = [
       () =>
@@ -2437,4 +2826,125 @@ describe("useNativeAgentSession progressive view", () => {
     ]);
     expect(remount.result.current.projection?.messageWindow).toBeUndefined();
   });
+});
+
+test("revised-row overflow while inactive invalidates held history, stays stable on unchanged, and re-pages whole rows", async () => {
+  const old = Array.from({ length: 40 }, (_, i) => message(`older-${i}`, `old-${i}`));
+  const tail = [message("live-a"), message("live-b")];
+  transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
+  stateUpdates = [() => stateSnapshot("state-1")];
+  const session = renderHook(
+    ({ active }) =>
+      useNativeAgentSession<TestMessage>({
+        platform: "codex",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive: active,
+        enabled: true,
+      }),
+    { initialProps: { active: true } },
+  );
+  await waitFor(() => expect(session.result.current.projection?.messages).toHaveLength(42));
+  transcriptUpdates = [
+    () =>
+      truncatedTail("tail", tail, {
+        historyCursor: "recover-before-live",
+        historyPaging: "direct",
+      }),
+  ];
+  await act(async () => {
+    await session.result.current.refresh();
+  });
+  expect(session.result.current.projection?.messages).toHaveLength(42);
+  session.rerender({ active: false });
+  const updated = old.map((row, i) => message(row.id, `settled-${i}`));
+  transcriptUpdates = [
+    () =>
+      truncatedTail("revised", tail, {
+        historyCursor: "recover-before-live",
+        historyPaging: "direct",
+        revisedMessages: updated.slice(0, 32),
+        historyReconciliationToken: "missed-eight-rows",
+      }),
+  ];
+  stateUpdates = [() => stateSnapshot("state-2")];
+  session.rerender({ active: true });
+  await waitFor(() =>
+    expect(session.result.current.projection?.messages.map((row) => row.id)).toEqual([
+      "live-a",
+      "live-b",
+    ]),
+  );
+  // Unchanged polling must not resurrect the stale retained prefix.
+  await act(async () => {
+    await session.result.current.refresh();
+  });
+  expect(session.result.current.projection?.messages).toHaveLength(2);
+  messagePages = [() => ({ ...historyPage(updated), historyEpoch: "epoch-1" })];
+  await act(async () => {
+    await session.result.current.loadEarlierMessages();
+  });
+  expect(session.result.current.projection?.messages.slice(0, 40).map((row) => row.text)).toEqual(
+    updated.map((row) => row.text),
+  );
+  session.unmount();
+  transcriptUpdates = [
+    () =>
+      truncatedTail("revised", tail, {
+        historyCursor: "recover-before-live",
+        historyPaging: "direct",
+        historyReconciliationToken: "missed-eight-rows",
+      }),
+  ];
+  stateUpdates = [() => stateSnapshot("state-3")];
+  const remount = renderSession();
+  await waitFor(() => expect(remount.result.current.transcriptAvailability).toBe("current"));
+  expect(
+    remount.result.current.projection?.messages.some((row) => row.text.startsWith("old-")),
+  ).toBe(false);
+});
+
+test("an overflow delta trims a remount's reconstructed held view before accepting its revision", async () => {
+  const old = Array.from({ length: 40 }, (_, i) => message(`old-${i}`, "stale"));
+  const tail = [message("live-a"), message("live-b")];
+  transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
+  stateUpdates = [() => stateSnapshot("state-1")];
+  const first = renderSession();
+  await waitFor(() => expect(first.result.current.projection?.messages).toHaveLength(42));
+  transcriptUpdates = [
+    () => truncatedTail("tail", tail, { historyCursor: "recover", historyPaging: "direct" }),
+  ];
+  await act(async () => {
+    await first.result.current.refresh();
+  });
+  first.unmount();
+  transcriptUpdates = [
+    () => ({
+      viewVersion: 1,
+      status: "delta",
+      baseToken: "tail",
+      token: "overflow",
+      identity,
+      delta: {
+        messageUpserts: [],
+        liveMessageIds: ["live-a", "live-b"],
+        deletedMessageIds: [],
+        freshness: "current",
+        historyEpoch: "epoch-1",
+        historyComplete: false,
+        historyCursor: "recover",
+        historyPaging: "direct",
+        historyReconciliationToken: "missed-revisions",
+      },
+    }),
+  ];
+  stateUpdates = [() => stateSnapshot("state-2")];
+  const remount = renderSession();
+  await waitFor(() =>
+    expect(remount.result.current.projection?.messages.map((row) => row.id)).toEqual([
+      "live-a",
+      "live-b",
+    ]),
+  );
+  expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
 });

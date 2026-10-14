@@ -49,7 +49,12 @@ export async function reconcileOpenCodeStreamState(options: {
             { count: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
           ),
         ];
-        options.streamState.replaceMessages(sessionId, messages, eventVersion);
+        options.streamState.replaceMessages(
+          sessionId,
+          messages,
+          eventVersion,
+          OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+        );
       } catch {
         // A dirty transcript is retried by the next authoritative read.
       }

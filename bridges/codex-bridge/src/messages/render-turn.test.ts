@@ -7,6 +7,7 @@ import { clearTranscriptCache } from "../transcript-cache.js";
 import {
   SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
   TRUNCATION_NOTICE,
+  beginAssistantRowRenderState,
   beginTurnRenderState,
   createTurnRenderState,
   effectiveItem,
@@ -78,6 +79,30 @@ describe("turn render state", () => {
     expect(next.subagentTerminalPathRetries.size).toBe(0);
     expect(next.fileChange.baselines.get("a.ts")).toBe("before");
     expect(next.fileChange.cache.size).toBe(0);
+  });
+
+  test("a turn's next row starts its own caches but shares the turn's", () => {
+    const previous = createTurnRenderState();
+    previous.timelineOrder.push("item:old");
+    previous.completedItemParts.set("old", { source: null, parts: [] });
+    previous.subagentParts.set("agent:old", { type: "subagent", content: "old" });
+    previous.subagentProbedAt = 1;
+    previous.fileChange.baselines.set("a.ts", "after the edit");
+    previous.fileChange.cache.set("edit:0:update:a.ts", { filePath: "a.ts", diff: "-a\n+A" });
+
+    const next = beginAssistantRowRenderState(previous);
+    expect(next.timelineOrder).toEqual([]);
+    expect(next.completedItemParts.size).toBe(0);
+    expect(next.subagentParts.size).toBe(0);
+    expect(next.subagentProbedAt).toBe(0);
+    // The edit's diff was taken against the baseline before it, and the
+    // baseline already moved past it: recomputing it would diff the file
+    // against itself, so the per-item cache must survive the row split.
+    expect(next.fileChange).toBe(previous.fileChange);
+    expect(next.fileChange.cache.get("edit:0:update:a.ts")?.diff).toBe("-a\n+A");
+    expect(next.subagentPathIds).toBe(previous.subagentPathIds);
+    expect(next.subagentTerminalPathRetries).toBe(previous.subagentTerminalPathRetries);
+    expect(next.subagentOwners).toBe(previous.subagentOwners);
   });
 
   test("release clears all retained render memory", () => {
@@ -1621,3 +1646,162 @@ describe("renderTurn", () => {
     expect(state.subagentFingerprints.size).toBe(0);
   });
 });
+
+describe("sub-agent cards across a turn's rows", () => {
+  const spawn = {
+    id: "spawn",
+    type: "collab_tool_call" as const,
+    tool: "spawn_agent",
+    receiver_thread_ids: ["child-1"],
+    status: "completed" as const,
+  };
+  const wait = {
+    id: "wait",
+    type: "collab_tool_call" as const,
+    tool: "wait",
+    receiver_thread_ids: ["child-1"],
+    agents_states: { "child-1": { status: "completed" as const, message: "Reviewed" } },
+    status: "completed" as const,
+  };
+  const card = {
+    type: "subagent" as const,
+    content: "child transcript",
+    toolState: "pending" as const,
+    subagentId: "child-1",
+  };
+
+  /** Row 1 spawns the agent; row 2, the next response, waits on it. */
+  function spawnThenWait() {
+    const accumulator = turn();
+    accumulator.onItemCompleted(spawn);
+    accumulator.startModelStep("message-2", "2026-07-25T12:00:05.000Z");
+    accumulator.onItemCompleted(wait);
+    const [first, second] = accumulator.assistantSegmentsInOrder();
+    const firstState = createTurnRenderState();
+    const secondState = beginAssistantRowRenderState(firstState);
+    // Both rows' loads report the child: the waiting row names it too.
+    const render = (segment: typeof first, state: typeof firstState) =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        segment,
+        loadSubagentParts: async () => [card],
+      });
+    return { render, first: first!, second: second!, firstState, secondState };
+  }
+
+  const cardIds = (parts: Array<{ type: string; subagentId?: string }>) =>
+    parts.filter((part) => part.type === "subagent").map((part) => part.subagentId);
+
+  test("a card stays on the row that spawned the agent, not on a later wait", async () => {
+    const { render, first, second, firstState, secondState } = spawnThenWait();
+    expect(cardIds((await render(first, firstState)).parts)).toEqual(["child-1"]);
+    expect(cardIds((await render(second, secondState)).parts)).toEqual([]);
+  });
+
+  test("a later wait rendered first gives the card back to the spawning row", async () => {
+    const { render, first, second, firstState, secondState } = spawnThenWait();
+    // The waiting row can render before the spawning row has claimed the
+    // agent, and briefly shows it; the next probe hands it back.
+    expect(cardIds((await render(second, secondState)).parts)).toEqual(["child-1"]);
+    expect(cardIds((await render(first, firstState)).parts)).toEqual(["child-1"]);
+    expect(cardIds((await render(second, secondState)).parts)).toEqual([]);
+    expect(secondState.subagentActivity).toBe(false);
+    expect(firstState.subagentActivity).toBe(true);
+  });
+
+  test("a failed spawn, or one naming no agent, settles once its cards finish", async () => {
+    const settledAfter = async (
+      item: Record<string, unknown>,
+      cards: Array<Record<string, unknown>>,
+    ): Promise<boolean> => {
+      const accumulator = turn();
+      accumulator.onItemCompleted({
+        id: "spawn",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        ...item,
+      } as never);
+      const state = createTurnRenderState();
+      await renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => cards as never,
+      });
+      return state.subagentSettled;
+    };
+    // A failed spawn started nothing, with or without a card for its failure.
+    expect(await settledAfter({ status: "failed" }, [])).toBe(true);
+    expect(await settledAfter({ status: "failed" }, [{ ...card, toolState: "failure" }])).toBe(
+      true,
+    );
+    // Multi-agent v2 names no agent on the spawn; the transcript card does.
+    const unnamed = { status: "completed" };
+    expect(
+      await settledAfter(unnamed, [{ ...card, subagentId: "child-9", toolState: "success" }]),
+    ).toBe(true);
+    expect(await settledAfter(unnamed, [{ ...card, subagentId: "child-9" }])).toBe(false);
+    expect(await settledAfter(unnamed, [])).toBe(false);
+    expect(await settledAfter({ status: "in_progress" }, [])).toBe(false);
+  });
+
+  test("a frozen row can skip the transcript probe", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted(agentMessageItem("answer", "done"));
+    let loads = 0;
+    await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      skipSubagentProbe: true,
+      loadSubagentParts: async () => {
+        loads += 1;
+        return [];
+      },
+    });
+    expect(loads).toBe(0);
+  });
+
+  test("the spawning row's card shows what a later row's wait reported", async () => {
+    const parts = await loadSubagentPartsFromTranscripts(
+      {
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:00.000Z",
+        items: [spawn],
+        followingItems: [
+          wait,
+          // Neither may add a card to this row: one waits on an agent this
+          // row never showed, the other spawns a new one.
+          {
+            ...wait,
+            id: "wait-other",
+            receiver_thread_ids: ["child-2"],
+            agents_states: { "child-2": { status: "completed" } },
+          },
+          { ...spawn, id: "spawn-later", receiver_thread_ids: ["child-3"] },
+        ],
+      },
+      {
+        createTranscriptMetaLoader: () => async (threadId) => ({
+          id: threadId,
+          updatedAt: "2026-07-25T12:00:00.000Z",
+          transcriptPath: `/transcripts/${threadId}.jsonl`,
+        }),
+        deriveTranscriptParts: async () => [{ ...card, subagentActions: [] }],
+        readTranscript: async () => ({ records: [] }),
+      },
+    );
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ subagentId: "child-1", toolState: "success" });
+    expect(parts[0]?.subagentActions).toContainEqual(
+      expect.objectContaining({ type: "text", content: "Reviewed" }),
+    );
+  });
+});
+
+function agentMessageItem(id: string, text: string) {
+  return { id, type: "agent_message" as const, text };
+}

@@ -28,6 +28,7 @@
  * bridge that ignores `version=2` answers as `1`.
  */
 
+import { revisedRowsReconciliationToken } from "./revised-rows.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
@@ -54,6 +55,22 @@ export const BRIDGE_DETAIL_LOCATOR_MAX_LENGTH = 2 * 1024;
 export const BRIDGE_PAGE_CURSOR_MAX_LENGTH = 1024;
 export const BRIDGE_PAGE_MAX_MESSAGES = 200;
 export const BRIDGE_PAGE_TARGET_BYTES = 1024 * 1024;
+/**
+ * Ceiling for a page holding one row that is larger than the page target on
+ * its own. Such a row is sent whole up to this size: cutting parts from its
+ * front would lose them for good, because the next page's cursor starts
+ * before the row, never inside it.
+ */
+export const BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Rows from before the live window that a snapshot carries because they
+ * changed recently. A row stops being sent in the window once newer rows push
+ * it out, yet a late tool result, a subagent's report or a measured change can
+ * still land on it; without these a reader holding the row keeps its stale
+ * copy until a reload.
+ */
+export const BRIDGE_REVISED_MESSAGES_MAX = 32;
+export const BRIDGE_REVISED_MESSAGES_MAX_BYTES = 256 * 1024;
 /** Nesting the summarizer follows; deeper structures are passed through as-is. */
 const MAX_SUMMARY_DEPTH = 8;
 const NESTED_PART_FIELDS = ["parts", "childTools", "subagentActions"] as const;
@@ -497,6 +514,14 @@ export type BridgeTranscriptSummaryUpdate =
         title?: string;
         /** Cursor for the page before `startIndex`, when there is one. */
         historyCursor?: string;
+        /**
+         * Rows before `startIndex` that changed recently, newest change first.
+         * A reader replaces its own copy of each; it never inserts one it does
+         * not hold, since its position is outside the window.
+         */
+        revisedMessages?: unknown[];
+        /** Changed omitted revisions require dropping retained pages and re-paging. */
+        historyReconciliationToken?: string;
         capabilities: BridgeTranscriptCapabilities;
       };
     };
@@ -504,6 +529,48 @@ export type BridgeTranscriptSummaryUpdate =
 export interface BridgeTranscriptSummaryOptions extends BridgeTranscriptReadOptions {
   /** Whether this bridge serves `/transcript/page`. */
   pages?: boolean;
+  /** Ids of rows this bridge changed recently, newest first; see `revisedMessages`. */
+  revisedMessageIds?: readonly string[];
+  revisedRowsOverflowVersion?: number;
+}
+
+/**
+ * Summaries of the recently changed rows that fall before the window, newest
+ * change first, within the count and byte bounds. A row too large for the
+ * whole budget is skipped: the reader can still page it back whole.
+ */
+function revisedBeforeWindow(
+  messages: readonly unknown[],
+  startIndex: number,
+  ids: readonly string[] | undefined,
+): { messages: unknown[]; omitted: unknown[] } {
+  if (!ids?.length || startIndex === 0) return { messages: [], omitted: [] };
+  const wanted = new Set(ids);
+  const found = new Map<string, unknown>();
+  for (let index = 0; index < startIndex && found.size < wanted.size; index += 1) {
+    const id = (messages[index] as { id?: unknown } | undefined)?.id;
+    if (typeof id === "string" && wanted.has(id)) found.set(id, messages[index]);
+  }
+  const revised: unknown[] = [];
+  const omitted: unknown[] = [];
+  let bytes = 0;
+  for (const id of ids) {
+    const message = found.get(id);
+    if (message === undefined) continue;
+    found.delete(id);
+    const summary = summarizeBridgeMessage(message);
+    const size = Buffer.byteLength(JSON.stringify(summary));
+    if (
+      revised.length >= BRIDGE_REVISED_MESSAGES_MAX ||
+      bytes + size > BRIDGE_REVISED_MESSAGES_MAX_BYTES
+    ) {
+      omitted.push(summary);
+      continue;
+    }
+    bytes += size;
+    revised.push(summary);
+  }
+  return { messages: revised, omitted };
 }
 
 function boundedInteger(value: number, maximum: number, fallback: number): number {
@@ -543,6 +610,12 @@ export function bridgeTranscriptSummaryUpdate(
   const startIndex = messages.length - bounded.messages.length;
   const omittedMessages = startIndex;
   const windowTruncated = bounded.messageWindow.truncated || omittedMessages > 0;
+  const revised = revisedBeforeWindow(messages, startIndex, options.revisedMessageIds);
+  const revisedMessages = revised.messages;
+  const historyReconciliationToken = revisedRowsReconciliationToken(
+    options.revisedRowsOverflowVersion ?? 0,
+    revised.omitted,
+  );
   // Pages serve whole messages before `startIndex`. A part-trimmed head is
   // reported by `omittedParts` and is not something a page can restore.
   const historyCursor =
@@ -582,6 +655,8 @@ export function bridgeTranscriptSummaryUpdate(
       freshness: options.freshness ?? "current",
       ...(options.title ? { title: options.title } : {}),
       ...(historyCursor ? { historyCursor } : {}),
+      ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
+      ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
       capabilities: { details: true, pages: options.pages === true },
     },
   };
@@ -664,11 +739,24 @@ export function bridgeTranscriptPage(
   const end = cursor.b;
   const start = Math.max(0, end - limit);
   const candidates = messages.slice(start, end).map((message) => summarizeBridgeMessage(message));
-  const bounded = boundTranscriptResponse(
+  const boundOptions = { envelopeReserveBytes: 0, contentFallbackBytes: 64 * 1024 };
+  let bounded = boundTranscriptResponse(
     candidates as Array<{ content: string; parts: unknown[] }>,
     targetBytes,
-    { envelopeReserveBytes: 0, contentFallbackBytes: 64 * 1024 },
+    boundOptions,
   );
+  // The newest row alone is over the target. Trimming it would strand the
+  // parts it cut: the next cursor ends before this row, never inside it.
+  if (
+    bounded.messages.length === 1 &&
+    (bounded.messageWindow.omittedParts !== undefined || bounded.overflowed)
+  ) {
+    bounded = boundTranscriptResponse(
+      candidates.slice(-1) as Array<{ content: string; parts: unknown[] }>,
+      Math.max(targetBytes, BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES),
+      boundOptions,
+    );
+  }
   const firstIndex = end - bounded.messages.length;
   const nextCursor =
     firstIndex > 0 ? encodePageCursor({ g: cursor.g, e: cursor.e, b: firstIndex }) : undefined;
@@ -749,6 +837,16 @@ export function parseBridgeTranscriptSummaryUpdate(
       ...(typeof value.historyCursor === "string" &&
       value.historyCursor.length <= BRIDGE_PAGE_CURSOR_MAX_LENGTH
         ? { historyCursor: value.historyCursor }
+        : {}),
+      ...(Array.isArray(value.revisedMessages) &&
+      value.revisedMessages.length > 0 &&
+      value.revisedMessages.length <= BRIDGE_REVISED_MESSAGES_MAX &&
+      value.revisedMessages.every((message) => isRecord(message) && typeof message.id === "string")
+        ? { revisedMessages: value.revisedMessages }
+        : {}),
+      ...(typeof value.historyReconciliationToken === "string" &&
+      value.historyReconciliationToken.length <= 128
+        ? { historyReconciliationToken: value.historyReconciliationToken }
         : {}),
       capabilities: {
         details: capabilities.details === true,

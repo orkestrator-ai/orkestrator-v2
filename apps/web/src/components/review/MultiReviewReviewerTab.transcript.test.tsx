@@ -9,6 +9,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewReviewerTab,
   mergeMultiReviewReviewerTranscript,
+  mergeReviewerHistory,
 } from "./MultiReviewReviewerTab";
 
 const STARTED_AT = "2026-09-14T22:00:00.000Z";
@@ -171,4 +172,59 @@ describe("conditional reviewer transcript reads", () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(loadTranscript).not.toHaveBeenCalled();
   });
+});
+
+describe("revised reviewer rows", () => {
+  const row = (id: string, content = id) => ({
+    id,
+    role: "assistant",
+    content,
+    createdAt: STARTED_AT,
+    parts: [{ type: "text", content }],
+  });
+
+  test("replace the copy of a held earlier row, and never insert one", () => {
+    const history = { earlier: [row("a"), row("b")], cursor: "c1", epoch: "e1" };
+    const tail = [row("c"), row("d")];
+    const next = transcript({
+      messages: [row("c"), row("d"), row("e")],
+      historyEpoch: "e1",
+      revisedMessages: [row("a", "settled late"), row("unknown")],
+    });
+    const merged = mergeReviewerHistory(history, tail, next, false);
+    expect(merged.reset).toBe(false);
+    expect(
+      merged.history.earlier.map((message) => (message as { content: string }).content),
+    ).toEqual(["settled late", "b"]);
+  });
+
+  test("an answer without revisions keeps the held history object", () => {
+    const history = { earlier: [row("a")], cursor: "c1", epoch: "e1" };
+    const next = transcript({ messages: [row("b")], historyEpoch: "e1" });
+    expect(mergeReviewerHistory(history, [row("b")], next, false).history).toBe(history);
+  });
+});
+
+test("missed reviewer revisions invalidate earlier rows and adopt a recoverable provider cursor", () => {
+  const history = {
+    earlier: Array.from({ length: 40 }, (_, i) => ({ id: `old-${i}`, content: "stale" })),
+    cursor: "old-cursor",
+    epoch: "e1",
+  };
+  const tail = [{ id: "live", content: "current" }];
+  const next = transcript({
+    messages: tail,
+    historyEpoch: "e1",
+    historyCursor: "reload-before-live",
+    historyReconciliationToken: "omitted-revisions",
+  });
+  const result = mergeReviewerHistory(history, tail, next);
+  expect(result.reset).toBe(true);
+  expect(result.history).toMatchObject({
+    earlier: [],
+    cursor: "reload-before-live",
+    epoch: "e1",
+    reconciliationToken: "omitted-revisions",
+  });
+  expect(mergeReviewerHistory(result.history, tail, next).reset).toBe(false);
 });

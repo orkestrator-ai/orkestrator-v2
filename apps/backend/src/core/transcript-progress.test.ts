@@ -491,6 +491,23 @@ test("version-2 digests are fixed-size, content-free and scoped to their base", 
   ).toBe(digest);
   const moved = snapshotProgressDigest({ ...base, messages: [{ id: "m", content: "moved" }] });
   expect(compareProgressDigests(digest, moved)).toBe("changed");
+  // A late report on a row older than the window is progress; an empty list
+  // keeps the digest an older backend persisted.
+  expect(snapshotProgressDigest({ ...base, revisedMessages: [] })).toBe(digest);
+  const revised = snapshotProgressDigest({
+    ...base,
+    revisedMessages: [{ id: "older", content: "subagent reported" }],
+  });
+  expect(compareProgressDigests(digest, revised)).toBe("changed");
+  expect(
+    compareProgressDigests(
+      revised,
+      snapshotProgressDigest({
+        ...base,
+        revisedMessages: [{ id: "older", content: "subagent reported again" }],
+      }),
+    ),
+  ).toBe("changed");
   const otherEpoch = snapshotProgressDigest({ ...base, historyEpoch: "g:e2" });
   expect(compareProgressDigests(digest, otherEpoch)).toBe("rebased");
   expect(compareProgressDigests(undefined, digest)).toBe("baseline");

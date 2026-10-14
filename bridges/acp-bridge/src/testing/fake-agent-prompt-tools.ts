@@ -946,6 +946,27 @@ export function handlePromptTools(
     }
     return true;
   }
+  if (prompt.startsWith("MANYPARTS")) {
+    // One response, named by its message id, alternating thought and text
+    // until it holds more parts than a row may. Back-to-back tool calls no
+    // longer reach that cap (they open the next row at the soft bound), so
+    // this is how a single oversized response is driven now.
+    for (let index = 0; index <= 512; index += 1) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: index % 2 === 0 ? "agent_thought_chunk" : "agent_message_chunk",
+            messageId: "many-parts",
+            content: { type: "text", text: `part-${index} ` },
+          },
+        },
+      });
+    }
+    return true;
+  }
   if (prompt.startsWith("TRANSCRIPTOVERFLOW")) {
     // Individually valid parts whose combined rendered transcript crosses the
     // 16 MiB budget. Each update is terminal so persistence/reload can verify

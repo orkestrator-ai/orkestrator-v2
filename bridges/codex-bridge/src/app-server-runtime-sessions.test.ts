@@ -752,6 +752,13 @@ describe("models", () => {
       requestId: "req-reroute-segments",
       attachments: [],
     });
+    // Something above the steer, so it splits the turn into two rows.
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "before", type: "agentMessage", text: "Looking" },
+    });
+    await h.drain();
     expect(
       await h.runtime.steerSession(sessionId, "Also inspect tests", "turn-1", "req-reroute-steer"),
     ).toBe("accepted");

@@ -145,14 +145,28 @@ export function legacyProgressDigest(messages: readonly unknown[]): string {
  * freshness.
  */
 export function snapshotProgressDigest(snapshot: ProviderTranscriptSnapshot): string {
-  return windowProgressDigest(snapshot, snapshot.messages, snapshot.omittedParts ?? 0);
+  return windowProgressDigest(
+    snapshot,
+    snapshot.messages,
+    snapshot.omittedParts ?? 0,
+    snapshot.revisedMessages,
+  );
 }
 
-/** `rows` end at the snapshot's newest message, and are hashed at its position. */
+/**
+ * `rows` end at the snapshot's newest message, and are hashed at its position.
+ *
+ * A row is one model response, so a subagent's report or a background tool's
+ * result can land on a row older than the window while the agent itself only
+ * waits; the provider sends such rows as `revised`. They join the hash only
+ * when present, so a sample without them keeps the digest an older backend
+ * persisted.
+ */
 function windowProgressDigest(
   snapshot: ProviderTranscriptSnapshot,
   rows: readonly unknown[],
   omittedParts: number,
+  revised?: readonly unknown[],
 ): string {
   const base = sha256(
     JSON.stringify([
@@ -165,10 +179,15 @@ function windowProgressDigest(
     snapshot.historyStartIndex === undefined
       ? null
       : snapshot.historyStartIndex + snapshot.messages.length;
-  const content = sha256(JSON.stringify([endPosition, rows.length, omittedParts, rows])).slice(
-    0,
-    DIGEST_CONTENT_HEX,
-  );
+  const content = sha256(
+    JSON.stringify([
+      endPosition,
+      rows.length,
+      omittedParts,
+      rows,
+      ...(revised?.length ? [revised] : []),
+    ]),
+  ).slice(0, DIGEST_CONTENT_HEX);
   return `${DIGEST_MARKER}${base}${content}`;
 }
 
@@ -269,7 +288,10 @@ export async function readTranscriptProgressSample(input: {
       );
       if (exact.length === 0) throw new Error("The exact transcript tail was unavailable");
       input.onRead?.("fallback");
-      return { digest: windowProgressDigest(snapshot, exact, 0), ...sourceTokenField };
+      return {
+        digest: windowProgressDigest(snapshot, exact, 0, snapshot.revisedMessages),
+        ...sourceTokenField,
+      };
     }
     return { digest: snapshotProgressDigest(snapshot), ...sourceTokenField };
   }

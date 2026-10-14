@@ -35,6 +35,14 @@ import {
   boundText,
   boundTranscriptDuringStreaming,
   chargeTranscript,
+  claimTurnRow,
+  indexToolCall,
+  indexedToolCallRow,
+  noteRowRevised,
+  rememberOwnerRow,
+  rememberedOwnerRow,
+  rowChanged,
+  writableStartIndex,
 } from "./transcript.js";
 import {
   isObject,
@@ -92,9 +100,10 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
     // rather than only once it is done.
     "summary-started": true,
     "summary-completed": true,
-    // Internal turn segmentation. These are accepted no-ops below: a step
-    // boundary has no transcript value, and the work inside it is already
-    // rendered by the deltas and tool calls it contains.
+    // One model call. A top-level `step-started` ends the assistant row the
+    // previous step wrote (see `endAssistantStep`); the work inside a step is
+    // rendered by the deltas and tool calls it contains, so `step-completed`
+    // and a sub-agent's own steps carry nothing more.
     "step-started": true,
     "step-completed": true,
     // SDK 1.0.32: how many tool calls the model requested in this step. A
@@ -114,13 +123,20 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
  * The display budget is enforced once per top-level update, after any nested
  * sub-agent updates it carries have been applied, so a deep update pays for
  * one check rather than one per level.
+ *
+ * Each model step writes a row of its own. A whole turn in one row is what
+ * this replaced: a turn runs for hours, and a multi-megabyte row fits no
+ * transcript window, so readers could only ever show a front-trimmed copy and
+ * lost its start once newer rows pushed it out of the live tail. Anything that
+ * patches a call later — its result, shell output, a sub-agent's activity —
+ * finds the row that holds the call rather than writing to the newest one.
  */
 export function applyInteractionUpdate(
   state: SessionState,
   update: unknown,
   context: UpdateContext = {},
 ): void {
-  const grown = new Set<string>();
+  const grown = new Map<string, BridgeMessage>();
   const outer = grownParents;
   grownParents = grown;
   try {
@@ -132,17 +148,18 @@ export function applyInteractionUpdate(
 }
 
 /**
- * Sub-agents that gained a display part during the update being applied.
+ * Sub-agents that gained a display part during the update being applied, with
+ * the row each one writes into.
  *
  * Only a new nested part can raise a child's count, so the per-child bound
  * checks exactly these once the whole update has landed, rather than every
  * child on every token. Set for the duration of one synchronous
  * `applyInteractionUpdate` call.
  */
-let grownParents: Set<string> | undefined;
+let grownParents: Map<string, BridgeMessage> | undefined;
 
-function noteNestedPart(parentTaskUseId: string | undefined): void {
-  if (parentTaskUseId) grownParents?.add(parentTaskUseId);
+function noteNestedPart(parentTaskUseId: string | undefined, row: BridgeMessage): void {
+  if (parentTaskUseId) grownParents?.set(parentTaskUseId, row);
 }
 
 function applyUpdate(state: SessionState, update: unknown, context: UpdateContext): void {
@@ -204,9 +221,17 @@ function applyUpdate(state: SessionState, update: unknown, context: UpdateContex
       // the parent would make the parent's live context gauge jump to an
       // unrelated window and can double-count work the SDK later reports on
       // the parent run.
-      if (!context.parentTaskUseId) applyTurnUsage(state, update.usage);
+      if (!context.parentTaskUseId) {
+        applyTurnUsage(state, update.usage);
+        // The end of one model call, so also the end of its row — the
+        // fallback for a stream that reports no step frames.
+        endAssistantStep(state);
+      }
       break;
     case "step-started":
+      // A sub-agent's steps stay on the row holding its launch card.
+      if (!context.parentTaskUseId) endAssistantStep(state);
+      break;
     case "step-completed":
     case "tool-requests-listed":
       // Known lifecycle frames, not bridge drift. Counting these as
@@ -231,7 +256,9 @@ function applyTextDelta(
   context: UpdateContext,
 ): void {
   if (!text) return;
-  const message = currentAssistantMessage(state);
+  const message = context.parentTaskUseId
+    ? subagentRow(state, context.parentTaskUseId)
+    : currentAssistantMessage(state);
   const existing = openTextPart(state, message, kind, context.parentTaskUseId);
   if (existing) {
     const before = existing.content;
@@ -249,7 +276,7 @@ function applyTextDelta(
     message.parts.push(part);
     state.openTextParts.set(openTextKey(kind, context.parentTaskUseId), part.sourcePartId);
     chargeNewEntry(state, part);
-    noteNestedPart(context.parentTaskUseId);
+    noteNestedPart(context.parentTaskUseId, message);
   }
 
   // `content` is the flat text the transcript exposes as the message body.
@@ -263,7 +290,7 @@ function applyTextDelta(
       state.currentTurnOutput = appendBounded(message, state.currentTurnOutput, text);
     }
   }
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 function applyToolCall(
@@ -275,9 +302,13 @@ function applyToolCall(
   const callId = nonBlank(update.callId) ? update.callId : undefined;
   if (!callId) return;
   const rendered = renderToolCall(update.toolCall, state.health);
-  const message = currentAssistantMessage(state);
-  closeTextParts(state, context.parentTaskUseId);
-  const part = upsertToolPart(state, message, callId, context.parentTaskUseId);
+  const { message, part } = upsertToolPart(state, callId, context.parentTaskUseId);
+  // A card interrupts the prose of the row it sits in. A late result for a
+  // call an earlier step made sits above, so the prose being written now
+  // carries on.
+  if (context.parentTaskUseId || message.id === state.currentAssistantMessageId) {
+    closeTextParts(state, context.parentTaskUseId);
+  }
   if (phase === "settled" && rendered.toolImage) {
     appendToolImage(state, message, callId, rendered.toolImage);
   }
@@ -325,7 +356,7 @@ function applyToolCall(
     );
   }
   chargeToolPart(state, part);
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /**
@@ -342,12 +373,13 @@ export function applyCommandChanges(
   change: MeasuredWorkspaceChange,
 ): boolean {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    for (const part of state.messages[index]!.parts) {
+    const row = state.messages[index]!;
+    for (const part of row.parts) {
       if (part.type !== "tool-invocation" || part.toolUseId !== callId) continue;
       part.commandChanges = change;
       // Bounded by the probe (at most fifty files, each a path and two counts).
       chargeTranscript(state, Buffer.byteLength(JSON.stringify(change)));
-      state.revision += 1;
+      rowChanged(state, row);
       return true;
     }
   }
@@ -421,6 +453,7 @@ export function settleBackgroundChildren(state: SessionState): void {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation" || !active.has(part.toolUseId)) continue;
       settleDetachedSubagentPart(part, state);
+      noteRowRevised(state, message.id);
     }
   }
   state.revision += 1;
@@ -479,6 +512,7 @@ export function settleAbandonedToolParts(state: SessionState): void {
           chargeTranscript(state, jsonStringContentBytes(ABANDONED_COMPACTION_NOTE));
         }
         settledCompaction = true;
+        noteRowRevised(state, message.id);
         continue;
       }
       if (part.type !== "tool-invocation") continue;
@@ -489,10 +523,12 @@ export function settleAbandonedToolParts(state: SessionState): void {
         chargeTranscript(state, jsonStringContentBytes(ABANDONED_TOOL_NOTE) + 16);
       }
       abandoned.add(part.toolUseId);
+      noteRowRevised(state, message.id);
     }
   }
   if (abandoned.size === 0 && !settledCompaction) return;
   if (abandoned.size > 0) {
+    // A progress line sits on its call's row, which was noted above.
     for (const message of state.messages) {
       message.parts = message.parts.filter(
         (candidate) => candidate.type !== "progress" || !abandoned.has(candidate.toolUseId),
@@ -509,12 +545,12 @@ function applyShellOutputDelta(
 ): void {
   const text = readShellOutputText(update.event);
   if (!text) return;
-  const message = currentAssistantMessage(state);
   // A shell delta names no call, so it belongs to the newest pending shell
   // card. Matching on the tool keeps a stray delta from appending to whatever
   // unrelated card happens to be last.
-  const part = trailingPendingToolPart(message, "shell", context.parentTaskUseId);
-  if (!part) return;
+  const found = trailingPendingToolPart(state, "shell", context.parentTaskUseId);
+  if (!found) return;
+  const { message, part } = found;
   const source = toolSourceStates.get(part) ?? {};
   const before = source.streamedOutput ?? "";
   // Continuing the buffer the card already shows is the per-frame case: charge
@@ -536,7 +572,7 @@ function applyShellOutputDelta(
   } else {
     chargeToolPart(state, part);
   }
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /**
@@ -640,10 +676,11 @@ function applySummary(state: SessionState, summary: string, context: UpdateConte
   if (!summary) return;
   const open = openCompactionPart(state);
   if (open) {
-    open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
-    chargeTranscript(state, jsonStringContentBytes(open.content));
-    open.toolState = "success";
-    state.revision += 1;
+    const { row, part } = open;
+    part.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+    chargeTranscript(state, jsonStringContentBytes(part.content));
+    part.toolState = "success";
+    rowChanged(state, row);
     return;
   }
   appendCompactionPart(state, summary, "success", context);
@@ -661,27 +698,32 @@ function applySummaryCompleted(state: SessionState, summary: string, context: Up
     appendCompactionPart(state, summary, "success", context);
     return;
   }
+  const { row, part } = open;
   if (summary) {
-    open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
-    chargeTranscript(state, jsonStringContentBytes(open.content));
+    part.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+    chargeTranscript(state, jsonStringContentBytes(part.content));
   }
-  open.toolState = "success";
-  state.revision += 1;
+  part.toolState = "success";
+  rowChanged(state, row);
 }
 
 /**
  * The newest boundary still waiting for its summary.
  *
  * Scanned from the end so a session with several compactions settles the one
- * that is actually open, and bounded to the trailing message because a
- * transcript trim can evict an older one — settling nothing is better than
- * settling the wrong boundary.
+ * that is actually open, and bounded to the current turn's rows (a compaction
+ * runs between model steps, so it can sit on the row before the newest)
+ * because a transcript trim can evict an older one — settling nothing is
+ * better than settling the wrong boundary.
  */
-function openCompactionPart(state: SessionState): BridgeCompactionPart | undefined {
-  const parts = state.messages.at(-1)?.parts ?? [];
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index];
-    if (part?.type === "compaction" && part.toolState === "pending") return part;
+function openCompactionPart(
+  state: SessionState,
+): { row: BridgeMessage; part: BridgeCompactionPart } | undefined {
+  for (const row of rowsNewestFirst(state)) {
+    for (let index = row.parts.length - 1; index >= 0; index -= 1) {
+      const part = row.parts[index];
+      if (part?.type === "compaction" && part.toolState === "pending") return { row, part };
+    }
   }
   return undefined;
 }
@@ -705,7 +747,7 @@ function appendCompactionPart(
   };
   message.parts.push(part);
   chargeNewEntry(state, part);
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /**
@@ -739,8 +781,11 @@ function applyAppendedUserMessage(
     createdAt: part.createdAt!,
   };
   state.messages.push(message);
+  // Part of the turn it was steered into, so the turn's earlier rows can
+  // still be found past it.
+  claimTurnRow(state, message);
   chargeNewEntry(state, message);
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 function applyTurnUsage(state: SessionState, usage: unknown): void {
@@ -838,11 +883,13 @@ function publishRunUsage(state: SessionState): void {
 }
 
 /**
- * The assistant message this turn is writing into, created on first use.
+ * The assistant row the current model step is writing into, created on first
+ * use.
  *
- * Deliberately lazy: a turn that produces nothing but tool calls still needs a
- * carrier, but a turn that fails before producing anything should not leave an
- * empty bubble in the transcript.
+ * Deliberately lazy: a step that produces nothing but tool calls still needs a
+ * carrier, but a turn that fails before producing anything — or a step
+ * boundary nothing follows — should not leave an empty bubble in the
+ * transcript.
  */
 export function currentAssistantMessage(state: SessionState): BridgeMessage {
   const last = state.messages[state.messages.length - 1];
@@ -857,11 +904,160 @@ export function currentAssistantMessage(state: SessionState): BridgeMessage {
     ...(state.composer.selectedModeId === "plan" ? { planReview: true } : {}),
   };
   state.messages.push(message);
+  claimTurnRow(state, message);
   state.currentAssistantMessageId = message.id;
-  // Blocks belong to the message that opened them.
-  state.openTextParts.clear();
+  // The step's own blocks belong to the row that opened them. A sub-agent's
+  // stay open: they live on its launch card's row, which outlasts the step.
+  closeTextParts(state, undefined);
   chargeNewEntry(state, message);
   return message;
+}
+
+/**
+ * Close the row the previous model step wrote, so the next step opens its own.
+ *
+ * The next row is still created lazily, so a boundary reported twice (a
+ * `turn-ended` and a `step-started` for the same call) or one nothing follows
+ * costs no empty row. A row with nothing in it yet stays current.
+ */
+function endAssistantStep(state: SessionState): void {
+  const last = state.messages.at(-1);
+  if (last && last.id === state.currentAssistantMessageId && last.parts.length === 0) return;
+  state.currentAssistantMessageId = undefined;
+}
+
+/**
+ * Finish prose the stream cut short, on the row that holds its start.
+ *
+ * The run's terminal text can complete what streamed before the stream went
+ * quiet, and a step boundary may have passed since: written as a delta, the
+ * missing end would open a row of its own and split one sentence across two
+ * bubbles. It extends the row's last block of prose instead, wherever that row
+ * now sits among the turn's rows.
+ */
+export function completeStreamedProse(state: SessionState, row: BridgeMessage, text: string): void {
+  if (!text) return;
+  let block: BridgeTextPart | undefined;
+  for (let index = row.parts.length - 1; index >= 0 && !block; index -= 1) {
+    const part = row.parts[index]!;
+    if (part.type === "text" && !part.parentTaskUseId) block = part;
+  }
+  if (block) {
+    const before = block.content;
+    block.content = appendBounded(block, block.content, text);
+    chargeAppended(state, before, block.content);
+  } else {
+    const part: BridgeTextPart = {
+      type: "text",
+      content: text,
+      sourcePartId: `${row.id}:${nextPartOrdinal(row)}`,
+      sourceMessageId: row.id,
+      createdAt: new Date().toISOString(),
+    };
+    row.parts.push(part);
+    chargeNewEntry(state, part);
+  }
+  const before = row.content;
+  row.content = appendBounded(row, row.content, text);
+  chargeAppended(state, before, row.content);
+  if (state.currentTurnOutput !== null) {
+    state.currentTurnOutput = appendBounded(row, state.currentTurnOutput, text);
+  }
+  rowChanged(state, row);
+}
+
+/**
+ * End the step being written when the model must have been called again
+ * after it: its row ends in a tool call or a compaction, so whatever the run
+ * says next is a later step's, on a row of its own. A row still ending in
+ * prose or reasoning stays open, because text that follows those can be the
+ * same call's.
+ */
+export function endStepBeforeAnswer(state: SessionState): void {
+  const last = state.messages.at(-1);
+  if (!last || last.id !== state.currentAssistantMessageId) return;
+  for (let index = last.parts.length - 1; index >= 0; index -= 1) {
+    const part = last.parts[index]!;
+    // A sub-agent's output and a call's own progress or image say nothing
+    // about where this step's prose ended.
+    if ("parentTaskUseId" in part && part.parentTaskUseId) continue;
+    if (part.type === "progress" || part.type === "image") continue;
+    if (part.type === "tool-invocation" || part.type === "compaction") {
+      state.currentAssistantMessageId = undefined;
+    }
+    return;
+  }
+}
+
+/**
+ * The current turn's rows, newest first. Late updates search these and
+ * nothing older: a run that has ended can patch nothing, and an evicted row is
+ * simply not found.
+ */
+function* rowsNewestFirst(state: SessionState): Generator<BridgeMessage> {
+  const start = writableStartIndex(state);
+  for (let index = state.messages.length - 1; index >= start; index -= 1) {
+    yield state.messages[index]!;
+  }
+}
+
+/**
+ * The row a sub-agent's activity is filed under: the one holding its launch
+ * card.
+ *
+ * The parent keeps working while a background child runs, so by the time the
+ * child reports again the newest row usually belongs to a later step. Looked
+ * up once and remembered for the turn, since a child streams token by token.
+ * When the card is gone — a trim evicted it — the activity goes to the current
+ * row, as it always did, and stays there.
+ */
+function subagentRow(state: SessionState, parentTaskUseId: string): BridgeMessage {
+  const remembered = rememberedOwnerRow(state, parentTaskUseId);
+  if (remembered) return remembered;
+  const row = findToolPart(state, parentTaskUseId)?.message ?? currentAssistantMessage(state);
+  rememberOwnerRow(state, parentTaskUseId, row);
+  return row;
+}
+
+/**
+ * The card for a call, wherever in the current turn's rows it is.
+ *
+ * Answered from the turn's call index (`indexToolCall`), which names the row
+ * a newest-first scan would stop at, so a new call costs one row's parts
+ * rather than the whole turn's. The scan remains for what the index cannot
+ * answer: a restored transcript with no turn, an index that had to forget
+ * entries, or a card a trim took out of a row that is still there.
+ */
+function findToolPart(
+  state: SessionState,
+  callId: string,
+): { message: BridgeMessage; part: BridgeToolPart } | undefined {
+  const indexed = indexedToolCallRow(state, callId);
+  if (indexed === null) return undefined;
+  if (indexed) {
+    const part = toolPartIn(indexed, callId);
+    if (part) return { message: indexed, part };
+  }
+  return scanToolPart(state, callId);
+}
+
+function toolPartIn(message: BridgeMessage, callId: string): BridgeToolPart | undefined {
+  for (let index = message.parts.length - 1; index >= 0; index -= 1) {
+    const part = message.parts[index]!;
+    if (part.type === "tool-invocation" && part.toolUseId === callId) return part;
+  }
+  return undefined;
+}
+
+function scanToolPart(
+  state: SessionState,
+  callId: string,
+): { message: BridgeMessage; part: BridgeToolPart } | undefined {
+  for (const message of rowsNewestFirst(state)) {
+    const part = toolPartIn(message, callId);
+    if (part) return { message, part };
+  }
+  return undefined;
 }
 
 function openTextKey(kind: "text" | "thinking", parentTaskUseId: string | undefined): string {
@@ -911,29 +1107,67 @@ function closeTextParts(state: SessionState, parentTaskUseId: string | undefined
   state.openTextParts.delete(openTextKey("thinking", parentTaskUseId));
 }
 
+/**
+ * The newest card of this tool in this scope, when it is still running.
+ *
+ * A command can outlive the step that started it, so the search spans the
+ * current turn's rows; the first matching card decides, exactly as it did
+ * within one row.
+ */
 function trailingPendingToolPart(
-  message: BridgeMessage,
+  state: SessionState,
   toolName: string,
   parentTaskUseId: string | undefined,
-): BridgeToolPart | undefined {
-  for (let index = message.parts.length - 1; index >= 0; index -= 1) {
-    const part = message.parts[index]!;
-    if (part.type !== "tool-invocation") continue;
-    if (part.toolName !== toolName || part.parentTaskUseId !== parentTaskUseId) continue;
-    return part.toolState === "pending" ? part : undefined;
+): { message: BridgeMessage; part: BridgeToolPart } | undefined {
+  // A lookup only: a delta with no card to land on must not open a row.
+  const rows = parentTaskUseId
+    ? [
+        rememberedOwnerRow(state, parentTaskUseId) ??
+          findToolPart(state, parentTaskUseId)?.message ??
+          state.messages.at(-1),
+      ]
+    : rowsNewestFirst(state);
+  for (const message of rows) {
+    if (!message) continue;
+    for (let index = message.parts.length - 1; index >= 0; index -= 1) {
+      const part = message.parts[index]!;
+      if (part.type !== "tool-invocation") continue;
+      if (part.toolName !== toolName || part.parentTaskUseId !== parentTaskUseId) continue;
+      return part.toolState === "pending" ? { message, part } : undefined;
+    }
   }
   return undefined;
 }
 
+/**
+ * The card for this call, wherever the turn put it; a new one on the row its
+ * scope writes to when there is none. Never a second card for one call.
+ */
 function upsertToolPart(
+  state: SessionState,
+  callId: string,
+  parentTaskUseId: string | undefined,
+): { message: BridgeMessage; part: BridgeToolPart } {
+  if (parentTaskUseId) {
+    // A child's cards sit beside its launch card, never anywhere else.
+    const message = subagentRow(state, parentTaskUseId);
+    for (const part of message.parts) {
+      if (part.type === "tool-invocation" && part.toolUseId === callId) return { message, part };
+    }
+    return { message, part: createToolPart(state, message, callId, parentTaskUseId) };
+  }
+  const found = findToolPart(state, callId);
+  if (found) return found;
+  const message = currentAssistantMessage(state);
+  return { message, part: createToolPart(state, message, callId, undefined) };
+}
+
+function createToolPart(
   state: SessionState,
   message: BridgeMessage,
   callId: string,
   parentTaskUseId: string | undefined,
 ): BridgeToolPart {
-  for (const part of message.parts) {
-    if (part.type === "tool-invocation" && part.toolUseId === callId) return part;
-  }
   const part: BridgeToolPart = {
     type: "tool-invocation",
     content: "",
@@ -944,8 +1178,9 @@ function upsertToolPart(
     ...(parentTaskUseId ? { parentTaskUseId } : {}),
   };
   message.parts.push(part);
+  indexToolCall(state, callId, message);
   chargeNewEntry(state, part);
-  noteNestedPart(parentTaskUseId);
+  noteNestedPart(parentTaskUseId, message);
   return part;
 }
 

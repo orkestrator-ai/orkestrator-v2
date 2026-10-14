@@ -1406,6 +1406,7 @@ async function handleAdmittedPrompt(
   state.turnStartedAt = Date.now();
   state.currentTurnUsage = {};
   state.currentAssistantMessageId = undefined;
+  state.turnOpenedAssistantRow = undefined;
   state.revision += 1;
 
   let handle: Awaited<ReturnType<typeof dispatchPrompt>>;
@@ -1445,6 +1446,7 @@ async function handleAdmittedPrompt(
     // A cancel recorded during preflight goes with the claim it targeted.
     releasePromptClaim(state, claim);
     state.currentAssistantMessageId = undefined;
+    state.turnOpenedAssistantRow = undefined;
     state.openTextParts.clear();
     state.toolInputs.clear();
     state.currentTurnUsage = undefined;

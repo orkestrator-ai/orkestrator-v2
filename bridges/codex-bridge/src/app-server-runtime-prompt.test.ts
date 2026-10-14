@@ -12,6 +12,7 @@ import {
   codexHome,
   deferredSignal,
   harness,
+  type Harness,
   threadPayload,
   waitUntil,
 } from "./app-server-runtime-test-harness.js";
@@ -2430,14 +2431,18 @@ describe("steering", () => {
     await h.drain();
 
     const messages = (await h.runtime.getMessages(sessionId))!;
+    // After the tool call the model answers in its next response, which is a
+    // row of its own below the steer's.
     expect(messages.map((message) => [message.role, message.content])).toEqual([
       ["user", "investigate"],
       ["assistant", "Initial finding"],
       ["user", "also inspect the tests"],
+      ["assistant", ""],
       ["assistant", "Tests are green"],
     ]);
     expect(messages[1]?.parts).toEqual([{ type: "text", content: "Initial finding" }]);
-    expect(messages[3]?.parts.map((part) => part.type)).toEqual(["tool-invocation", "text"]);
+    expect(messages[3]?.parts.map((part) => part.type)).toEqual(["tool-invocation"]);
+    expect(messages[4]?.parts).toEqual([{ type: "text", content: "Tests are green" }]);
   });
 
   /**
@@ -2719,6 +2724,179 @@ describe("steering", () => {
     ]);
   });
 
+  /** One model response's reasoning, as app-server streams it. */
+  function notifyReasoning(h: Harness, id: string): void {
+    const item = { id, type: "reasoning", summary: [`thinking in ${id}`], content: [] };
+    for (const method of ["item/started", "item/completed"]) {
+      h.child().notify(method, { threadId: "thread-1", turnId: "turn-1", item });
+    }
+  }
+
+  /** A command the model called, run to completion. */
+  function notifyCommand(h: Harness, id: string): void {
+    for (const [method, status] of [
+      ["item/started", "inProgress"],
+      ["item/completed", "completed"],
+    ] as const) {
+      h.child().notify(method, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id,
+          type: "commandExecution",
+          command: `run ${id}`,
+          status,
+          aggregatedOutput: null,
+        },
+      });
+    }
+  }
+
+  const rowShapes = (
+    messages: readonly {
+      role: string;
+      content: string;
+      parts: { type: string; toolUseId?: string }[];
+    }[],
+  ) =>
+    messages.map((message) =>
+      message.role === "user"
+        ? ["user", message.content]
+        : ["assistant", message.parts.map((part) => part.toolUseId ?? part.type)],
+    );
+
+  test("puts a steer above the next response when its row opened mid-steer", async () => {
+    // The steer cuts the response off, and the next one's reasoning arrives
+    // while turn/steer is in flight. After a tool call that reasoning opens
+    // the next response's row before the steer is appended, and every item of
+    // that row came after the steer.
+    let h!: Harness;
+    const script = steerScript((accepted) => [
+      { type: "userMessage", clientId: "req-original" },
+      { id: "r1", type: "reasoning" },
+      { id: "c1", type: "commandExecution" },
+      ...accepted.flatMap((clientId) => [
+        { type: "userMessage", clientId },
+        { id: "r2", type: "reasoning" },
+      ]),
+    ]);
+    h = await harness({
+      ...script,
+      "turn/steer": (params) => {
+        const answer = script["turn/steer"]!(params);
+        notifyReasoning(h, "r2");
+        return answer;
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    h.runtime.getRegistry().getSession(sessionId)!.localMessages.push({
+      id: "local-command",
+      role: "system",
+      content: "local command",
+      parts: [],
+      createdAt: "2000-01-01T00:00:00.000Z",
+    });
+    await h.runtime.prompt(sessionId, {
+      prompt: "investigate",
+      requestId: "req-original",
+      attachments: [],
+    });
+    notifyReasoning(h, "r1");
+    notifyCommand(h, "c1");
+    await h.drain();
+
+    expect(await h.runtime.steerSession(sessionId, "narrow it down", "turn-1", "req-race")).toBe(
+      "accepted",
+    );
+    notifyCommand(h, "c2");
+    await h.drain();
+
+    expect(
+      rowShapes(
+        h.runtime
+          .getCachedMessages(sessionId)!
+          .messages.filter((row) => row.id !== "local-command"),
+      ),
+    ).toEqual([
+      ["user", "investigate"],
+      ["assistant", ["thinking", "c1"]],
+      ["user", "narrow it down"],
+      ["assistant", ["thinking", "c2"]],
+    ]);
+  });
+
+  test("an ambiguous steer retried after later responses opened rows puts them below it", async () => {
+    let steerAttempted = false;
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              items: [
+                { type: "userMessage", clientId: "req-original" },
+                { id: "r1", type: "reasoning" },
+                { id: "c1", type: "commandExecution" },
+                ...(steerAttempted
+                  ? [
+                      { type: "userMessage", clientId: "req-steer-retry" },
+                      { id: "r2", type: "reasoning" },
+                      { id: "c2", type: "commandExecution" },
+                      { id: "r3", type: "reasoning" },
+                    ]
+                  : []),
+              ],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    h.runtime.getRegistry().getSession(sessionId)!.localMessages.push({
+      id: "local-command",
+      role: "system",
+      content: "local command",
+      parts: [],
+      createdAt: "2000-01-01T00:00:00.000Z",
+    });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-original", attachments: [] });
+    notifyReasoning(h, "r1");
+    notifyCommand(h, "c1");
+    await h.drain();
+    h.engine.steerTurn = async () => {
+      steerAttempted = true;
+      throw new AppServerTimeoutError("turn/steer", 100);
+    };
+
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry")).toBe(
+      "unknown",
+    );
+    // The steer did land: two more responses stream before the retry.
+    notifyReasoning(h, "r2");
+    notifyCommand(h, "c2");
+    notifyReasoning(h, "r3");
+    await h.drain();
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry")).toBe(
+      "accepted",
+    );
+    await h.drain();
+
+    expect(
+      rowShapes(
+        h.runtime
+          .getCachedMessages(sessionId)!
+          .messages.filter((row) => row.id !== "local-command"),
+      ),
+    ).toEqual([
+      ["user", "go"],
+      ["assistant", ["thinking", "c1"]],
+      ["user", "more"],
+      ["assistant", ["thinking", "c2"]],
+      ["assistant", ["thinking"]],
+    ]);
+  });
+
   test("keeps three assistant rows straight across two steers in one turn", async () => {
     const laterItems = ["second", "third"];
     const h = await harness(
@@ -2954,11 +3132,11 @@ describe("steering", () => {
         ?.filter((message) => message.role === "user")
         .map((message) => message.content),
     ).toEqual(["go", "more"]);
+    // Nothing came before the steer, so no row is left empty above it.
     expect(
       (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
     ).toEqual([
       ["user", "go"],
-      ["assistant", ""],
       ["user", "more"],
       ["assistant", "after steer"],
     ]);

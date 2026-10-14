@@ -43,12 +43,8 @@ import {
   type BridgeToolPart,
   type SessionState,
 } from "./acp-context.js";
-import {
-  commitToolPartMutation,
-  ensureAcpToolSource,
-  findToolPart,
-  renderAcpToolSource,
-} from "./acp-tools.js";
+import { commitToolPartMutation, ensureAcpToolSource, renderAcpToolSource } from "./acp-tools.js";
+import { findToolPart } from "./acp-rows.js";
 
 /** The slice of the probe this bridge drives; a test substitutes its own. */
 export type CommandChangeProbe = Pick<

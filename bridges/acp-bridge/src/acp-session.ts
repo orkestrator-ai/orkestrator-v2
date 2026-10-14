@@ -79,9 +79,9 @@ import {
   applySubagentFinished,
   applySubagentSpawned,
   applyToolCallUpdate,
-  boundedModelId,
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
+import { boundedModelId, endsWithToolCall, noteMessageMutation, rowIsFull } from "./acp-rows.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
@@ -306,6 +306,8 @@ export async function resumeSessionReserved(
     );
     finalizeHistoryReplayTurnUsage(state);
     state.historyReplay = false;
+    // The replay built this history; no reader holds an older copy of a row.
+    state.revisedRows?.clear();
     // session/load is a projection of work owned by another ACP process. Its
     // historical active markers cannot describe children of this new process.
     reconcileStaleToolParts(state, true);
@@ -659,6 +661,8 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     finalizeHistoryReplayTurnUsage(state);
     state.historyReplay = false;
     if (hydratedHistory) {
+      // The replay built this history; no reader holds an older copy of a row.
+      state.revisedRows?.clear();
       reconcileStaleToolParts(state, true);
       // The vendor replay has no shell measurements; this bridge journaled them.
       await applyJournaledCommandChanges(state);
@@ -1006,9 +1010,10 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     return;
   }
   // A reconnect replays a transcript the bridge already holds, so every update
-  // that would mutate it has to be dropped — tool calls included. `tool_call`
-  // upserts by id against the *trailing* message only, so a replayed historical
-  // call finds no owner and appends a duplicate to whatever is at the tail.
+  // that would mutate it has to be dropped — tool calls included. A new
+  // `tool_call` upserts by id within the current turn only, so a replayed
+  // historical call finds no owner and appends a duplicate to whatever is at
+  // the tail.
   if (state.historyReplay === "ignore" && isTranscriptUpdateKind(kind)) return;
   if (kind === "subagent_spawned") {
     applySubagentSpawned(state, update);
@@ -1077,14 +1082,19 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   const providerMessageId = boundedString(update.messageId, MAX_TOOL_ID_BYTES)?.trim();
   let message = providerMessageId ? findHistoryMessage(state, providerMessageId) : undefined;
   const last = state.messages.at(-1);
-  // With no provider message id there is no explicit boundary, so a chunk
-  // continues the message before it regardless of part type: a thought chunk
-  // followed by a text chunk is one assistant turn, not two.
+  // With no provider message id the only boundary between model responses is
+  // a tool call: the response that issued it ends there, and prose or thinking
+  // after it is the next response, in a row of its own (see `acp-rows.ts`).
+  // Otherwise a chunk continues the message before it regardless of part type:
+  // a thought chunk followed by a text chunk is one response, not two. A row
+  // at its soft size bound takes no new part either, so it is never trimmed.
+  const startsPart = last?.parts.at(-1)?.type !== partType;
   if (
     !message &&
     !providerMessageId &&
     isChunk &&
     last?.role === role &&
+    !(role === "assistant" && (endsWithToolCall(last) || (startsPart && rowIsFull(last)))) &&
     (state.status === "running" || state.historyReplay === "hydrate")
   ) {
     message = last;
@@ -1164,6 +1174,8 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     state.currentTurnOutput = captured.value;
     if (captured.truncated) state.outputTruncated = true;
   }
+  // A provider message id can address a row a newer one already follows.
+  noteMessageMutation(state, message);
   state.revision += 1;
   state.uncheckedTranscriptBytes += Buffer.byteLength(text) * (partType === "text" ? 2 : 1);
   const transcriptTruncated =

@@ -374,13 +374,32 @@ export interface SessionState {
   /** Monotonic count of turns dispatched in this process. */
   promptSequence: number;
   /**
-   * The assistant message the current turn writes into.
+   * The row of the model response the current turn is writing into.
    *
-   * Held by id rather than by reference so a transcript trim that evicts the
-   * message cannot leave the translator appending to an orphan that no longer
+   * One row per model response, not per turn: Pi's `message_start` for an
+   * assistant message clears this, so the next response opens a row of its
+   * own. Held by id rather than by reference so a transcript trim that evicts
+   * the row cannot leave the translator appending to an orphan that no longer
    * appears in the transcript it is bounding.
    */
   currentAssistantMessageId?: string;
+  /**
+   * True once the current turn has opened an assistant row.
+   *
+   * What {@link currentAssistantMessageId} used to answer before rows were
+   * split per response: a response boundary clears the id mid-turn, so "did
+   * the model answer this turn" needs its own flag. Reset with the turn.
+   */
+  turnOpenedAssistantRow?: boolean;
+  /**
+   * The row holding each tool call's card, by tool call id.
+   *
+   * A frame for a call — a late update, its result images, a nested call
+   * naming it as parent — must land on the row that holds the call, which is
+   * not necessarily the newest one. Runtime-only and bounded; a row trimmed
+   * from the transcript simply fails the lookup.
+   */
+  toolCallRows?: Map<string, string>;
   /**
    * The text and thinking blocks still being appended to, by kind.
    *

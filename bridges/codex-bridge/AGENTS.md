@@ -16,6 +16,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | --------------------------------------- | -------------------------------------------------- |
 | `src/index.ts`                          | Routes, SSE, composition root                      |
 | `src/app-server-runtime.ts`             | Session surface for the app-server engine          |
+| `src/app-server-runtime-rows.ts`        | A turn's assistant rows: open, render, publish     |
 | `src/event-ring.ts`                     | Bounded SSE replay buffer + cursor parsing         |
 | `src/app-server/process-supervisor.ts`  | Child lifecycle, generations, restart policy       |
 | `src/app-server/jsonl-rpc-client.ts`    | Transport; must never await consumer work          |
@@ -27,6 +28,41 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/messages/diff-budget.ts`           | Caps the diff state, the largest memory consumer   |
 | `src/codex-item-types.ts`               | Local thread-item types (was the Codex SDK)        |
 | `src/testing/replay-recording.ts`       | Replays a recording through the real pipeline      |
+
+## One row per model response
+
+A turn renders as one assistant row per model response, plus a row after each
+steer (`TurnAccumulator.opensModelStep`, `app-server-runtime-rows.ts`). Live
+items name no response, so the boundary is inferred: a new reasoning or agent
+message item after a tool call in the live row opens the next row. A reload
+splits at the same place (`history/rollout.ts`). Never fold a whole turn back
+into one row: a turn can run for hours, and a single multi-megabyte row fits no
+transcript window, so readers can only show a trimmed copy and lose it once a
+newer row pushes it out of the live tail. A late change to an item (a command
+finishing, its measured line changes, a sub-agent reporting back) re-renders the
+row holding it, not the newest one; a sub-agent's card stays on the row whose
+item spawned it. Rows keep render state up to `MAX_TRACKED_ASSISTANT_ROWS`
+(plus up to `MAX_HELD_ASSISTANT_ROWS` still waiting on a sub-agent); a row let
+go is tracked again when one of its items changes, the turn ending included,
+so never make a late change depend on its row still being tracked. A row let
+go keeps its rendered file changes and sub-agent cards (`ReleasedAssistantRow`)
+and, tracked again, re-renders only the items that changed: a diff taken anew
+after later edits moved the file comes out blank. The turn's end also tracks
+again every row let go while a card could still read as running. A publish
+tick renders only the rows that moved, and a row whose sub-agents have all
+finished (a failed spawn waits for none) is probed again only on new lifecycle
+evidence.
+
+A steer goes above every row whose items all followed it — the next response
+can open its row while `turn/steer` is in flight — and never freezes an empty
+row. A row that changes while a newer row follows it is noted in the
+session's `revisedRows`, which the transcript routes pass as
+`revisedMessageIds` so a late change to a row outside the live window still
+reaches readers; clear it whenever the history is replaced. Note through
+`bumpMessageRevision(context, rows)`, in the step that bumps the revision,
+never when the change is sent: a send waits for the coalesced flush and can be
+dropped, and a note that lands after a read bumps nothing. Never note the
+newest row, which every window holds.
 
 ## When touching the app-server engine
 

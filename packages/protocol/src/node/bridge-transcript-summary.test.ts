@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BRIDGE_REVISED_MESSAGES_MAX,
   BRIDGE_SUMMARY_INLINE_DETAIL_BYTES,
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
@@ -332,6 +333,30 @@ describe("pages", () => {
     expect(page.nextCursor).toBeDefined();
   });
 
+  test("a row larger than the page target is sent whole rather than cut", () => {
+    const parts = Array.from({ length: 300 }, (_, index) => ({
+      type: "text",
+      content: `part ${index} ${"x".repeat(4 * 1024)}`,
+    }));
+    const history = [message("before"), message("huge", parts), message("after")];
+    const update = bridgeTranscriptSummaryUpdate(history, { ...options, limit: 1 });
+    if (update.status !== "snapshot") throw new Error("expected a snapshot");
+    const page = bridgeTranscriptPage(history, {
+      generation: "g1",
+      contentEpoch: 3,
+      complete: true,
+      cursor: update.value.historyCursor!,
+      limit: 100,
+      targetBytes: 256 * 1024,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((entry) => (entry as Message).id)).toEqual(["huge"]);
+    expect((page.messages[0] as Message).parts).toHaveLength(300);
+    expect(page.truncated).toBe(false);
+    expect(page.startIndex).toBe(1);
+    expect(page.nextCursor).toBeDefined();
+  });
+
   test("a cursor from another epoch or generation is expired, never reinterpreted", () => {
     const cursor = firstCursor();
     const base = { complete: true, cursor, limit: 50, targetBytes: 512 * 1024 };
@@ -424,4 +449,93 @@ describe("summary envelope parsing", () => {
       expect(parseBridgeTranscriptSummaryUpdate(body)).toBeUndefined();
     }
   });
+});
+
+describe("revised rows", () => {
+  const history = Array.from({ length: 150 }, (_, index) => message(`r${index}`));
+
+  test("rows before the window that changed travel with the snapshot, newest change first", () => {
+    const update = bridgeTranscriptSummaryUpdate(history, {
+      ...options,
+      revisedMessageIds: ["r149", "r3", "r10", "missing"],
+    });
+    if (update.status !== "snapshot") throw new Error("expected a snapshot");
+    expect(update.value.startIndex).toBe(50);
+    // r149 is in the window already; an unknown id is ignored.
+    expect(update.value.revisedMessages?.map((entry) => (entry as Message).id)).toEqual([
+      "r3",
+      "r10",
+    ]);
+    expect(parseBridgeTranscriptSummaryUpdate(update)).toEqual(update);
+  });
+
+  test("revised rows are bounded by count and summarized like the window", () => {
+    const heavy = history.map((entry, index) =>
+      index === 1 ? message(entry.id, [tool("t1", big(64 * 1024))]) : entry,
+    );
+    const ids = heavy.slice(0, 50).map((entry) => entry.id);
+    const update = bridgeTranscriptSummaryUpdate(heavy, { ...options, revisedMessageIds: ids });
+    if (update.status !== "snapshot") throw new Error("expected a snapshot");
+    const revised = update.value.revisedMessages as Message[];
+    expect(revised).toHaveLength(BRIDGE_REVISED_MESSAGES_MAX);
+    expect(update.value.historyReconciliationToken).toBeDefined();
+    const streamed = bridgeTranscriptSummaryUpdate(
+      [...heavy.slice(0, -1), message("r149", [], "delta")],
+      { ...options, revision: 2, revisedMessageIds: ids },
+    );
+    if (streamed.status !== "snapshot") throw new Error("expected snapshot");
+    expect(streamed.value.historyReconciliationToken).toBe(update.value.historyReconciliationToken);
+    const changed = heavy.map((row) =>
+      row.id === "r49" ? { ...row, content: "revised again" } : row,
+    );
+    const late = bridgeTranscriptSummaryUpdate(changed, {
+      ...options,
+      revision: 3,
+      revisedMessageIds: ids,
+    });
+    if (late.status !== "snapshot") throw new Error("expected snapshot");
+    expect(late.value.historyReconciliationToken).not.toBe(update.value.historyReconciliationToken);
+    const summarized = revised.find((entry) => entry.id === "r1")!;
+    expect(summarized.parts[0]?.toolOutput).toBeUndefined();
+  });
+
+  test("a window that starts at the beginning carries none", () => {
+    const update = bridgeTranscriptSummaryUpdate(history.slice(0, 5), {
+      ...options,
+      revisedMessageIds: ["r0"],
+    });
+    if (update.status !== "snapshot") throw new Error("expected a snapshot");
+    expect(update.value.revisedMessages).toBeUndefined();
+  });
+});
+
+test("revised-row byte overflow invalidates retained history while keeping whole-row paging", () => {
+  const rows = Array.from({ length: 102 }, (_, index) =>
+    message(
+      `bytes-${index}`,
+      index < 2
+        ? Array.from({ length: 45 }, () => ({ type: "text", content: "x".repeat(4 * 1024) }))
+        : [],
+      "small",
+    ),
+  );
+  const update = bridgeTranscriptSummaryUpdate(rows, {
+    ...options,
+    revisedMessageIds: ["bytes-0", "bytes-1"],
+    pages: true,
+  });
+  if (update.status !== "snapshot") throw new Error("expected snapshot");
+  expect(update.value.revisedMessages).toHaveLength(1);
+  expect(update.value.historyReconciliationToken).toBeDefined();
+  const page = bridgeTranscriptPage(rows, {
+    generation: "g1",
+    contentEpoch: 3,
+    cursor: update.value.historyCursor!,
+    complete: true,
+    limit: 100,
+    targetBytes: 512 * 1024,
+  });
+  if (page.status !== "page") throw new Error("expected page");
+  expect(page.messages).toEqual(rows.slice(0, 2));
+  expect(page.complete).toBe(true);
 });

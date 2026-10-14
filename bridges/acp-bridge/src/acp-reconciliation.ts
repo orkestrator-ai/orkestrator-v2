@@ -4,6 +4,7 @@ import {
   settleActiveSubagent,
   syncActiveSubagentTool,
 } from "./acp-tools.js";
+import { noteMessageMutation } from "./acp-rows.js";
 
 export function reconcileStaleToolParts(state: SessionState, failActiveSubagents = false): void {
   for (const message of state.messages) {
@@ -11,11 +12,13 @@ export function reconcileStaleToolParts(state: SessionState, failActiveSubagents
       if (part.type !== "tool-invocation") continue;
       const abandoned = part.toolState !== "success" && part.toolState !== "failure";
       if ((failActiveSubagents || abandoned) && part.agentState === "active") {
+        noteMessageMutation(state, message);
         part.agentState = "failed";
         const source = acpToolSourceStates.get(part);
         if (source) source.agentState = "failed";
       }
       if (part.toolState === "success" || part.toolState === "failure") continue;
+      noteMessageMutation(state, message);
       part.toolState = "failure";
       part.toolError = part.toolError ?? "Tool call ended without a result";
       // Keep the render source in step. A late update carrying no status of its

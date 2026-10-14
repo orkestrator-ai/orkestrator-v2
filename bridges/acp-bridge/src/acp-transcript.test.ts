@@ -13,6 +13,7 @@ import {
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
+import { MAX_HISTORY_MESSAGE_IDS, MAX_MESSAGES } from "./acp-context.js";
 
 describe("ACP bridge", () => {
   // The fake agent records its own argv, so these assert the exact command line
@@ -144,7 +145,9 @@ describe("ACP bridge", () => {
   test("bounds remembered provider message ids during a large replay", async () => {
     const bridge = await spawnBridge({
       env: {
-        FAKE_ACP_REPLAY_MESSAGE_COUNT: "1200",
+        FAKE_ACP_REPLAY_MESSAGE_COUNT: String(
+          Math.max(MAX_MESSAGES, MAX_HISTORY_MESSAGE_IDS) + 200,
+        ),
       },
     });
     const listed = (await nativeFetch(`${bridge.base}/session/list`, {
@@ -171,7 +174,7 @@ describe("ACP bridge", () => {
     // stays usable, the transcript stays capped, and the eviction is reported
     // through `baseIndex` rather than silently shifting the client's window.
     expect(session.status).toBe("idle");
-    expect(session.messages.length).toBeLessThanOrEqual(500);
+    expect(session.messages.length).toBeLessThanOrEqual(MAX_MESSAGES);
     expect(session.baseIndex).toBeGreaterThan(0);
   });
 
@@ -296,8 +299,9 @@ describe("ACP bridge", () => {
       "thinking",
       "tool-invocation",
       "tool-invocation",
-      "text",
     ]);
+    // The prose after the calls is the model's next response, on a row of its own.
+    expect(session.messages[2]?.parts.map((part) => part.type)).toEqual(["text"]);
     expect(assistantParts?.filter((part) => part.toolUseId === "edit-1")).toHaveLength(1);
     expect(assistantParts?.[1]).toMatchObject({
       type: "tool-invocation",
@@ -1479,7 +1483,7 @@ describe("ACP bridge", () => {
     });
   });
 
-  test("trims oldest parts when a synthetic cursor/task would exceed the per-message cap", async () => {
+  test("opens the next row for a synthetic cursor/task once the trailing row is full", async () => {
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -1509,18 +1513,17 @@ describe("ACP bridge", () => {
       (value) => value.status === "idle",
     );
     expect(settled.error).toBeUndefined();
-    expect(settled.messages[1]?.parts).toHaveLength(512);
-    expect(settled.messages[1]?.parts[0]).toMatchObject({
-      type: "text",
-      content: expect.stringContaining("Earlier steps in this response were dropped"),
-    });
-    expect(settled.messages[1]?.parts.at(-1)).toMatchObject({
+    // Rows close at their soft bound, so nothing is trimmed to make room.
+    expect(settled.messages.slice(1).map((message) => message.parts.length)).toEqual([256, 256, 1]);
+    expect(settled.messages.at(-1)?.parts[0]).toMatchObject({
       toolUseId: "cursor-task-cap",
       toolName: "task",
       toolArgs: { description: "Overflow task", subagent_type: "explore" },
     });
     expect(
-      settled.messages[1]?.parts.filter((part) => part.toolUseId === "cursor-task-cap"),
+      settled.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.toolUseId === "cursor-task-cap"),
     ).toHaveLength(1);
   });
 
@@ -1725,7 +1728,7 @@ describe("ACP bridge", () => {
     ).toEqual({ activity: "idle" });
   });
 
-  test("drops a cursor/task whose launch part was already trimmed away", async () => {
+  test("applies a cursor/task to its launch however many rows the turn has opened since", async () => {
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -1755,19 +1758,20 @@ describe("ACP bridge", () => {
       (value) => value.status === "idle",
     );
     expect(settled.error).toBeUndefined();
-    expect(settled.messages[1]?.parts).toHaveLength(512);
+    // The siblings fill the launch's row and open more, rather than trimming
+    // the launch away. Its late metadata finds it there instead of rebuilding
+    // a second card on the trailing row. (A launch a trim did remove is
+    // covered in `acp-rows.test.ts`.)
+    expect(settled.messages.length).toBeGreaterThan(2);
+    const launches = settled.messages
+      .flatMap((message) => message.parts)
+      .filter((part) => part.toolUseId === "cursor-task-trimmed");
+    expect(launches).toHaveLength(1);
     expect(settled.messages[1]?.parts[0]).toMatchObject({
-      type: "text",
-      content: expect.stringContaining("Earlier steps in this response were dropped"),
+      toolUseId: "cursor-task-trimmed",
+      agentState: "finished",
+      toolArgs: { description: "Trimmed task" },
     });
-    // The launch was evicted on purpose. Rebuilding it here would append the
-    // task *after* the notice saying those steps went, detached from the work
-    // it launched, so the late metadata is dropped instead.
-    expect(
-      settled.messages
-        .flatMap((message) => message.parts)
-        .filter((part) => part.toolUseId === "cursor-task-trimmed"),
-    ).toHaveLength(0);
     expect(
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
@@ -2815,7 +2819,8 @@ describe("ACP bridge", () => {
     );
 
     const parts = session.messages[1]?.parts;
-    expect(parts?.map((part) => part.type)).toEqual(["tool-invocation", "tool-invocation", "text"]);
+    expect(parts?.map((part) => part.type)).toEqual(["tool-invocation", "tool-invocation"]);
+    expect(session.messages[2]?.parts.map((part) => part.type)).toEqual(["text"]);
     const failWithPayload = parts?.find((part) => part.toolUseId === "fail-1");
     expect(failWithPayload).toMatchObject({
       toolState: "failure",
@@ -3115,13 +3120,15 @@ describe("ACP bridge", () => {
       (value) => value.status === "idle",
     );
 
-    expect(session.messages).toHaveLength(2);
-    expect(session.messages[0]?.role).toBe("user");
-    expect(session.messages[1]?.role).toBe("assistant");
-    expect(session.messages[1]?.parts.map((part) => part.type)).toEqual([
-      "tool-invocation",
-      "text",
+    // The call opens the first assistant row; the prose after it is the next
+    // response, on a row of its own.
+    expect(session.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
     ]);
+    expect(session.messages[1]?.parts.map((part) => part.type)).toEqual(["tool-invocation"]);
+    expect(session.messages[2]?.parts.map((part) => part.type)).toEqual(["text"]);
     expect(session.messages[1]?.parts[0]).toMatchObject({
       toolUseId: "lead-1",
       toolName: "plan",
@@ -3174,7 +3181,7 @@ describe("ACP bridge", () => {
     expect(toolDiff?.after).toBeUndefined();
   });
 
-  test("trims the oldest parts, and announces it, when a turn exhausts the per-message limit", async () => {
+  test("trims the oldest parts, and announces it, when one response exhausts the per-message limit", async () => {
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -3185,7 +3192,7 @@ describe("ACP bridge", () => {
     await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ prompt: "MANYTOOLS: flood the turn" }),
+      body: JSON.stringify({ prompt: "MANYPARTS: one oversized response" }),
     });
     const session = await waitFor(
       async () =>
@@ -3204,19 +3211,58 @@ describe("ACP bridge", () => {
     expect(session.status).toBe("running");
     expect(session.error).toBeUndefined();
     expect(session.messages[1]?.parts).toHaveLength(512);
-    // The oldest tool calls went, and the cut says so rather than reading as a
-    // turn that never made those calls.
+    // The oldest parts went, and the cut says so rather than reading as a
+    // response that never said those things.
     expect(session.messages[1]?.parts[0]).toMatchObject({
       type: "text",
       content: expect.stringContaining("Earlier steps in this response were dropped"),
     });
-    expect(
-      session.messages[1]?.parts.slice(1).every((part) => part.type === "tool-invocation"),
-    ).toBe(true);
-    expect(session.messages[1]?.parts.at(-1)).toMatchObject({ toolUseId: "many-512" });
+    expect(session.messages[1]?.parts.at(-1)).toMatchObject({
+      type: "thinking",
+      content: "part-512 ",
+    });
   });
 
-  test("does not rebuild a trimmed tool call from its own late update", async () => {
+  test("opens the next row for back-to-back calls instead of trimming one", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-many-calls" }),
+    }).then((response) => response.json())) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "MANYTOOLS: flood the turn" }),
+    });
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) =>
+        value.messages.some((message) =>
+          message.parts.some((part) => part.toolUseId === "many-512"),
+        ),
+    );
+
+    // No message id and no prose between the calls gives them no response
+    // boundary, so the row closes at its soft bound and none is ever trimmed.
+    expect(session.status).toBe("running");
+    expect(session.messages.slice(1).map((message) => message.parts.length)).toEqual([256, 256, 1]);
+    expect(
+      session.messages
+        .slice(1)
+        .every((message) => message.parts.every((part) => part.type === "tool-invocation")),
+    ).toBe(true);
+  });
+
+  test("completes an early call on its own row however many rows have opened since", async () => {
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -3241,19 +3287,22 @@ describe("ACP bridge", () => {
       (value) => value.status === "idle",
     );
 
-    const parts = session.messages[1]?.parts ?? [];
+    const parts = session.messages.flatMap((message) => message.parts);
     expect(session.error).toBeUndefined();
-    expect(parts).toHaveLength(512);
-    expect(parts[0]).toMatchObject({
-      type: "text",
-      content: expect.stringContaining("Earlier steps in this response were dropped"),
-    });
-    // `early-1` was trimmed, and its completion arrived afterwards. Rebuilding
-    // it there would append an empty `Tool call` at the end of the turn, after
-    // the notice that says those steps went, with none of its title or output.
-    expect(parts.filter((part) => part.toolUseId === "early-1")).toEqual([]);
+    // The fillers open new rows rather than trimming `early-1` away, so its
+    // completion lands on the card it belongs to, not on a second, empty
+    // `Tool call` at the end of the turn. (A late update for a call a trim did
+    // remove is covered in `acp-rows.test.ts`.)
+    expect(session.messages.slice(1).map((message) => message.parts.length)).toEqual([256, 256, 9]);
+    expect(parts.filter((part) => part.toolUseId === "early-1")).toEqual([
+      expect.objectContaining({
+        toolState: "success",
+        toolTitle: "Start the long build",
+        toolOutput: "build finished",
+      }),
+    ]);
+    expect(session.messages[1]?.parts[0]).toMatchObject({ toolUseId: "early-1" });
     expect(parts.at(-1)).toMatchObject({ toolUseId: "filler-519" });
-    expect(parts.slice(1).every((part) => part.type === "tool-invocation")).toBe(true);
   });
 
   test("starts a new part when a chunk follows a message trimmed to its notice", async () => {
@@ -3459,7 +3508,7 @@ describe("ACP bridge", () => {
       method: "POST",
       headers,
       body: JSON.stringify({
-        prompt: "MANYTOOLS: flood the turn",
+        prompt: "MANYPARTS: one oversized response",
         outputSchema: { type: "object" },
       }),
     });

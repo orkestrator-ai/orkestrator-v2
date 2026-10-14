@@ -276,6 +276,24 @@ export function handleSessionMessage(message: JsonObject): boolean {
         status: "completed",
       });
     }
+    if (process.env.FAKE_ACP_REPLAY_ROW_REVISION === "1") {
+      replay({
+        sessionUpdate: "tool_call",
+        toolCallId: "replay-old-call",
+        title: "Old call",
+        status: "in_progress",
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "New response" },
+      });
+      replay({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "replay-old-call",
+        status: "completed",
+        rawOutput: "late result during replay",
+      });
+    }
     // The `SHELLCHANGE` turn as the vendor replays it: the command, with none
     // of the measurement the bridge took around it.
     if (process.env.FAKE_ACP_REPLAY_SHELL_CHANGE === "1") {

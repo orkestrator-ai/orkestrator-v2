@@ -8,7 +8,7 @@ import {
   CODEX_RESTARTED_MID_TURN_MESSAGE,
   patchCommandChangePart,
 } from "./app-server-runtime-lifecycle.js";
-import type { NormalizedPart } from "./messages/types.js";
+import type { NormalizedMessage, NormalizedPart } from "./messages/types.js";
 import type { EngineEvent } from "./engine/types.js";
 import {
   getTranscriptCatalogInvalidationCountForTesting,
@@ -1039,7 +1039,9 @@ describe("session lifecycle", () => {
     });
 
     const messages = await h.runtime.getMessages("session-named");
-    expect(messages?.map((message) => message.content)).toEqual(["Persisted answer"]);
+    // The answer is the model's next response after the tool result, so it is
+    // a row of its own, exactly as the live stream published it.
+    expect(messages?.map((message) => message.content)).toEqual(["", "Persisted answer"]);
     expect(messages?.[0]?.parts).toEqual([
       expect.objectContaining({
         type: "tool-invocation",
@@ -1048,8 +1050,8 @@ describe("session lifecycle", () => {
         toolState: undefined,
         toolOutput: "clean",
       }),
-      { type: "text", content: "Persisted answer" },
     ]);
+    expect(messages?.[1]?.parts).toEqual([{ type: "text", content: "Persisted answer" }]);
     expect(h.runtime.getStatus("session-named")?.messageRevision).toBe(1);
     // app-server's own name outranks anything reconstructed from the rollout.
     expect(h.runtime.getStatus("session-named")).toMatchObject({ title: "Codex Name" });
@@ -2623,6 +2625,7 @@ describe("session lifecycle", () => {
       },
     });
     await h.drain();
+    const toolRowId = (await h.runtime.getMessages(sessionId))?.[1]?.id;
     const completedToolPatchCount = h.events.length;
     h.child().notify("item/agentMessage/delta", {
       threadId: "thread-1",
@@ -2631,19 +2634,22 @@ describe("session lifecycle", () => {
       delta: "Done",
     });
     await h.drain();
-    const laterPatches = h.events
-      .slice(completedToolPatchCount)
-      .filter((event) => event.type === "message.patched");
-    expect(laterPatches).not.toHaveLength(0);
-    for (const patch of laterPatches) {
-      expect(
-        (
-          patch.data as {
-            changedParts?: Array<{ index: number }>;
-          }
-        ).changedParts?.some(({ index }) => index === 0),
-      ).toBe(false);
-    }
+    // The message after the tool is the model's next response: a row of its
+    // own, announced whole, while the large tool row is not sent again.
+    const laterEvents = h.events.slice(completedToolPatchCount);
+    const laterMessages = laterEvents.flatMap((event) =>
+      event.type === "message.updated" ? [event.data?.message as NormalizedMessage] : [],
+    );
+    expect(laterMessages.map((message) => message.content)).toEqual(["Done"]);
+    expect(laterMessages[0]?.id).not.toBe(toolRowId);
+    expect(
+      laterEvents.some(
+        (event) =>
+          event.type === "message.patched" &&
+          (event.data as { messageId?: string }).messageId === toolRowId,
+      ),
+    ).toBe(false);
+    expect(state.lastPublishedSnapshotChars).toBeLessThan(256 * 1024);
 
     h.child().notify("turn/completed", {
       threadId: "thread-1",
@@ -3709,10 +3715,13 @@ describe("idle detach and transparent re-attach", () => {
     // Same session id the UI still holds — this must just work.
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).not.toBeNull();
+    // The closing answer follows the patch's result, so it is the model's next
+    // response and a row of its own below the steer.
     expect(messages!.map((message) => [message.role, message.content])).toEqual([
       ["user", "hello"],
       ["assistant", ""],
       ["user", "also inspect the bridge"],
+      ["assistant", ""],
       ["assistant", "done"],
     ]);
     expect(

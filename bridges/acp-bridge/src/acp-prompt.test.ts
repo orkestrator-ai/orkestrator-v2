@@ -262,11 +262,14 @@ describe("ACP bridge", () => {
         ) as Promise<{ status: string; messages: Array<{ content: string; parts: unknown[] }> }>,
       (value) => value.status === "idle",
     );
+    // The answer after the tool call is the model's next response, so it is a
+    // row of its own; the row that made the call carries no text.
     expect(session.messages.map((message) => message.content)).toEqual([
       "Do the work",
+      "",
       "approved:once",
     ]);
-    expect(session.messages[1]?.parts).toEqual([
+    expect(session.messages.slice(1).flatMap((message) => message.parts)).toEqual([
       {
         type: "thinking",
         content: "Checking permission. ",
@@ -469,7 +472,7 @@ describe("ACP bridge", () => {
     expect(structured.structuredOutput).toMatchObject({ ok: true, value: { ok: true } });
   });
 
-  test("fails a structured turn when its parts exhaust the per-message limit", async () => {
+  test("fails a structured turn when one response exhausts the per-message limit", async () => {
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -481,7 +484,7 @@ describe("ACP bridge", () => {
       method: "POST",
       headers,
       body: JSON.stringify({
-        prompt: "MANYTOOLS: flood the turn",
+        prompt: "MANYPARTS: one oversized response",
         requestId: "many-structured-1",
         outputSchema: { type: "object" },
       }),
@@ -499,10 +502,52 @@ describe("ACP bridge", () => {
     );
 
     // A structured turn is worth exactly its complete output, so trimming it
-    // has to fail rather than hand back a partial answer as a whole one.
+    // has to fail rather than hand back a partial answer as a whole one. Rows
+    // hold one response each, so only a single response this large trips it.
     expect(session.error).toContain("exceeded the transcript limit");
     expect(session.messages[1]?.parts).toHaveLength(512);
-    expect(session.messages[1]?.parts.every((part) => part.type === "tool-invocation")).toBe(true);
+    expect(session.messages[1]?.parts.every((part) => part.type !== "tool-invocation")).toBe(true);
+  });
+
+  test("does not fail a structured turn whose back-to-back calls outnumber a row", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ clientSessionKey: "env-tools:tab-many-calls-structured" }),
+    }).then((response) => response.json())) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "MANYTOOLS: flood the turn",
+        requestId: "many-calls-structured-1",
+        outputSchema: { type: "object" },
+      }),
+    });
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) =>
+        value.status !== "running" ||
+        value.messages.some((message) =>
+          message.parts.some((part) => part.toolUseId === "many-512"),
+        ),
+    );
+
+    // No message id and no prose between them gives these calls no response
+    // boundary. The row still closes at its soft bound, so nothing is trimmed
+    // and the structured turn carries on.
+    expect(session.status).toBe("running");
+    expect(session.error).toBeUndefined();
+    expect(session.messages.slice(1).map((message) => message.parts.length)).toEqual([256, 256, 1]);
   });
 
   test("deduplicates session creation and prompt dispatch by durable keys", async () => {

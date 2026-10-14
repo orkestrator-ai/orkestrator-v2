@@ -20,6 +20,7 @@ mock.module("@/lib/native/events", () => ({
   listen: mock(() => Promise.resolve(() => {})),
   emit: mock(() => Promise.resolve()),
   NATIVE_EVENT_STREAM_CONNECTED_EVENT: "native-event-stream-connected",
+  TERMINAL_EVENT_STREAM_CONNECTED_EVENT: "terminal-event-stream-connected",
 }));
 
 // --- Centralised mocks for modules used by multiple test files ---

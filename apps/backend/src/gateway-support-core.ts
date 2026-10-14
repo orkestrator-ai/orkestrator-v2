@@ -217,17 +217,21 @@ export const DROPPABLE_EVENT_PREFIX = "terminal-output-";
 export const SSE_CLIENT_SOFT_BUFFER_BYTES = 1024 * 1024;
 /**
  * Above this a client is hopeless even for authoritative events. The connection
- * is destroyed rather than dropping them: on reconnect the renderer receives
- * `native-event-stream-connected` and refetches, which is correct, whereas a
- * silently skipped state event is not.
+ * is destroyed rather than dropping them: on reconnect the client resumes from
+ * its cursor and is either replayed what it missed or told to reconcile, which
+ * is correct, whereas a silently skipped state event is not. Clients bound one
+ * frame by the same amount (`MAX_GATEWAY_EVENT_FRAME_BYTES`).
  */
 export const SSE_CLIENT_HARD_BUFFER_BYTES = 8 * 1024 * 1024;
 /** Bounds events that arrive after subscription but before replay has drained. */
 export const DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY = 2_048;
 export const DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES = 8 * 1024 * 1024;
-export const GATEWAY_CONNECTED_EVENT = "gateway.connected";
-export const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
-export const GATEWAY_CURSOR_EVENT = "gateway.cursor";
+// Shared with every client transport, which owns the other half of the contract.
+export {
+  GATEWAY_CONNECTED_EVENT,
+  GATEWAY_CURSOR_EVENT,
+  GATEWAY_RECONCILE_REQUIRED_EVENT,
+} from "@orkestrator/protocol/gateway-event-stream";
 export const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 export const CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token, X-Orkestrator-Acp-Token";

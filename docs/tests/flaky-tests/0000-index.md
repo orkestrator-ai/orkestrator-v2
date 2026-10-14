@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0207 | open | `non-sticky history keeps its anchor while new transcript rows stream` | e2e/StreamingTranscript.spec.ts:137 | `distanceFromBottom` never exceeded 100 within 5 s during a loaded `test:browser`; spec passed alone three times. | [0207-streaming-transcript-non-sticky-anchor-under-load.md](0207-streaming-transcript-non-sticky-anchor-under-load.md) |
 | 0206 | open | `touch compose input geometry > uses a real 16px font and preserves the twelve-line scroll threshold` | e2e/GlobalStyles.spec.ts:90 | Coarse-pointer media query read false on mobile-chromium during a loaded `test:browser`; spec passed alone. | [0206-globalstyles-touch-geometry-not-coarse-pointer.md](0206-globalstyles-touch-geometry-not-coarse-pointer.md) |
 | 0205 | open | Build pipeline keyed scheduling (2 cases) | apps/backend/src/core/build-pipeline-scheduling.test.ts | Two five-second aggregate timeouts; unchanged owning file passed alone in 5.4 and 2.9 seconds. | [0205-build-pipeline-scheduling-timeouts.md](0205-build-pipeline-scheduling-timeouts.md) |
 | 0204 | open | Request count quota refuses a send without reserving work | apps/backend/src/core/web-annotation-quotas.test.ts | Ten-second beforeEach/afterEach hook timeout in the aggregate; unchanged owning file passed alone in 5.1 and 2.4 seconds. | [0204-web-annotation-quota-hook-timeout.md](0204-web-annotation-quota-hook-timeout.md) |

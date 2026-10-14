@@ -286,11 +286,38 @@ callers (interactive tabs and build pipelines alike) do not branch on platform.
 `apps/backend/src/core/build-pipeline-provider.ts` re-exports a deliberately
 smaller slice of that contract for pipeline code.
 
+### Why OpenCode has no bridge
+
+The other bridges exist because their vendor surface is an in-process SDK or a
+stdio child; the bridge supplies the long-lived process, the authenticated HTTP
+surface and the session state. `opencode serve` already is a long-lived,
+password-protected HTTP + SSE server with its own persistent session store, and
+its at-most-once evidence (a request marker in its own history) is durable. A
+bridge in front of it would add a process and a hop per environment, a second
+copy of session state, and the full bridge route contract, while the
+translation code would only move, not shrink.
+
+The trade-off is fault isolation: SDK and SSE-client failures surface in the
+backend process rather than in a disposable bridge (see the patched SSE client
+below). Revisit the decision if that recurs. Until then, treat
+`OpenCodeProvider` as an in-process bridge and keep the boundary as strict as
+an HTTP one:
+
+- Shared native-agent code (`native-agent-service-*.ts`) does not branch on
+  `agent === "opencode"`. OpenCode-specific policy is reached through a
+  provider-neutral seam selected per platform.
+- The renderer does not talk to `opencode serve` and does not normalize
+  OpenCode messages; it receives the same normalized projections and
+  transcripts as every other platform.
+
 Always use **v2** of the SDK (`@opencode-ai/sdk/v2/client`). v2 takes flat
 parameters — `client.session.promptAsync({ sessionID, parts })` — where v1 took
 nested `{ path, body }` objects, and the question APIs
-(`client.question.list/reply/reject`) exist only in v2. The renderer has its own
-v2 wrapper at `apps/web/src/lib/opencode-client.ts`.
+(`client.question.list/reply/reject`) exist only in v2. Only the backend talks
+to `opencode serve`; the renderer has no OpenCode client. Build-pipeline and
+Multi Review transcripts are stored raw and normalized for display on the way
+out (`apps/backend/src/core/opencode-display-transcript.ts`), so the renderer
+carries no OpenCode normalizer.
 
 Because the server is the vendor's rather than ours, the SSE event vocabulary is
 theirs too: `message.updated`, `message.part.updated`, `session.updated`,
@@ -358,7 +385,7 @@ abort and cannot reproduce this, which is why the bug shipped.
 | `OpenCodeStreamState`             | Bounded incremental SSE projection state     |
 | `AgentNativeTab`                  | Shared native-agent chat UI                  |
 | `NativeAgentQuestionCard`         | Shared question/answer UI                    |
-| `opencode-client.ts`              | Legacy renderer SDK wrapper                  |
+| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts` |
 
 The server's SSE event types:
 

@@ -606,12 +606,12 @@ OpenCode's SDK and CLI are intentionally kept at the same exact version.
   `packages/toolchain/src/manifest.ts`
 - `OPENCODE_CLI_VERSION` in `docker/Dockerfile`
 
-Both code paths import `@opencode-ai/sdk/v2/client`; do not change them to the v1
-package root:
+Every import uses `@opencode-ai/sdk/v2/client`; do not change one to the v1
+package root. The renderer no longer talks to `opencode serve` or normalizes
+OpenCode messages; the web pin remains for
+`scripts/opencode-live-compatibility-probe.ts`, which resolves the SDK through
+the web workspace.
 
-- `apps/web/src/lib/opencode-client.ts` is the renderer wrapper. It normalizes
-  OpenCode messages and exposes session, event, model/provider, command, agent,
-  skill, question, permission, MCP, formatter, and LSP operations.
 - `apps/backend/src/core/opencode-provider.ts` is the only backend file that
   calls `createOpencodeClient`. It uses sessions, async prompts,
   status/messages, event subscriptions, aborts, questions, and permissions, and

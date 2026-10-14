@@ -8,7 +8,7 @@ import {
   FIXTURE_TIME,
   fixtureCapture,
   fixtureRequest,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {

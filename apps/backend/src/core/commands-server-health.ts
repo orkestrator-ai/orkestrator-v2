@@ -1,5 +1,6 @@
-import { createHash, runCommand } from "./commands-dependencies.js";
-import type { AgentToolConnection } from "./commands-dependencies.js";
+import { createHash } from "node:crypto";
+import { runCommand } from "./shell.js";
+import type { AgentToolConnection } from "./agent-tools.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   LOCAL_SERVER_HEALTH_ATTEMPTS,
@@ -16,7 +17,7 @@ import type { LocalServerKind } from "./commands-runtime-state.js";
  *
  * A leaf: `commands-containers` imported nothing from `commands-servers`
  * except these, which made the container module a back-edge into the server
- * module. Depends only on `commands-dependencies` and the runtime-state leaf.
+ * module. The only `commands-*` module it depends on is the runtime-state leaf.
  */
 
 export async function dockerExecDetached(

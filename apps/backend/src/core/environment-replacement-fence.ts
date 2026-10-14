@@ -1,5 +1,5 @@
 import path from "node:path";
-import { canonicalWorktreePath } from "@orkestrator/protocol/worktree-paths";
+import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 
 /**

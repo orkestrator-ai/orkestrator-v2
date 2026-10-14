@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BridgeRunDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
+import { BridgeRunDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { observeClaudeMessage } from "./diagnostics.js";
 
 test("Claude tool envelopes preserve pending work without recording content", () => {

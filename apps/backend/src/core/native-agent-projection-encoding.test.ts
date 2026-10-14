@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import {
   digestWithMessages,
   encodedArrayBytes,

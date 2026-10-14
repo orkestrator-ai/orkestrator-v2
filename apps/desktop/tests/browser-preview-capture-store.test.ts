@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BrowserPreviewExpiredCaptureNotice } from "@orkestrator/protocol/browser-preview";
-import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   BrowserPreviewCaptureStore,
   createBrowserPreviewCaptureId,

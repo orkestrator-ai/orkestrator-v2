@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { createServer, type AddressInfo } from "node:net";
 import { PassThrough, Readable, Writable, type Duplex } from "node:stream";
 
-import { http1Request } from "@orkestrator/protocol/preview-http1";
+import { http1Request } from "@orkestrator/protocol/node/preview-http1";
 import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
 
 import {

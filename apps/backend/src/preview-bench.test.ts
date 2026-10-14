@@ -12,7 +12,7 @@ import {
   PREVIEW_TUNNEL_SUBPROTOCOL,
   type PreviewAttachmentDescriptor,
 } from "@orkestrator/protocol/preview-access";
-import { connectPreviewWebSocket } from "@orkestrator/protocol/preview-websocket";
+import { connectPreviewWebSocket } from "@orkestrator/protocol/node/preview-websocket";
 
 import {
   startPreviewFixture,

@@ -11,7 +11,7 @@ import { writeFile } from "node:fs/promises";
 import { useCursorAgentForTests } from "./agent-session.js";
 import { MAX_CLOSING_TOMBSTONES } from "./config.js";
 import { loadPersistedState, persistBarrier } from "./persistence.js";
-import { finishRestoredTombstones } from "./session-close.js";
+import { finishRestoredTombstones } from "./session-tombstones.js";
 import { closingTombstones, sessions } from "./state.js";
 import { fakeAgent } from "./testing/fake-agent.js";
 import {

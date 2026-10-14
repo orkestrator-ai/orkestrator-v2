@@ -1,35 +1,38 @@
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
+import { createHash } from "node:crypto";
 import {
-  createHash,
   AGENT_INTERACTION_ORIGINS,
   isAgentInteractionPolicy,
-  isAgentSkillProvider,
-  resolveGitHubRepository,
-  isStartFeaturePlanningInput,
-  assertValidPromptAttachments,
-  assertValidPromptImages,
-} from "./commands-dependencies.js";
+} from "@orkestrator/protocol/agent-interactions";
+import { isAgentSkillProvider } from "./agent-skills.js";
+import { resolveGitHubRepository } from "./github.js";
+import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
+import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
+import type {
   AppConfig,
   CodexModelCatalogEntry,
   CodexReasoningEffort,
   EnvironmentType,
   OpenCodeModelCatalogEntry,
   PortMapping,
-  AgentSkillProvider,
-  JsonRecord,
-  StorageService,
-  GitHubIssueStatus,
-  GitHubRepositoryRef,
+} from "./models.js";
+import type { AgentSkillProvider } from "./agent-skills.js";
+import type { JsonRecord, StorageService } from "./storage.js";
+import type { GitHubIssueStatus, GitHubRepositoryRef } from "./github.js";
+import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,
-  DispatchNativeAgentPromptInput,
-  FeaturePlanningService,
+} from "@orkestrator/protocol/native-agent";
+import type { DispatchNativeAgentPromptInput } from "./native-agent-service.js";
+import type { FeaturePlanningService } from "./feature-planning.js";
+import type {
   FeaturePlanningKind,
   StartFeaturePlanningInput,
-} from "./commands-dependencies.js";
+} from "@orkestrator/protocol/feature-planning";
 import type { CommandContext } from "./commands-context.js";
 
 export const UNTRACKED_SCAN_CONCURRENCY = 8;

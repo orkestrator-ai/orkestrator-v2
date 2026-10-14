@@ -11,7 +11,7 @@ import {
   type PreviewRegistrySnapshot,
   type PreviewServiceDefinition,
   type PreviewServiceSnapshot,
-} from "./preview-services.js";
+} from "../preview-services.js";
 
 export const FIXTURE_BACKEND_INSTANCE_ID = "bk_fixture_instance_0001";
 export const FIXTURE_BACKEND_EPOCH = "ep_fixture_epoch_0001";

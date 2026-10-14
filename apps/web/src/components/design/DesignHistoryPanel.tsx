@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { DesignProjection } from "@/stores/designStore";
-import { designApi, failureOf } from "./design-client";
+import { designApi, failureOf } from "@/lib/design-client";
 import type { DesignCanvasController } from "./design-controller";
 import { DesignCheckpointPreview } from "./DesignCheckpointPreview";
 

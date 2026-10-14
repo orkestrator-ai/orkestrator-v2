@@ -1,7 +1,7 @@
 import type {
   BridgeRunDiagnostics,
   CancellationReason,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 /**
  * The transcript model this bridge serves, and the per-session state that
  * produces it.

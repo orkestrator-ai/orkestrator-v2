@@ -7,7 +7,7 @@ import {
   parseWebAnnotationRequestMarker,
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureDestination } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureDestination } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { recordDirectoryName } from "./web-annotation-storage.js";
 import type { WebAnnotationService } from "./web-annotation-service.js";
 import {

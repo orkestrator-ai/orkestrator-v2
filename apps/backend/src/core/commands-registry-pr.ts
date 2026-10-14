@@ -8,9 +8,10 @@ import {
 import {
   isAgentBridgeKind,
   isStructuredCommandError,
-  isPrMonitorMode,
-} from "./commands-dependencies.js";
-import type { AwaitBridgeReadyResult, PrMonitorSnapshot } from "./commands-dependencies.js";
+} from "@orkestrator/protocol/bridge-readiness";
+import { isPrMonitorMode } from "@orkestrator/protocol/pr-monitor";
+import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
+import type { PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import type { PrMonitorSnapshotOutcome } from "@orkestrator/protocol/pr-monitor";
 import {
   parseViewSnapshotRequest,

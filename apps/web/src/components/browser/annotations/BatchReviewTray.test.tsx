@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
-import { fixtureCapture } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCapture } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {

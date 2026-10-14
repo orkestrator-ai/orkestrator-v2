@@ -29,6 +29,177 @@
     "react/preserve-manual-memoization": "warn",
     "react/globals": "warn",
     "react/purity": "warn",
-    "react/use-memo": "warn"
-  }
+    "react/use-memo": "warn",
+    "import/no-cycle": "error",
+    "import/no-mutable-exports": "error",
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["@orkestrator/protocol/testing/*"],
+            "message": "Test fixtures and fakes are for tests only."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["apps/web/src/**", "apps/web-public/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "The renderer runs in a browser; keep Node and Bun APIs out of its bundle."
+              },
+              {
+                "group": ["@orkestrator/protocol/node/*"],
+                "allowTypeImports": true,
+                "message": "Node-only protocol module; the renderer may import its types only."
+              },
+              {
+                "group": ["@orkestrator/protocol/testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/web/src/components/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@/lib/native/backend",
+                "message": "Components reach the backend through the typed clients in lib/ (lib/backend, lib/design-client, \u2026), not the raw command transport."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "The renderer runs in a browser; keep Node and Bun APIs out of its bundle."
+              },
+              {
+                "group": ["@orkestrator/protocol/node/*"],
+                "allowTypeImports": true,
+                "message": "Node-only protocol module; the renderer may import its types only."
+              },
+              {
+                "group": ["@orkestrator/protocol/testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/protocol/src/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "Top-level protocol modules are shared with the browser renderer. Put Node- or Bun-dependent code in src/node/."
+              },
+              {
+                "group": ["./node/*"],
+                "allowTypeImports": true,
+                "message": "Top-level protocol modules are shared with the browser renderer and may import only types from src/node/."
+              },
+              {
+                "group": ["./testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/test/**",
+        "**/tests/**",
+        "**/testing/**",
+        "e2e/**",
+        "**/mocks/**",
+        "**/*test-harness*",
+        "**/*test-support*",
+        "**/*test-helpers*",
+        "**/*test-fixtures*"
+      ],
+      "rules": {
+        "no-restricted-imports": "off",
+        "import/no-mutable-exports": "off"
+      }
+    },
+    {
+      "files": [
+        "apps/backend/src/core/bridge-session-close.ts",
+        "apps/backend/src/core/commands-agent-support.ts",
+        "apps/backend/src/core/commands-container-exec.ts",
+        "apps/backend/src/core/commands-files.ts",
+        "apps/backend/src/core/commands-pr-monitor.ts",
+        "apps/backend/src/core/commands-runtime-state.ts",
+        "apps/backend/src/core/commands-servers.ts",
+        "apps/backend/src/core/control-mcp-server.ts",
+        "apps/backend/src/core/coordinator-service.ts",
+        "apps/backend/src/core/extension-discovery.ts",
+        "apps/backend/src/core/http-bridge-claude-runtime.ts",
+        "apps/backend/src/core/http-bridge-interactions.ts",
+        "apps/backend/src/core/project-git-service.ts",
+        "apps/backend/src/core/public-api/actions-settings.ts",
+        "apps/backend/src/core/tmux-session-manager.ts",
+        "apps/backend/src/gateway-support-core.ts",
+        "apps/desktop/electron/browser-preview-capture-page.ts",
+        "apps/desktop/electron/browser-preview-capture-validation.ts",
+        "apps/web/src/hooks/useClipboardImagePaste.ts",
+        "apps/web/src/lib/native/terminal-input-batcher.ts",
+        "bridges/acp-bridge/src/acp-context.ts",
+        "bridges/acp-bridge/src/acp-errors.ts",
+        "bridges/acp-bridge/src/acp-http.ts",
+        "bridges/acp-bridge/src/acp-persistence.ts",
+        "bridges/acp-bridge/src/acp-public.ts",
+        "bridges/acp-bridge/src/acp-reconciliation.ts",
+        "bridges/acp-bridge/src/acp-session.ts",
+        "bridges/acp-bridge/src/acp-tools.ts",
+        "bridges/acp-bridge/src/acp-transcript.ts",
+        "bridges/acp-bridge/src/session-config.ts",
+        "bridges/claude-bridge/src/services/session-manager-core.ts",
+        "bridges/claude-bridge/src/services/session-manager-interactions.ts",
+        "bridges/claude-bridge/src/services/session-manager-lifecycle.ts",
+        "bridges/claude-bridge/src/services/session-manager-messages.ts",
+        "bridges/claude-bridge/src/services/session-manager-persistence.ts",
+        "bridges/claude-bridge/src/services/session-manager-session.ts",
+        "bridges/codex-bridge/src/app-server-runtime-helpers.ts",
+        "bridges/codex-bridge/src/app-server-runtime-tail.ts",
+        "bridges/codex-bridge/src/index.ts",
+        "bridges/codex-bridge/src/subagent-spawn.ts",
+        "bridges/cursor-bridge/src/agent-session.ts",
+        "bridges/cursor-bridge/src/credentials.ts",
+        "bridges/cursor-bridge/src/sdk-runtime.ts",
+        "packages/protocol/src/connections.ts",
+        "packages/protocol/src/mcp-management.ts",
+        "packages/protocol/src/native-agent-steer-rejection.ts",
+        "packages/protocol/src/node/preview-http1.ts",
+        "packages/protocol/src/preview-services.ts",
+        "packages/protocol/src/project-folders.ts"
+      ],
+      "rules": {
+        "import/no-mutable-exports": "off"
+      }
+    }
+  ]
 }

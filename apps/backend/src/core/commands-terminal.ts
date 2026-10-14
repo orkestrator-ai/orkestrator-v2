@@ -2,12 +2,10 @@ import {
   containerLifecycleSnapshot,
   parseContainerLifecycle,
 } from "@orkestrator/protocol/container-lifecycle";
-import { existsSync, path, createHash } from "./commands-dependencies.js";
-import type {
-  ClientEnvironment,
-  Environment,
-  PersistedLoopedReviewWorkflow,
-} from "./commands-dependencies.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import type { ClientEnvironment, Environment, PersistedLoopedReviewWorkflow } from "./models.js";
 import {
   terminalProcesses,
   terminalSessionConfigs,

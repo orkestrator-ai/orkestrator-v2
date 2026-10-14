@@ -1,4 +1,4 @@
-import type { BridgeRunDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
+import type { BridgeRunDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

@@ -13,7 +13,7 @@
  *   cookie refusal, host-only cookies, and same-service absolute redirects.
  */
 import { isReservedPreviewCookieName } from "./preview-access.js";
-import type { HeaderList } from "./preview-http1.js";
+import type { HeaderList } from "./node/preview-http1.js";
 import { PREVIEW_LIMITS, type PreviewErrorCategory } from "./preview-services.js";
 
 export interface PreviewHeaderPolicy {

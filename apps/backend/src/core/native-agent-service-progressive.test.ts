@@ -1,5 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import {

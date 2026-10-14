@@ -58,7 +58,7 @@ apply.
 
 ## Shared implementation
 
-`packages/protocol/src/bridge-diagnostics.ts` owns flag interpretation, periodic
+`packages/protocol/src/node/bridge-diagnostics.ts` owns flag interpretation, periodic
 snapshots, correlation ID hashing, metadata filtering, pending-operation bounds,
 event batching and log formatting. Bridge adapters describe their own events;
 they do not own logging timers or copy the privacy and size policies.

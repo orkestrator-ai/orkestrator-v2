@@ -10,7 +10,7 @@ truncation metadata, and background-task semantics.
 
 ## Owners
 
-- [Shared windowing](../../../../packages/protocol/src/transcript-window.ts) and
+- [Shared windowing](../../../../packages/protocol/src/node/transcript-window.ts) and
   its adjacent test file.
 - [Cursor transcript](../../../../bridges/cursor-bridge/src/transcript.ts),
   [Pi transcript](../../../../bridges/pi-bridge/src/transcript.ts), and
@@ -74,7 +74,7 @@ This step provides the safe producer-side enforcement used by step 03.
 Status: Complete
 Implementation commit / PR: branch 20260927-125815-7f0993836777 (perf(transcripts): linear trim accounting and producer-side Cursor bounds)
 Protocol or storage decisions:
-  - New packages/protocol/src/transcript-budget.ts: planOldestFirstTrim measures
+  - New packages/protocol/src/node/transcript-budget.ts: planOldestFirstTrim measures
     each candidate message once (and, only when one message is left over
     budget, each of its parts once), subtracts sizes, and returns a plan with
     the exact retained encoded size (UTF-8 JSON bytes incl. escapes, commas,
@@ -93,7 +93,7 @@ Protocol or storage decisions:
     `parts.length`-derived ids in Cursor and Pi, so trimmed fronts cannot
     make a new part reuse a retained part's id.
 Tests and isolated profiles:
-  - packages/protocol/src/transcript-budget.test.ts: 60 seeded transcripts x 7
+  - packages/protocol/src/node/transcript-budget.test.ts: 60 seeded transcripts x 7
     ceilings with multibyte/astral/quote/backslash/control text compared with
     the old quadratic loops (with and without the ACP notice); reported bytes
     equal actual serialized bytes; empty/exact/one-byte/overflow cases;

@@ -269,6 +269,14 @@ reformatted. Rationale and exclusions are in
 - Iterate a collection you are about to mutate with
   `for (const x of Array.from(collection))`, not a spread; lint's suggested fix
   for the spread form silently skips entries.
+- Module boundaries are lint errors: no runtime import cycles
+  (`import/no-cycle`; type-only imports are exempt), no new `export let`, no
+  `node:`/`bun:` or `@orkestrator/protocol/node/*` value imports in the
+  renderer, no raw `@/lib/native/backend` in components, and
+  `@orkestrator/protocol/testing/*` only from tests. Top-level
+  `packages/protocol/src/*.ts` is shared with the browser; Node- or
+  Bun-dependent protocol code goes in `src/node/`, fixtures and fakes in
+  `src/testing/`. Fix a finding by moving code, not with a disable directive.
 
 ## Application Version Bumps
 
@@ -663,7 +671,9 @@ When touching the SDK bridge:
   removal before it answers success. Idle detach (`detachAgent`) is not a
   close and never sets the marker. A method the bridge does not serve on a
   session it *does* have answers 405, so a real gap cannot hide as a missing
-  session.
+  session. A close a previous process recorded but did not finish (a restored
+  tombstone) is finished by `src/session-tombstones.ts`, and resuming the same
+  conversation waits for it first.
 - `persistBarrier()` is a mandatory publication: it rejects when nothing
   reached disk, and prompt/steer dispatch, create, resume and identity-changing
   attach all wait for it. `schedulePersist()` is best-effort. Both share one
@@ -744,7 +754,7 @@ When touching any of them:
   the tab that finds no other mapping performs the provider close.
 - **Transcript v2 reads share one source and answer in band.** Every HTTP
   bridge serves `GET /session/:id/transcript?version=2` (summaries with detail
-  locators, `@orkestrator/protocol/bridge-transcript-summary`) plus
+  locators, `@orkestrator/protocol/node/bridge-transcript-summary`) plus
   `/transcript/detail` and `/transcript/page`, all built from one per-bridge
   read source via `bridge-transcript-routes`. Detail/page answer an unknown
   session 200 `missing`/`expired`, never 404; absent `version` stays v1.

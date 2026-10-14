@@ -3,7 +3,7 @@ import {
   fixturePreviewCapabilities,
   fixturePreviewDefinition,
   fixturePreviewService,
-} from "@orkestrator/protocol/preview-contract-fixtures";
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 import { emptyPreviewReadiness, previewError } from "@orkestrator/protocol/preview-services";
 
 import {

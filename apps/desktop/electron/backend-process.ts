@@ -4,7 +4,7 @@ import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/application-logging";
+import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 
 export const HOSTED_WEB_CLIENT_ORIGINS = [

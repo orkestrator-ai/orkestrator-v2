@@ -1,11 +1,6 @@
-import {
-  CommandFailedError,
-  createEnvironment,
-  pathExists,
-  runCommand,
-  sanitizeEnvironmentName,
-} from "./commands-dependencies.js";
-import type { Environment, EnvironmentType, Project } from "./commands-dependencies.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
+import { createEnvironment, sanitizeEnvironmentName } from "./storage.js";
+import type { Environment, EnvironmentType, Project } from "./models.js";
 import type { ClientEnvironment, NetworkAccessMode } from "./models.js";
 import { isContainerRunning } from "./commands-container-exec.js";
 import {

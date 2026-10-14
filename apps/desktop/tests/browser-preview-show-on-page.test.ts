@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { BrowserPreviewAnchorQuery } from "@orkestrator/protocol/browser-preview";
 import type { WebAnnotationTarget } from "@orkestrator/protocol/web-annotations";
-import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { createHarness, type Json } from "./browser-preview-capture-harness";
 
 const pin = (

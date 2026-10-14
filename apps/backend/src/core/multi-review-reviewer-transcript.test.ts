@@ -4,7 +4,7 @@ import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
-} from "@orkestrator/protocol/bridge-transcript-summary";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   LEGACY_HISTORY_EPOCH,
   MAX_REVIEWER_TRANSCRIPT_MESSAGES,

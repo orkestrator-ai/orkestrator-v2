@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { formatWithOptions } from "node:util";
 
-import { normalizeDebugLogRetentionDays } from "./debug-logging.js";
+import { normalizeDebugLogRetentionDays } from "../debug-logging.js";
 
 /** Electron's own log. A standalone backend writes beside it under its own prefix. */
 export const DESKTOP_LOG_FILE_PREFIX = "orkestrator-ai-";

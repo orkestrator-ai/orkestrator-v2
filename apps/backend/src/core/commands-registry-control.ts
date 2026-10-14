@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
+import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { BUILD_PIPELINE_AGENTS, isAgentPlatform } from "./commands-dependencies.js";
+import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import { asNonBlankString, asOptionalString } from "./commands-helpers.js";
 import {
   isTrustedUserPromptPresentation,

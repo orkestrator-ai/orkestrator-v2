@@ -21,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { invoke } from "@/lib/native/backend";
 import { pickHostPath } from "@/lib/host-path-picker";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
@@ -34,7 +33,9 @@ import {
   designApi,
   designBackendKey,
   failureOf,
-} from "./design-client";
+  importDesignDocument,
+  importDesignHostFile,
+} from "@/lib/design-client";
 import {
   DESIGN_AGENTS,
   DESIGN_AGENT_LABELS,
@@ -449,11 +450,7 @@ export function DesignWorkspaceDialog({
       setBusy(false);
       return;
     }
-    await importFile(
-      () => invoke<DesignCanvas>("design_import_host_file", { environmentId, path }),
-      epoch,
-      importScope,
-    );
+    await importFile(() => importDesignHostFile(environmentId, path), epoch, importScope);
   };
 
   const uploadFile = async (file: File) => {
@@ -466,7 +463,7 @@ export function DesignWorkspaceDialog({
         const document = await readDesignImport(file);
         if (epoch !== importEpoch.current || importScope !== scopeRef.current)
           throw new Error("Design workspace changed.");
-        return invoke<DesignCanvas>("design_import", { environmentId, document });
+        return importDesignDocument(environmentId, document);
       },
       epoch,
       importScope,

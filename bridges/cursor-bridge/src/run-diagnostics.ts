@@ -2,7 +2,7 @@ import {
   BridgeRunDiagnostics,
   bridgeDebugEnabled,
   readBridgeDebugFlag,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 import { isObject, type SessionState } from "./state.js";
 import { CursorSdkDiagnostics } from "./sdk-diagnostics.js";
 

@@ -7,7 +7,7 @@ import {
   formatWebAnnotationError,
   type WebAnnotationEntry,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureEntry } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureEntry } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {

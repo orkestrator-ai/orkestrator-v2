@@ -26,7 +26,7 @@ import {
   FIXTURE_SERVICE_ID,
   fixturePreviewCapabilities,
   fixturePreviewSnapshot,
-} from "./preview-contract-fixtures.js";
+} from "./testing/preview-contract-fixtures.js";
 
 describe("preview ports and paths", () => {
   test("accepts only complete decimal ports", () => {

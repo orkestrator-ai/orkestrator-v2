@@ -12,9 +12,9 @@ import {
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_OWNER,
-  dockerOwnerNamespace,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { AppConfig, Environment } from "./models.js";
 import {

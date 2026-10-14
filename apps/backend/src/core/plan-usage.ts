@@ -19,7 +19,7 @@ import {
   cursorDashboardPath,
   cursorExchangeAccessToken,
   cursorExchangeExpiryMs,
-} from "@orkestrator/protocol/cursor-plan-usage";
+} from "@orkestrator/protocol/node/cursor-plan-usage";
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
 import {
   CLAUDE_PLAN_WINDOW_LABELS,

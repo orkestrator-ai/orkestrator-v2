@@ -35,7 +35,7 @@ import {
   type AgentSessionTestHooks,
 } from "./agent-session.js";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
-import { CommandChangeJournal } from "@orkestrator/protocol/command-change-journal";
+import { CommandChangeJournal } from "@orkestrator/protocol/node/command-change-journal";
 import { setCommandChangeProbeForTests } from "./command-changes.js";
 import { commandChangeJournalPath, workingDirectory } from "./config.js";
 import { catalogReadFailed, refreshModels } from "./models.js";

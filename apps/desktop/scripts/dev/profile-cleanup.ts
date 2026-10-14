@@ -1,4 +1,4 @@
-import { captureWorktreePathIdentity } from "@orkestrator/protocol/worktree-paths";
+import { captureWorktreePathIdentity } from "@orkestrator/protocol/node/worktree-paths";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";

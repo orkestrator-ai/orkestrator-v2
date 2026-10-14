@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { publicSuccessEnvelope, type PublicReceipt } from "@orkestrator/protocol/public-api";
-import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/public-api-fixtures";
+import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
   createSandbox,
   defaultResponder,

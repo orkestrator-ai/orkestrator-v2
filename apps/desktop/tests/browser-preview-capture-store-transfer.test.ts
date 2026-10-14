@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { WebAnnotationCaptureInput } from "@orkestrator/protocol/web-annotations";
 import {
   BrowserPreviewCaptureStore,

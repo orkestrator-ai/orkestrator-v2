@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { BrowserPreviewAnchorQuery } from "@orkestrator/protocol/browser-preview";
 import type { WebAnnotationTarget } from "@orkestrator/protocol/web-annotations";
-import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { validateWebAnnotationCaptureInput } from "@orkestrator/protocol/web-annotations-validation";
 import { BROWSER_PREVIEW_CAPTURE_WORLD_ID } from "../electron/browser-preview-capture";
 import {

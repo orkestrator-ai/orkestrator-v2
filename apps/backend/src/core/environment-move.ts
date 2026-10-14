@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   canonicalWorktreePath,
   captureWorktreePathIdentity,
-} from "@orkestrator/protocol/worktree-paths";
+} from "@orkestrator/protocol/node/worktree-paths";
 
 import type { CommandContext } from "./commands-context.js";
 import {

@@ -39,10 +39,14 @@ beforeEach(() => {
   optionalLocks = process.env.GIT_OPTIONAL_LOCKS;
   // Watchers may run status while fixtures reset the index.
   process.env.GIT_OPTIONAL_LOCKS = "0";
-  // These worktrees never start tmux. Keep the real cleanup path, but make its
-  // empty session inventory independent of the host's tmux server and socket.
+  // These fixtures own no tmux processes. Keep cleanup and hook restoration
+  // real, but use a known-empty inventory instead of the host's tmux sessions.
   listTmuxSessions.mockClear();
-  spyOn(TmuxBackend.prototype, "exec").mockImplementation(listTmuxSessions);
+  const exec = TmuxBackend.prototype.exec;
+  spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (this: TmuxBackend, ...args) {
+    if (args[0][0] === "tmux") return listTmuxSessions(args[0]);
+    return exec.apply(this, args);
+  });
 });
 
 afterEach(async () => {

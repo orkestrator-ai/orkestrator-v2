@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import type { AgentModel } from "./commands-dependencies.js";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
 import { resolveBunBinary } from "./commands-agent-support.js";
 import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";

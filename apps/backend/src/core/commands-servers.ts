@@ -11,11 +11,10 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import { OPENCODE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 import {
-  existsSync,
-  path,
-  createHash,
-  randomBytes,
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
@@ -25,13 +24,14 @@ import {
   PI_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   resolveCodexMaxConcurrentThreads,
+} from "./constants.js";
+import {
   ORKESTRATOR_AGENT_MCP_SERVER_NAME,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
-  cleanupEnvironmentTmux,
-  shutdownClaudeStatePolling,
-  AGENT_PLATFORM_LABELS,
-} from "./commands-dependencies.js";
+} from "./agent-tools.js";
+import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux.js";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
   enqueueLocalServerEnvironmentOperation,
   coordinatorBridgeEnvironmentFields,
@@ -51,13 +51,10 @@ import {
   bearerBridgeHeaders,
   agentToolConnectionFingerprint,
 } from "./commands-server-health.js";
-import type {
-  ChildProcessWithoutNullStreams,
-  Environment,
-  AgentToolConnection,
-  AgentModel,
-  AgentReasoningOption,
-} from "./commands-dependencies.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { Environment } from "./models.js";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import {
   localServerProcesses,
   localCodexBridgeTokens,

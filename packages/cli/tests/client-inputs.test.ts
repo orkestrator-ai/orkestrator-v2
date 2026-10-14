@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PUBLIC_API_LIMITS, publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
-import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/public-api-fixtures";
+import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import { readBinaryFile, readPatch, readPrompt } from "../src/client/inputs.js";
 import {
   captureIo,

@@ -4,7 +4,7 @@
  * Tests assert what is still armed after a shutdown and drive time without
  * sleeping. Implements the same `IntervalTimers` seam production owners take.
  */
-import type { IntervalTimers } from "./parent-watchdog.js";
+import type { IntervalTimers } from "../parent-watchdog.js";
 
 /** Manually driven intervals: `tick` fires every armed callback due by then. */
 export class FakeIntervals implements IntervalTimers {

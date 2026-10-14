@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { fixtureAnchor } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureAnchor } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { validateWebAnnotationCaptureInput } from "@orkestrator/protocol/web-annotations-validation";
 import {
   createHarness,

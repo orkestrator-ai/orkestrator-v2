@@ -101,7 +101,7 @@ import {
 } from "./native-agent-progressive-metrics.js";
 import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
-import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/bridge-transcript-summary";
+import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   DirectHistoryPageCache,
   decodeHistoryCursor,

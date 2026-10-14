@@ -17,7 +17,7 @@ import {
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
 import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
 import type { Environment } from "./models.js";
-import { createHostTestScheduler } from "@orkestrator/protocol/host-test-scheduler";
+import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { validationPreparation } from "./review-validation-service.js";
 import { parseReviewPreparationValidation } from "./commands-review.js";
 

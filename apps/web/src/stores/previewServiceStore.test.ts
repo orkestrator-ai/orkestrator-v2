@@ -5,7 +5,7 @@ import {
   FIXTURE_ENVIRONMENT_ID,
   fixturePreviewCapabilities,
   fixturePreviewSnapshot,
-} from "@orkestrator/protocol/preview-contract-fixtures";
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetPreviewServiceSyncForTests, usePreviewServiceStore } from "./previewServiceStore";

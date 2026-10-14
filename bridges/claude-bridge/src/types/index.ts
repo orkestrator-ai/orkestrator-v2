@@ -1,6 +1,6 @@
 // Type definitions for Claude Bridge Server
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
-import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
+import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transcript-window";
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";

@@ -19,7 +19,7 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import sessionRoutes from "../routes/session.js";
 import { compressTranscriptReads } from "../routes/session-transcript.js";

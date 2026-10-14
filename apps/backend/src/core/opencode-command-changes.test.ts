@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import { openCodeFake, waitUntil } from "./agent-provider-test-support.js";
 import { createNativeAgentProvider } from "./native-agent-provider.js";
 import {

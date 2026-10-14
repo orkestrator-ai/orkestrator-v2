@@ -11,7 +11,7 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import { authToken } from "./config.js";
 import { drainPersistence, loadPersistedState, schedulePersist } from "./persistence.js";
 import {

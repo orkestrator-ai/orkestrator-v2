@@ -45,7 +45,7 @@ import { rmSync } from "node:fs";
 import { copyFile, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
-import type { MeasuredFileChange, MeasuredWorkspaceChange } from "./tool-diff.js";
+import type { MeasuredFileChange, MeasuredWorkspaceChange } from "../tool-diff.js";
 
 export const DEFAULT_MAX_UNTRACKED_FILE_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_MAX_UNTRACKED_FILES = 5_000;

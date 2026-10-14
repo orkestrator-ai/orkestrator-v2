@@ -89,7 +89,7 @@ Revision: working tree on `a9337716`, 2026-09-26.
   [`public-api-resources.ts`](../../../../packages/protocol/src/public-api-resources.ts)
   (IDs, summaries, pages, settings descriptors, transcript/interaction/exec
   shapes). One registry command, `public_action`, is the only public entry.
-- Examples: [`public-api-fixtures.ts`](../../../../packages/protocol/src/public-api-fixtures.ts);
+- Examples: [`public-api-fixtures.ts`](../../../../packages/protocol/src/testing/public-api-fixtures.ts);
   tests: `packages/protocol/src/public-api.test.ts` (17, validators accept every
   fixture and reject malformed/unknown shapes).
 - Command matrix, owners and milestones: [public-cli.md](../../../architecture/public-cli.md#command-surface).

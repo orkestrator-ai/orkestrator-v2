@@ -16,7 +16,7 @@ import {
   type WebAnnotationRequest,
   type WebAnnotationRequestState,
   type WebAnnotationTarget,
-} from "./web-annotations.js";
+} from "../web-annotations.js";
 
 export const FIXTURE_ENVIRONMENT_ID = "env-fixture";
 export const FIXTURE_TIME = "2026-09-21T12:00:00.000Z";

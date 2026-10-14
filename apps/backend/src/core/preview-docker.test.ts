@@ -2,10 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createServer, type AddressInfo, type Server } from "node:net";
 
-import { http1Request } from "@orkestrator/protocol/preview-http1";
+import { http1Request } from "@orkestrator/protocol/node/preview-http1";
 
 import { connectPreviewUpstream } from "../preview-upstream.js";
-import { runCommand } from "./commands-dependencies.js";
+import { runCommand } from "./shell.js";
 import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
 
 /**

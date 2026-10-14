@@ -7,9 +7,9 @@ import {
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_INPUTS_REVISION,
   DOCKER_LABEL_OWNER,
-  dockerOwnerNamespace,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
 import { pruneInputRevisions, readInputsManifest, scrubStagedProvider } from "./portable-inputs.js";

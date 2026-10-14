@@ -1,10 +1,9 @@
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
+import { constants as fsConstants, promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
-  fsConstants,
-  fs,
-  os,
-  path,
   inferLanguage,
   runCommand,
   runCommandBuffer,
@@ -12,16 +11,19 @@ import {
   GitRemoteTimeoutError,
   assertEditorTextFileSize,
   decodeEditorTextFile,
+} from "./shell.js";
+import {
   MAX_BINARY_FILE_BYTES,
   validateRelativeFilePath,
   writeConfinedFile,
   moveConfinedFile,
   createConfinedDirectory,
-  randomUUID,
-  INITIAL_PROMPT_STAGING_DIRECTORY,
-} from "./commands-dependencies.js";
+} from "./path-safety.js";
+import { randomUUID } from "node:crypto";
+import { INITIAL_PROMPT_STAGING_DIRECTORY } from "./prompt-attachments.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
-import type { Environment, AppConfig, StorageService } from "./commands-dependencies.js";
+import type { Environment, AppConfig } from "./models.js";
+import type { StorageService } from "./storage.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   CONTAINER_GITHUB_CREDENTIAL_FILE,

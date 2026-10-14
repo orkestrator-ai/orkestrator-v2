@@ -20,7 +20,6 @@ import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
@@ -183,7 +182,6 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
 /** Stop store-owned background state after authoritative deletion. */
 export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
   useClaudeStore.getState().closeEventSubscription(environmentId);
-  useOpenCodeStore.getState().closeEventSubscription(environmentId);
   clearBuildPipelineTabActivation(environmentId);
   clearBuildPipelineHandoffResolutions(environmentId);
   clearStartupAgentTabActivation(environmentId);

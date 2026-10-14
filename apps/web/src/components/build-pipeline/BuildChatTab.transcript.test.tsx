@@ -48,8 +48,10 @@ afterAll(() => {
 
 const verifyMessages = [
   {
-    info: { id: "answer-2", role: "assistant" },
-    parts: [{ type: "text", text: "All criteria pass" }],
+    id: "answer-2",
+    role: "assistant",
+    content: "All criteria pass",
+    parts: [{ type: "text", content: "All criteria pass" }],
   },
 ];
 

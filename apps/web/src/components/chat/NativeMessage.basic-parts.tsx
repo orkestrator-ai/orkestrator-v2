@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useOptionalTerminalContext, useTerminalContext } from "@/contexts/TerminalContext";
-import { type ToolDiffMetadata } from "@/lib/opencode-client";
+import type { NativeToolDiffMetadata as ToolDiffMetadata } from "@/lib/chat/native-message-types";
 import { getToolDisplayName, getToolTitleDisplayName } from "@/lib/tool-names";
 import {
   isBackgroundTaskActionTool,

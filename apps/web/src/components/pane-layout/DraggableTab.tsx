@@ -24,7 +24,6 @@ import { createDraggableTabId, getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -150,14 +149,7 @@ export function DraggableTab({
     if (nativeAgentData?.platform !== "codex") return undefined;
     return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
   });
-  const openCodeSessionTitle = useOpenCodeStore((state) => {
-    if (nativeAgentData?.platform !== "opencode") {
-      return undefined;
-    }
-    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
-  });
-  const nativeSessionTitle =
-    projectionSessionTitle ?? claudeSessionTitle ?? codexSessionTitle ?? openCodeSessionTitle;
+  const nativeSessionTitle = projectionSessionTitle ?? claudeSessionTitle ?? codexSessionTitle;
   const workflowTitle = getWorkflowTabTitle(tab);
 
   // Get build pipeline title for claude-build tabs

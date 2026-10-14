@@ -9,7 +9,6 @@ const teardownTab = mock(async (_input: unknown) => ({ completed: true }));
 const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => {});
 const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
-const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteAgentHandoff = mock(async (_handoffId: string, _environmentId: string) => true);
 const getAgentHandoff = mock(async (_handoffId: string) => null);
 const pruneAgentHandoffs = mock(
@@ -27,8 +26,6 @@ const realClaudeClient = await import("@/lib/claude-client");
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const realCodexClient = await import("@/lib/codex-client");
 const realCodexClientSnapshot = { ...realCodexClient };
-const realOpenCodeClient = await import("@/lib/opencode-client");
-const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -68,17 +65,11 @@ mock.module("@/lib/codex-client", () => ({
   deleteSession: deleteCodexSession,
 }));
 
-mock.module("@/lib/opencode-client", () => ({
-  ...realOpenCodeClientSnapshot,
-  deleteSession: deleteOpenCodeSession,
-}));
-
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/claude-tmux-client", () => realClaudeTmuxClientSnapshot);
   mock.module("@/lib/claude-client", () => realClaudeClientSnapshot);
   mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
-  mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
 });
 
 afterEach(() => {
@@ -96,7 +87,6 @@ const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } =
   await import("./terminalSessionStore");
 const { useClaudeStore } = await import("./claudeStore");
 const { useCodexStore } = await import("./codexStore");
-const { useOpenCodeStore } = await import("./openCodeStore");
 const { useEnvironmentStore } = await import("./environmentStore");
 const { createTerminalKey, useTerminalPortalStore } = await import("./terminalPortalStore");
 const { createClaudeTmuxStateKey, useClaudeTmuxStore } = await import("./claudeTmuxStore");
@@ -118,11 +108,6 @@ function resetStores() {
     messageQueue: new Map(),
   });
   useCodexStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    messageQueue: new Map(),
-  });
-  useOpenCodeStore.setState({
     clients: new Map(),
     sessions: new Map(),
     messageQueue: new Map(),
@@ -150,7 +135,6 @@ function resetStores() {
   stopTmuxSession.mockClear();
   deleteClaudeSession.mockClear();
   deleteCodexSession.mockClear();
-  deleteOpenCodeSession.mockClear();
   deleteAgentHandoff.mockClear();
   getAgentHandoff.mockClear();
   pruneAgentHandoffs.mockClear();
@@ -479,14 +463,6 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const openCodeKey = createSessionKey("env-native", "opencode-tab");
-    useOpenCodeStore.getState().setClient("env-native", {} as any);
-    useOpenCodeStore.getState().setSession(openCodeKey, {
-      sessionId: "opencode-session",
-      messages: [],
-      isLoading: true,
-    });
-
     usePaneLayoutStore.getState().removeTab("default", "claude-tab");
     usePaneLayoutStore.getState().removeTab("default", "codex-tab");
     usePaneLayoutStore.getState().removeTab("default", "opencode-tab");
@@ -503,15 +479,15 @@ describe("paneLayoutStore tab cleanup", () => {
       kind: "codex-native",
       sessionId: "codex-session",
     });
+    // OpenCode has no renderer session state; the backend resolves the provider
+    // session from its own persisted tab mapping.
     expect(teardownTab).toHaveBeenCalledWith({
       environmentId: "env-native",
       tabId: "opencode-tab",
       kind: "opencode-native",
-      sessionId: "opencode-session",
     });
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
-    expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
   });
 
   test("closing a Pi native tab delegates Pi cleanup to the backend", () => {
@@ -745,14 +721,6 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const openCodeKey = createSessionKey("env-cleanup-errors", "opencode-tab");
-    useOpenCodeStore.getState().setClient("env-cleanup-errors", {} as any);
-    useOpenCodeStore.getState().setSession(openCodeKey, {
-      sessionId: "opencode-cleanup-errors",
-      messages: [],
-      isLoading: true,
-    });
-
     teardownTab.mockRejectedValue(new Error("backend teardown unavailable"));
 
     const store = usePaneLayoutStore.getState();
@@ -765,7 +733,6 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
-    expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
     expect(consoleDebugSpy).toHaveBeenCalled();
   });
 
@@ -786,11 +753,6 @@ describe("paneLayoutStore tab cleanup", () => {
         type: "agent-native",
         nativeAgentData: { platform: "codex", environmentId: "env-leak" },
       },
-      {
-        id: "opencode-tab",
-        type: "agent-native",
-        nativeAgentData: { platform: "opencode", environmentId: "env-leak" },
-      },
     ];
     seedPaneTree(
       { kind: "leaf", id: "default", tabs, activeTabId: "claude-tab" },
@@ -800,14 +762,11 @@ describe("paneLayoutStore tab cleanup", () => {
 
     const claudeKey = createSessionKey("env-leak", "claude-tab");
     const codexKey = createSessionKey("env-leak", "codex-tab");
-    const openCodeKey = createSessionKey("env-leak", "opencode-tab");
 
     useClaudeStore.getState().setDraftText(claudeKey, "claude draft");
     useClaudeStore.getState().setSelectedModel(claudeKey, "opus");
     useCodexStore.getState().setDraftText(codexKey, "codex draft");
     useCodexStore.getState().setSelectedModel(codexKey, "gpt-5");
-    useOpenCodeStore.getState().setDraftText(openCodeKey, "opencode draft");
-    useOpenCodeStore.getState().setSelectedModel(openCodeKey, "gpt-5");
 
     const store = usePaneLayoutStore.getState();
     for (const tab of tabs) {
@@ -818,8 +777,6 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(useClaudeStore.getState().selectedModel.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().getDraftText(codexKey)).toBe("");
     expect(useCodexStore.getState().selectedModel.has(codexKey)).toBe(false);
-    expect(useOpenCodeStore.getState().getDraftText(openCodeKey)).toBe("");
-    expect(useOpenCodeStore.getState().selectedModel.has(openCodeKey)).toBe(false);
   });
 
   test("clears setup state and closes a child pane when its last tab is removed", () => {
@@ -1178,7 +1135,7 @@ describe("paneLayoutStore authoritative cleanup", () => {
     const seedNativeSession = (
       tabId: string,
       sessionId: string,
-      store: typeof useClaudeStore | typeof useCodexStore | typeof useOpenCodeStore,
+      store: typeof useClaudeStore | typeof useCodexStore,
     ) => {
       const sessionKey = createSessionKey(environmentId, tabId);
       store.getState().setClient(environmentId, {} as never);
@@ -1193,7 +1150,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
     };
     const claudeKey = seedNativeSession("removed-claude", "claude-session", useClaudeStore);
     const codexKey = seedNativeSession("removed-codex", "codex-session", useCodexStore);
-    const openCodeKey = seedNativeSession("removed-opencode", "opencode-session", useOpenCodeStore);
 
     const scopedTmuxKey = createClaudeTmuxStateKey(environmentId, "removed-tmux");
     const tmuxStore = useClaudeTmuxStore.getState();
@@ -1238,10 +1194,8 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(destroy).toHaveBeenCalledWith("removed-browser");
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
-    expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
     expect(useClaudeStore.getState().getDraftText(claudeKey)).toBe("");
     expect(useCodexStore.getState().getDraftText(codexKey)).toBe("");
-    expect(useOpenCodeStore.getState().getDraftText(openCodeKey)).toBe("");
     expect(useClaudeTmuxStore.getState().getTab(scopedTmuxKey).running).toBe(false);
     expect(useClaudeTmuxStore.getState().getDraftText(scopedTmuxKey)).toBe("");
     expect(useClaudeTmuxStore.getState().getTab("removed-tmux").running).toBe(false);
@@ -1257,7 +1211,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(stopTmuxSession).not.toHaveBeenCalled();
     expect(deleteClaudeSession).not.toHaveBeenCalled();
     expect(deleteCodexSession).not.toHaveBeenCalled();
-    expect(deleteOpenCodeSession).not.toHaveBeenCalled();
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
   });
 

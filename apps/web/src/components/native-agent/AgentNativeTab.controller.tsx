@@ -251,10 +251,9 @@ export function SharedNativeAgentController({
   );
   const configuredModel = configured.model;
   const configuredReasoning = configured.reasoningEffort;
-  const speedCatalog = useMemo(
-    () => buildReviewModelCatalog(data.environmentId),
-    [data.environmentId],
-  );
+  // Read once per tab, as before: a tab's environment never changes, and the
+  // catalog reads the provider stores through getState() without subscribing.
+  const speedCatalog = useMemo(() => buildReviewModelCatalog(), []);
   const speedCompatible = modelSupportsSpeed(
     platform,
     speedCatalog,

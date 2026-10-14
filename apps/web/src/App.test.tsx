@@ -8,7 +8,6 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -551,10 +550,6 @@ function resetStores({
     messageQueue: new Map(),
   });
 
-  useOpenCodeStore.setState({
-    sessions: new Map(),
-    messageQueue: new Map(),
-  });
   useLoopedReviewStore.setState({ workflows: new Map() });
 }
 
@@ -1368,7 +1363,6 @@ describe("App background processing mounts", () => {
         makeEnvironment("env-queued-claude", "project-2"),
         makeEnvironment("env-queued-tmux", "project-2"),
         makeEnvironment("env-queued-codex", "project-2"),
-        makeEnvironment("env-queued-opencode", "project-2"),
       ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
@@ -1377,7 +1371,6 @@ describe("App background processing mounts", () => {
     const claudeSessionKey = createSessionKey("env-queued-claude", "tab-1");
     const tmuxStateKey = createClaudeTmuxStateKey("env-queued-tmux", "tab-1");
     const codexSessionKey = createSessionKey("env-queued-codex", "tab-1");
-    const openCodeSessionKey = createSessionKey("env-queued-opencode", "tab-1");
     useClaudeStore.setState({
       messageQueue: new Map([
         [
@@ -1418,22 +1411,6 @@ describe("App background processing mounts", () => {
         ],
       ]),
     });
-    useOpenCodeStore.setState({
-      messageQueue: new Map([
-        [
-          openCodeSessionKey,
-          [
-            {
-              id: "queue-opencode",
-              text: "Run queued OpenCode work",
-              attachments: [],
-              model: "openai/gpt-5",
-              mode: "build",
-            },
-          ],
-        ],
-      ]),
-    });
 
     render(<App />);
 
@@ -1448,7 +1425,6 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("terminal-env-queued-claude") === null).toBe(true);
     expect(screen.queryByTestId("terminal-env-queued-tmux") === null).toBe(true);
     expect(screen.queryByTestId("terminal-env-queued-codex") === null).toBe(true);
-    expect(screen.queryByTestId("terminal-env-queued-opencode") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for loading native sessions", async () => {

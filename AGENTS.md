@@ -336,9 +336,8 @@ touching it:
 | `apps/web/src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
 | `apps/web/src/components/native-agent/AgentNativeTab.tsx` | Shared Native Mode chat   |
 | `apps/web/src/lib/codex-client.ts`                       | Codex bridge client wrapper |
-| `apps/web/src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
 | `apps/web/src/stores/codexStore.ts`                      | Codex state management      |
-| `apps/web/src/stores/openCodeStore.ts`                   | OpenCode state management   |
+| `apps/web/src/stores/nativeAgentProjectionStore.ts`      | Native agent projections (incl. OpenCode, driven by the backend's `opencode-provider.ts`) |
 | `apps/web/src/lib/native/backend.ts`                     | Native IPC command wrapper  |
 
 ### Claude bridge

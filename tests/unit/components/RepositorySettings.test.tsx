@@ -143,7 +143,6 @@ import { CODEX_MODELS } from "@/lib/codex-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
@@ -196,7 +195,6 @@ function resetStores(config = makeConfig()) {
     error: null,
   });
   useClaudeStore.setState({ models: [] });
-  useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useCodexStore.setState({ models: CODEX_MODELS });
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
 }

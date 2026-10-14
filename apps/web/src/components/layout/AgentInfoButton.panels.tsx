@@ -461,32 +461,6 @@ function RuntimeNoticeCard({
 }
 
 /**
- * Read the authoritative share state for an OpenCode session.
- *
- * The store's session record carries no share field, so the server's own
- * session document is the only snapshot that survives a tab switch or an app
- * restart. Probed structurally rather than against the SDK types so a partial
- * client (older server, test double) reports "not shared" instead of throwing.
- *
- * Follow-up for the lib owner: this belongs in `opencode-client.ts` as a typed
- * `getOpenCodeShareUrl(client, sessionId)`.
- */
-export async function readOpenCodeShareUrl(
-  client: unknown,
-  sessionId: string,
-): Promise<string | null> {
-  const sessions = record(client).session;
-  const get = record(sessions).get;
-  if (typeof get !== "function") return null;
-  const response = await (get as (parameters: { sessionID: string }) => Promise<unknown>).call(
-    sessions,
-    { sessionID: sessionId },
-  );
-  const url = record(record(record(response).data).share).url;
-  return typeof url === "string" && url.length > 0 ? url : null;
-}
-
-/**
  * Turn the opaque rewind dry-run payload into something a person can act on.
  *
  * `rewindClaudeFiles` returns `unknown` — it is whatever the installed Agent

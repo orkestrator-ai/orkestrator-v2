@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
-import type { Environment } from "@/types";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -119,7 +118,6 @@ const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useConfigStore } = await import("@/stores/configStore");
-const { useOpenCodeStore } = await import("@/stores/openCodeStore");
 const { useProjectStore } = await import("@/stores/projectStore");
 const { buildPipelineFixture } = await import("@/test/build-pipeline-fixture");
 const initialKanbanState = useKanbanStore.getState();
@@ -236,25 +234,6 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   } as KanbanTask;
 }
 
-function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
-  return {
-    id: "env-1",
-    projectId: "project-1",
-    name: "Environment 1",
-    branch: "feature/test",
-    containerId: "container-1",
-    status: "running",
-    prUrl: "https://github.com/org/repo/pull/1",
-    prState: "open",
-    hasMergeConflicts: false,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    networkAccessMode: "restricted",
-    order: 0,
-    environmentType: "containerized",
-    ...overrides,
-  };
-}
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((promiseResolve) => {
@@ -318,7 +297,6 @@ function resetStores() {
       },
     ],
   });
-  useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useBuildPipelineStore.setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
@@ -1699,24 +1677,12 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("never offers OpenCode models owned by another project", async () => {
-    useEnvironmentStore.setState({
-      environments: [makeEnvironment({ id: "env-other", projectId: "project-other" })],
-    });
-    useOpenCodeStore.setState({
-      models: new Map([
-        [
-          "env-other",
-          [
-            {
-              id: "openrouter/zeta",
-              name: "Zeta",
-              provider: "OpenRouter",
-              variants: [],
-            },
-          ],
-        ],
-      ]),
-      modelSource: new Map([["env-other", "server"]]),
+    getCachedOpenCodeModelCatalogMock.mockResolvedValueOnce({
+      schemaVersion: 2,
+      projectId: "project-other",
+      catalogVersion: "catalog-v1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      models: [{ id: "openrouter/zeta", name: "Zeta", provider: "OpenRouter", variants: [] }],
     });
 
     render(
@@ -1755,55 +1721,6 @@ describe("KanbanTaskDialog", () => {
     openLauncher();
     chooseLauncherPlatform("Build", "opencode");
     await waitFor(() => expect(launcherPicker("Build").textContent).toContain("Project Model"));
-  });
-
-  test("accepts live OpenCode catalog updates only from environments owned by the project", async () => {
-    useEnvironmentStore.setState({
-      environments: [
-        makeEnvironment({ id: "env-project", projectId: "project-1" }),
-        makeEnvironment({ id: "env-other", projectId: "project-other" }),
-      ],
-    });
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
-
-    openLauncher();
-    chooseLauncherPlatform("Build", "opencode");
-
-    await act(async () => {
-      useOpenCodeStore.setState({
-        models: new Map([
-          [
-            "env-project",
-            [
-              {
-                id: "openrouter/project-live",
-                name: "Project Live",
-                provider: "OpenRouter",
-                variants: [],
-              },
-            ],
-          ],
-          [
-            "env-other",
-            [
-              {
-                id: "openrouter/other-live",
-                name: "Other Live",
-                provider: "OpenRouter",
-                variants: [],
-              },
-            ],
-          ],
-        ]),
-        modelSource: new Map([
-          ["env-project", "server"],
-          ["env-other", "server"],
-        ]),
-      });
-    });
-
-    expect(launcherPicker("Build").textContent).toContain("Project Live");
-    expect(launcherPicker("Build").textContent).not.toContain("Other Live");
   });
 
   test("the launcher opens on the repository and project defaults", async () => {

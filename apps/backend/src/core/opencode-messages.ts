@@ -223,6 +223,55 @@ export function hydrateNormalizedOpenCodeSubagents(
   }));
 }
 
+/** `createdAt` of a message whose provider timestamp is missing or unusable. */
+export const OPEN_CODE_UNKNOWN_CREATED_AT = "1970-01-01T00:00:00.000Z";
+
+/**
+ * An OpenCode epoch (or date string) as ISO text, or undefined when it is not
+ * a usable date. Total: `new Date(x).toISOString()` throws a `RangeError` past
+ * the ECMA-262 time clip (±8.64e15 ms), and one such value must not fail a
+ * whole transcript read.
+ */
+export function openCodeIsoTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || value.length === 0)) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+function isOpenCodeReasoningInProgress(part: Record<string, unknown>): boolean {
+  const time = asRecord(part.time);
+  return typeof time?.start === "number" && time.end === undefined;
+}
+
+/**
+ * OpenCode wraps completed reasoning in one balanced outer bold pair. Remove
+ * that pair together — stripping a leading and a trailing `**` independently
+ * corrupts reasoning that merely starts or ends with bold Markdown
+ * (`**Plan** then inspect`). While a part is still streaming, its opening
+ * delimiter can arrive before the closing one.
+ */
+function stripOpenCodeReasoningBoldMarkers(
+  content: string,
+  allowStreamingOpeningMarker: boolean,
+): string {
+  if (!content.replace(/\*\*/g, "").trim()) return "";
+  const leadingMarker = content.match(/^(\s*)\*\*/);
+  if (!leadingMarker) return content;
+  const markerCount = content.match(/\*\*/g)?.length ?? 0;
+  const trailingMarker = content.match(/\*\*(\s*)$/);
+  if (trailingMarker && markerCount === 2) {
+    return `${leadingMarker[1]}${content.slice(
+      leadingMarker[0].length,
+      content.length - trailingMarker[0].length,
+    )}${trailingMarker[1]}`;
+  }
+  return allowStreamingOpeningMarker && markerCount === 1
+    ? `${leadingMarker[1]}${content.slice(leadingMarker[0].length)}`
+    : content;
+}
+
 export function normalizeOpenCodeInteractiveMessage(
   value: unknown,
   index: number,
@@ -248,13 +297,8 @@ export function normalizeOpenCodeInteractiveMessage(
       ? info.role
       : "assistant";
   const messageId = nonEmptyString(info.id) ?? `opencode-message-${index}`;
-  const rawCreatedAt = asRecord(info.time)?.created;
   const createdAt =
-    typeof rawCreatedAt === "number" && Number.isFinite(rawCreatedAt)
-      ? new Date(rawCreatedAt).toISOString()
-      : typeof rawCreatedAt === "string" && Number.isFinite(Date.parse(rawCreatedAt))
-        ? new Date(rawCreatedAt).toISOString()
-        : "1970-01-01T00:00:00.000Z";
+    openCodeIsoTimestamp(asRecord(info.time)?.created) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
   const parts: Record<string, unknown>[] = [];
   /**
    * Child sessions already represented by a first-class `subtask` part.
@@ -289,7 +333,10 @@ export function normalizeOpenCodeInteractiveMessage(
       continue;
     }
     if (part.type === "reasoning" && typeof part.text === "string") {
-      const reasoning = part.text.replace(/^\s*\*\*/, "").replace(/\*\*\s*$/, "");
+      const reasoning = stripOpenCodeReasoningBoldMarkers(
+        part.text,
+        isOpenCodeReasoningInProgress(part),
+      );
       if (reasoning.trim()) parts.push({ type: "thinking", content: reasoning, ...source });
       continue;
     }
@@ -519,11 +566,11 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
         }`
       : terminal.message;
   const time = asRecord(info.time);
-  const validDate = [time?.completed, time?.created]
-    .filter((candidate): candidate is number => typeof candidate === "number")
-    .map((candidate) => new Date(candidate))
-    .find((candidate) => Number.isFinite(candidate.getTime()));
-  const createdAt = validDate?.toISOString() ?? "1970-01-01T00:00:00.000Z";
+  const createdAt =
+    [time?.completed, time?.created]
+      .filter((candidate): candidate is number => typeof candidate === "number")
+      .map(openCodeIsoTimestamp)
+      .find((candidate) => candidate !== undefined) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
   return {
     id: `${OPEN_CODE_INLINE_ERROR_ID_PREFIX}${messageId}`,
     role: "assistant",

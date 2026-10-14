@@ -11,12 +11,11 @@ import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createClient } from "../apps/web/src/lib/opencode-client";
 
 /**
  * Marks the single stdout line that carries the result. Anything else in this
- * process may also write to stdout (Bun routes `console.debug` there, and
- * `opencode-client` has one), so the caller cannot parse the whole stream.
+ * process may also write to stdout (Bun routes `console.debug` there), so the
+ * caller cannot parse the whole stream.
  */
 export const RESULT_SENTINEL = "__OPENCODE_COMPAT_RESULT__";
 
@@ -109,8 +108,28 @@ const defaultRunCli: RunCli = async (command) => {
 const defaultSpawnServer: SpawnServer = (command, options) =>
   Bun.spawn(command, { ...options, stdout: "ignore", stderr: "ignore" });
 
+/** The slice of the SDK's v2 client factory this probe calls. */
+type CreateOpencodeClient = (config: { baseUrl: string; directory?: string }) => {
+  session: {
+    list(parameters: undefined, options: { signal: AbortSignal }): Promise<SessionListResult>;
+  };
+};
+
+/**
+ * Loads the SDK client from the web workspace that pins it, the same package
+ * `readInstalledSdkVersion` reports. The SDK is not hoisted to the repository
+ * root, so a bare import from `scripts/` would not resolve.
+ */
+async function loadPinnedSdkClientFactory(): Promise<CreateOpencodeClient> {
+  const webPackageRoot = join(import.meta.dir, "..", "apps", "web");
+  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", webPackageRoot);
+  const sdk = (await import(entry)) as { createOpencodeClient: CreateOpencodeClient };
+  return sdk.createOpencodeClient;
+}
+
 const defaultListSessions: ListSessions = async (baseUrl, directory, signal) => {
-  const client = createClient(baseUrl, directory);
+  const createOpencodeClient = await loadPinnedSdkClientFactory();
+  const client = createOpencodeClient({ baseUrl, directory });
   return await client.session.list(undefined, { signal });
 };
 

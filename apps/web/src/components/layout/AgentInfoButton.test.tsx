@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -35,14 +34,12 @@ import {
  * import those modules for real are unaffected once this file finishes.
  */
 import * as realClaudeClient from "@/lib/claude-client";
-import * as realOpenCodeClient from "@/lib/opencode-client";
 import * as realCodexClient from "@/lib/codex-client";
 import { createSessionKey } from "@/lib/utils";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
-const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 const realCodexClientSnapshot = { ...realCodexClient };
 
 const mockForkClaudeSession = mock<
@@ -79,34 +76,25 @@ const mockRewindClaudeFiles = mock<
 >(async () => ({ files: [] }));
 const mockStopClaudeBackgroundTask = mock(async () => true);
 
-const mockCompactOpenCodeSession = mock(async () => undefined);
-const mockForkOpenCodeSession = mock<
-  (_client: unknown, _sessionId: string) => Promise<{ id: string; title?: string }>
->(async () => ({ id: "opencode-fork", title: "OpenCode fork title" }));
-const mockGetOpenCodeSessionMessages = mock<
-  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
->(async () => [
-  {
-    id: "opencode-message-1",
-    role: "user" as const,
-    content: "continue from OpenCode",
-    parts: [{ type: "text" as const, content: "continue from OpenCode" }],
-    createdAt: "2026-07-27T10:00:00.000Z",
-  },
-]);
-const mockGetOpenCodeSessionStatus = mock<
-  (
-    _client: unknown,
-    _sessionId: string,
-    _options?: { throwOnError?: boolean },
-  ) => Promise<"idle" | "busy" | "retry" | null>
->(async () => "idle");
-const mockRevertOpenCodeSession = mock(async () => undefined);
-const mockUnrevertOpenCodeSession = mock(async () => undefined);
-const mockShareOpenCodeSession = mock<
-  (_client: unknown, _sessionId: string) => Promise<string | undefined>
->(async () => "https://share.opencode.test/abc");
-const mockUnshareOpenCodeSession = mock(async () => undefined);
+/*
+ * OpenCode has no renderer-side client: every control on an OpenCode tab goes
+ * through the backend's native-agent session actions and projection.
+ */
+const mockOpenCodeAction = mock<
+  (action: { kind: string; messageId?: string }) => Promise<{
+    outcome: "applied";
+    shareUrl?: string;
+  }>
+>(async () => ({ outcome: "applied" }));
+const mockForkOpenCodeSession = mock<() => Promise<{ sessionId: string; title?: string }>>(
+  async () => ({ sessionId: "opencode-fork", title: "OpenCode fork title" }),
+);
+/** By default the backend answers whatever projection the store holds. */
+const readStoredOpenCodeProjection = async () =>
+  useNativeAgentProjectionStore.getState().projections.get(OPENCODE_KEY) ?? null;
+const mockOpenCodeProjectionRead = mock<() => Promise<NativeAgentSessionProjection | null>>(
+  readStoredOpenCodeProjection,
+);
 
 const mockCompactCodexSession = mock(async () => true);
 // `forkCodexSession` throws a `CodexForkError` carrying the bridge's status and
@@ -155,18 +143,6 @@ mock.module("@/lib/claude-client", () => ({
   stopClaudeBackgroundTask: mockStopClaudeBackgroundTask,
 }));
 
-mock.module("@/lib/opencode-client", () => ({
-  ...realOpenCodeClientSnapshot,
-  compactOpenCodeSession: mockCompactOpenCodeSession,
-  forkOpenCodeSession: mockForkOpenCodeSession,
-  getSessionMessages: mockGetOpenCodeSessionMessages,
-  getSessionStatus: mockGetOpenCodeSessionStatus,
-  revertOpenCodeSession: mockRevertOpenCodeSession,
-  shareOpenCodeSession: mockShareOpenCodeSession,
-  unrevertOpenCodeSession: mockUnrevertOpenCodeSession,
-  unshareOpenCodeSession: mockUnshareOpenCodeSession,
-}));
-
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
   compactCodexSession: mockCompactCodexSession,
@@ -191,7 +167,6 @@ const {
 
 afterAll(() => {
   mock.module("@/lib/claude-client", () => realClaudeClientSnapshot);
-  mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
   mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
 });
 
@@ -204,10 +179,60 @@ const CLAUDE_CLIENT = { baseUrl: "http://127.0.0.1:1111" } as never;
 const CODEX_CLIENT = { baseUrl: "http://127.0.0.1:2222" } as never;
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
 
-let openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-  data: { id: "opencode-session-1" },
-}));
-let openCodeClient: unknown;
+function openCodeProjection(
+  sessionId = "opencode-session-1",
+  overrides: Partial<NativeAgentSessionProjection> = {},
+): NativeAgentSessionProjection {
+  return {
+    platform: "opencode",
+    environmentId: ENVIRONMENT_ID,
+    sessionId,
+    connection: "connected",
+    turn: { phase: "idle" },
+    messages: [
+      {
+        id: "m1",
+        role: "user",
+        content: "hi",
+        parts: [{ type: "text", content: "hi" }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      },
+    ],
+    interactions: [],
+    composerControls: [],
+    capabilities: nativeAgentCapabilities("opencode"),
+    revision: 1,
+    generation: "opencode-generation",
+    ...overrides,
+  };
+}
+
+/**
+ * Publishes an OpenCode projection and routes the backend commands an OpenCode
+ * tab issues. Projection reads answer whatever the store currently holds, so a
+ * test that swaps the session sees the panel's refresh agree with it.
+ */
+function seedOpenCodeProjection(
+  sessionId = "opencode-session-1",
+  overrides: Partial<NativeAgentSessionProjection> = {},
+) {
+  useNativeAgentProjectionStore
+    .getState()
+    .setProjection(OPENCODE_KEY, openCodeProjection(sessionId, overrides));
+  nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "perform_native_agent_session_action") {
+      return mockOpenCodeAction((args as { action: { kind: string; messageId?: string } }).action);
+    }
+    if (command === "fork_native_agent_session") return mockForkOpenCodeSession();
+    if (command === "get_native_agent_projection") return mockOpenCodeProjectionRead();
+    if (command === "get_cursor_account_usage") return new Promise(() => undefined);
+    return undefined;
+  });
+}
+
+function openCodeActionKinds(): string[] {
+  return mockOpenCodeAction.mock.calls.map(([action]) => action.kind);
+}
 
 function claudeTab(overrides: Partial<TabInfo> = {}): TabInfo {
   return {
@@ -449,25 +474,16 @@ beforeEach(() => {
     },
   });
 
-  openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-    data: { id: "opencode-session-1" },
-  }));
-  openCodeClient = { session: { get: openCodeSessionGet } };
-
   mockForkClaudeSession.mockClear();
   mockCompactClaudeSession.mockClear();
   mockGetClaudeSession.mockClear();
   mockGetClaudeSessionMessages.mockClear();
   mockRewindClaudeFiles.mockClear();
   mockStopClaudeBackgroundTask.mockClear();
-  mockCompactOpenCodeSession.mockClear();
+  mockOpenCodeAction.mockClear();
   mockForkOpenCodeSession.mockClear();
-  mockGetOpenCodeSessionMessages.mockClear();
-  mockGetOpenCodeSessionStatus.mockClear();
-  mockRevertOpenCodeSession.mockClear();
-  mockUnrevertOpenCodeSession.mockClear();
-  mockShareOpenCodeSession.mockClear();
-  mockUnshareOpenCodeSession.mockClear();
+  mockOpenCodeProjectionRead.mockClear();
+  mockOpenCodeProjectionRead.mockImplementation(readStoredOpenCodeProjection);
   mockCompactCodexSession.mockClear();
   mockForkCodexSession.mockClear();
   mockGetCodexSessionMessages.mockClear();
@@ -497,25 +513,15 @@ beforeEach(() => {
   ]);
   mockRewindClaudeFiles.mockImplementation(async () => ({ files: [] }));
   mockStopClaudeBackgroundTask.mockImplementation(async () => true);
-  mockCompactOpenCodeSession.mockImplementation(async () => undefined);
+  mockOpenCodeAction.mockImplementation(async (action) =>
+    action.kind === "share"
+      ? { outcome: "applied", shareUrl: "https://share.opencode.test/abc" }
+      : { outcome: "applied" },
+  );
   mockForkOpenCodeSession.mockImplementation(async () => ({
-    id: "opencode-fork",
+    sessionId: "opencode-fork",
     title: "OpenCode fork title",
   }));
-  mockGetOpenCodeSessionMessages.mockImplementation(async () => [
-    {
-      id: "opencode-message-1",
-      role: "user",
-      content: "continue from OpenCode",
-      parts: [{ type: "text", content: "continue from OpenCode" }],
-      createdAt: "2026-07-27T10:00:00.000Z",
-    },
-  ]);
-  mockGetOpenCodeSessionStatus.mockImplementation(async () => "idle");
-  mockRevertOpenCodeSession.mockImplementation(async () => undefined);
-  mockUnrevertOpenCodeSession.mockImplementation(async () => undefined);
-  mockShareOpenCodeSession.mockImplementation(async () => "https://share.opencode.test/abc");
-  mockUnshareOpenCodeSession.mockImplementation(async () => undefined);
   mockCompactCodexSession.mockImplementation(async () => true);
   mockForkCodexSession.mockImplementation(async () => ({
     sessionId: "codex-fork",
@@ -567,14 +573,6 @@ afterEach(() => {
     sessions: new Map(),
     contextUsage: new Map(),
     selectedModel: new Map(),
-  });
-  useOpenCodeStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    contextUsage: new Map(),
-    selectedModel: new Map(),
-    selectedAgent: new Map(),
-    runtimeHealth: new Map(),
   });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -801,11 +799,25 @@ describe("AgentInfoButton provider resolution", () => {
     expect(screen.getByText("No native agent")).toBeTruthy();
   });
 
-  test("labels an OpenCode session and reads its environment-scoped model", () => {
-    useOpenCodeStore.setState({
-      contextUsage: new Map([[OPENCODE_KEY, usage({ source: "opencode" })]]),
-      selectedModel: new Map([[ENVIRONMENT_ID, "anthropic/claude-sonnet"]]),
-    } as never);
+  test("labels an OpenCode session and reads its model from the projection", () => {
+    seedOpenCodeProjection("opencode-session-1", {
+      contextUsage: {
+        usedTokens: 25_000,
+        maximumTokens: 100_000,
+        percentage: 25,
+        source: "opencode",
+        estimated: false,
+      },
+      composer: {
+        models: [],
+        selectedModelId: "anthropic/claude-sonnet",
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        modes: [],
+        includeLocalSettings: false,
+        promptSuggestionsEnabled: false,
+      },
+    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
@@ -3549,44 +3561,6 @@ describe("AgentInfoButton Claude session options", () => {
     fireEvent.change(select, { target: { value: "" } });
     expect(useClaudeStore.getState().selectedAgent.get(CLAUDE_KEY)).toBeUndefined();
   });
-
-  test("offers only primary/all OpenCode agents and stores the choice", () => {
-    useOpenCodeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
-      sessions: new Map([
-        [OPENCODE_KEY, { sessionId: "opencode-session-1", messages: [], isLoading: false }],
-      ]),
-      runtimeHealth: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            agents: [
-              { name: "build", mode: "primary", modelId: "sonnet" },
-              { name: "helper", mode: "subagent" },
-              { name: "general", mode: "all" },
-            ],
-            skills: [],
-            mcpServers: [],
-            lspServers: [],
-            formatters: [],
-            fetchedAt: "2026-07-26T00:00:00.000Z",
-          },
-        ],
-      ]),
-    } as never);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "Provider default",
-      "build · sonnet",
-      "general",
-    ]);
-
-    fireEvent.change(select, { target: { value: "general" } });
-    expect(useOpenCodeStore.getState().selectedAgent.get(OPENCODE_KEY)).toBe("general");
-  });
 });
 
 describe("AgentInfoButton session actions", () => {
@@ -3600,19 +3574,7 @@ describe("AgentInfoButton session actions", () => {
   }
 
   function seedOpenCodeSession() {
-    useOpenCodeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
-      sessions: new Map([
-        [
-          OPENCODE_KEY,
-          {
-            sessionId: "opencode-session-1",
-            messages: [{ id: "m1", role: "user", content: "hi", parts: [], createdAt: "" }],
-            isLoading: false,
-          },
-        ],
-      ]),
-    } as never);
+    seedOpenCodeProjection();
   }
 
   function seedCodexSession(isLoading = false) {
@@ -3735,7 +3697,23 @@ describe("AgentInfoButton session actions", () => {
   });
 
   test("reads and revalidates an authoritative OpenCode handoff before opening Claude", async () => {
-    seedOpenCodeSession();
+    const projection = openCodeProjection();
+    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, projection);
+    const saved: Array<Record<string, unknown>> = [];
+    nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_native_agent_projection") return projection;
+      if (command === "save_agent_handoff") {
+        saved.push(args.snapshot as Record<string, unknown>);
+        return {
+          id: args.handoffId,
+          environmentId: args.environmentId,
+          version: args.version,
+          snapshot: args.snapshot,
+          createdAt: "2026-07-27T10:00:00.000Z",
+        };
+      }
+      return undefined;
+    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
@@ -3744,19 +3722,19 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
     );
-    expect(mockGetOpenCodeSessionStatus).toHaveBeenCalledTimes(3);
-    expect(mockGetOpenCodeSessionStatus).toHaveBeenNthCalledWith(
-      1,
-      openCodeClient,
-      "opencode-session-1",
-      { throwOnError: true },
-    );
-    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledWith(
-      openCodeClient,
-      "opencode-session-1",
-      { throwOnError: true },
-    );
-    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(2);
+    // Two consistency reads of the backend projection, apart from the panel's
+    // own usage refresh.
+    expect(
+      nativeInvokeMock.mock.calls.filter(
+        ([command, args]) =>
+          command === "get_native_agent_projection" &&
+          !(args as { refreshUsage?: boolean } | undefined)?.refreshUsage,
+      ),
+    ).toHaveLength(2);
+    expect(saved.at(-1)).toMatchObject({
+      sourceProvider: "opencode",
+      destinationProvider: "claude",
+    });
     const handoffTab = usePaneLayoutStore
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
@@ -3810,15 +3788,6 @@ describe("AgentInfoButton session actions", () => {
       },
     ],
     [
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("idle").mockResolvedValueOnce("busy");
-        return openCodeTab();
-      },
-    ],
-    [
       "Codex",
       "OpenCode",
       () => {
@@ -3858,15 +3827,6 @@ describe("AgentInfoButton session actions", () => {
       },
     ],
     [
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce(null);
-        return openCodeTab();
-      },
-    ],
-    [
       "Codex",
       "OpenCode",
       () => {
@@ -3884,7 +3844,6 @@ describe("AgentInfoButton session actions", () => {
         expect(mockToastError).toHaveBeenCalledWith(`${provider} session is unavailable`),
       );
       expect(mockGetClaudeSessionMessages).not.toHaveBeenCalled();
-      expect(mockGetOpenCodeSessionMessages).not.toHaveBeenCalled();
       expect(mockGetCodexSessionMessages).not.toHaveBeenCalled();
       expectNoHandoffCreated();
     },
@@ -3904,26 +3863,6 @@ describe("AgentInfoButton session actions", () => {
           lastActivity: "2026-07-27T10:01:00.000Z",
         });
         return claudeTab();
-      },
-    ],
-    [
-      "OpenCode busy",
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("busy");
-        return openCodeTab();
-      },
-    ],
-    [
-      "OpenCode retry",
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("retry");
-        return openCodeTab();
       },
     ],
     [
@@ -3947,7 +3886,6 @@ describe("AgentInfoButton session actions", () => {
         ),
       );
       expect(mockGetClaudeSessionMessages).not.toHaveBeenCalled();
-      expect(mockGetOpenCodeSessionMessages).not.toHaveBeenCalled();
       expect(mockGetCodexSessionMessages).not.toHaveBeenCalled();
       expectNoHandoffCreated();
     },
@@ -3971,15 +3909,6 @@ describe("AgentInfoButton session actions", () => {
       },
     ],
     [
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("idle").mockResolvedValueOnce(null);
-        return openCodeTab();
-      },
-    ],
-    [
       "Codex",
       "OpenCode",
       () => {
@@ -3998,41 +3927,6 @@ describe("AgentInfoButton session actions", () => {
       await waitFor(() =>
         expect(mockToastError).toHaveBeenCalledWith(`${provider} session is unavailable`),
       );
-      expectNoHandoffCreated();
-    },
-  );
-
-  test("treats OpenCode retry after the first message read as active work", async () => {
-    seedOpenCodeSession();
-    mockGetOpenCodeSessionStatus.mockResolvedValueOnce("idle").mockResolvedValueOnce("retry");
-    startHandoff(openCodeTab(), "Claude");
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "OpenCode started working while its conversation was being transferred",
-      ),
-    );
-    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(1);
-    expectNoHandoffCreated();
-  });
-
-  test.each([
-    [null, "OpenCode session is unavailable"],
-    ["busy", "OpenCode started working while its conversation was being transferred"],
-    ["retry", "OpenCode started working while its conversation was being transferred"],
-  ] as const)(
-    "rejects an OpenCode transfer when its final status is %p",
-    async (finalStatus, expectedError) => {
-      seedOpenCodeSession();
-      mockGetOpenCodeSessionStatus
-        .mockResolvedValueOnce("idle")
-        .mockResolvedValueOnce("idle")
-        .mockResolvedValueOnce(finalStatus);
-      startHandoff(openCodeTab(), "Claude");
-
-      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(expectedError));
-      expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(2);
-      expect(mockGetOpenCodeSessionStatus).toHaveBeenCalledTimes(3);
       expectNoHandoffCreated();
     },
   );
@@ -4086,40 +3980,6 @@ describe("AgentInfoButton session actions", () => {
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
     },
   );
-
-  test("rejects a fast OpenCode turn when two idle reads return different messages", async () => {
-    seedOpenCodeSession();
-    mockGetOpenCodeSessionMessages
-      .mockResolvedValueOnce([
-        {
-          id: "m1",
-          role: "user",
-          content: "before",
-          parts: [{ type: "text", content: "before" }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: "m1",
-          role: "user",
-          content: "after",
-          parts: [{ type: "text", content: "after" }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-      ]);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "OpenCode conversation changed while it was being transferred",
-      ),
-    );
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-  });
 
   test("rejects a Codex transfer that changed while no revision was reported", async () => {
     /*
@@ -4550,104 +4410,73 @@ describe("AgentInfoButton session actions", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
     await waitFor(() =>
-      expect(mockRevertOpenCodeSession).toHaveBeenCalledWith(
-        openCodeClient,
-        "opencode-session-1",
-        "m1",
-      ),
+      expect(mockOpenCodeAction).toHaveBeenCalledWith({ kind: "undo", messageId: "m1" }),
     );
+    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
 
     reopen();
     fireEvent.click(screen.getByRole("button", { name: /Redo turn/ }));
-    await waitFor(() =>
-      expect(mockUnrevertOpenCodeSession).toHaveBeenCalledWith(
-        openCodeClient,
-        "opencode-session-1",
-      ),
+    await waitFor(() => expect(mockOpenCodeAction).toHaveBeenCalledWith({ kind: "redo" }));
+    expect(nativeInvokeMock).toHaveBeenCalledWith(
+      "perform_native_agent_session_action",
+      expect.objectContaining({
+        environmentId: ENVIRONMENT_ID,
+        agent: "opencode",
+        logicalSessionKey: OPENCODE_KEY,
+      }),
     );
   });
 
   test("passes no message id when undoing without a user message", async () => {
-    seedOpenCodeSession();
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [
-          OPENCODE_KEY,
-          {
-            sessionId: "opencode-session-1",
-            messages: [
-              {
-                id: "a1",
-                role: "assistant",
-                content: "hello",
-                parts: [],
-                createdAt: "",
-              },
-            ],
-            isLoading: false,
-          },
-        ],
-      ]),
-    } as never);
+    seedOpenCodeProjection("opencode-session-1", {
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          content: "hello",
+          parts: [{ type: "text", content: "hello" }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        },
+      ],
+    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
     await waitFor(() =>
-      expect(mockRevertOpenCodeSession).toHaveBeenCalledWith(
-        openCodeClient,
-        "opencode-session-1",
-        undefined,
-      ),
+      expect(mockOpenCodeAction).toHaveBeenCalledWith({ kind: "undo", messageId: undefined }),
     );
     expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
   });
 
-  test("reports an OpenCode undo rejection and re-enables actions", async () => {
-    seedOpenCodeSession();
-    mockRevertOpenCodeSession.mockImplementation(async () => {
-      throw new Error("OpenCode undo endpoint unavailable");
-    });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
+  test.each([
+    ["undo", /Undo turn/, "OpenCode session reverted"],
+    ["redo", /Redo turn/, "OpenCode revert undone"],
+  ] as const)(
+    "reports an OpenCode %s rejection and re-enables actions",
+    async (kind, button, success) => {
+      seedOpenCodeSession();
+      mockOpenCodeAction.mockImplementation(async () => {
+        throw new Error(`OpenCode ${kind} endpoint unavailable`);
+      });
+      render(<AgentInfoButton activeTab={openCodeTab()} />);
+      open();
 
-    fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
+      fireEvent.click(screen.getByRole("button", { name: button }));
 
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("OpenCode undo endpoint unavailable"),
-    );
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode session reverted");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Undo turn/ }).hasAttribute("disabled")).toBe(
-        false,
-      ),
-    );
-  });
-
-  test("reports an OpenCode redo rejection and re-enables actions", async () => {
-    seedOpenCodeSession();
-    mockUnrevertOpenCodeSession.mockImplementation(async () => {
-      throw new Error("OpenCode redo endpoint unavailable");
-    });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    fireEvent.click(screen.getByRole("button", { name: /Redo turn/ }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("OpenCode redo endpoint unavailable"),
-    );
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode revert undone");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Redo turn/ }).hasAttribute("disabled")).toBe(
-        false,
-      ),
-    );
-  });
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(`OpenCode ${kind} endpoint unavailable`),
+      );
+      expect(mockToastSuccess).not.toHaveBeenCalledWith(success);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: button }).hasAttribute("disabled")).toBe(false),
+      );
+    },
+  );
 
   test("normalizes a non-Error OpenCode action rejection", async () => {
     seedOpenCodeSession();
-    mockRevertOpenCodeSession.mockImplementation(async () => {
+    mockOpenCodeAction.mockImplementation(async () => {
       throw "transport closed";
     });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
@@ -4657,6 +4486,26 @@ describe("AgentInfoButton session actions", () => {
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("undo failed"));
     expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode session reverted");
+  });
+
+  test("forks and compacts OpenCode through the backend session actions", async () => {
+    seedOpenCodeSession();
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenCalledWith("Context compaction started"),
+    );
+    expect(openCodeActionKinds()).toEqual(["compact"]);
+
+    reopen();
+    fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
+    await waitFor(() => expect(mockForkOpenCodeSession).toHaveBeenCalledTimes(1));
+    expect(nativeInvokeMock).toHaveBeenCalledWith("fork_native_agent_session", {
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: OPENCODE_KEY,
+    });
   });
 
   test("stops a running background task and reports a refusal", async () => {
@@ -4960,48 +4809,36 @@ describe("AgentInfoButton rewind confirmation", () => {
 
 describe("AgentInfoButton OpenCode sharing", () => {
   function seedShareableSession(sessionId = "opencode-session-1") {
-    useOpenCodeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
-      sessions: new Map([[OPENCODE_KEY, { sessionId, messages: [], isLoading: false }]]),
-    } as never);
+    seedOpenCodeProjection(sessionId);
   }
 
-  test("rehydrates sharing from the provider-neutral projection without a legacy client", () => {
-    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, {
-      platform: "opencode",
-      environmentId: ENVIRONMENT_ID,
-      sessionId: "opencode-session-1",
+  /** Holds the next share open until the test releases it with a URL. */
+  function deferShare(): (url: string) => void {
+    let release: (url: string) => void = () => {};
+    mockOpenCodeAction.mockImplementation((action) =>
+      action.kind === "share"
+        ? new Promise((resolve) => {
+            release = (url) => resolve({ outcome: "applied", shareUrl: url });
+          })
+        : Promise.resolve({ outcome: "applied" }),
+    );
+    return (url) => release(url);
+  }
+
+  async function shareAndWaitForRevocation() {
+    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+  }
+
+  test("rehydrates sharing from the provider-neutral projection", () => {
+    seedOpenCodeProjection("opencode-session-1", {
       shareUrl: "https://share.opencode.test/projected",
-      connection: "connected",
-      turn: { phase: "idle" },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: {
-        attachments: { files: true, images: true },
-        queue: true,
-        resume: true,
-        fork: true,
-        slashCommands: true,
-        backgroundTasks: false,
-        composer: {
-          provider: true,
-          model: true,
-          reasoning: true,
-          speed: false,
-          mode: true,
-        },
-        actions: { share: true },
-      },
-      revision: 1,
-      generation: "test",
     });
 
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
-    expect(openCodeSessionGet).not.toHaveBeenCalled();
   });
 
   test("copies the link and offers revocation", async () => {
@@ -5013,13 +4850,14 @@ describe("AgentInfoButton OpenCode sharing", () => {
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link copied"));
     expect(confirmMessages[0]).toContain("leave this machine");
+    expect(openCodeActionKinds()).toEqual(["share"]);
     expect(clipboardWrites).toEqual(["https://share.opencode.test/abc"]);
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
   });
 
   test("a clipboard rejection still leaves the session revocable and surfaces the URL", async () => {
     /*
-     * The conversation is public the moment `share()` resolves. The flag used
+     * The conversation is public the moment the share resolves. The flag used
      * to be set after the clipboard write, so a rejection (focus or permission)
      * produced an error toast beside a live link and no way to revoke it.
      */
@@ -5039,7 +4877,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
   test("a share with no returned URL is still revocable", async () => {
     seedShareableSession();
-    mockShareOpenCodeSession.mockImplementation(async () => undefined);
+    mockOpenCodeAction.mockImplementation(async () => ({ outcome: "applied" }));
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
@@ -5058,13 +4896,13 @@ describe("AgentInfoButton OpenCode sharing", () => {
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
     await waitFor(() => expect(confirmMessages).toHaveLength(1));
-    expect(mockShareOpenCodeSession).not.toHaveBeenCalled();
+    expect(openCodeActionKinds()).toEqual([]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a share failure reports and offers no revocation", async () => {
     seedShareableSession();
-    mockShareOpenCodeSession.mockImplementation(async () => {
+    mockOpenCodeAction.mockImplementation(async () => {
       throw new Error("OpenCode share endpoint unavailable");
     });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
@@ -5077,35 +4915,35 @@ describe("AgentInfoButton OpenCode sharing", () => {
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
-  test("rehydrates the shared state from the server when the panel opens", async () => {
+  test("rehydrates the shared state from the backend when the panel opens", async () => {
     /*
      * Component state is lost on every tab switch and app restart, but the link
-     * stays live — the server's session record is the authoritative snapshot.
+     * stays live — the backend projection is the authoritative snapshot.
      */
-    openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-      data: { id: "opencode-session-1", share: { url: "https://share.opencode.test/live" } },
-    }));
-    openCodeClient = { session: { get: openCodeSessionGet } };
     seedShareableSession();
+    mockOpenCodeProjectionRead.mockImplementation(async () =>
+      openCodeProjection("opencode-session-1", { shareUrl: "https://share.opencode.test/live" }),
+    );
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
-    expect(openCodeSessionGet).toHaveBeenCalledWith({ sessionID: "opencode-session-1" });
   });
 
-  test("a failed share lookup does not hide an already-known share", async () => {
+  test("a failed projection refresh does not hide an already-known share", async () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
 
-    openCodeSessionGet.mockImplementation(async () => {
+    mockOpenCodeProjectionRead.mockImplementation(async () => {
       throw new Error("server unreachable");
     });
+    const readsBefore = mockOpenCodeProjectionRead.mock.calls.length;
     reopen();
-    await waitFor(() => expect(openCodeSessionGet).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(mockOpenCodeProjectionRead.mock.calls.length).toBeGreaterThan(readsBefore),
+    );
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
   });
 
@@ -5113,63 +4951,42 @@ describe("AgentInfoButton OpenCode sharing", () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy(), {
-      timeout: 10_000,
-    });
+    await shareAndWaitForRevocation();
 
-    // A share can be revoked from another client. A successful provider read
-    // with no URL is authoritative and must remove the stale local action.
-    openCodeSessionGet.mockImplementation(async () => ({
-      data: { id: "opencode-session-1" },
-    }));
+    // A share can be revoked from another client. A projection that reports
+    // no share URL is authoritative and must remove the stale local action.
+    mockOpenCodeProjectionRead.mockImplementation(async () =>
+      openCodeProjection("opencode-session-1", { shareUrl: null }),
+    );
     reopen();
 
-    await waitFor(
-      () => expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true),
-      { timeout: 10_000 },
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true),
     );
-  }, 20_000);
-
-  test("a client without a session.get surface reports not shared rather than throwing", async () => {
-    openCodeClient = {};
-    seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-    await waitFor(() => expect(screen.getByText("Session actions")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("stop sharing revokes and hides the control", async () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
 
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
     );
-    expect(mockUnshareOpenCodeSession).toHaveBeenCalledWith(openCodeClient, "opencode-session-1");
+    expect(openCodeActionKinds()).toEqual(["share", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a failed unshare remains visible and can be retried", async () => {
-    openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-      data: {
-        id: "opencode-session-1",
-        share: { url: "https://share.opencode.test/live" },
-      },
-    }));
-    openCodeClient = { session: { get: openCodeSessionGet } };
     seedShareableSession();
-    mockUnshareOpenCodeSession.mockImplementation(async () => {
-      throw new Error("OpenCode unshare endpoint unavailable");
-    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
+    mockOpenCodeAction.mockImplementation(async () => {
+      throw new Error("OpenCode unshare endpoint unavailable");
+    });
 
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
 
@@ -5183,12 +5000,12 @@ describe("AgentInfoButton OpenCode sharing", () => {
       ),
     );
 
-    mockUnshareOpenCodeSession.mockImplementation(async () => undefined);
+    mockOpenCodeAction.mockImplementation(async () => ({ outcome: "applied" }));
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
     );
-    expect(mockUnshareOpenCodeSession).toHaveBeenCalledTimes(2);
+    expect(openCodeActionKinds()).toEqual(["share", "unshare", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
@@ -5196,8 +5013,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     seedShareableSession();
     const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
 
     rerender(<AgentInfoButton activeTab={openCodeTab({ id: "tab-9" })} />);
     reopen();
@@ -5206,19 +5022,11 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
   test("a delayed share cannot mark a resumed session as shared", async () => {
     seedShareableSession("opencode-session-a");
-    let releaseShare: (url: string) => void = () => {};
-    mockShareOpenCodeSession.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseShare = resolve;
-        }),
-    );
+    const releaseShare = deferShare();
     const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() =>
-      expect(mockShareOpenCodeSession).toHaveBeenCalledWith(openCodeClient, "opencode-session-a"),
-    );
+    await waitFor(() => expect(openCodeActionKinds()).toEqual(["share"]));
 
     act(() => {
       seedShareableSession("opencode-session-b");
@@ -5237,18 +5045,15 @@ describe("AgentInfoButton OpenCode sharing", () => {
   test("an old action finishing cannot clear the new session's busy latch", async () => {
     seedShareableSession("opencode-session-a");
     let releaseShare: (url: string) => void = () => {};
-    let releaseCompact: (value?: undefined) => void = () => {};
-    mockShareOpenCodeSession.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseShare = resolve;
-        }),
-    );
-    mockCompactOpenCodeSession.mockImplementation(
-      () =>
-        new Promise<undefined>((resolve) => {
-          releaseCompact = resolve;
-        }),
+    let releaseCompact: () => void = () => {};
+    mockOpenCodeAction.mockImplementation((action) =>
+      action.kind === "share"
+        ? new Promise((resolve) => {
+            releaseShare = (url) => resolve({ outcome: "applied", shareUrl: url });
+          })
+        : new Promise((resolve) => {
+            releaseCompact = () => resolve({ outcome: "applied" });
+          }),
     );
     const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
@@ -5555,90 +5360,6 @@ describe("AgentInfoButton runtime inventory", () => {
     expect(metricValue("MCP")).toBe("2");
     expect(metricValue("Plugins")).toBe("1");
     expect(metricValue("Commands")).toBe("3");
-  });
-
-  test("prefers the session-scoped OpenCode snapshot for todos and files", () => {
-    /*
-     * Every OpenCode tab writes runtime health under the environment key, so
-     * the environment entry can describe a sibling session. The session-keyed
-     * mirror is the one that belongs to the tab the user is looking at.
-     */
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [OPENCODE_KEY, { sessionId: "opencode-session-1", messages: [], isLoading: false }],
-      ]),
-      runtimeHealth: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            agents: [],
-            skills: [{ name: "s1" }],
-            mcpServers: [{ name: "m1", status: "connected" }],
-            lspServers: [],
-            formatters: [],
-            todos: [{ content: "sibling todo", status: "pending", priority: "high" }],
-            diffs: [
-              { file: "sibling.ts", additions: 1, deletions: 0 },
-              { file: "sibling2.ts", additions: 1, deletions: 0 },
-            ],
-            fetchedAt: "2026-07-26T00:00:00.000Z",
-          },
-        ],
-        [
-          OPENCODE_KEY,
-          {
-            agents: [],
-            skills: [],
-            mcpServers: [],
-            lspServers: [],
-            formatters: [],
-            todos: [
-              { content: "mine", status: "pending", priority: "high" },
-              { content: "mine too", status: "pending", priority: "low" },
-              { content: "third", status: "completed", priority: "low" },
-            ],
-            diffs: [{ file: "mine.ts", additions: 3, deletions: 1 }],
-            fetchedAt: "2026-07-26T01:00:00.000Z",
-          },
-        ],
-      ]),
-    } as never);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    // Environment-wide inventory still comes from the environment entry.
-    expect(metricValue("MCP")).toBe("1");
-    expect(metricValue("Skills")).toBe("1");
-    expect(metricValue("LSP")).toBe("0");
-    expect(metricValue("Todos")).toBe("3");
-    expect(metricValue("Files")).toBe("1");
-  });
-
-  test("falls back to the environment snapshot before the first session-scoped write", () => {
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [OPENCODE_KEY, { sessionId: "opencode-session-1", messages: [], isLoading: false }],
-      ]),
-      runtimeHealth: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            agents: [],
-            skills: [],
-            mcpServers: [],
-            lspServers: [],
-            formatters: [],
-            todos: [{ content: "only", status: "pending", priority: "high" }],
-            diffs: [],
-            fetchedAt: "2026-07-26T00:00:00.000Z",
-          },
-        ],
-      ]),
-    } as never);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    expect(metricValue("Todos")).toBe("1");
   });
 });
 

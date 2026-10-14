@@ -13,7 +13,6 @@ import { invoke } from "@/lib/native/backend";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePromptQueueDispatchRecovery } from "./usePromptQueueDispatchRecovery";
 
 /**
@@ -25,7 +24,7 @@ import { usePromptQueueDispatchRecovery } from "./usePromptQueueDispatchRecovery
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
-const stores = [useClaudeStore, useCodexStore, useOpenCodeStore, useClaudeTmuxStore];
+const stores = [useClaudeStore, useCodexStore, useClaudeTmuxStore];
 
 let renderCount = 0;
 let revision = 0;
@@ -161,10 +160,10 @@ describe("usePromptQueueDispatchRecovery", () => {
   });
 
   test("retry stays stable per queue and does not touch another agent", async () => {
-    render(<Probe agent="opencode" sessionKey="env-abc123:tab-9" />);
+    render(<Probe agent="claude" sessionKey="env-abc123:tab-9" />);
     const retry = latest?.retry;
 
-    await publish("opencode", "env-abc123:tab-9", error("OpenCode refused."));
+    await publish("claude", "env-abc123:tab-9", error("Claude refused."));
     expect(latest?.retry).toBe(retry);
 
     await act(async () => {
@@ -175,7 +174,7 @@ describe("usePromptQueueDispatchRecovery", () => {
       [
         "retry_prompt_queue_dispatch",
         {
-          queueKey: promptQueueKey("opencode", "env-abc123:tab-9"),
+          queueKey: promptQueueKey("claude", "env-abc123:tab-9"),
         },
       ],
     ]);

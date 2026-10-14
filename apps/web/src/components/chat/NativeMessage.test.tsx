@@ -16,10 +16,9 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
-import { ERROR_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
-import { createPeerMailNativeMessage } from "@/lib/chat/client-only-messages";
+import { createPeerMailNativeMessage, ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { buildDesignAgentPrompt } from "@/components/design/design-launch";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";

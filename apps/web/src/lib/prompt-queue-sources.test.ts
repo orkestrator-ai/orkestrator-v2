@@ -3,7 +3,6 @@ import * as realBackend from "@/lib/backend";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { PersistedPromptQueue } from "@/types";
 import { isPromptQueueActionError } from "@/lib/prompt-queue-errors";
 
@@ -58,7 +57,6 @@ const { persistComposeDraft } = await import("@/lib/compose-draft-persistence");
 const stores = {
   claude: useClaudeStore,
   codex: useCodexStore,
-  opencode: useOpenCodeStore,
   "claude-tmux": useClaudeTmuxStore,
 } as const;
 
@@ -127,7 +125,7 @@ afterAll(() => {
 describe("createPromptQueueSources", () => {
   test("exposes one uniquely namespaced source per agent", () => {
     const agents = createPromptQueueSources().map((source) => source.agent);
-    expect(agents.sort()).toEqual(["claude", "claude-tmux", "codex", "opencode"]);
+    expect(agents.sort()).toEqual(["claude", "claude-tmux", "codex"]);
     expect(new Set(agents).size).toBe(agents.length);
   });
 
@@ -179,7 +177,7 @@ describe("store adapters", () => {
 
 describe("environmentIdFor", () => {
   test("recovers the environment from the shared native session key", () => {
-    for (const agent of ["claude", "codex", "opencode"]) {
+    for (const agent of ["claude", "codex"]) {
       const source = createPromptQueueSources().find((entry) => entry.agent === agent)!;
       expect(source.environmentIdFor("env-abc123:tab-1")).toBe("abc123");
     }

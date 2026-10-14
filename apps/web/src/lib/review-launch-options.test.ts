@@ -7,22 +7,19 @@ import {
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 const originalClaudeModels = useClaudeStore.getState().models;
 const originalCodexModels = useCodexStore.getState().models;
-const originalOpenCodeModels = useOpenCodeStore.getState().models;
 
 afterEach(() => {
   useClaudeStore.setState({ models: originalClaudeModels });
   useCodexStore.setState({ models: originalCodexModels });
-  useOpenCodeStore.setState({ models: originalOpenCodeModels });
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
 });
 
 describe("buildReviewModelCatalog", () => {
-  test("maps live models, variants, and effort metadata for every agent", () => {
+  test("maps live models and effort metadata, with the unpinned OpenCode placeholder", () => {
     useClaudeStore.setState({
       models: [
         {
@@ -44,16 +41,8 @@ describe("buildReviewModelCatalog", () => {
         } as any,
       ],
     });
-    useOpenCodeStore.getState().setModels("env-live", [
-      {
-        id: "provider/model-live",
-        name: "OpenCode Live",
-        provider: "Provider",
-        variants: ["fast", "deep"],
-      } as any,
-    ]);
 
-    expect(buildReviewModelCatalog("env-live")).toEqual({
+    expect(buildReviewModelCatalog()).toEqual({
       claude: [
         {
           id: "claude-live",
@@ -75,15 +64,9 @@ describe("buildReviewModelCatalog", () => {
       cursor: [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
       grok: [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
       pi: [{ id: "default", name: "Pi default", reasoningEfforts: [] }],
-      opencode: [
-        {
-          id: "provider/model-live",
-          name: "OpenCode Live",
-          providerLabel: "Provider",
-          description: "Provider",
-          reasoningEfforts: ["fast", "deep"],
-        },
-      ],
+      // Concrete OpenCode models come from the durable project cache, which
+      // project-aware launchers overlay on this placeholder.
+      opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
     });
   });
 
@@ -115,7 +98,7 @@ describe("buildReviewModelCatalog", () => {
       ] as any,
     });
 
-    expect(buildReviewModelCatalog(undefined).claude).toEqual([
+    expect(buildReviewModelCatalog().claude).toEqual([
       expect.objectContaining({
         id: "supports-effort-without-levels",
         reasoningEfforts: ["low", "medium", "high"],
@@ -143,7 +126,7 @@ describe("buildReviewModelCatalog", () => {
       ] as any,
     });
 
-    const [defaultAllow, explicitDeny] = buildReviewModelCatalog(null).claude;
+    const [defaultAllow, explicitDeny] = buildReviewModelCatalog().claude;
     expect(defaultAllow?.supportsSpeed).toBe(true);
     expect(explicitDeny?.supportsSpeed).toBeUndefined();
   });
@@ -177,7 +160,7 @@ describe("buildReviewModelCatalog", () => {
       },
     ]);
 
-    const catalog = buildReviewModelCatalog(null);
+    const catalog = buildReviewModelCatalog();
     expect(catalog.cursor).toEqual([
       {
         id: "composer-2.5",
@@ -217,7 +200,7 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog(undefined).claude).toEqual([
+    expect(buildReviewModelCatalog().claude).toEqual([
       expect.objectContaining({
         id: "sonnet",
         resolvedModel: "claude-sonnet-resolved",
@@ -235,7 +218,7 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog(undefined).codex).toEqual([
+    expect(buildReviewModelCatalog().codex).toEqual([
       expect.objectContaining({
         id: "codex-without-efforts",
         reasoningEfforts: ["medium", "high"],
@@ -245,9 +228,8 @@ describe("buildReviewModelCatalog", () => {
 
   test("uses safe fallbacks and does not expose stale configured models", () => {
     useClaudeStore.setState({ models: [] });
-    useOpenCodeStore.setState({ models: new Map() });
 
-    const catalog = buildReviewModelCatalog(undefined);
+    const catalog = buildReviewModelCatalog();
 
     expect(catalog.claude.length).toBeGreaterThan(0);
     expect(catalog.claude).toEqual(
@@ -272,117 +254,6 @@ describe("buildReviewModelCatalog", () => {
         .flat()
         .map((model) => model.id),
     ).not.toContain("removed-provider/model");
-  });
-
-  test("keeps the environment-scoped catalog isolated from other environments", () => {
-    // Only the no-environment (create-dialog) call aggregates. A review launched
-    // inside an environment must never be offered a model that environment's own
-    // OpenCode server does not serve.
-    useOpenCodeStore.setState({ models: new Map() });
-    useOpenCodeStore
-      .getState()
-      .setModels("env-a", [
-        { id: "provider/only-a", name: "Only A", provider: "Provider A", variants: [] } as any,
-      ]);
-    useOpenCodeStore
-      .getState()
-      .setModels("env-b", [
-        { id: "provider/only-b", name: "Only B", provider: "Provider B", variants: [] } as any,
-      ]);
-
-    expect(buildReviewModelCatalog("env-a").opencode.map((model) => model.id)).toEqual([
-      "provider/only-a",
-    ]);
-    expect(buildReviewModelCatalog("env-b").opencode.map((model) => model.id)).toEqual([
-      "provider/only-b",
-    ]);
-    // An environment with no cached catalog still falls back to the placeholder
-    // rather than borrowing a sibling's models.
-    expect(buildReviewModelCatalog("env-unknown").opencode).toEqual([
-      { id: "default", name: "Default", reasoningEfforts: [] },
-    ]);
-  });
-
-  test("can explicitly suppress OpenCode aggregation for project-scoped callers", () => {
-    useOpenCodeStore.setState({ models: new Map() });
-    useOpenCodeStore.getState().setModels("env-other-project", [
-      {
-        id: "provider/other-project",
-        name: "Other Project",
-        provider: "Provider",
-        variants: [],
-      } as any,
-    ]);
-
-    expect(buildReviewModelCatalog(null).opencode).toEqual([
-      { id: "default", name: "Default", reasoningEfforts: [] },
-    ]);
-  });
-
-  test("falls back to the placeholder when every cached catalog is empty", () => {
-    useOpenCodeStore.setState({ models: new Map() });
-    useOpenCodeStore.getState().setModels("env-a", []);
-    useOpenCodeStore.getState().setModels("env-b", []);
-
-    expect(buildReviewModelCatalog(undefined).opencode).toEqual([
-      { id: "default", name: "Default", reasoningEfforts: [] },
-    ]);
-  });
-
-  test("aggregates and deduplicates cached OpenCode catalogs before an environment exists", () => {
-    useOpenCodeStore.setState({ models: new Map() });
-    useOpenCodeStore.getState().setModels("env-a", [
-      {
-        id: "provider/shared",
-        name: "Shared",
-        provider: "Provider A",
-        variants: ["fast"],
-      } as any,
-      {
-        id: "provider/only-a",
-        name: "Only A",
-        provider: "Provider A",
-        variants: [],
-      } as any,
-    ]);
-    useOpenCodeStore.getState().setModels("env-b", [
-      {
-        id: "provider/shared",
-        name: "Duplicate Shared",
-        provider: "Provider B",
-        variants: ["deep"],
-      } as any,
-      {
-        id: "provider/only-b",
-        name: "Only B",
-        provider: "Provider B",
-        variants: ["deep"],
-      } as any,
-    ]);
-
-    expect(buildReviewModelCatalog(undefined).opencode).toEqual([
-      {
-        id: "provider/shared",
-        name: "Shared",
-        providerLabel: "Provider A",
-        description: "Provider A",
-        reasoningEfforts: ["fast"],
-      },
-      {
-        id: "provider/only-a",
-        name: "Only A",
-        providerLabel: "Provider A",
-        description: "Provider A",
-        reasoningEfforts: [],
-      },
-      {
-        id: "provider/only-b",
-        name: "Only B",
-        providerLabel: "Provider B",
-        description: "Provider B",
-        reasoningEfforts: ["deep"],
-      },
-    ]);
   });
 });
 

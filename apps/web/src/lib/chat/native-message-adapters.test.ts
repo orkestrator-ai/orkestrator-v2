@@ -21,7 +21,6 @@ import {
   normalizeCodexNativeMessage,
   normalizeNativeMessage,
   normalizeNativeMessages,
-  normalizeOpenCodeNativeMessage,
   parseNativeAttachmentsFromContent,
   rowlessBackgroundTaskMessages,
   splitClaudeAssistantTextBlocks,
@@ -1687,7 +1686,7 @@ describe("native message adapters", () => {
     };
 
     expect(normalizeCodexNativeMessage(message).modelId).toBe("provider/model");
-    expect(normalizeOpenCodeNativeMessage(message).modelId).toBe("provider/model");
+    expect(normalizeNativeMessage(message).modelId).toBe("provider/model");
   });
 
   test("propagates Claude model attribution to every timestamp-split row", () => {
@@ -1738,7 +1737,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeOpenCodeNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text"]);
     expect(normalized.parts[1]?.type).toBe("tool-group");
@@ -1760,7 +1759,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeOpenCodeNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["tool-group", "text"]);
     expect(normalized.parts[0]?.type).toBe("tool-group");
@@ -1798,9 +1797,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    expect(normalizeOpenCodeNativeMessage(message).parts.map((part) => part.type)).toEqual([
-      "text",
-    ]);
+    expect(normalizeNativeMessage(message).parts.map((part) => part.type)).toEqual(["text"]);
   });
 
   test("drops empty Claude reasoning parts during normalization", () => {
@@ -1833,7 +1830,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeOpenCodeNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["tool-group", "text"]);
     expect(normalized.parts[0]?.type).toBe("tool-group");
@@ -3428,7 +3425,7 @@ describe("normalization identity cache", () => {
 
     const first = normalizeCodexNativeMessage(message);
     const second = normalizeCodexNativeMessage(message);
-    const third = normalizeOpenCodeNativeMessage(message);
+    const third = normalizeNativeMessage(message);
 
     expect(second).toBe(first);
     // Codex and OpenCode share the provider-neutral normalizer, so the cache

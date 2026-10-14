@@ -15,7 +15,15 @@
  *
  * The inspection works on raw `session.messages()` SDK payloads
  * (`{ info, parts }`), the same authoritative transcript OpenCode persists.
+ *
+ * The scheduling, manual-prompt claims, and durable dispatch are shared and
+ * live in `native-agent-turn-recovery.ts`; this module supplies OpenCode's
+ * {@link openCodeIncompleteTurnRecoveryStrategy}.
  */
+import type {
+  IncompleteTurnRecovery,
+  IncompleteTurnRecoveryStrategy,
+} from "./native-agent-turn-recovery.js";
 
 /**
  * Continuation prompt for turns that ended with `unknown` and no final text.
@@ -58,21 +66,17 @@ const AUTOMATIC_CONTINUATIONS = new Set<string>([
   OPENCODE_PROVIDER_ERROR_CONTINUATION,
 ]);
 
-export interface OpenCodeIncompleteTurnRecovery {
-  action: "continue" | "exhausted";
-  /** Which failure shape was detected; selects the continuation prompt. */
-  reason: "incomplete" | "provider-error";
-  /** Earliest epoch ms a provider-error retry may be dispatched (backoff). */
-  notBefore?: number;
-  /** Stalled assistant message id; keys the durable dispatch request id. */
-  assistantMessageId: string;
-  /** `providerID/modelID` of the stalled turn, when the transcript reports it. */
-  modelId?: string;
-  /** Execution agent of the stalled turn (`build`, `plan`, …). */
-  agent?: string;
-  /** Model variant/reasoning profile used by the stalled turn. */
-  variant?: string;
-}
+/**
+ * Messages read per inspection. A full page means the history may be clipped,
+ * so the retry budget cannot be proven from it.
+ */
+export const OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT = 64;
+
+/**
+ * The generic recovery shape; `reason` selects the continuation prompt and
+ * `modelId` is `providerID/modelID` when the transcript reports it.
+ */
+export type OpenCodeIncompleteTurnRecovery = IncompleteTurnRecovery;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -328,3 +332,11 @@ export function openCodeTurnRecoveryPrompt(recovery: OpenCodeIncompleteTurnRecov
 export function openCodeIncompleteTurnRequestId(assistantMessageId: string): string {
   return `opencode-incomplete-${assistantMessageId}`;
 }
+
+/** OpenCode's incomplete-turn recovery, registered in `native-agent-platform-policy.ts`. */
+export const openCodeIncompleteTurnRecoveryStrategy: IncompleteTurnRecoveryStrategy = {
+  historyLimit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+  inspect: (messages, options) => inspectOpenCodeIncompleteTurn(messages, options),
+  continuationPrompt: openCodeTurnRecoveryPrompt,
+  requestId: (recovery) => openCodeIncompleteTurnRequestId(recovery.assistantMessageId),
+};

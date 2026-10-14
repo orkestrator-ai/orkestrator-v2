@@ -17,6 +17,7 @@ import {
   StorageService,
 } from "./storage.js";
 import { createNativeAgentDisplayTail } from "./native-agent-display-tails.js";
+import { sessionIncompleteTurnNotice } from "./models.js";
 
 async function withStorage(
   run: (first: StorageService, second: StorageService) => Promise<void>,
@@ -1208,7 +1209,7 @@ describe("StorageService native agent sessions", () => {
       const skipped = await first.dispatchNativeAgentPromptOnce(
         input.key,
         "recovery-1",
-        async () => ({ dispatched: false, openCodeIncompleteTurnNotice: notice }),
+        async () => ({ dispatched: false, incompleteTurnNotice: notice }),
       );
       expect(skipped.dispatched).toBe(false);
       expect(skipped.session.dispatchedRequestIds).toBeUndefined();
@@ -1222,6 +1223,37 @@ describe("StorageService native agent sessions", () => {
       expect(accepted.dispatched).toBe(true);
       expect(accepted.session.openCodeIncompleteTurnNotice).toBeUndefined();
       expect(accepted.session.dispatchedRequestIds).toEqual(["manual-1"]);
+    });
+  });
+
+  test("keeps recovery notices under their original persisted field name", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const notice = {
+        kind: "failed" as const,
+        assistantMessageId: "assistant-1",
+        updatedAt: "2026-08-10T10:00:00.000Z",
+      };
+      expect(await first.setIncompleteTurnNotice(input.key, "provider-session", notice)).toBe(true);
+
+      // Older versions read and wrote this exact field; a rename would drop
+      // notices from existing session files and hide them from older builds.
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toMatchObject({
+        openCodeIncompleteTurnNotice: notice,
+      });
+      const restarted = new StorageService(first.getDataDir());
+      await restarted.init();
+      const session = await restarted.getNativeAgentSession(input.key);
+      expect(session?.openCodeIncompleteTurnNotice).toEqual(notice);
+      expect(session && sessionIncompleteTurnNotice(session)).toEqual(notice);
+
+      expect(await restarted.setIncompleteTurnNotice(input.key, "provider-session", null)).toBe(
+        true,
+      );
+      expect(
+        (await restarted.getNativeAgentSession(input.key))?.openCodeIncompleteTurnNotice,
+      ).toBeUndefined();
     });
   });
 

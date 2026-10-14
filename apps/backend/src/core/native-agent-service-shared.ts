@@ -71,7 +71,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,
@@ -104,12 +104,6 @@ import {
   stagePromptImages,
   type PromptAttachment,
 } from "./prompt-attachments.js";
-import {
-  inspectOpenCodeIncompleteTurn,
-  openCodeIncompleteTurnRequestId,
-  openCodeTurnRecoveryPrompt,
-  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-} from "./opencode-turn-recovery.js";
 
 export const PROVIDER_REPORTED_INTERACTION_GRACE_MS = 60_000;
 
@@ -492,8 +486,6 @@ export const ACP_SESSION_CREATE_RETRY_BASE_MS = 250;
 export const ACTIVITY_STATUS_CONCURRENCY = 8;
 export const ACTIVITY_RETRY_BASE_MS = 2_000;
 export const ACTIVITY_RETRY_CEILING_MS = 60_000;
-export const OPENCODE_RECOVERY_RETRY_BASE_MS = 2_000;
-export const OPENCODE_RECOVERY_RETRY_CEILING_MS = 60_000;
 /**
  * Shown when a new prompt collides with a dispatch that is still parked.
  *
@@ -517,9 +509,6 @@ export const PARKED_DISPATCH_CONFLICT_MESSAGE =
  */
 export const PARKED_DISPATCH_RECONCILE_GRACE_MS = 15_000;
 
-export const OPENCODE_RECOVERY_MAX_CANDIDATES = 1_024;
-export const OPENCODE_MANUAL_PROMPT_CLAIM_MS = 2 * 60_000;
-export const OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT = 64;
 /** How long "no bridge is running" is trusted before it is re-probed. */
 export const ABSENT_BRIDGE_RECHECK_MS = 15_000;
 /**
@@ -813,14 +802,8 @@ export function nativeAgentSessionStorageKey(
     .digest("hex");
 }
 
-export type OpenCodeRecoveryCandidate = {
-  providerSessionId: string;
-  attempts: number;
-  retryAt: number;
-};
-
 export type PromptDispatchPreparation =
-  | { dispatch: false; notice?: OpenCodeIncompleteTurnNotice }
+  | { dispatch: false; notice?: IncompleteTurnNotice }
   | {
       dispatch: true;
       /** Prompt replacement assembled while the durable dispatch lock is held. */
@@ -867,10 +850,6 @@ export {
   assertValidPromptAttachments,
   INITIAL_PROMPT_STAGING_DIRECTORY,
   stagePromptImages,
-  inspectOpenCodeIncompleteTurn,
-  openCodeIncompleteTurnRequestId,
-  openCodeTurnRecoveryPrompt,
-  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
 };
 
 export type {
@@ -908,7 +887,7 @@ export type {
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,

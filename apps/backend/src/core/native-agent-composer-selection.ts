@@ -33,10 +33,11 @@ export function lastAssistantModelRef(messages: readonly unknown[]): {
 }
 
 /**
- * Persist only evidence of what this session used or what OpenCode stored —
- * never the catalog default, which is how Nemotron overwrote DeepSeek.
+ * Persist only evidence of what this session used or what the runtime stored
+ * (OpenCode's session model) — never the catalog default, which is how
+ * Nemotron overwrote DeepSeek.
  */
-export function openCodeComposerSelectionToPersist(input: {
+export function inferredComposerSelectionToPersist(input: {
   sessionControlsModelId?: string;
   lastAssistantModelId?: string;
   lastAssistantReasoningId?: string;

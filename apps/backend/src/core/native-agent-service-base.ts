@@ -30,6 +30,7 @@ import {
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeAgentObservationBroker } from "./native-agent-observation.js";
+import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
 import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
@@ -57,7 +58,7 @@ type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
-type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
+type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
@@ -79,7 +80,6 @@ type NativeAgentHistoryState = shared.NativeAgentHistoryState;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
-type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
@@ -107,7 +107,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   StorageService,
@@ -127,7 +127,6 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentActivityTransition,
   NativeAgentServiceOptions,
   AgentInteractionObservation,
-  OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
 
@@ -339,10 +338,11 @@ export abstract class NativeAgentServiceBase {
   >();
   protected readonly disposedProviders = new WeakSet<NativeAgentRuntimeProvider>();
   protected unsubscribeObservationWakeups: (() => void) | null = null;
-  /** In-flight incomplete-turn recoveries, coalesced per durable session. */
-  protected readonly openCodeRecoveryTasks = new Map<string, Promise<void>>();
-  /** Idle transcript candidates retained across transient recovery failures. */
-  protected readonly openCodeRecoveryCandidates = new Map<string, OpenCodeRecoveryCandidate>();
+  /**
+   * Automatic continuation of incomplete turns, for platforms with a recovery
+   * strategy, and the manual-prompt claims that keep it from racing the user.
+   */
+  protected readonly turnRecovery: NativeAgentTurnRecovery;
 
   protected abstract trackScan(task: Promise<void>): Promise<void>;
   /** Resolves with how many environments still carry a launch intent. */
@@ -380,18 +380,6 @@ export abstract class NativeAgentServiceBase {
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome>;
-  abstract claimOpenCodeManualPrompt(input: {
-    environmentId: string;
-    logicalSessionKey: string;
-    providerSessionId: string;
-    requestId: string;
-  }): Promise<void>;
-  abstract releaseOpenCodeManualPrompt(input: {
-    environmentId: string;
-    logicalSessionKey: string;
-    providerSessionId: string;
-    requestId: string;
-  }): void;
   protected abstract dispatchPromptInternal(
     input: DispatchNativeAgentPromptInput,
     prepare?: (
@@ -428,13 +416,6 @@ export abstract class NativeAgentServiceBase {
     message: unknown,
   ): boolean | undefined;
   protected abstract queueBoolean(message: unknown, field: string): boolean | undefined;
-  /** Short-lived manual-send claims prevent stale automatic continuations. */
-  protected readonly openCodeManualPromptClaims = new Map<
-    string,
-    { providerSessionId: string; requestId: string; expiresAt: number }
-  >();
-  /** Final no-await handoff from recovery validation into provider dispatch. */
-  protected readonly openCodeRecoveryDispatches = new Set<string>();
   /**
    * Parked dispatches currently being settled against their provider, keyed by
    * session and request id. Projection reads are frequent and the settle is a
@@ -509,6 +490,15 @@ export abstract class NativeAgentServiceBase {
   ) {
     this.interactionMonitorAdoptionEnabled = options.interactionMonitorAdoptionEnabled !== false;
     this.observations = new NativeAgentObservationBroker(() => this.now());
+    this.turnRecovery = new NativeAgentTurnRecovery({
+      storage,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      assertAcceptingWork: () => this.assertAcceptingWork(),
+      observeProvider: (input) => this.observeProvider(input),
+      dispatchPrompt: (input, prepare) => this.dispatchPromptInternal(input, prepare),
+      observedActivity: (key) => this.observedSessionActivity.get(key),
+    });
     /*
      * Durable session mutations wake the affected provider group. Only a
      * backed-off group is affected at all — every other group is read on

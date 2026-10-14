@@ -657,7 +657,7 @@ describe("NativeAgentService", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await storage.setOpenCodeIncompleteTurnNotice(key, session.providerSessionId, {
+        await storage.setIncompleteTurnNotice(key, session.providerSessionId, {
           kind: "failed",
           assistantMessageId: "assistant-1",
           updatedAt: "2026-09-10T00:00:00.000Z",

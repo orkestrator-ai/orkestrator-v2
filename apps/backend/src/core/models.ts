@@ -557,7 +557,8 @@ export interface PersistedBuildPipeline {
 export type NativeAgentProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 export const NATIVE_AGENT_SESSION_VERSION = 1 as const;
 
-export interface OpenCodeIncompleteTurnNotice {
+/** Content-free outcome of an automatic incomplete-turn recovery. */
+export interface IncompleteTurnNotice {
   kind: "failed" | "exhausted";
   assistantMessageId: string;
   updatedAt: string;
@@ -647,8 +648,15 @@ export interface PersistedNativeAgentSession {
   pendingDispatch?: PersistedNativeAgentPendingDispatch;
   /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */
   pendingSteer?: PersistedNativeAgentPendingSteer;
-  /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
-  openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;
+  /**
+   * Content-free authoritative recovery outcome rehydrated by every tab.
+   *
+   * The field keeps the name it was first persisted under, when OpenCode was
+   * the only platform with turn recovery, so session files written by earlier
+   * versions read unchanged. Storage writes it; everything else reads it
+   * through {@link sessionIncompleteTurnNotice}.
+   */
+  openCodeIncompleteTurnNotice?: IncompleteTurnNotice;
   /**
    * Bounded, content-free outcomes of recent turns keyed by the request id that
    * started them, recorded from provider status reads the backend already
@@ -663,6 +671,13 @@ export interface PersistedNativeAgentSession {
   interruptedRequestIds?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** A session's incomplete-turn notice, independent of its persisted field name. */
+export function sessionIncompleteTurnNotice(
+  session: Pick<PersistedNativeAgentSession, "openCodeIncompleteTurnNotice">,
+): IncompleteTurnNotice | undefined {
+  return session.openCodeIncompleteTurnNotice;
 }
 
 export interface PersistedNativeAgentTurnOutcome {

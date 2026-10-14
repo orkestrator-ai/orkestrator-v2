@@ -83,9 +83,12 @@ import {
   withSessionActionSlashCommands,
 } from "./native-agent-service-shared.js";
 import {
+  inferredComposerSelectionToPersist,
   lastAssistantModelRef,
-  openCodeComposerSelectionToPersist,
 } from "./native-agent-composer-selection.js";
+import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import { sessionIncompleteTurnNotice } from "./models.js";
 import {
   createNativeAgentDisplayTail,
   displayTailRecoveryWindow,
@@ -157,7 +160,7 @@ type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
-type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
+type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
@@ -192,7 +195,6 @@ type NativeAgentMessagePage = shared.NativeAgentMessagePage;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
-type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 
 const IMAGE_MIME_TYPES = new Map([
@@ -256,21 +258,23 @@ function imageMimeType(filePath: string): string {
 }
 
 function visibleProjectionNotices(
+  agent: BuildPipelineAgent,
   notices: readonly NativeAgentNotice[] | undefined,
-  incompleteTurn: OpenCodeIncompleteTurnNotice | undefined,
+  incompleteTurn: IncompleteTurnNotice | undefined,
 ): NativeAgentNotice[] {
   const visible = (notices ?? [])
     .filter((notice) => notice.kind !== "error" && notice.kind !== "stopped")
     .slice(0, incompleteTurn ? 511 : 512);
   if (!incompleteTurn) return visible;
+  const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
   return [
     ...visible,
     {
       kind: "incomplete-turn",
       message:
         incompleteTurn.kind === "failed"
-          ? "The previous OpenCode turn ended before completion."
-          : "OpenCode could not complete the previous turn after recovery.",
+          ? `The previous ${label} turn ended before completion.`
+          : `${label} could not complete the previous turn after recovery.`,
     },
   ];
 }
@@ -301,7 +305,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   StorageService,
@@ -320,7 +324,6 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentActivityTransition,
   NativeAgentServiceOptions,
   AgentInteractionObservation,
-  OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
 
@@ -2744,8 +2747,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     recordResponse(queue?.inFlight?.requestId, "dispatching");
     recordResponse(queue?.dispatchError?.messageId, "failed");
     const notices = visibleProjectionNotices(
+      input.agent,
       stateSnapshot.notices,
-      resolved.session.openCodeIncompleteTurnNotice,
+      sessionIncompleteTurnNotice(resolved.session),
     );
     return {
       identity: this.progressiveIdentity(
@@ -3648,11 +3652,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         }
       }
     }
-    const openCodeHints = input.agent === "opencode";
+    const sessionSelectionHints =
+      nativeAgentPlatformPolicy(input.agent).infersComposerSelection === true;
     const selectedModelId = resolveNativeComposerModelId({
       providerControlsModelId: providerControls?.modelId,
       sessionControlsModelId: session.controls?.modelId,
-      ...(openCodeHints
+      ...(sessionSelectionHints
         ? {
             lastAssistantModelId: hints.lastAssistantModelId,
             sessionModelId: hints.sessionModelId,
@@ -3665,8 +3670,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const resolvedSelection = withResolvedNativeComposerModel(models, selectedModelId, input.agent);
     models = resolvedSelection.models;
     const selectedModel = resolvedSelection.selectedModel;
-    if (hints.persistSelection && openCodeHints) {
-      const persist = openCodeComposerSelectionToPersist({
+    if (hints.persistSelection && sessionSelectionHints) {
+      const persist = inferredComposerSelectionToPersist({
         sessionControlsModelId: session.controls?.modelId,
         lastAssistantModelId: hints.lastAssistantModelId,
         lastAssistantReasoningId: hints.lastAssistantReasoningId,
@@ -3686,7 +3691,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const storedReasoningId =
       providerControls?.reasoningId ??
       session.controls?.reasoningId ??
-      (openCodeHints
+      (sessionSelectionHints
         ? (hints.lastAssistantReasoningId ??
           hints.sessionReasoningId ??
           session.inferredComposerSelection?.reasoningId)
@@ -4455,8 +4460,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       recordAsyncQuestionResponse(queue?.inFlight?.requestId, "dispatching");
       recordAsyncQuestionResponse(queue?.dispatchError?.messageId, "failed");
       const notices = visibleProjectionNotices(
+        input.agent,
         snapshot.notices,
-        resolved.session.openCodeIncompleteTurnNotice,
+        sessionIncompleteTurnNotice(resolved.session),
       );
 
       const projection: NativeAgentSessionProjection = {

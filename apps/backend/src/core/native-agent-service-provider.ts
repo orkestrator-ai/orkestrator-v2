@@ -40,7 +40,7 @@ type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
-type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
+type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
@@ -59,7 +59,6 @@ type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
-type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
@@ -87,7 +86,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   StorageService,
@@ -106,7 +105,6 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentActivityTransition,
   NativeAgentServiceOptions,
   AgentInteractionObservation,
-  OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
 
@@ -852,10 +850,9 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     model?: string,
     effort?: string,
   ): Promise<BridgeConnection> {
-    const suffix = agent === "opencode" ? "opencode" : agent;
     if (environment.environmentType === "local") {
       const result = await this.invoke<{ port: number; authToken?: string }>(
-        `start_local_${suffix}_server_cmd`,
+        `start_local_${agent}_server_cmd`,
         { environmentId: environment.id },
       );
       if (!result.authToken) {
@@ -878,7 +875,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       throw new Error("Native agent container is unavailable");
     }
     const result = await this.invoke<{ hostPort: number; authToken?: string }>(
-      `start_${suffix}_server`,
+      `start_${agent}_server`,
       { containerId: environment.containerId },
     );
     if (!result.authToken) {

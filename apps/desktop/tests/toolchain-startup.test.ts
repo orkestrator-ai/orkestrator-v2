@@ -1,0 +1,245 @@
+import { describe, expect, mock, test } from "bun:test";
+import {
+  createToolchainProgressController,
+  preparePinnedToolchains,
+} from "../electron/toolchain-startup";
+import type {
+  EnsurePinnedToolchainsOptions,
+  PinnedToolchainResult,
+  ToolchainProgress,
+} from "@orkestrator/toolchain/manager";
+
+function progress(phase: ToolchainProgress["phase"]): ToolchainProgress {
+  return { phase, completedTools: 0, totalTools: 3, overallFraction: 0, message: phase };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function fakeWindow() {
+  let destroyed = false;
+  let closedListener: (() => void) | undefined;
+  return {
+    close: mock(() => {
+      destroyed = true;
+      closedListener?.();
+    }),
+    isDestroyed: mock(() => destroyed),
+    once: mock((_event: string, listener: () => void) => {
+      closedListener = listener;
+      return undefined as never;
+    }),
+    closeFromWindowManager() {
+      destroyed = true;
+      closedListener?.();
+    },
+  };
+}
+
+function progressControllerOptions(
+  overrides: Partial<Parameters<typeof createToolchainProgressController>[0]> = {},
+) {
+  return {
+    createWindow: mock(async () => fakeWindow()),
+    reportProgress: mock(() => undefined),
+    onUnexpectedClose: mock(() => undefined),
+    logError: mock(() => undefined),
+    ...overrides,
+  };
+}
+
+describe("toolchain startup orchestration", () => {
+  test("does not open a progress window for a verified cache", async () => {
+    const createWindow = mock(async () => fakeWindow());
+    const controller = createToolchainProgressController(
+      progressControllerOptions({ createWindow }),
+    );
+
+    controller.report(progress("checking"));
+    controller.report(progress("ready"));
+    await controller.close();
+    expect(createWindow).not.toHaveBeenCalled();
+  });
+
+  test("shares a pending window, forwards progress, and closes it even when creation resolves late", async () => {
+    const pendingWindow = deferred<ReturnType<typeof fakeWindow>>();
+    const reportProgress = mock(() => undefined);
+    const controller = createToolchainProgressController(
+      progressControllerOptions({
+        createWindow: mock(() => pendingWindow.promise),
+        reportProgress,
+      }),
+    );
+
+    controller.report(progress("downloading"));
+    controller.report(progress("verifying"));
+    const closing = controller.close();
+    const window = fakeWindow();
+    pendingWindow.resolve(window);
+    await closing;
+
+    expect(window.close).toHaveBeenCalledTimes(1);
+    expect(reportProgress).not.toHaveBeenCalled();
+  });
+
+  test("retries progress window creation after a load failure", async () => {
+    const error = new Error("preload failed");
+    const window = fakeWindow();
+    const createWindow = mock().mockRejectedValueOnce(error).mockResolvedValueOnce(window);
+    const logError = mock(() => undefined);
+    const reportProgress = mock(() => undefined);
+    const controller = createToolchainProgressController(
+      progressControllerOptions({
+        createWindow,
+        reportProgress,
+        logError,
+      }),
+    );
+
+    controller.report(progress("downloading"));
+    await Bun.sleep(0);
+    controller.report(progress("downloading"));
+    await Bun.sleep(0);
+
+    expect(logError).toHaveBeenCalledWith(error);
+    expect(createWindow).toHaveBeenCalledTimes(2);
+    expect(reportProgress).toHaveBeenCalledTimes(1);
+    await controller.close();
+  });
+
+  test("quits after the user closes progress and never recreates the window", async () => {
+    const window = fakeWindow();
+    const createWindow = mock(async () => window);
+    const onUnexpectedClose = mock(() => undefined);
+    const reportProgress = mock(() => undefined);
+    const controller = createToolchainProgressController(
+      progressControllerOptions({ createWindow, onUnexpectedClose, reportProgress }),
+    );
+
+    controller.report(progress("downloading"));
+    await Bun.sleep(0);
+    window.closeFromWindowManager();
+    controller.report(progress("verifying"));
+    await Bun.sleep(0);
+
+    expect(onUnexpectedClose).toHaveBeenCalledTimes(1);
+    expect(createWindow).toHaveBeenCalledTimes(1);
+    expect(reportProgress).toHaveBeenCalledTimes(1);
+    await controller.close();
+    expect(onUnexpectedClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("retries tool preparation and returns the verified bin directory", async () => {
+    const ensure = mock().mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce({
+      rootDir: "/data/toolchains",
+      binDir: "/data/toolchains/bin",
+      executables: {},
+    });
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 0 }));
+    const quit = mock(() => undefined);
+    const logError = mock(() => undefined);
+
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError,
+      }),
+    ).resolves.toBe("/data/toolchains/bin");
+
+    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(showMessageBox.mock.calls[0]?.[0].detail).toContain("network down");
+    expect(quit).not.toHaveBeenCalled();
+  });
+
+  test("starts successfully when selected platforms require no managed artifacts", async () => {
+    const ensure = mock(
+      async (_options: EnsurePinnedToolchainsOptions): Promise<PinnedToolchainResult> => ({
+        rootDir: "/data/toolchains",
+        binDir: "/data/toolchains/bin/empty",
+        // No artifacts were requested, so no executable is installed.
+        executables: {} as PinnedToolchainResult["executables"],
+      }),
+    );
+
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox: mock(async () => ({ response: 1 })),
+        quit: mock(() => undefined),
+        logError: mock(() => undefined),
+        artifacts: [],
+      }),
+    ).resolves.toBe("/data/toolchains/bin/empty");
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure.mock.calls[0]?.[0].artifacts).toEqual([]);
+  });
+
+  test("quits after a rejected retry prompt and handles non-Error failures", async () => {
+    const quit = mock(() => undefined);
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 1 }));
+
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure: mock(async () => {
+          throw "offline";
+        }),
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError: mock(() => undefined),
+      }),
+    ).resolves.toBeNull();
+
+    expect(showMessageBox.mock.calls[0]?.[0].detail).toContain("offline");
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+
+  test("fails an unattended profile instead of waiting on a retry prompt", async () => {
+    const error = new Error("network down");
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 0 }));
+    const quit = mock(() => undefined);
+    const logError = mock(() => undefined);
+    const ensure = mock(async () => {
+      throw error;
+    });
+
+    // Nobody answers a modal in an agent-driven `dev:test` run, so prompting
+    // would hang the launcher: never ready, never exited, with the cause trapped
+    // in a dialog instead of the log directory dev:status points at.
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError,
+        interactive: false,
+      }),
+    ).resolves.toBeNull();
+
+    expect(showMessageBox).not.toHaveBeenCalled();
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(error);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+});

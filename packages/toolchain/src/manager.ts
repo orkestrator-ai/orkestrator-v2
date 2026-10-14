@@ -786,6 +786,10 @@ async function extractTarGzipEntry(
   let found = false;
   const extract = tar.extract();
   extract.on("entry", (header, stream, next) => {
+    // Destroying the extractor also destroys the current entry stream with the
+    // same error. The archive pipeline already rejects with it; an entry stream
+    // without its own listener would raise it again as an uncaught exception.
+    stream.on("error", () => {});
     if (header.name !== archive.entryPath) {
       stream.on("end", next);
       stream.resume();
@@ -841,6 +845,8 @@ async function extractTarGzipBundle(
   const maxExtractedBytes = Math.max(archive.size * 6, archive.size);
   const extract = tar.extract();
   extract.on("entry", (header, stream, next) => {
+    // As above, the archive pipeline reports a destroyed entry stream's error.
+    stream.on("error", () => {});
     if (!header.name.startsWith(root)) {
       stream.on("end", next);
       stream.resume();

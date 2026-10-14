@@ -368,7 +368,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     let outputBytes = 0;
     let persistedBytes = 0;
     let outputLimitExceeded = false;
-    let outputTail = Buffer.alloc(0);
+    let outputTail: Buffer = Buffer.alloc(0);
     let spawnError: Error | undefined;
     let logError: Error | undefined;
     let childStatus: number | null = 1;
@@ -582,8 +582,11 @@ const defaultDependencies: TestAllDependencies = {
  * Left to itself each Bun test group would spawn one worker per core, so the
  * three worker-consuming groups would oversubscribe the machine threefold —
  * tolerable on an 18-core workstation, liable to thrash a 2-core CI runner.
- * The protocol check does not allocate a Bun test worker pool. The root suite
- * gets the largest share because it is by far the biggest and slowest.
+ * The protocol check does not allocate a Bun test worker pool. Backend and
+ * desktop integration suites run in their own packages, so the backend package
+ * is the slowest single task; package tasks get a second worker as soon as the
+ * budget allows, and the root group (renderer and repository-contract tests)
+ * takes what remains.
  */
 export interface WorkerPlan {
   /** Bun workers used by each active workspace package task. */
@@ -639,12 +642,12 @@ export function planWorkers(cores: number): WorkerPlan {
   );
   const bridges = MIN_BRIDGE_WORKERS;
   // Two package tasks at a time keep the React-heavy workspace tests from
-  // multiplying peak heap while leaving enough capacity for the root long pole.
+  // multiplying peak heap.
   const workspaceConcurrency = budget >= 8 ? 2 : 1;
-  const workspace = 1;
-  // Root absorbs the remaining capacity. Capping the aggregate at eight leaves
-  // three root workers plus a protocol slot on large hosts: higher caps repeatedly starved
-  // subprocess fixtures and produced SIGTERM/SIGSEGV UI-worker crashes.
+  const workspace = budget >= 6 ? 2 : 1;
+  // Root absorbs the remaining capacity. The aggregate stays capped at eight:
+  // higher caps repeatedly starved subprocess fixtures and produced
+  // SIGTERM/SIGSEGV UI-worker crashes.
   const root = Math.max(1, budget - 1 - bridges - workspace * workspaceConcurrency);
   return { workspace, workspaceConcurrency, root, bridges };
 }

@@ -29,6 +29,8 @@ mock.module("@/lib/backend", () => ({
 }));
 
 import { ComposeBar } from "../../../apps/web/src/components/terminal/ComposeBar";
+
+type ComposeBarProps = Parameters<typeof ComposeBar>[0];
 import { useTerminalSessionStore } from "../../../apps/web/src/stores/terminalSessionStore";
 
 const SESSION_KEY = "container-1:tab-1";
@@ -78,9 +80,9 @@ function seedDraft(text = "", images: DraftImage[] = [], sessionKey = SESSION_KE
   });
 }
 
-function renderComposeBar(overrides: Partial<Parameters<typeof ComposeBar>[0]> = {}) {
+function renderComposeBar(overrides: Partial<ComposeBarProps> = {}) {
   const onClose = mock(() => {});
-  const onSend = mock(() => {});
+  const onSend = mock((..._args: Parameters<ComposeBarProps["onSend"]>) => {});
   const onAddressAll = mock(() => {});
 
   const result = render(

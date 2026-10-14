@@ -76,8 +76,8 @@ The following existing test selections passed using pinned Bun through mise:
 
 ```bash
 mise run test:logged -- --name browser-investigation-gateway -- \
-  bun test ./tests/unit/electron/gateway-proxy.test.ts \
-  ./tests/unit/electron/gateway-events.test.ts \
+  bun test ./apps/backend/tests/gateway-proxy.test.ts \
+  ./apps/backend/tests/gateway-events.test.ts \
   --test-name-pattern 'browser.preview|preview.referred|preview text|preview bodies|preview bytes|preview client' \
   --parallel=1 --only-failures
 

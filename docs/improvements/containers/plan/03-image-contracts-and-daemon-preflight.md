@@ -127,7 +127,7 @@ unsupported; it must never reinterpret a new storage layout as legacy data.
   undeterminable endpoint is reported `unknown` and keeps the previous
   behavior. Qualified: Engine 29.7.2 Linux amd64. Desktop and rootless are
   reported, not yet qualified (step 14).
-- **Tests.** `tests/unit/electron/docker-image.test.ts` (manifest parsing
+- **Tests.** `apps/backend/tests/docker-image.test.ts` (manifest parsing
   bounds, tar extraction refusing symlinks/oversize/truncation, capability
   probe, digest and no-digest resolution, probe container lifecycle and cache,
   legacy status, endpoint classification without leaking endpoints, remote

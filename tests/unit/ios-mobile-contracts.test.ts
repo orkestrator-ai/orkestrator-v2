@@ -122,7 +122,7 @@ describe("iOS project and deployment contracts", () => {
     const config = Bun.TOML.parse(read("mise.toml")) as {
       tasks: Record<string, { run?: string }>;
     };
-    expect(config.tasks["dev:ios"].run).toBe("bun scripts/run-ios-simulator.ts");
+    expect(config.tasks["dev:ios"]?.run).toBe("bun scripts/run-ios-simulator.ts");
   });
 
   test("project and shared scheme include the app and unit-test targets", () => {
@@ -171,9 +171,12 @@ describe("iOS project and deployment contracts", () => {
       expect(image.filename).toBeTruthy();
       const relativePath = `${catalogPath}/${image.filename}`;
       expect(existsSync(path.join(root, relativePath))).toBe(true);
-      const [pointsWidth, pointsHeight] = image.size.split("x").map(Number);
+      const [pointsWidth, pointsHeight] = image.size.split("x");
       const scale = Number(image.scale.replace("x", ""));
-      expect(pngDimensions(relativePath)).toEqual([pointsWidth * scale, pointsHeight * scale]);
+      expect(pngDimensions(relativePath)).toEqual([
+        Number(pointsWidth) * scale,
+        Number(pointsHeight) * scale,
+      ]);
     }
 
     const brand = JSON.parse(

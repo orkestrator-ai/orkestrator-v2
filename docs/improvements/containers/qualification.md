@@ -13,8 +13,8 @@ How to reproduce:
 | --- | --- |
 | Unit and integration (complete) | `mise run test` |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` |
-| Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-live-qualification.test.ts tests/unit/electron/container-live-replacement.test.ts tests/unit/electron/container-live-network.test.ts tests/unit/electron/container-live-firewall.test.ts` |
-| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-benchmarks.test.ts` |
+| Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-live-qualification.test.ts apps/backend/tests/container-live-replacement.test.ts apps/backend/tests/container-live-network.test.ts apps/backend/tests/container-live-firewall.test.ts` |
+| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-benchmarks.test.ts` |
 | Real stack, local | `mise run test:agent:browser:isolated` |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` (includes the rebuild cycle) |
 

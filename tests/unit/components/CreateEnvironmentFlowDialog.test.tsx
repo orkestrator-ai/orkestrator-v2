@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { useState } from "react";
 import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
+import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -23,18 +24,20 @@ const realBackendSnapshot = { ...realBackend };
 const updateEnvironmentAgentSettingsMock = mock(
   async (environmentId: string, ..._rest: unknown[]) => ({ id: environmentId }) as Environment,
 );
-const getContainerGitHubCredentialStatusMock = mock(async () => ({
-  source: "host-cli" as const,
+const getContainerGitHubCredentialStatusMock = mock(async (): Promise<GitHubCredentialStatus> => ({
+  source: "host-cli",
   available: true,
 }));
-const createFeatureBuildMock = mock(async (..._args: unknown[]) => ({
-  taskId: "task-1",
-  pipelineId: "pipeline-1",
-  environmentId: "env-feature",
-}));
+const createFeatureBuildMock = mock(
+  async (..._args: unknown[]): Promise<CreateFeatureBuildResult> => ({
+    taskId: "task-1",
+    pipelineId: "pipeline-1",
+    environmentId: "env-feature",
+  }),
+);
 const getBuildPipelineConditionalMock = mock(async (..._args: unknown[]) => null);
 const getEnvironmentMock = mock(
-  async (environmentId: string) =>
+  async (environmentId: string): Promise<Environment | null> =>
     ({
       id: environmentId,
       projectId: "project-1",
@@ -1270,6 +1273,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       pendingAgentLaunch: true,
       initialAgentModel: "default",
       initialReasoningEffort: undefined,
+      initialFastMode: undefined,
       initialPromptAttachments: attachments,
     });
     expect(
@@ -1282,6 +1286,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       pendingAgentLaunch: false,
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
+      initialFastMode: undefined,
       initialPromptAttachments: undefined,
     });
   });
@@ -1415,6 +1420,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       portMappings: undefined,
       environmentType: "containerized",
       namingPrompt: "repair stale sessions",
+      worktreeBaseDir: undefined,
     });
 
     expect(

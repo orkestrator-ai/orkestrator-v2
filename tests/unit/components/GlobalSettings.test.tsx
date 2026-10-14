@@ -16,6 +16,12 @@ import { BUNDLED_APP_VERSION } from "@/lib/app-version";
 import { installControlledTimeout } from "../../helpers/controlled-timeout";
 import type { AgentAccountsSnapshot } from "../../../packages/protocol/src/agent-accounts";
 import type { PlanUsageSnapshot } from "../../../packages/protocol/src/plan-usage";
+import type {
+  DomainTestResult,
+  GatewayTokenSettings,
+  GlobalConfig,
+  WebClientStatus,
+} from "@/types";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -86,7 +92,7 @@ const mockGetAgentAccountUsage = mock(
   }),
 );
 const mockGetAgentAccountLogin = mock(async () => ({ state: "idle" as const }));
-const mockGetLogDirectory = mock(async () => null);
+const mockGetLogDirectory = mock(async (): Promise<string | null> => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
 const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
 const mockGetAppVersion = mock(async () => "2.15.1");
@@ -96,39 +102,41 @@ const mockPropagateGithubCredentialsToContainers = mock(
     failed: [],
   }),
 );
-const mockGetWebClientStatus = mock(async () => ({
+const mockGetWebClientStatus = mock(async (): Promise<WebClientStatus> => ({
   enabled: true,
   running: true,
   url: "http://100.88.12.3:34121/",
   error: null,
   resetAvailable: false,
 }));
-const mockSetWebClientEnabled = mock(async (enabled: boolean) => ({
+const mockSetWebClientEnabled = mock(async (enabled: boolean): Promise<WebClientStatus> => ({
   enabled,
   running: enabled,
   url: enabled ? "http://100.88.12.3:34121/" : null,
   error: null,
   resetAvailable: false,
 }));
-const mockResetWebClientServe = mock(async () => ({
+const mockResetWebClientServe = mock(async (): Promise<WebClientStatus> => ({
   enabled: true,
   running: true,
   url: "https://workstation.example.ts.net/",
   error: null,
   resetAvailable: false,
 }));
-const mockGetGatewayTokenSettings = mock(async () => ({
+const mockGetGatewayTokenSettings = mock(async (): Promise<GatewayTokenSettings> => ({
   token: "gateway-token-123456",
   editable: true,
-  source: "file" as const,
+  source: "file",
 }));
-const mockSetGatewayToken = mock(async (token: string) => ({
+const mockSetGatewayToken = mock(async (token: string): Promise<GatewayTokenSettings> => ({
   token: token.trim(),
   editable: true,
-  source: "file" as const,
+  source: "file",
 }));
 const mockOpenInBrowser = mock(async () => undefined);
-const mockTestDomainResolution = mock(async () => []);
+const mockTestDomainResolution = mock(
+  async (_domains: string[]): Promise<DomainTestResult[]> => [],
+);
 const mockRevealInFileManager = mock(async (_path: string) => {});
 const mockGetCachedOpenCodeModelCatalog = mock(async (_projectId: string) => null);
 const mockRefreshHostAgentModelCatalog = mock(async (agent: string, _projectId?: string) => ({
@@ -2093,12 +2101,14 @@ describe("GlobalSettings", () => {
   });
 
   test("uses the default terminal scrollback when legacy config omits it", () => {
-    useConfigStore.setState((state) => ({
-      config: {
-        ...state.config,
-        global: { ...state.config.global, terminalScrollback: undefined },
-      },
-    }));
+    useConfigStore.setState((state) => {
+      // A legacy stored config predates the field, so it is genuinely absent.
+      const legacyGlobal: Partial<GlobalConfig> = {
+        ...state.config.global,
+        terminalScrollback: undefined,
+      };
+      return { config: { ...state.config, global: legacyGlobal as GlobalConfig } };
+    });
     const { container } = render(<GlobalSettings activeSection="terminal" />);
     expect(screen.getByText("1,000 lines")).toBeTruthy();
 
@@ -2319,7 +2329,7 @@ describe("GlobalSettings", () => {
 
   test("validates domains locally, tests valid domains, and clears invalid input", async () => {
     mockTestDomainResolution.mockResolvedValueOnce([
-      { domain: "example.com", valid: true, resolvable: true },
+      { domain: "example.com", valid: true, resolvable: true, ips: [], error: null },
     ]);
     render(<GlobalSettings activeSection="network" />);
     const domains = screen.getByPlaceholderText(/github\.com/) as HTMLTextAreaElement;
@@ -2346,9 +2356,15 @@ describe("GlobalSettings", () => {
     console.error = mock(() => undefined);
     mockTestDomainResolution
       .mockResolvedValueOnce([
-        { domain: "resolved.example", valid: true, resolvable: true },
-        { domain: "missing.example", valid: true, resolvable: false, error: "Not found" },
-        { domain: "invalid.example", valid: false, resolvable: false, error: "Invalid response" },
+        { domain: "resolved.example", valid: true, resolvable: true, ips: [], error: null },
+        { domain: "missing.example", valid: true, resolvable: false, ips: [], error: "Not found" },
+        {
+          domain: "invalid.example",
+          valid: false,
+          resolvable: false,
+          ips: [],
+          error: "Invalid response",
+        },
       ])
       .mockRejectedValueOnce(new Error("resolver offline"));
     try {

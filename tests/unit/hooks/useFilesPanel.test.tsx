@@ -9,6 +9,10 @@ import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
+import {
+  DEFAULT_TERMINAL_APPEARANCE,
+  DEFAULT_TERMINAL_SCROLLBACK,
+} from "../../../apps/web/src/constants/terminal";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
@@ -168,12 +172,7 @@ function resetStores(
     environments: environment ? [environment] : [],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
-    sessionActivated: new Set(),
   });
 
   useUIStore.setState({
@@ -205,6 +204,8 @@ function resetStores(
         containerResources: { cpuCores: 2, memoryGb: 4 },
         envFilePatterns: [".env.local", ".env"],
         allowedDomains: [],
+        terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
+        terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
         agentSettings: {
           defaultAgent: "claude",
           platforms: {
@@ -567,7 +568,8 @@ describe("useFilesPanel", () => {
       worktreePath: "/tmp/worktree",
       status: "stopped",
     });
-    resetStores(environment, { defaultBranch: "trunk" });
+    // Legacy repository configs predate prBaseBranch.
+    resetStores(environment, { defaultBranch: "trunk" } as RepositoryConfig);
     useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 

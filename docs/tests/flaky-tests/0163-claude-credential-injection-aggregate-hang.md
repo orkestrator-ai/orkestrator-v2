@@ -3,7 +3,7 @@
 - **ID:** 0163
 - **Status:** open
 - **Date observed:** 2026-09-25
-- **File:** `tests/unit/claude-credential-injection.test.ts`
+- **File:** `apps/backend/tests/claude-credential-injection.test.ts`
 - **Original command:** `mise run test` (four aggregate groups; root group with
   3 worker slots).
 - **Failure:** the root group's no-progress watchdog fired after 300 s with
@@ -12,7 +12,7 @@
 - **Suite counts:** not available; the watchdog terminated the group before
   its summary.
 - **Isolated rerun:** `mise run test:logged -- --name cred-injection -- bun test
-  ./tests/unit/claude-credential-injection.test.ts` passed twice (0.6 s each).
+  ./apps/backend/tests/claude-credential-injection.test.ts` passed twice (0.6 s each).
   The previous aggregate run on the same commit passed the root group in 107 s.
 - **Context:** observed on the web annotations branch, which does not change
   this test or credential injection.

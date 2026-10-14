@@ -124,7 +124,7 @@ describe("ResumeTmuxSessionDialog", () => {
       }),
     ]);
 
-    const onResume = mock(() => {});
+    const onResume = mock((_sessionId: string) => {});
 
     render(
       <ResumeTmuxSessionDialog

@@ -168,7 +168,7 @@ data and the UI describes precisely which paths and session formats survive.
   candidate is stopped again after its health check so setup and agent launch
   run only against the committed runtime. No resumable chunk journal: an
   interrupted copy discards the candidate and a retry recopies.
-- **Tests.** `tests/unit/electron/container-replacement.test.ts` (copy plan,
+- **Tests.** `apps/backend/tests/container-replacement.test.ts` (copy plan,
   helper parsing, capacity, admission refusals, restart rollback, failed
   candidate retention); `EnvironmentRebuildSection.test.tsx`. Live (Engine
   29.7.2, `container-live-replacement.test.ts`): C14 legacy migration (Git

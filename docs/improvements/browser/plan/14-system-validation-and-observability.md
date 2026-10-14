@@ -113,7 +113,7 @@ Choose explicit owner paths as files are implemented, through the logged runner:
 
 ```bash
 mise run test:logged -- --name preview-focused -- \
-  bun test ./tests/unit/electron/browser-preview-manager.test.ts \
+  bun test ./apps/desktop/tests/browser-preview-manager.test.ts \
   --parallel=1 --only-failures
 mise run test:changed
 mise run test:logged -- --name preview-check -- mise run check

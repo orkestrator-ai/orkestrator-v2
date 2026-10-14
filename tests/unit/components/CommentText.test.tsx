@@ -2,7 +2,7 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 
 // Mock backend's openInBrowser
-const mockOpenInBrowser = mock(() => Promise.resolve());
+const mockOpenInBrowser = mock((_url: string) => Promise.resolve());
 
 mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,

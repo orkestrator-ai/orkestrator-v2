@@ -210,8 +210,8 @@ describe("scripts/test-all.ts", () => {
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
     expect(workspaceGroup.args).toContain("--concurrency=2");
-    expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "1" });
-    expect(rootGroup.args).toContain("--parallel=3");
+    expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
+    expect(rootGroup.args).toContain("--parallel=1");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
     expect(rootGroup.args).toContain("./scripts/opencode-live-compatibility-probe.test.ts");
@@ -330,10 +330,13 @@ describe("scripts/test-all.ts", () => {
     }
   });
 
-  test("the root suite receives bounded additional large-host capacity", () => {
+  test("package tasks receive bounded additional large-host capacity", () => {
+    // Backend integration suites run in the backend package, which made it the
+    // long pole once each package task was limited to one worker.
     const large = planWorkers(20);
-    expect(large.root).toBe(3);
+    expect(large.workspace).toBe(2);
     expect(large.workspaceConcurrency).toBe(2);
+    expect(large.root).toBe(1);
     expect(1 + large.root + large.bridges + large.workspace * large.workspaceConcurrency).toBe(
       MAX_AGGREGATE_TEST_WORKERS,
     );

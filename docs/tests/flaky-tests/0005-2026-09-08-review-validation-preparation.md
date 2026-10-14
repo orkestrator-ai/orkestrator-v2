@@ -56,13 +56,13 @@
   disconnects`, in `bridges/acp-bridge/src/acp-http.test.ts`, reported
   `Timed out waiting for ACP state: ""` (5456.03ms), matching that same cluster.
 - `Electron backend command registry > deletes an environment only after all
-  three local server kinds exit`, in `tests/unit/electron/commands-integration.test.ts`,
+  three local server kinds exit`, in `apps/backend/tests/commands-integration.test.ts`,
   timed out at 5238.87ms. The other root failure was the deterministic diagnostic
   guard finding two old DOM absence assertions; those assertions were corrected
   in this change and the diagnostic owner passed (21.1s). It is not a flake.
 - **Owner reruns:** all passed; no timeout or assertion was loosened:
   - `mise exec -- bun run test:logged -- --name validation-final-backend-owners -- bun test --cwd apps/backend ./src/core/commands-state-sync.test.ts ./src/core/coordinator-service.test.ts ./src/core/multi-review-service.test.ts ./src/core/review-validation-service.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=1 --only-failures` (28.9s).
-  - `mise exec -- bun run test:logged -- --name validation-root-timeout-owner -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures` (19.6s).
+  - `mise exec -- bun run test:logged -- --name validation-root-timeout-owner -- bun test ./apps/backend/tests/commands-integration.test.ts --parallel=1 --only-failures` (19.6s).
   - `mise exec -- bun run test:logged -- --name validation-acp-timeout-owner -- bun test ./bridges/acp-bridge/src/acp-http.test.ts --parallel=1 --only-failures` (2.6s).
   The root server-shutdown case remains open alongside the existing timeout
   cluster. Host contention is a hypothesis; an isolated pass does not establish

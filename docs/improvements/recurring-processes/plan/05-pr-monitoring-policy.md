@@ -15,7 +15,7 @@ aggregate requests without losing task reconciliation or replacement discovery.
 `apps/backend/src/core/pr-monitor.ts`, `commands-pr-monitor.ts`,
 `commands-registry-pr.ts`, `commands-servers.ts`,
 `packages/protocol/src/pr-monitor.ts`, renderer monitor store/subscriber, and
-`tests/unit/backend/pr-monitor-service.test.ts`. Existing terminal/replacement
+`apps/backend/tests/pr-monitor-service.test.ts`. Existing terminal/replacement
 and persistence-failure tests are essential behavior, not obsolete polling tests.
 
 ## Policy to implement
@@ -220,7 +220,7 @@ Details in the baseline README ("Step 05 re-run").
 
 ### Tests
 
-New: `tests/unit/backend/pr-monitor-lifecycle.test.ts` (terminal cadence for
+New: `apps/backend/tests/pr-monitor-lifecycle.test.ts` (terminal cadence for
 merged and closed/reopen; unfinished repair stays due with its own backoff and
 no `gh`; failing repair does not starve replacement discovery; repair
 revalidation against durable state; repair after restart; new open PR on a
@@ -229,7 +229,7 @@ simultaneous merge-cleanup deletion; deletion during in-flight reconciliation;
 stale open reading after explicit merge; no duplicated comments when timers,
 explicit commands, sync and restart converge; bounded reconciliation maps;
 terminal-effects failure keeps repair due),
-`tests/unit/backend/pr-monitor-admission.test.ts` (aggregate bound of 2 with
+`apps/backend/tests/pr-monitor-admission.test.ts` (aggregate bound of 2 with
 one pending check per environment; priority upgrade in the queue; fairness
 under a continuous merge-pending burst via the starvation cap — verified to
 fail with the cap disabled; startup jitter; bounded error jitter; shared and

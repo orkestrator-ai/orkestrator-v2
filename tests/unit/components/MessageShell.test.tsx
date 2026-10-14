@@ -586,7 +586,7 @@ describe("MessageShell", () => {
     expect(user.container.textContent).toContain("1:00 PM · 3s");
     user.unmount();
 
-    const assistant = render(
+    render(
       <MessageShell isUser={false} authorLabel="Claude" timestampLabel="1:01 PM" durationLabel="4s">
         <p>Timed assistant message</p>
       </MessageShell>,

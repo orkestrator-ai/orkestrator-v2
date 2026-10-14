@@ -405,7 +405,7 @@ describe("application logging shutdown", () => {
 
   test("holds the quit open until the flush completes, then quits once", async () => {
     const app = fakeApp();
-    let released: (() => void) | null = null;
+    const stopped = Promise.withResolvers<void>();
     let stopCalls = 0;
     const logging = {
       logDirectory: "/tmp/logs",
@@ -414,7 +414,7 @@ describe("application logging shutdown", () => {
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: () => {
         stopCalls += 1;
-        return new Promise<void>((resolve) => (released = resolve));
+        return stopped.promise;
       },
     } satisfies InstalledApplicationLogging;
 
@@ -424,7 +424,7 @@ describe("application logging shutdown", () => {
     await Bun.sleep(5);
     expect(app.quitCount).toBe(0);
 
-    released?.();
+    stopped.resolve();
     await Bun.sleep(5);
     expect(app.quitCount).toBe(1);
 
@@ -471,7 +471,7 @@ describe("application logging shutdown", () => {
     // Electron drains microtasks before `will-quit` dispatch returns, ignores a
     // quit issued while it still considers itself quitting, and only then
     // applies `preventDefault` by clearing that flag.
-    let listener: ((event: { preventDefault(): void }) => void) | null = null;
+    let listener: ((event: { preventDefault(): void }) => void) | undefined;
     let quitting = false;
     let effectiveQuits = 0;
     const host: ApplicationLoggingQuitHost = {

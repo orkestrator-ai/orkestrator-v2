@@ -137,11 +137,7 @@ describe("native chat scroll wiring", () => {
       environments: [],
       isLoading: false,
       error: null,
-      workspaceReadyEnvironments: new Set(),
       deletingEnvironments: new Set(),
-      pendingSetupCommands: new Map(),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
     });
 
     useClaudeStore.setState({

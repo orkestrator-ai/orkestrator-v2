@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
+import type { ClipboardImage } from "@/lib/native/clipboard";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -22,7 +23,11 @@ type KanbanTaskUpdates = Partial<
   >
 >;
 
-const startBuildMock = mock(async (): Promise<string | undefined> => "pipeline-1");
+type StartBuild = ReturnType<typeof realUseBuildPipeline.useBuildPipeline>["startBuild"];
+
+const startBuildMock = mock(
+  async (..._args: Parameters<StartBuild>): Promise<string | undefined> => "pipeline-1",
+);
 const navigateToBuildMock = mock(() => {});
 const getKanbanImageDataMock = mock(async () => "");
 const detectPrMock = mock(
@@ -65,12 +70,13 @@ const saveComposeDraftMock = mock(
   }),
 );
 const deleteComposeDraftMock = mock(async (_draftKey: string) => {});
-const readImageMock = mock(async () => {
+const readImageMock = mock(async (_pastedBlob?: Blob | null): Promise<ClipboardImage> => {
   throw new Error("no image");
 });
 
 const addTaskMock = mock(
-  async (_projectId: string, _title: string, _description: string) => "task-created",
+  async (_projectId: string, _title: string, _description: string): Promise<string | undefined> =>
+    "task-created",
 );
 const updateTaskMock = mock(async (_taskId: string, _updates: KanbanTaskUpdates) => {});
 const deleteTaskMock = mock(async (_taskId: string) => {});
@@ -296,12 +302,7 @@ function resetStores() {
   useEnvironmentStore.setState({
     ...initialEnvironmentState,
     environments: [],
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
-    sessionActivated: new Set(),
   });
   // The build launcher reads its defaults and its model catalog from these, so
   // a test that seeds them must not leak into the next one.
@@ -1053,8 +1054,8 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("reports file-reader failures and resets the file input", async () => {
-    FileReader.prototype.readAsDataURL = function () {
-      this.onerror?.(new ProgressEvent("error"));
+    FileReader.prototype.readAsDataURL = function (this: FileReader) {
+      this.onerror?.(new ProgressEvent("error") as ProgressEvent<FileReader>);
     } as typeof FileReader.prototype.readAsDataURL;
     render(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
@@ -1331,20 +1332,16 @@ describe("KanbanTaskDialog", () => {
     launchBuild("Local", { Review: "Codex", PR: "OpenCode" });
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalled());
-    const [, environmentType, agent, options] = startBuildMock.mock.calls[0] as unknown as [
-      KanbanTask,
-      string,
-      string,
-      { steps: Record<string, { agent: string }> },
-    ];
+    const [, environmentType, agent, options] = startBuildMock.mock.calls[0]!;
+    const steps = options?.steps;
     expect(environmentType).toBe("local");
     // The pipeline agent stays the build step's harness even when review differs.
     expect(agent).toBe("claude");
-    expect(options.steps.build.agent).toBe("claude");
-    expect(options.steps.review.agent).toBe("codex");
-    expect(options.steps.verify.agent).toBe("claude");
-    expect(options.steps.pr.agent).toBe("opencode");
-    expect(options.steps["resolve-conflicts"].agent).toBe("claude");
+    expect(steps?.build?.agent).toBe("claude");
+    expect(steps?.review?.agent).toBe("codex");
+    expect(steps?.verify?.agent).toBe("claude");
+    expect(steps?.pr?.agent).toBe("opencode");
+    expect(steps?.["resolve-conflicts"]?.agent).toBe("claude");
   });
 
   test("reports a create-and-build that throws instead of leaving the launch stuck", async () => {
@@ -1858,17 +1855,10 @@ describe("KanbanTaskDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalled());
-    const [, environmentType, agent, options] = startBuildMock.mock.calls[0] as unknown as [
-      KanbanTask,
-      string,
-      string,
-      {
-        steps: Record<string, { agent: string; model: string; reasoningEffort?: string }>;
-      },
-    ];
+    const [, environmentType, agent, options] = startBuildMock.mock.calls[0]!;
     expect(environmentType).toBe("local");
     expect(agent).toBe("codex");
-    expect(options.steps.build).toEqual({
+    expect(options?.steps?.build).toEqual({
       agent: "codex",
       model: "gpt-5.4-mini",
       reasoningEffort: "high",

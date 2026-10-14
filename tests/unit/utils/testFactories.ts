@@ -6,6 +6,10 @@ import type {
   AppConfig,
   RepositoryConfig,
 } from "../../../apps/web/src/types";
+import {
+  DEFAULT_TERMINAL_APPEARANCE,
+  DEFAULT_TERMINAL_SCROLLBACK,
+} from "../../../apps/web/src/constants/terminal";
 
 /**
  * Creates a mock Project with sensible defaults that can be overridden
@@ -17,6 +21,7 @@ export function createMockProject(overrides: Partial<Project> = {}): Project {
     gitUrl: "git@github.com:test/repo.git",
     localPath: null,
     addedAt: new Date().toISOString(),
+    order: 0,
     ...overrides,
   };
 }
@@ -29,10 +34,15 @@ export function createMockEnvironment(overrides: Partial<Environment> = {}): Env
     id: "mock-env-id",
     projectId: "mock-project-id",
     name: "mock-env",
+    branch: "mock-env",
     containerId: null,
-    status: "stopped" as EnvironmentStatus,
+    status: "stopped" satisfies EnvironmentStatus,
     prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
     createdAt: new Date().toISOString(),
+    networkAccessMode: "full",
+    order: 0,
     environmentType: "containerized",
     ...overrides,
   };
@@ -63,6 +73,9 @@ export function createMockAppConfig(overrides: Partial<AppConfig> = {}): AppConf
         memoryGb: 4,
       },
       envFilePatterns: [".env.local", ".env"],
+      allowedDomains: [],
+      terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
+      terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
       experimentalCodexRawEventLogging: true,
     },
     repositories: {},

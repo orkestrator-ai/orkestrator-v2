@@ -126,7 +126,7 @@ an optimization while preserving the authoritative storage/lifecycle contract.
 - **Measurement.** Durable operations record monotonic `durationMs` and
   per-phase durations in their outcome (bounded to 16 phases, durations only);
   `runCommand` counts subprocesses by program name for benchmarks. The opt-in
-  harness `tests/unit/electron/container-benchmarks.test.ts` covers fresh
+  harness `apps/backend/tests/container-benchmarks.test.ts` covers fresh
   restricted environments (5), warm stop/start (10), preserving rebuilds at
   two sizes (5 and 3), sampler cost (10) and observer churn (200 cycles), and
   records incomplete runs instead of retrying them.

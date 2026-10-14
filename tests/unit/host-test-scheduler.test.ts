@@ -8,7 +8,7 @@ import {
   createHostTestScheduler,
   HOST_TEST_SCHEDULER_SOURCE,
   testSchedulingPolicy,
-} from "../../packages/protocol/src/host-test-scheduler";
+} from "../../packages/protocol/src/node/host-test-scheduler";
 import { createTestAdmission } from "../../scripts/test-admission";
 import { createTestTimingsDirectory, runAllTests } from "../../scripts/test-all";
 
@@ -398,7 +398,7 @@ test("the scheduler factory remains self-contained after production bundling", a
   const { directory } = fixture();
   const build = await Bun.build({
     entrypoints: [
-      path.resolve(import.meta.dir, "../../packages/protocol/src/host-test-scheduler.ts"),
+      path.resolve(import.meta.dir, "../../packages/protocol/src/node/host-test-scheduler.ts"),
     ],
     target: "bun",
     minify: true,

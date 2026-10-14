@@ -4,7 +4,7 @@ import type { DesignElement } from "@orkestrator/protocol/design-canvas";
 import { invoke } from "@/lib/native/backend";
 import { useDesignStore } from "@/stores/designStore";
 import { designController, resetDesignControllers } from "./design-controller";
-import { resetCapabilities } from "./design-client";
+import { resetCapabilities } from "@/lib/design-client";
 import { FakeBackend, canvasId, deferred, frameA, frameB } from "./design-test-backend";
 import { DesignFrameBridge } from "./frame-bridge";
 

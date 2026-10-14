@@ -1,23 +1,18 @@
+import { existsSync, promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import {
-  existsSync,
-  fs,
-  os,
-  path,
-  pathToFileURL,
-  randomUUID,
   CODEX_BACKGROUND_TASK_MODEL,
   CODEX_BACKGROUND_TASK_REASONING_EFFORT,
-  sanitizeBranchName,
-  sanitizeEnvironmentName,
-  runCommand,
-  ENVIRONMENT_AGENT_SKILLS_SCRIPT,
-} from "./commands-dependencies.js";
-import type {
-  Environment,
-  AgentSkillProvider,
-  AgentExtensionId,
-  ExtensionCommandRunner,
-} from "./commands-dependencies.js";
+} from "@orkestrator/protocol/codex-background-task";
+import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
+import { runCommand } from "./shell.js";
+import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
+import type { Environment } from "./models.js";
+import type { AgentSkillProvider } from "./agent-skills.js";
+import type { AgentExtensionId, ExtensionCommandRunner } from "./extension-discovery.js";
 import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";

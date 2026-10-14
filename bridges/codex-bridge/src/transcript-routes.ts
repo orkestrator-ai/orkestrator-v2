@@ -6,7 +6,7 @@ import {
   bridgeTranscriptPageRouteBody,
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import type { NormalizedMessage } from "./messages/types.js";
 
 /** The runtime reads the transcript routes use; neither touches liveness or attaches. */

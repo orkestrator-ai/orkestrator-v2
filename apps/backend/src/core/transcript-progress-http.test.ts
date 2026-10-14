@@ -4,8 +4,8 @@
  * session, and when the legacy whole-history route is (and is not) touched.
  */
 import { expect, test } from "bun:test";
-import { bridgeTranscriptSummaryUpdate } from "@orkestrator/protocol/bridge-transcript-summary";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import { bridgeTranscriptSummaryUpdate } from "@orkestrator/protocol/node/bridge-transcript-summary";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import {

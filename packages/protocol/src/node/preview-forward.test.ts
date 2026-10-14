@@ -13,7 +13,7 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import {
   startPreviewFixture,
   type PreviewFixture,
-} from "../../../test-fixtures/preview-app/server";
+} from "../../../../test-fixtures/preview-app/server";
 import {
   DEFAULT_PREVIEW_FORWARD_LIMITS,
   forwardPreviewRequest,
@@ -29,8 +29,8 @@ import {
   rewriteSetCookie,
   upstreamRequestHeaders,
   type PreviewHeaderPolicy,
-} from "./preview-header-policy.js";
-import { previewFailure } from "./preview-services.js";
+} from "../preview-header-policy.js";
+import { previewFailure } from "../preview-services.js";
 
 const policyFor = (port: number, publicOrigin: string): PreviewHeaderPolicy => ({
   privateAuthority: `localhost:${port}`,

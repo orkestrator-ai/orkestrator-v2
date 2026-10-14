@@ -9,7 +9,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, mock } from "bun:test";
 import type { BrowserPreviewCaptureEvent } from "@orkestrator/protocol/browser-preview";
-import { fixtureAnchor, fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import {
+  fixtureAnchor,
+  fixtureTargets,
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   BrowserPreviewManager,
   type BrowserPreviewManagerOptions,

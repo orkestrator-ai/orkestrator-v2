@@ -1,10 +1,8 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import {
-  paneLayoutUnsupportedVersionMessage,
-  PANE_LAYOUT_VERSION,
-  runCommand,
-} from "./commands-dependencies.js";
-import type { SessionStatus, SessionType } from "./commands-dependencies.js";
+import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
+import { PANE_LAYOUT_VERSION } from "./models.js";
+import { runCommand } from "./shell.js";
+import type { SessionStatus, SessionType } from "./models.js";
 import {
   asString,
   asRecord,

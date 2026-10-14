@@ -12,7 +12,7 @@
  * meter Cursor never reported.
  */
 import { Buffer } from "node:buffer";
-import type { NativeAgentAccountUsageWindow } from "./native-agent.js";
+import type { NativeAgentAccountUsageWindow } from "../native-agent.js";
 
 const MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2020, 0, 1);
 const MAX_PLAUSIBLE_EPOCH_MS = Date.UTC(2100, 0, 1);

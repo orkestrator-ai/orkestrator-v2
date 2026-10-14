@@ -1,4 +1,4 @@
-import { CommandFailedError, GitRemoteTimeoutError } from "./commands-dependencies.js";
+import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
 
 export const LIFECYCLE_LOG_DETAIL_MAX_CHARS = 500;
 

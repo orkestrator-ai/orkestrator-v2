@@ -9,7 +9,7 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
-import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
+import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transcript-window";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;

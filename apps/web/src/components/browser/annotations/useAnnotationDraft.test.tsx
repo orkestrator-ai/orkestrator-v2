@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useLayoutEffect, useRef } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { FIXTURE_TIME } from "@orkestrator/protocol/web-annotations-fixtures";
+import { FIXTURE_TIME } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   FakeWebAnnotationBackend,
   installFakeOrkestrator,

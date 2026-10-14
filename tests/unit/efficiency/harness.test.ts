@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   countSerializations,
   countStringifyCalls,
@@ -26,6 +29,7 @@ import {
 } from "../../../scripts/efficiency/fixtures";
 import {
   compareReports,
+  createContext,
   percentile,
   runCase,
   summarizeReports,
@@ -232,6 +236,82 @@ describe("step-14 delta accounting", () => {
 });
 
 describe("efficiency harness", () => {
+  const relocatedModules = [
+    "progressive-transcript.ts",
+    "transcript-window.ts",
+    "bridge-transcript-routes.ts",
+    "bridge-transcript-summary.ts",
+  ];
+
+  for (const layout of ["legacy", "current", "both"] as const) {
+    test(`required and optional modules use the selected root's ${layout} layout`, async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "efficiency-loader-"));
+      try {
+        for (const directory of ["packages/protocol/src", "packages/protocol/src/node"]) {
+          await mkdir(path.join(root, directory), { recursive: true });
+          const source = directory.endsWith("/node") ? "current" : "legacy";
+          if (layout !== "both" && source !== layout) continue;
+          // A dependency beside the module must also come from this root.
+          await writeFile(
+            path.join(root, directory, "identity.ts"),
+            `export const root = ${JSON.stringify(root)};`,
+          );
+          for (const name of relocatedModules) {
+            await writeFile(
+              path.join(root, directory, name),
+              `export { root } from "./identity.ts"; export const layout = ${JSON.stringify(source)};`,
+            );
+          }
+        }
+        const context = createContext(root);
+        for (const name of relocatedModules) {
+          const relative = `packages/protocol/src/node/${name}`;
+          const expected = { root, layout: layout === "legacy" ? "legacy" : "current" };
+          expect(await context.load(relative)).toMatchObject(expected);
+          expect(await context.loadOptional(relative)).toMatchObject(expected);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("missing modules never load from the harness checkout", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "efficiency-loader-"));
+    try {
+      const context = createContext(root);
+      for (const name of relocatedModules) {
+        const relative = `packages/protocol/src/node/${name}`;
+        expect(await context.loadOptional(relative)).toBeUndefined();
+        await expect(context.load(relative)).rejects.toThrow();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a current module's import failure is not hidden by the legacy fallback", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "efficiency-loader-"));
+    try {
+      const directory = path.join(root, "packages/protocol/src");
+      await mkdir(path.join(directory, "node"), { recursive: true });
+      await writeFile(
+        path.join(directory, "progressive-transcript.ts"),
+        "export const legacy = true;",
+      );
+      await writeFile(
+        path.join(directory, "node/progressive-transcript.ts"),
+        'throw new Error("broken current module");',
+      );
+      const context = createContext(root);
+      const relative = "packages/protocol/src/node/progressive-transcript.ts";
+      await expect(context.load(relative)).rejects.toThrow("broken current module");
+      await expect(context.loadOptional(relative)).rejects.toThrow("broken current module");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("percentiles use nearest rank", () => {
     expect(percentile([], 0.5)).toBe(0);
     expect(percentile([5, 1, 3], 0.5)).toBe(3);

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:te
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { resetCapabilities } from "./design-client";
+import { resetCapabilities } from "@/lib/design-client";
 import { DesignLaunchButton } from "./DesignLaunchButton";
 
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.

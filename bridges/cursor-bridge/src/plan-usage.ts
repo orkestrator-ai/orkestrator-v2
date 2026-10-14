@@ -17,7 +17,7 @@ import {
   cursorExchangeExpiryMs,
   DEFAULT_PLAN_LABELS,
   isPlanQuotaWindow,
-} from "@orkestrator/protocol/cursor-plan-usage";
+} from "@orkestrator/protocol/node/cursor-plan-usage";
 import { CATALOG_TIMEOUT_MS } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 

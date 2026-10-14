@@ -4,7 +4,7 @@ import {
   type BridgeLifecycleOptions,
   type LifecycleSignalTarget,
 } from "./bridge-lifecycle.js";
-import { FakeIntervals } from "./fake-intervals.js";
+import { FakeIntervals } from "./testing/fake-intervals.js";
 
 class FakeSignals implements LifecycleSignalTarget {
   readonly listeners = new Map<string, Set<() => void>>();

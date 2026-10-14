@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { validateWebAnnotationCaptureInput } from "@orkestrator/protocol/web-annotations-validation";
 import { BROWSER_PREVIEW_CAPTURE_WORLD_ID } from "../../../apps/desktop/electron/browser-preview-capture";
 import {

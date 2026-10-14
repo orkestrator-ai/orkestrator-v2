@@ -1,24 +1,17 @@
 import { runRemoteGit } from "./git-noninteractive-env.js";
-import {
-  path,
-  createHash,
-  resolveComparisonRef,
-  DiffStatsService,
-  GitFetchScheduler,
-  runCommand,
-  spawnCommand,
-  terminateProcessTree,
-} from "./commands-dependencies.js";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { resolveComparisonRef } from "@orkestrator/protocol/diff-stats";
+import { GitFetchScheduler } from "./git-fetch-scheduler.js";
+import { runCommand, spawnCommand } from "./shell.js";
+import { terminateProcessTree } from "./process-tree.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
-import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
+import { CONTAINER_TREE_MAX_AGE_MS, DiffStatsService } from "./diff-stats-service.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
-import type {
-  ChildProcessWithoutNullStreams,
-  ClientEnvironment,
-  Environment,
-  PtyProcess,
-} from "./commands-dependencies.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ClientEnvironment, Environment } from "./models.js";
+import type { PtyProcess } from "./pty.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
 export type TerminalSessionConfig = (

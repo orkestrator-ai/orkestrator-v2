@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { WEB_ANNOTATION_CAPACITY } from "@orkestrator/protocol/web-annotations";
-import { fixtureAnnotation, fixtureRequest } from "@orkestrator/protocol/web-annotations-fixtures";
+import {
+  fixtureAnnotation,
+  fixtureRequest,
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   decodeBase64Png,
   liveAnnotationCount,

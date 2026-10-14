@@ -348,7 +348,7 @@ describe("draft index crash recovery", () => {
       environmentId: ENV_A,
       operationId: "op-publish",
       capture: (
-        await import("@orkestrator/protocol/web-annotations-fixtures")
+        await import("@orkestrator/protocol/testing/web-annotations-fixtures")
       ).fixtureCaptureInput(),
       body: "Publish me",
       draftId: draft.id,

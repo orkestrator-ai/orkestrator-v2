@@ -17,7 +17,7 @@ import {
   ensureReviewPackageIsGitExcluded,
 } from "./commands-review.js";
 import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
-import { runCommand } from "./commands-dependencies.js";
+import { runCommand } from "./shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
 import type { ReviewPreparationResult } from "./looped-review-prompts.js";
 

@@ -9,7 +9,7 @@ import {
   publicSuccessEnvelope,
   type PublicActionResponse,
   type PublicReceipt,
-} from "./public-api.js";
+} from "../public-api.js";
 
 const NAMESPACE = "ns-1790000000000-0a1b2c3d";
 const CREATED = "2026-09-26T12:00:00.000Z";

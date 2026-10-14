@@ -155,6 +155,19 @@ describe("tmux session cleanup helpers", () => {
       expect(isMissingTmuxSessionError(diagnostic)).toBe(true);
     }
     expect(isMissingTmuxSessionError("permission denied")).toBe(false);
+    // A deleted socket can leave the server and its sessions alive.
+    expect(
+      isMissingTmuxSessionError(
+        "error connecting to /private/tmp/tmux-501/default (No such file or directory)",
+      ),
+    ).toBe(false);
+    expect(
+      isMissingTmuxSessionError("error connecting to /tmp/tmux/default (Permission denied)"),
+    ).toBe(false);
+    expect(
+      isMissingTmuxSessionError("error connecting to /tmp/tmux/default (Connection refused)"),
+    ).toBe(false);
+    expect(isMissingTmuxSessionError("tmux: No such file or directory")).toBe(false);
     expect(isMissingTmuxSessionError(new Error("unrelated failure"))).toBe(false);
   });
 

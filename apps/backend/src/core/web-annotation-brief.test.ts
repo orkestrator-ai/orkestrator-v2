@@ -17,7 +17,7 @@ import {
   fixtureCapture,
   fixtureDestination,
   fixtureEntry,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   compileWebAnnotationBrief,
   composeWebAnnotationDispatchText,

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { webAnnotationRequestMarker } from "@orkestrator/protocol/web-annotations";
-import { fixtureRequest } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";

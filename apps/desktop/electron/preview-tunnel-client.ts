@@ -15,7 +15,7 @@ import {
   connectPreviewWebSocket,
   PreviewWebSocketHandshakeError,
   type PreviewWebSocket,
-} from "@orkestrator/protocol/preview-websocket";
+} from "@orkestrator/protocol/node/preview-websocket";
 
 export interface PreviewTunnelOpenOptions {
   /** `ws(s)://<gateway>/__orkestrator/preview/tunnel` */

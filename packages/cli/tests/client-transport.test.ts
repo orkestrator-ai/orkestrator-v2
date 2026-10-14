@@ -5,7 +5,7 @@ import { GatewayTransport } from "../src/client/transport.js";
 import { ClientSession } from "../src/client/session.js";
 import { LocalReceiptStore } from "../src/client/receipts.js";
 import { publicErrorEnvelope, publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
-import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/public-api-fixtures";
+import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
   capabilities,
   createSandbox,

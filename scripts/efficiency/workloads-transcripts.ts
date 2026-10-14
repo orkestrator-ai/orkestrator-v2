@@ -70,11 +70,11 @@ function unchangedRead(
 
 export async function unchangedReadWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const progressive = await context.load<{ bridgeTranscriptUpdate: UpdateFn }>(
-    "packages/protocol/src/progressive-transcript.ts",
+    "packages/protocol/src/node/progressive-transcript.ts",
   );
   const routes = await context.loadOptional<{
     bridgeTranscriptRouteBody: (source: Json, query: (name: string) => string | undefined) => Json;
-  }>("packages/protocol/src/bridge-transcript-routes.ts");
+  }>("packages/protocol/src/node/bridge-transcript-routes.ts");
   const claudeRevision = await context.loadOptional<{
     readTranscriptVersion: (session: Json) => { epoch: number; revision: number };
     markTranscriptChanged: (session: Json) => void;
@@ -251,7 +251,7 @@ export async function trimmingWorkload(context: WorkloadContext): Promise<Worklo
       targetBytes: number,
       options: Json,
     ) => { messages: FixtureMessage[] };
-  }>("packages/protocol/src/transcript-window.ts");
+  }>("packages/protocol/src/node/transcript-window.ts");
 
   const fixtures = {
     messages: (bytes: number) => textMessages(100, bytes),
@@ -431,10 +431,10 @@ export function heavyArtifactHistory(): FixtureMessage[] {
 
 export async function bridgeWindowWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const progressive = await context.load<{ bridgeTranscriptUpdate: UpdateFn }>(
-    "packages/protocol/src/progressive-transcript.ts",
+    "packages/protocol/src/node/progressive-transcript.ts",
   );
   const summary = await context.loadOptional<{ bridgeTranscriptSummaryUpdate: UpdateFn }>(
-    "packages/protocol/src/bridge-transcript-summary.ts",
+    "packages/protocol/src/node/bridge-transcript-summary.ts",
   );
   const windowCounters = (response: Json) => {
     const value = (response.value ?? {}) as {

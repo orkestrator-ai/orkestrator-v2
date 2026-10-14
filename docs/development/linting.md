@@ -69,6 +69,46 @@ the typo the rule is looking for.
 Warnings never fail the build, so `mise run lint` exiting `0` means zero errors,
 not zero findings. Read the output.
 
+## Module boundaries
+
+Three rules outside `correctness` are errors because they hold an
+architectural line the type checker cannot see. Each was at zero, or had an
+explicit allowlist, when it was turned on (2026-10-14), so a finding is always
+new.
+
+- **`import/no-cycle`.** No runtime import cycles anywhere. Type-only imports
+  are exempt (the rule's `ignoreTypes` default), because they are erased before
+  anything runs. A cycle through value imports makes module evaluation order
+  load-bearing: a binding read during initialisation can still be in its
+  temporal dead zone. Break one by moving the shared piece into a module both
+  sides import. Two components that render each other belong in one module.
+- **`no-restricted-imports`.** It enforces where code may run:
+  - The renderer (`apps/web/src`, `apps/web-public/src`) runs in a browser. It
+    may not import `node:*` or `bun:*`, or import values from
+    `@orkestrator/protocol/node/*`. Types from those modules are fine.
+  - Components reach the backend through the typed clients in `lib/`
+    (`lib/backend`, `lib/design-client`, …), never through the raw
+    `@/lib/native/backend` command transport.
+  - Top-level `packages/protocol/src/*.ts` modules are shared with the
+    renderer. Code that needs Node or Bun lives in `src/node/` and is exported
+    as `@orkestrator/protocol/node/*`. A top-level module may import only types
+    from there. Fixtures and fakes live in `src/testing/`
+    (`@orkestrator/protocol/testing/*`), and only tests may import them.
+
+  Test files, harnesses and fixtures are exempt from this rule (see the test
+  globs in `.oxlintrc.json`).
+- **`import/no-mutable-exports`.** No new `export let`. An exported mutable
+  binding is shared state that any importer can observe changing, and it is
+  usually paired with a setter that exists only for tests. Prefer state owned
+  by an object or closure, with an explicit accessor. The modules that already
+  export mutable bindings are listed in the last `.oxlintrc.json` override. That
+  list is a burn-down list, so remove a file from it once it no longer needs
+  the exemption, and never add one.
+
+The overrides for `no-restricted-imports` replace one another rather than
+merging, so the components override repeats the renderer patterns. Keep the two
+in step when you edit either.
+
 ## Disable directives
 
 Reach for a disable directive only when the rule is wrong about that specific

@@ -14,7 +14,10 @@
  */
 import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { encodedJsonBytes, jsonStringContentBytes } from "@orkestrator/protocol/transcript-budget";
+import {
+  encodedJsonBytes,
+  jsonStringContentBytes,
+} from "@orkestrator/protocol/node/transcript-budget";
 import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { noteCommandOutput } from "./commands.js";

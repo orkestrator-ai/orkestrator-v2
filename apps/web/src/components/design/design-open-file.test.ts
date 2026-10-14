@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { DesignClientError } from "./design-client";
+import { DesignClientError } from "@/lib/design-client";
 import { isDesignFilePath, openDesignFile } from "./design-open-file";
 
 describe("isDesignFilePath", () => {

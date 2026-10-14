@@ -3,7 +3,7 @@ import path from "node:path";
 import type { PublicExecutionState } from "@orkestrator/protocol/public-api";
 import type { CommandContext } from "../commands-context.js";
 import { quoteShell, resolveBunBinary } from "../commands-agent-support.js";
-import { runCommand } from "../commands-dependencies.js";
+import { runCommand } from "../shell.js";
 import { withContainerRuntimeCredential } from "../commands-runtime-state.js";
 import type { Environment } from "../models.js";
 import { boundedMessage, PublicActionError } from "./errors.js";

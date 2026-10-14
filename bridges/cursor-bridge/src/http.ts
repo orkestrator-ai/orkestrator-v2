@@ -31,11 +31,8 @@ import {
   persistBarrier,
   schedulePersist,
 } from "./persistence.js";
-import {
-  closeRestoredTombstone,
-  closeSessionPermanently,
-  hasRestoredTombstone,
-} from "./session-close.js";
+import { closeSessionPermanently } from "./session-close.js";
+import { closeRestoredTombstone, hasRestoredTombstone } from "./session-tombstones.js";
 import {
   admitSteer,
   noteSteerRefusal,
@@ -75,7 +72,7 @@ import {
   bridgeTranscriptRouteBody,
   bridgeTranscriptSubReadBody,
   isBridgeTranscriptSubRead,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { cursorTranscriptSource } from "./transcript-source.js";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";

@@ -1,7 +1,7 @@
 import {
   createBridgeDiagnostics,
   type CancellationReason,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 /**
  * Running one turn.
  *

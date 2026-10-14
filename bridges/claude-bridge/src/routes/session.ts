@@ -62,7 +62,7 @@ import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 import {
   boundTranscriptResponse,
   type TranscriptWindowMetadata,
-} from "@orkestrator/protocol/transcript-window";
+} from "@orkestrator/protocol/node/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { resolveUltracodeEffort } from "../services/ultracode.js";

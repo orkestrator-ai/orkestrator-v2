@@ -9,7 +9,7 @@ import {
   type PreviewLimits,
 } from "@orkestrator/protocol/preview-services";
 
-import { runCommand } from "./commands-dependencies.js";
+import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import { PreviewMetrics } from "../preview-metrics.js";

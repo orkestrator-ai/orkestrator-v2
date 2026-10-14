@@ -1,4 +1,4 @@
-import { createHostTestScheduler } from "../packages/protocol/src/host-test-scheduler";
+import { createHostTestScheduler } from "../packages/protocol/src/node/host-test-scheduler";
 import { renameSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";

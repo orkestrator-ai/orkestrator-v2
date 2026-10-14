@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FIXTURE_BACKEND_INSTANCE_ID,
   FIXTURE_SERVICE_ID,
-} from "@orkestrator/protocol/preview-contract-fixtures";
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 import {
   formatPreviewServiceUri,
   parsePreviewTabTarget,

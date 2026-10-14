@@ -18,7 +18,7 @@ import {
   forwardPreviewUpgrade,
   rejectPreviewUpgrade,
   writePreviewError,
-} from "@orkestrator/protocol/preview-forward";
+} from "@orkestrator/protocol/node/preview-forward";
 import type { PreviewHeaderPolicy } from "@orkestrator/protocol/preview-header-policy";
 import {
   isOpaquePreviewId,

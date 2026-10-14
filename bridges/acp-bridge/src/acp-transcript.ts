@@ -28,7 +28,10 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
-import { encodedJsonBytes, planOldestFirstTrim } from "@orkestrator/protocol/transcript-budget";
+import {
+  encodedJsonBytes,
+  planOldestFirstTrim,
+} from "@orkestrator/protocol/node/transcript-budget";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { terminalDisplayOutput } from "./acp-client-methods.js";
 

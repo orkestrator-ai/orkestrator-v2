@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
-import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
+import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import {
   MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
   MAX_PERSISTED_GROK_INTERJECTION_BYTES,

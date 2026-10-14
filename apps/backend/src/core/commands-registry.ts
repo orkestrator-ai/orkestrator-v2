@@ -2,19 +2,19 @@ import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
+import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
+import type { ClaudeModelCatalogSnapshot } from "./models.js";
 import type {
-  AwaitBridgeReadyResult,
-  ClaudeModelCatalogSnapshot,
   ConditionalResourceSnapshot,
   ResourceManifestKind,
-  StorageService,
-} from "./commands-dependencies.js";
+} from "@orkestrator/protocol/resource-events";
+import type { StorageService } from "./storage.js";
+import { createExtensionDiscoveryCache } from "./extension-discovery.js";
 import {
-  createExtensionDiscoveryCache,
   isResourceGeneration,
   isResourceSnapshotRevision,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "@orkestrator/protocol/resource-events";
+import { runCommand } from "./shell.js";
 import {
   assertDockerContainerOwned,
   enqueueEnvironmentLifecycleOperation,

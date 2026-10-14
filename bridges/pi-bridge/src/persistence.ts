@@ -26,7 +26,7 @@ import {
   type PersistedState,
   type SessionState,
 } from "./state.js";
-import { newSessionState } from "./agent-session.js";
+import { newSessionState } from "./session-factory.js";
 import { restoreCommandCatalogue } from "./commands.js";
 
 let tail: Promise<void> = Promise.resolve();

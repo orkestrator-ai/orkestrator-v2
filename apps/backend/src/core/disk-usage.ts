@@ -1,4 +1,4 @@
-import { canonicalWorktreePath } from "@orkestrator/protocol/worktree-paths";
+import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -9,7 +9,7 @@ import type {
   DiskUsageItem,
   EnvironmentDiskUsage,
 } from "@orkestrator/protocol/disk-usage";
-import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/runtime-profile-status";
+import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-profile-status";
 
 import type { CommandContext } from "./commands-context.js";
 import { retainedContainerIds, storageVolumeNames } from "./environment-cleanup.js";

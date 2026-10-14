@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import * as dependencies from "./commands-dependencies.js";
+import * as pathSafety from "./path-safety.js";
 import { renameLocalFile, resolveWorkspaceFileRename } from "./commands-files.js";
 
 describe("workspace file renames", () => {
@@ -66,9 +66,9 @@ describe("workspace file renames", () => {
 
   test("restores the source when case-only publication fails", async () => {
     await fs.writeFile(path.join(worktreePath, "src", "readme.md"), "original");
-    const move = dependencies.moveConfinedFile;
+    const move = pathSafety.moveConfinedFile;
     const publicationError = new Error("Publication refused");
-    const spy = spyOn(dependencies, "moveConfinedFile").mockImplementation(
+    const spy = spyOn(pathSafety, "moveConfinedFile").mockImplementation(
       async (root, source, destination) => {
         if (destination === "src/README.md") throw publicationError;
         await move(root, source, destination);
@@ -89,9 +89,9 @@ describe("workspace file renames", () => {
 
   test("reports the recovery path when a concurrent writer blocks publication and rollback", async () => {
     await fs.writeFile(path.join(worktreePath, "src", "readme.md"), "original");
-    const move = dependencies.moveConfinedFile;
+    const move = pathSafety.moveConfinedFile;
     let recoveryPath = "";
-    const spy = spyOn(dependencies, "moveConfinedFile").mockImplementation(
+    const spy = spyOn(pathSafety, "moveConfinedFile").mockImplementation(
       async (root, source, destination) => {
         await move(root, source, destination);
         if (source === "src/readme.md") {

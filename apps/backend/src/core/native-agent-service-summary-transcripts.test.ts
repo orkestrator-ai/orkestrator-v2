@@ -12,7 +12,7 @@ import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
-} from "@orkestrator/protocol/bridge-transcript-summary";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import type {
   ProviderTranscriptDetail,
   ProviderTranscriptPage,

@@ -10,9 +10,9 @@ import {
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RESOURCE_ROLE,
-  dockerOwnerNamespace,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
 import { PROVIDER_STATE_LAYOUT } from "./container-state-layout.js";

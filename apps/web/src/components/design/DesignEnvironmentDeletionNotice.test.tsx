@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
-import { resetCapabilities } from "./design-client";
+import { resetCapabilities } from "@/lib/design-client";
 import { DesignEnvironmentDeletionNotice } from "./DesignEnvironmentDeletionNotice";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;

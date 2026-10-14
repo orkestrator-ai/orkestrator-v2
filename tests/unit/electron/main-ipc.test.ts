@@ -4,7 +4,7 @@ import {
   MAX_CLIPBOARD_IMAGE_BYTES,
   type ClipboardItemLike,
 } from "../../../apps/desktop/electron/clipboard";
-import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 
 const CAPTURE_ID = "capture-0f8fad5b-d9cb-469f-a165-70867728950e";
 

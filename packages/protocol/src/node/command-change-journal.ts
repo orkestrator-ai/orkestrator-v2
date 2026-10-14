@@ -14,7 +14,7 @@
 
 import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { MeasuredFileChange, MeasuredWorkspaceChange } from "./tool-diff.js";
+import type { MeasuredFileChange, MeasuredWorkspaceChange } from "../tool-diff.js";
 
 export const MAX_JOURNAL_ENTRIES = 1_000;
 /** A file keeps at most this many files per entry; the totals cover them all. */

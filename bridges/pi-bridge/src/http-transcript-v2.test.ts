@@ -14,7 +14,7 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import type { BridgeMessage, BridgeToolPart, SessionState } from "./state.js";
 
 // `config.ts` reads its environment once, at import; load the router after.

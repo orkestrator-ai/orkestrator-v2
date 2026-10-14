@@ -3,8 +3,8 @@ import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
-} from "@orkestrator/protocol/bridge-transcript-summary";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import { HttpBridgeTranscriptCapabilities } from "./http-bridge-transcript-v2.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";

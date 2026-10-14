@@ -26,14 +26,10 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import {
-  createEnvironment,
-  defaultEnvironmentName,
-  sanitizeEnvironmentName,
-  discoverAgentExtensions,
-  dockerOwnerNamespace,
-} from "./commands-dependencies.js";
-import type { Environment } from "./commands-dependencies.js";
+import { createEnvironment, defaultEnvironmentName, sanitizeEnvironmentName } from "./storage.js";
+import { discoverAgentExtensions } from "./extension-discovery.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import type { Environment } from "./models.js";
 import {
   terminalProcesses,
   mergingEnvironments,

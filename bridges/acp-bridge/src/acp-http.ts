@@ -67,7 +67,7 @@ import {
   bridgeTranscriptRouteBody,
   bridgeTranscriptSubReadBody,
   isBridgeTranscriptSubRead,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { acpTranscriptSource } from "./acp-transcript-source.js";
 import { boundTranscript } from "./acp-transcript.js";
 import {

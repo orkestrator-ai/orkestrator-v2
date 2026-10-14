@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { summarizeBridgeMessage } from "@orkestrator/protocol/bridge-transcript-summary";
+import { summarizeBridgeMessage } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import type { ProviderTranscriptSnapshot } from "./agent-provider-contract.js";
 import { MultiReviewProgressTracker, progressFingerprint } from "./multi-review-progress.js";
 import { commitProgressObservation } from "./review-fanout.js";

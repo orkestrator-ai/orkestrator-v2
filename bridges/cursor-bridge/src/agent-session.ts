@@ -13,7 +13,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
-  Agent,
   type AgentOptions,
   type LocalAgentRunDocument,
   type Run,
@@ -22,10 +21,19 @@ import {
   type ToolName,
 } from "@cursor/sdk";
 import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
-import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { schedulePersist } from "./persistence.js";
-import { finishTombstonesForAgent, hasTombstoneForAgent } from "./session-close.js";
+import {
+  cancelSurvivingRuns,
+  cursorAgentApi,
+  listAllRuns,
+  SessionConflictError,
+  useCursorAgentForTests,
+} from "./cursor-runs.js";
+import { newSessionState } from "./session-factory.js";
+import { finishTombstonesForAgent, hasTombstoneForAgent } from "./session-tombstones.js";
+
+export { cancelSurvivingRuns, newSessionState, SessionConflictError, useCursorAgentForTests };
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
@@ -67,57 +75,6 @@ export class CredentialError extends Error {
     super(message);
     this.name = "CredentialError";
   }
-}
-
-export class SessionConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionConflictError";
-  }
-}
-
-let cursorAgent = Agent;
-
-export function useCursorAgentForTests(agent: typeof Agent): () => void {
-  const previous = cursorAgent;
-  cursorAgent = agent;
-  return () => {
-    cursorAgent = previous;
-  };
-}
-
-export function newSessionState(
-  clientSessionKey?: string,
-  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
-): SessionState {
-  return {
-    id: randomBytes(16).toString("hex"),
-    ...(policy ? { policy } : {}),
-    ...(clientSessionKey ? { clientSessionKey } : {}),
-    status: "idle",
-    messages: [],
-    droppedMessages: 0,
-    droppedParts: 0,
-    transcriptTruncated: false,
-    revision: 0,
-    structured: new Map(),
-    promptJournal: new Map(),
-    steerJournal: new Map(),
-    steerJournalBytes: 0,
-    activeSubagentDescriptors: new Map(),
-    subagentLimitExceeded: false,
-    todos: [],
-    composer: emptyComposer(),
-    agent: null,
-    dispatching: false,
-    promptSequence: 0,
-    openTextParts: new Map(),
-    uncheckedTranscriptBytes: 0,
-    currentTurnOutput: null,
-    lastAccessed: Date.now(),
-    observedMcpTools: new Set(),
-    health: new RuntimeHealthRecorder(),
-  };
 }
 
 /**
@@ -556,7 +513,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         assertSessionOpen(state);
       }
       try {
-        const resumed = await cursorAgent.resume(state.agentId, options);
+        const resumed = await cursorAgentApi().resume(state.agentId, options);
         await disposeIfClosed(state, resumed);
         state.agent = resumed;
         recordAttachedConfig();
@@ -575,7 +532,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       }
     }
 
-    const created = await cursorAgent.create({ ...options, name: "Orkestrator" });
+    const created = await cursorAgentApi().create({ ...options, name: "Orkestrator" });
     await disposeIfClosed(state, created);
     // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
     // state somehow lost its id), the replacement starts its cumulative token
@@ -932,7 +889,7 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
   const items: SDKAgentInfo[] = [];
   let cursor: string | undefined;
   do {
-    const page = await cursorAgent
+    const page = await cursorAgentApi()
       .list({
         runtime: "local",
         cwd: workingDirectory,
@@ -1101,25 +1058,6 @@ async function hydrateHistory(
   state.revision += 1;
 }
 
-async function listAllRuns(agentId: string): Promise<Run[]> {
-  const runs: Run[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await withTimeout(
-      cursorAgent.listRuns(agentId, {
-        runtime: "local",
-        cwd: workingDirectory,
-        limit: MAX_RESUME_ENTRIES,
-        ...(cursor ? { cursor } : {}),
-      }),
-      CATALOG_TIMEOUT_MS,
-    );
-    runs.push(...page.items);
-    cursor = page.nextCursor;
-  } while (cursor && runs.length < 2_000);
-  return runs;
-}
-
 /** Re-adopt a local run that survived a bridge restart. */
 async function recoverActiveRun(state: SessionState): Promise<void> {
   if (!state.agentId || state.activeRun || state.status === "running") return;
@@ -1175,39 +1113,6 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       state.revision += 1;
     }
   })();
-}
-
-/**
- * Cancel any run of `agentId` still executing after the session that owned it
- * was closed by a previous bridge process. Never rejects.
- *
- * `unknown` means the store could not be read — not evidence of a live run.
- * `running` means one was found and did not acknowledge cancellation.
- */
-export async function cancelSurvivingRuns(
-  agentId: string,
-  cancelTimeoutMs: number,
-): Promise<"none" | "cancelled" | "running" | "unknown"> {
-  let runs: Run[];
-  try {
-    runs = await listAllRuns(agentId);
-  } catch {
-    return "unknown";
-  }
-  const running = runs.filter((run) => run.status === "running");
-  if (running.length === 0) return "none";
-  const stopped = await Promise.all(
-    running.map((run) =>
-      withTimeout(
-        Promise.resolve().then(() => run.cancel()),
-        cancelTimeoutMs,
-      ).then(
-        () => true,
-        () => false,
-      ),
-    ),
-  );
-  return stopped.every(Boolean) ? "cancelled" : "running";
 }
 
 function applyRecoveredStreamEvent(state: SessionState, event: unknown): void {
@@ -1413,19 +1318,4 @@ function pushMessage(
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
-}
-
-async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Cursor history read timed out")), timeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

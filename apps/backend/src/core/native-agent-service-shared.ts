@@ -64,7 +64,7 @@ import {
   withResolvedNativeComposerModel,
 } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
-import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
+import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";

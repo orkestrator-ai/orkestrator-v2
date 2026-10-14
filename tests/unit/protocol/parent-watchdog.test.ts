@@ -5,7 +5,7 @@ import {
   startParentWatchdog,
   startReparentWatchdog,
 } from "../../../packages/protocol/src/parent-watchdog";
-import { FakeIntervals } from "../../../packages/protocol/src/fake-intervals";
+import { FakeIntervals } from "../../../packages/protocol/src/testing/fake-intervals";
 
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

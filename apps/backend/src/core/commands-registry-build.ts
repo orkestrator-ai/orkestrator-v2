@@ -1,10 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import {
-  isBuildPipeline,
-  isStartBuildPipelineInput,
-  UNATTENDED_AGENT_INTERACTION_POLICY,
-} from "./commands-dependencies.js";
-import type { StartBuildPipelineInput } from "./commands-dependencies.js";
+import { isBuildPipeline, isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import {
   asString,
   asBoolean,

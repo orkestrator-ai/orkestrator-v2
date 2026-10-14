@@ -1,6 +1,6 @@
 /**
  * Backend side of the bridge transcript v2 contract
- * (`packages/protocol/src/bridge-transcript-summary.ts`).
+ * (`packages/protocol/src/node/bridge-transcript-summary.ts`).
  *
  * Capabilities are learned from answers, never assumed: a bridge that predates
  * v2 ignores `version=2` and answers its v1 envelope, which is read as v1 and
@@ -17,7 +17,7 @@ import {
   parseBridgeTranscriptDetailResponse,
   parseBridgeTranscriptPageResponse,
   parseBridgeTranscriptSummaryUpdate,
-} from "@orkestrator/protocol/bridge-transcript-summary";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   ProviderUnavailableError,
   type BridgeConnection,

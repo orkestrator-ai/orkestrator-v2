@@ -37,8 +37,8 @@ override applies only to this command.
 
 ```bash
 CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 bun - <<'EOF'
-import { bridgeTranscriptUpdate } from './packages/protocol/src/progressive-transcript.ts';
-import { boundTranscriptResponse } from './packages/protocol/src/transcript-window.ts';
+import { bridgeTranscriptUpdate } from './packages/protocol/src/node/progressive-transcript.ts';
+import { boundTranscriptResponse } from './packages/protocol/src/node/transcript-window.ts';
 import { boundTranscript } from './bridges/cursor-bridge/src/transcript.ts';
 
 let serializations = 0;

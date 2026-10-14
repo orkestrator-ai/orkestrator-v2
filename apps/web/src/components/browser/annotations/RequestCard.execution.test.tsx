@@ -10,7 +10,10 @@ import type {
   WebAnnotationRequest,
   WebAnnotationRequestState,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureDestination, fixtureRequest } from "@orkestrator/protocol/web-annotations-fixtures";
+import {
+  fixtureDestination,
+  fixtureRequest,
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {

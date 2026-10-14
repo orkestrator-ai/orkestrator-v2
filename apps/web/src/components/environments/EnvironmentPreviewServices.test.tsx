@@ -5,7 +5,7 @@ import {
   fixturePreviewCapabilities,
   fixturePreviewService,
   fixturePreviewSnapshot,
-} from "@orkestrator/protocol/preview-contract-fixtures";
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 import { previewError } from "@orkestrator/protocol/preview-services";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";

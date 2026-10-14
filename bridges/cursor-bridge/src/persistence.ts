@@ -34,7 +34,7 @@ import {
   type PersistedState,
   type SessionState,
 } from "./state.js";
-import { newSessionState } from "./agent-session.js";
+import { newSessionState } from "./session-factory.js";
 
 export { PersistenceError } from "./persistence-budget.js";
 

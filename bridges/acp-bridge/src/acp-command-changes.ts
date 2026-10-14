@@ -30,9 +30,9 @@ import {
   CommandChangeJournal,
   hasMeasuredChanges,
   parseMeasuredWorkspaceChange,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   MAX_RESUMABLE_SESSIONS,
   acpToolSourceStates,

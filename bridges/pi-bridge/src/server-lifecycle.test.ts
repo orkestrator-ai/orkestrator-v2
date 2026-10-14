@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { FakeIntervals } from "@orkestrator/protocol/fake-intervals";
+import { FakeIntervals } from "@orkestrator/protocol/testing/fake-intervals";
 
 // `config.ts` reads its environment once, at import, so everything below is
 // loaded after this suite's environment is in place.

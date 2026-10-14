@@ -23,7 +23,7 @@ import {
   WEB_ANNOTATION_COMMANDS,
   parseWebAnnotationError,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { OrkestratorGateway } from "../gateway.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";

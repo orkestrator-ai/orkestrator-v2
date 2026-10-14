@@ -3,7 +3,7 @@ import { createServer as createHttpServer, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo } from "node:net";
 
-import { fixturePreviewDefinition } from "@orkestrator/protocol/preview-contract-fixtures";
+import { fixturePreviewDefinition } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { resolvePreviewTargetIntent } from "./preview-intent.js";
 import { PreviewReadinessProber } from "./preview-readiness.js";

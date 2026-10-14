@@ -142,6 +142,17 @@ export function getChanges(
 ) {
   return invoke<DesignChanges>("design_changes", { environmentId, canvasId, generation, after });
 }
+export function getLegacyDesignStatus() {
+  return invoke<{ ready: boolean; error?: string }>("design_status");
+}
+/** Imports a serialized `.orkdes` document as a new canvas. */
+export function importDesignDocument(environmentId: string, document: string) {
+  return invoke<DesignCanvas>("design_import", { environmentId, document });
+}
+/** Imports an `.orkdes` file the backend reads from the host. */
+export function importDesignHostFile(environmentId: string, path: string) {
+  return invoke<DesignCanvas>("design_import_host_file", { environmentId, path });
+}
 
 // Protocol v2.
 export const designApi = {

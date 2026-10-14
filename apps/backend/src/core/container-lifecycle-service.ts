@@ -23,9 +23,9 @@ import {
   DOCKER_LABEL_OPERATION_ID,
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RUNTIME_GENERATION,
-  dockerOwnerNamespace,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { removeStorageVolumes } from "./container-storage.js";

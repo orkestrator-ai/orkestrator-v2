@@ -59,7 +59,7 @@ import {
   bridgeTranscriptRouteBody,
   bridgeTranscriptSubReadBody,
   isBridgeTranscriptSubRead,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { piTranscriptSource } from "./transcript-source.js";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";

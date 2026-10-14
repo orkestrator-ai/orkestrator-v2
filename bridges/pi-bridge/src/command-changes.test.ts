@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CommandChangeJournal } from "@orkestrator/protocol/command-change-journal";
+import { CommandChangeJournal } from "@orkestrator/protocol/node/command-change-journal";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { newSessionState } from "./agent-session.js";
 import {

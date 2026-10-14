@@ -61,7 +61,7 @@ import {
   commandDidNotRun,
   recordCommandChanges,
 } from "./sessions/command-changes.js";
-import { hasMeasuredChanges } from "@orkestrator/protocol/command-change-journal";
+import { hasMeasuredChanges } from "@orkestrator/protocol/node/command-change-journal";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import { hydrateMessagesFromPersistedSession } from "./history/rollout.js";

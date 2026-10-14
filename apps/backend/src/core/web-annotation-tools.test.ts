@@ -13,7 +13,7 @@ import {
   fixtureCapture,
   fixtureEntry,
   fixtureRequest,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { WebAnnotationResultReportInput } from "@orkestrator/protocol/web-annotations-validation";
 import { AgentToolsServer } from "./agent-tools.js";
 import { StorageService } from "./storage.js";

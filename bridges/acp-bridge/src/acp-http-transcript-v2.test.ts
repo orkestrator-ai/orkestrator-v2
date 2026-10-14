@@ -20,7 +20,7 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { route } from "./acp-http.js";
 import {

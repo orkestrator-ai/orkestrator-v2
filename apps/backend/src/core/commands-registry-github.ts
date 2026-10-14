@@ -9,7 +9,7 @@ import {
   updateGitHubIssue,
   updateGitHubIssueComment,
   updateGitHubIssueStatus,
-} from "./commands-dependencies.js";
+} from "./github.js";
 import {
   asString,
   requireGitHubProject,

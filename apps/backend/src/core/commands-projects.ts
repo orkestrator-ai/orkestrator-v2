@@ -1,19 +1,13 @@
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
-import {
-  fs,
-  path,
-  createProject,
-  CommandFailedError,
-  runCommand,
-} from "./commands-dependencies.js";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { createProject } from "./storage.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 import { conciseError } from "./commands-error-text.js";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
-import type {
-  ClaudeModelCatalogSnapshot,
-  Project,
-  StorageService,
-} from "./commands-dependencies.js";
+import type { ClaudeModelCatalogSnapshot, Project } from "./models.js";
+import type { StorageService } from "./storage.js";
 import { enqueueContainerBridgeOperation, startLocalServer } from "./commands-servers.js";
 import {
   startContainerClaudeServer,

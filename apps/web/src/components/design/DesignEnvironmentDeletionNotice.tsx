@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { designApi, getCapabilities } from "./design-client";
+import { designApi, getCapabilities } from "@/lib/design-client";
 
 interface Summary {
   total: number;

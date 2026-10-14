@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import type { FileNode } from "@/lib/backend";
 import { useFilesPanelStore } from "@/stores";
 import type { DesignProjection } from "@/stores/designStore";
-import { designApi, failureOf } from "./design-client";
+import { designApi, failureOf } from "@/lib/design-client";
 import type { DesignCanvasController } from "./design-controller";
 
 import { DESIGN_EXPORT_NAME, DESIGN_EXPORT_PATH_MAX } from "./design-export-path";

@@ -5,10 +5,10 @@ import {
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
 import {
-  os,
-  path,
-  randomBytes,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,
@@ -26,21 +26,18 @@ import {
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
-  dockerContainerRuntimeName,
-  dockerOwnerNamespace,
-  defaultRepositoryConfig,
-  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
-  ORKESTRATOR_AGENT_MCP_URL_ENV,
-  pathExists,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerContainerRuntimeName, dockerOwnerNamespace } from "./docker-ownership.js";
+import { defaultRepositoryConfig } from "./storage.js";
+import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
+import { pathExists, runCommand } from "./shell.js";
 import type {
   Environment,
   ClaudeEffortLevel,
   ClaudeModelCatalogEntry,
   ClaudeModelCatalogSnapshot,
-  AgentToolConnection,
-} from "./commands-dependencies.js";
+} from "./models.js";
+import type { AgentToolConnection } from "./agent-tools.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   BRIDGE_TOKEN_PATTERN,

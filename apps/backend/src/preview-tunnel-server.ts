@@ -19,7 +19,7 @@ import {
 import {
   acceptPreviewWebSocket,
   type PreviewWebSocket,
-} from "@orkestrator/protocol/preview-websocket";
+} from "@orkestrator/protocol/node/preview-websocket";
 
 import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
 import type { PreviewRuntime } from "./core/preview-runtime.js";

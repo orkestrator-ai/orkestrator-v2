@@ -16,7 +16,7 @@ import { detachAgent } from "./agent-session.js";
 import { json, route } from "./http.js";
 import { settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
-import { finishRestoredTombstones } from "./session-close.js";
+import { finishRestoredTombstones } from "./session-tombstones.js";
 import { sessions } from "./state.js";
 
 const IDLE_SWEEP_MS = 60 * 1000;

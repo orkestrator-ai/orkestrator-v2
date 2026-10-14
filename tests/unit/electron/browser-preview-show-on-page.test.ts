@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { createHarness, type Json } from "./browser-preview-capture-harness";
 
 const pin = (annotationId: string, route: string, target: unknown = fixtureTargets.element) => ({

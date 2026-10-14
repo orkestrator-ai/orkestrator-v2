@@ -8,7 +8,7 @@
  * cache from the other side.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { isPlanQuotaWindow } from "@orkestrator/protocol/cursor-plan-usage";
+import { isPlanQuotaWindow } from "@orkestrator/protocol/node/cursor-plan-usage";
 import type {
   NativeAgentAccountUsageWindow,
   NativeAgentContextUsage,

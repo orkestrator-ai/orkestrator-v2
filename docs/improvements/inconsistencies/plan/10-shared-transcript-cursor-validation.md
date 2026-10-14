@@ -13,8 +13,8 @@ parser prevents future drift between Pi, Cursor, and Grok's ACP bridge.
 
 ## Owners
 
-- [Shared transcript utilities](../../../../packages/protocol/src/transcript-window.ts)
-  and [tests](../../../../packages/protocol/src/transcript-window.test.ts).
+- [Shared transcript utilities](../../../../packages/protocol/src/node/transcript-window.ts)
+  and [tests](../../../../packages/protocol/src/node/transcript-window.test.ts).
 - [Pi public projection](../../../../bridges/pi-bridge/src/public.ts) and
   [HTTP routes](../../../../bridges/pi-bridge/src/http.ts).
 - [Cursor public projection](../../../../bridges/cursor-bridge/src/public.ts) and
@@ -104,7 +104,7 @@ for example, after adding the helper to this existing module:
 
 ```sh
 mise run test:logged -- --name transcript-cursor-contract -- \
-  bun test ./packages/protocol/src/transcript-window.test.ts \
+  bun test ./packages/protocol/src/node/transcript-window.test.ts \
   --parallel=1 --only-failures
 ```
 

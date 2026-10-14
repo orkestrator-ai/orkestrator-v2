@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand } from "./shell.js";
+import type { CommandContext } from "./commands-context.js";
+import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
+import { ContainerLifecycleError } from "./container-lifecycle-service.js";
 import {
+  requiredAgentNetworkDomains,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_NETWORK_POLICY,
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RESOURCE_ROLE,
-  dockerOwnerNamespace,
-  runCommand,
-} from "./commands-dependencies.js";
-import type { CommandContext } from "./commands-context.js";
-import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
-import { ContainerLifecycleError } from "./container-lifecycle-service.js";
-import { requiredAgentNetworkDomains } from "./constants.js";
+} from "./constants.js";
 import { imageCapabilities } from "./docker-image.js";
 import type { AppConfig, Environment } from "./models.js";
 

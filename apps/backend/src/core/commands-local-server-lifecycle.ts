@@ -1,5 +1,7 @@
-import { DOCKER_IMAGE, runCommand } from "./commands-dependencies.js";
-import type { ChildProcessWithoutNullStreams, Environment } from "./commands-dependencies.js";
+import { DOCKER_IMAGE } from "./constants.js";
+import { runCommand } from "./shell.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { Environment } from "./models.js";
 import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
 import type { CoordinatorConversation } from "@orkestrator/protocol/coordinator";
 import {

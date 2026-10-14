@@ -8,7 +8,7 @@ import {
   fixturePreviewCapabilities,
   fixturePreviewService,
   fixturePreviewSnapshot,
-} from "@orkestrator/protocol/preview-contract-fixtures";
+} from "@orkestrator/protocol/testing/preview-contract-fixtures";
 import {
   formatPreviewIntentUri,
   formatPreviewServiceUri,

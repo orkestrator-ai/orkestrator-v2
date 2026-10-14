@@ -17,7 +17,7 @@ import {
 import {
   boundTranscriptInPlace,
   type TranscriptLimits,
-} from "@orkestrator/protocol/transcript-budget";
+} from "@orkestrator/protocol/node/transcript-budget";
 import {
   saturatedText,
   type BridgeMessage,

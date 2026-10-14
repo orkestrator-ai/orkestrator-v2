@@ -11,7 +11,7 @@ desktop/backend/bridge versions explicit.
 
 ## Owners
 
-- [Bridge progressive protocol](../../../../packages/protocol/src/progressive-transcript.ts).
+- [Bridge progressive protocol](../../../../packages/protocol/src/node/progressive-transcript.ts).
 - [Native-agent protocol](../../../../packages/protocol/src/native-agent.ts) and
   [part identity](../../../../packages/protocol/src/transcript-part-ids.ts).
 - [Provider contract](../../../../apps/backend/src/core/agent-provider-contract.ts).
@@ -98,7 +98,7 @@ Implementation commit / PR: branch implement-efficiency-improvements-7f099383677
   (+ readBridgePartDetail and the NativeAgentTranscriptView.historyPaging field
   in the backend consumption commit)
 Protocol or storage decisions:
-  - packages/protocol/src/bridge-transcript-summary.ts. Summary envelope
+  - packages/protocol/src/node/bridge-transcript-summary.ts. Summary envelope
     `version: 2` beside the unchanged v1 envelope; capabilities are read from
     the envelope's own discriminator (an old bridge ignores `version=2` and
     answers v1) plus `capabilities: {details, pages}` in each v2 snapshot.
@@ -127,7 +127,7 @@ Protocol or storage decisions:
     backend direct page cursors are a separate namespace (`v: 2`) from the
     joined sync-v1 cursors (`v: 1`) and never translated into each other.
   - Part-level deltas remain off (step 14 decision).
-Tests and isolated profiles: packages/protocol/src/bridge-transcript-summary.test.ts
+Tests and isolated profiles: packages/protocol/src/node/bridge-transcript-summary.test.ts
   (22 tests: summaries, inline threshold, images, nested tools, prompt kept
   in window where v1 drops it, zero-visit unchanged read, v1/v2 token
   separation, memoized heavy parts, exact/expired/missing/invalid details,

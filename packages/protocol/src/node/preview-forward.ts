@@ -13,7 +13,7 @@ import {
   requestHeaderViolation,
   upstreamRequestHeaders,
   type PreviewHeaderPolicy,
-} from "./preview-header-policy.js";
+} from "../preview-header-policy.js";
 import {
   headerValues,
   http1Request,
@@ -27,7 +27,7 @@ import {
   previewErrorFromUnknown,
   previewFailure,
   type PreviewErrorCategory,
-} from "./preview-services.js";
+} from "../preview-services.js";
 
 export interface PreviewForwardLimits {
   headersTimeoutMs: number;

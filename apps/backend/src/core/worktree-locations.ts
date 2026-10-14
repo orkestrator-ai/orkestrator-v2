@@ -1,7 +1,7 @@
 import {
   canonicalWorktreePath,
   assertWorktreePathUnlinked,
-} from "@orkestrator/protocol/worktree-paths";
+} from "@orkestrator/protocol/node/worktree-paths";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,7 +11,7 @@ import {
   type WorktreeLocationSettings,
   type WorktreeLocationsSnapshot,
 } from "@orkestrator/protocol/disk-usage";
-import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/runtime-profile-status";
+import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-profile-status";
 
 import type { CommandContext } from "./commands-context.js";
 import { APP_SLUG } from "./constants.js";

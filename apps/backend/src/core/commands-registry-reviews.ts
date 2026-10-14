@@ -3,23 +3,23 @@ import {
   readReviewValidationOutput,
 } from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { isMultiReviewReviewerHistoryPageRequest } from "@orkestrator/protocol/multi-review";
 import {
-  LOOPED_REVIEW_WORKFLOW_VERSION,
-  isLoopedReviewTerminalPhase,
-  isLoopedReviewWorkflow,
+  isMultiReviewReviewerHistoryPageRequest,
   isMultiReviewStepControlInput,
   isMultiReviewReviewerTranscriptRequest,
   isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
-  isStartLoopedReviewInput,
   isStartMultiReviewInput,
-} from "./commands-dependencies.js";
-import type {
-  StartLoopedReviewInput,
-  StartMultiReviewCustomFixInput,
-  StartMultiReviewInput,
-} from "./commands-dependencies.js";
+  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewInput,
+} from "@orkestrator/protocol/multi-review";
+import {
+  LOOPED_REVIEW_WORKFLOW_VERSION,
+  isLoopedReviewTerminalPhase,
+  isLoopedReviewWorkflow,
+  isStartLoopedReviewInput,
+} from "@orkestrator/protocol/review-workflow";
+import type { StartLoopedReviewInput } from "@orkestrator/protocol/review-workflow";
 import {
   asString,
   asNumber,

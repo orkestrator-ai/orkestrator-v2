@@ -2,7 +2,7 @@ import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejectio
 import {
   HOST_TEST_SCHEDULER_SOURCE,
   TEST_SCHEDULING_POLICY_SOURCE,
-} from "@orkestrator/protocol/host-test-scheduler";
+} from "@orkestrator/protocol/node/host-test-scheduler";
 import {
   REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX,
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,

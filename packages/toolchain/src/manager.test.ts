@@ -141,7 +141,12 @@ function artifactWithBody(
 }
 
 async function tarGzip(
-  entries: Array<{ name: string; body: Buffer; type?: "file" | "directory" }>,
+  entries: Array<{
+    name: string;
+    body: Buffer;
+    type?: "file" | "directory" | "symlink" | "link";
+    linkname?: string;
+  }>,
 ): Promise<NonSharedBuffer> {
   const pack = tar.pack();
   const collecting = (async () => {
@@ -156,6 +161,7 @@ async function tarGzip(
           name: entry.name,
           size: entry.body.byteLength,
           type: entry.type ?? "file",
+          linkname: entry.linkname,
         },
         entry.body,
         (error) => {
@@ -1159,6 +1165,89 @@ describe("pinned desktop toolchain cache", () => {
       else await expect(installing).resolves.toBeDefined();
     }
   });
+
+  // Node-only tests also fail on an uncaught entry-stream error. Exact error
+  // assertions pin the outer pipeline's rejection while its entry listener
+  // consumes tar-stream's second emission of the same failure.
+  for (const failure of [
+    {
+      name: "duplicate executable",
+      entries: [
+        { name: "package/tool", body: Buffer.alloc(EXECUTABLE_SIZE) },
+        { name: "package/tool", body: Buffer.alloc(EXECUTABLE_SIZE) },
+      ],
+      message: "claude archive contains a duplicate executable entry",
+    },
+    {
+      name: "mismatched executable size",
+      entries: [{ name: "package/tool", body: Buffer.alloc(EXECUTABLE_SIZE - 1) }],
+      message: "claude executable entry did not match the pinned manifest",
+    },
+    {
+      name: "non-file executable",
+      entries: [{ name: "package/tool", body: Buffer.alloc(0), type: "directory" as const }],
+      message: "claude executable entry did not match the pinned manifest",
+    },
+  ]) {
+    test(`tar entry failure rejects cleanly with the original error: ${failure.name}`, async () => {
+      const dataDir = await createDataDir();
+      const archive = await tarGzip(failure.entries);
+      await expect(
+        ensurePinnedToolchains({
+          dataDir,
+          artifacts: [artifactWithBody(artifacts[1], archive)],
+          fetchImpl: async () => response(archive),
+          skipExecutableProbeForTests: true,
+        }),
+      ).rejects.toEqual(new Error(failure.message));
+      expect(await readdir(path.join(dataDir, "toolchains"))).toEqual([]);
+    });
+  }
+
+  for (const failure of [
+    {
+      name: "unsafe path",
+      entries: [{ name: "package/../escape", body: Buffer.from("unsafe") }],
+      message: "Unsafe path in claude bundle",
+    },
+    {
+      name: "extracted byte bound",
+      entries: [{ name: "package/large", body: Buffer.alloc(8192) }],
+      message: "claude bundle exceeded its extraction bounds",
+    },
+    {
+      name: "entry count bound",
+      entries: Array.from({ length: 20_001 }, (_, index) => ({
+        name: `package/dir-${index}/`,
+        body: Buffer.alloc(0),
+        type: "directory" as const,
+      })),
+      message: "claude bundle exceeded its extraction bounds",
+    },
+    ...(["symlink", "link"] as const).map((type) => ({
+      name: `unsupported ${type}`,
+      entries: [{ name: "package/link", body: Buffer.alloc(0), type, linkname: "package/tool" }],
+      message: "claude bundle contains an unsupported link or entry type",
+    })),
+  ]) {
+    test(`tar bundle failure rejects cleanly with the original error: ${failure.name}`, async () => {
+      const dataDir = await createDataDir();
+      const archive = await tarGzip(failure.entries);
+      if (failure.name === "extracted byte bound") {
+        expect(failure.entries[0]!.body.byteLength).toBeGreaterThan(archive.byteLength * 6);
+      }
+      await expect(
+        ensurePinnedToolchains({
+          dataDir,
+          artifacts: [artifactWithBody(artifacts[1], archive, { bundleRoot: "package/" })],
+          fetchImpl: async () => response(archive),
+          skipExecutableProbeForTests: true,
+        }),
+      ).rejects.toEqual(new Error(failure.message));
+      // Failed extraction must remove staging files and never activate a tool.
+      expect(await readdir(path.join(dataDir, "toolchains"))).toEqual([]);
+    });
+  }
 
   test("probes installed executables and rejects unexpected versions", async () => {
     const executableArtifact: ToolchainArtifact = { ...artifacts[0], platform: "linux" };

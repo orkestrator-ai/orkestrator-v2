@@ -894,7 +894,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
-                      disabled={neutralControlUpdatePending}
+                      disabled={neutralControlUpdatePending || !neutralProjection}
                       checked={neutralProjection?.composer?.includeLocalSettings ?? false}
                       onChange={(event) => {
                         void updateNeutralControls({
@@ -907,7 +907,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
-                      disabled={neutralControlUpdatePending}
+                      disabled={neutralControlUpdatePending || !neutralProjection}
                       checked={neutralProjection?.composer?.promptSuggestionsEnabled ?? false}
                       onChange={(event) => {
                         void updateNeutralControls({ promptSuggestions: event.target.checked });

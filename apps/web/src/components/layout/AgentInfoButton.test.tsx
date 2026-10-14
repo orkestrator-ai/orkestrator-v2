@@ -2658,9 +2658,9 @@ describe("AgentInfoButton Claude session options", () => {
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   });
 
-  test("routes the session toggles to the backend before the projection arrives", async () => {
-    // The backend owns these settings; with no projection yet there is no
-    // local copy to latch, so a refused update leaves the box unchecked.
+  test("holds the session toggles until the projection arrives", () => {
+    // The backend owns these settings and there is no session to update yet,
+    // so the boxes stay disabled rather than sending an update it must refuse.
     routeNativeCommands();
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
@@ -2668,15 +2668,13 @@ describe("AgentInfoButton Claude session options", () => {
     const [localSettings, suggestions] = screen.getAllByRole("checkbox") as HTMLInputElement[];
     expect(localSettings!.checked).toBe(false);
     expect(suggestions!.checked).toBe(false);
+    expect(localSettings!.disabled).toBe(true);
+    expect(suggestions!.disabled).toBe(true);
 
     fireEvent.click(localSettings!);
 
-    await waitFor(() =>
-      expect(mockNativeControls).toHaveBeenCalledWith({ includeLocalSettings: true }),
-    );
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Claude Native session is unavailable"),
-    );
+    expect(mockNativeControls).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
     expect(localSettings!.checked).toBe(false);
   });
 

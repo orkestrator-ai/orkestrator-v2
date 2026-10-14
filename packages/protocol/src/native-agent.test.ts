@@ -38,6 +38,9 @@ import {
   isNativeAgentTranscriptUpdate,
   nativeAsyncQuestionItemId,
   nativeAsyncQuestionRequestId,
+  isNativeInlineErrorMessageId,
+  NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX,
+  providerInlineErrorMessageId,
   type NativeAgentSessionProjection,
 } from "./native-agent";
 
@@ -47,6 +50,23 @@ describe("native async question identities", () => {
     expect(nativeAsyncQuestionItemId(nativeAsyncQuestionRequestId(itemId))).toBe(itemId);
     expect(nativeAsyncQuestionItemId("ordinary-request")).toBeUndefined();
     expect(nativeAsyncQuestionItemId("async-question:%zz")).toBeUndefined();
+  });
+});
+
+describe("native inline error message ids", () => {
+  test("keeps the persisted id shape the renderer styles as an error", () => {
+    // Persisted transcripts and rendered rows carry these literal ids.
+    expect(NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX).toBe("error-");
+    expect(providerInlineErrorMessageId("opencode", "msg-1")).toBe("error-opencode-msg-1");
+  });
+
+  test("recognizes provider and renderer inline error rows only", () => {
+    expect(isNativeInlineErrorMessageId(providerInlineErrorMessageId("opencode", "m"))).toBe(true);
+    expect(isNativeInlineErrorMessageId("error-123")).toBe(true);
+    expect(isNativeInlineErrorMessageId("assistant-error-1")).toBe(false);
+    expect(isNativeInlineErrorMessageId("native-terminal:error:abc")).toBe(false);
+    expect(isNativeInlineErrorMessageId(undefined)).toBe(false);
+    expect(isNativeInlineErrorMessageId(42)).toBe(false);
   });
 });
 

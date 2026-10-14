@@ -23,6 +23,7 @@ import {
   type NativeAgentAsyncQuestionResponse,
   type NativeAgentContextUsage,
   type NativeAgentNotice,
+  isNativeInlineErrorMessageId,
 } from "@orkestrator/protocol/native-agent";
 import {
   parseCoordinatorDelegatedPrompt,
@@ -102,7 +103,6 @@ import {
   type ProgressiveReadOutcome,
   type ProgressiveReadPhases,
 } from "./native-agent-progressive-metrics.js";
-import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/bridge-transcript-summary";
 import {
@@ -4286,14 +4286,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const messageIds = new Set(
         transcript.messages.map((message) => (message as { id?: unknown })?.id),
       );
-      // A provider that already renders its failure inline (OpenCode) ends the
-      // transcript with that row; a second terminal row would repeat it.
+      // A provider that already renders its failure inline (OpenCode today)
+      // ends the transcript with an inline error row; a second terminal row
+      // would repeat it.
       const lastMessageId = (transcript.messages.at(-1) as { id?: unknown } | undefined)?.id;
-      const inlineError =
-        typeof lastMessageId === "string" &&
-        lastMessageId.startsWith(OPEN_CODE_INLINE_ERROR_ID_PREFIX)
-          ? (transcript.messages.at(-1) as { content?: unknown })
-          : undefined;
+      const inlineError = isNativeInlineErrorMessageId(lastMessageId)
+        ? (transcript.messages.at(-1) as { content?: unknown })
+        : undefined;
       const terminalMessages = terminalNotices
         .filter(
           (notice) =>

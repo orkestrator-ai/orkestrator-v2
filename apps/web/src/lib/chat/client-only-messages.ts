@@ -4,9 +4,13 @@ import {
   type AgentMailMessage,
   type MailActor,
 } from "@orkestrator/protocol/agent-mail";
+import { NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-agent";
 
-/** Prefix for client-only error messages rendered inline in a transcript. */
-export const ERROR_MESSAGE_PREFIX = "error-";
+/**
+ * Prefix for error messages rendered inline in a transcript: client-only rows
+ * and the durable rows a provider writes (`providerInlineErrorMessageId`).
+ */
+export const ERROR_MESSAGE_PREFIX = NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX;
 
 /** Prefix for client-only system messages rendered inline in a transcript. */
 export const SYSTEM_MESSAGE_PREFIX = "system-";

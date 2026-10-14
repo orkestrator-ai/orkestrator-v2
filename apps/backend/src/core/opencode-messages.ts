@@ -1,4 +1,5 @@
 import type { Part as OpenCodePart } from "@opencode-ai/sdk/v2/types";
+import { providerInlineErrorMessageId } from "@orkestrator/protocol/native-agent";
 import {
   tryParseStructuredOutputText,
   type JsonSchema,
@@ -530,12 +531,6 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
 }
 
 /**
- * Id prefix the renderer styles as an error alert rather than an assistant
- * reply. Matches the renderer's own `ERROR_MESSAGE_PREFIX`.
- */
-export const OPEN_CODE_INLINE_ERROR_ID_PREFIX = "error-opencode-";
-
-/**
  * Appended when the provider refused a tool definition, which otherwise reads
  * like a fault in the conversation rather than in the tools sent with it.
  */
@@ -572,7 +567,8 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
       .map(openCodeIsoTimestamp)
       .find((candidate) => candidate !== undefined) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
   return {
-    id: `${OPEN_CODE_INLINE_ERROR_ID_PREFIX}${messageId}`,
+    // `error-opencode-<id>`: rendered as an error alert, not an assistant reply.
+    id: providerInlineErrorMessageId("opencode", messageId),
     role: "assistant",
     content,
     parts: [{ type: "text", content }],

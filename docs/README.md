@@ -114,7 +114,7 @@ still to fix (`docs/<date>/`).
 | Document | Status | Notes |
 | --- | --- | --- |
 | [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Coordinator read-only adapters, turn-control gaps, and one live suite. |
-| [2026-10-14/README.md](2026-10-14/README.md) | Active | Six pre-existing problems found while validating the OpenCode boundary cleanup: OpenCode default model ignores connectivity, tmux 3.8 breaks environment move, startup Claude login dialog blocks the app, fork loses its model, host-dependent test failures, wrong OpenCode auth status. |
+| [2026-10-14/README.md](2026-10-14/README.md) | Active | Everything left open after the OpenCode boundary cleanup: OpenCode default model ignores connectivity, tmux 3.8 breaks environment move, startup Claude login dialog blocks the app, fork loses its model, host-dependent test failures, wrong OpenCode auth status, plus cleanup follow-ups, decisions, flakes and watch items. |
 | [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.19.0`. |
 | [remote-stream-compression.md](todo/remote-stream-compression.md) | Deferred | Measure redundant payloads before changing compression defaults. |
 | [remote-client-data-saving-mode.md](todo/remote-client-data-saving-mode.md) | Deferred | Proposal only. Measure existing incremental reads first. |

@@ -16,6 +16,7 @@ not touch, so none of them is a regression from that work.
 | [04](04-opencode-fork-loses-model.md) | A forked OpenCode session switches to the first catalogue model | Medium | Fork flow, composer inference |
 | [05](05-real-stack-suite-host-dependencies.md) | Browser, root and bridge suites fail on an ordinary developer machine for host reasons | Medium | Test infrastructure |
 | [06](06-opencode-auth-status-truncation.md) | OpenCode shows "needs auth" while a provider is connected | Low–medium | OpenCode capabilities |
+| [07](07-cleanup-follow-ups.md) | Leftover dead renderer helpers, store consolidation, doc drift, a decision to confirm, a known version-skew limitation, the day's flakes (0207, 0208), a live OpenCode spec to commit, and a fault-isolation watch item | Low | Cleanup and follow-ups |
 
 01, 04 and 06 share one underlying weakness: OpenCode model and provider
 state is chosen without OpenCode's connectivity report, and
@@ -25,3 +26,20 @@ cause 5 first makes 04 smaller.
 Each file gives the symptom, root cause with file and line references, user
 impact, a proposed fix and the tests that pin current behaviour. Line numbers
 are as of `d4dfa11d` plus the branch above. Re-check them before editing.
+
+## Not yet confirmed
+
+These points are inferred and should be checked first when picking up the
+item:
+
+- 03: why `dev:test --credential-source claude` still reported Claude as "not
+  configured" (`~/.claude.json` not visible to the isolated backend, or not
+  imported).
+- 04: that "MiMo-V2.6-Pro" is simply the first catalogue row (inferred from
+  the label, not checked against OpenCode's provider order).
+- 05: the cause of the narrow-viewport export dialog failure in
+  `design-canvas.spec.ts:9`, and whether the `verified copy helper` failures
+  come from bsdtar versus GNU tar.
+- 06: that the connected provider really sits beyond index 127 of
+  `provider.list().all` (the provider count in a live response was not
+  measured).

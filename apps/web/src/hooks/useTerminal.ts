@@ -965,9 +965,10 @@ export function useTerminal({
     return true;
   }, []);
 
-  // A failed write can leave the browser gateway's input queue closed until the
-  // session restarts, while output keeps streaming so the terminal still looks
-  // alive. Reconnecting is the only recovery, so the failure toast offers it.
+  // A failed write can leave the terminal input queue closed until the session
+  // restarts, while output keeps streaming so the terminal still looks alive.
+  // Reconnecting is the only recovery that works on every transport, so the
+  // failure toast offers it.
   //
   // `connect` refuses while a renderer-owned connection is already established,
   // so that session has to restart. Attach-only sessions are backend-owned,

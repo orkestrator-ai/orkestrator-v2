@@ -1,7 +1,17 @@
 export const TERMINAL_HTTP_INPUT_BATCH_DELAY_MS = 8;
 export const TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES = 64 * 1024;
+/** Accepted-but-unsent bytes per terminal. */
 export const TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES = 1024 * 1024;
+/**
+ * Input parked for room, as a multiple of the queue ceiling. One terminal
+ * therefore never holds more than five ceilings of input in memory.
+ */
+export const TERMINAL_HTTP_INPUT_PARKED_CEILINGS = 4;
 export const TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS = 30_000;
+/** Unsettled `enqueue` calls per terminal, so tiny writes are bounded by count too. */
+export const TERMINAL_HTTP_INPUT_MAX_PENDING_INPUTS = 1024;
+/** Terminals with live or failed queues; idle healthy queues are forgotten. */
+export const TERMINAL_HTTP_INPUT_MAX_TERMINALS = 1024;
 
 export type TerminalInputCommand = "terminal_write" | "local_terminal_write";
 
@@ -50,6 +60,8 @@ type PendingInput = {
   batches: PendingBatch[];
   waiters: Set<InputWaiter>;
   admission: AdmissionWaiter[];
+  /** Bytes of admission entries not yet released into the queue. */
+  parkedBytes: number;
   /** Outstanding `flush` calls; while any is active, typing does not wait. */
   flushing: number;
   timer: ReturnType<typeof setTimeout> | null;
@@ -127,14 +139,18 @@ function splitAtUtf8Boundaries(
 }
 
 /**
- * Batches only remote HTTP terminal writes. Each terminal has an independent,
- * byte-bounded queue. Requests for one terminal are serialized and a failed or
- * timed-out send stops that queue until reset or `clearFailure`, so a suffix is
- * never delivered after an ambiguously lost prefix.
+ * Batches HTTP terminal writes. Each terminal has an independent, bounded
+ * queue. Requests for one terminal are serialized and a failed or timed-out
+ * send stops that queue until reset or `clearFailure`, so a suffix is never
+ * delivered after an ambiguously lost prefix.
  *
  * The byte ceiling applies backpressure rather than discarding input: an input
  * that fits the ceiling on its own waits, in order, for room. Only an input too
- * large to ever fit is rejected outright.
+ * large to ever fit is rejected outright. Parked input is itself bounded by
+ * bytes and by count; beyond that the queue fails closed rather than dropping
+ * one input from the middle of an ordered stream.
+ *
+ * Ordering against lifecycle commands lives in `TerminalInputSequencer`.
  */
 export class TerminalHttpInputBatcher {
   private readonly pending = new Map<string, PendingInput>();
@@ -146,6 +162,8 @@ export class TerminalHttpInputBatcher {
     private readonly maxBufferBytes = TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
     private readonly maxQueuedBytes = TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
     private readonly sendTimeoutMs = TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
+    private readonly maxPendingInputs = TERMINAL_HTTP_INPUT_MAX_PENDING_INPUTS,
+    private readonly maxTerminals = TERMINAL_HTTP_INPUT_MAX_TERMINALS,
   ) {
     if (typeof send !== "function") throw new TypeError("send must be a function");
     if (!Number.isFinite(delayMs) || delayMs < 0)
@@ -158,6 +176,12 @@ export class TerminalHttpInputBatcher {
     }
     if (!Number.isFinite(sendTimeoutMs) || sendTimeoutMs <= 0) {
       throw new RangeError("sendTimeoutMs must be positive");
+    }
+    if (!Number.isSafeInteger(maxPendingInputs) || maxPendingInputs < 1) {
+      throw new RangeError("maxPendingInputs must be a positive integer");
+    }
+    if (!Number.isSafeInteger(maxTerminals) || maxTerminals < 1) {
+      throw new RangeError("maxTerminals must be a positive integer");
     }
   }
 
@@ -194,21 +218,19 @@ export class TerminalHttpInputBatcher {
     }
 
     if (!state) {
-      state = {
-        command: request.command,
-        sessionId: request.sessionId,
-        batches: [],
-        waiters: new Set(),
-        admission: [],
-        flushing: 0,
-        timer: null,
-        inFlight: null,
-        outstandingBytes: 0,
-        failed: false,
-        failure: null,
-        retired: false,
-      };
+      // Failed queues are fences and are never evicted to make room, so a
+      // full map refuses the new terminal instead.
+      if (this.pending.size >= this.maxTerminals) {
+        return Promise.reject(
+          new Error("Terminal input queue capacity reached; reconnect to the backend"),
+        );
+      }
+      state = this.createState(request.command, request.sessionId);
       this.pending.set(key, state);
+    }
+
+    if (state.waiters.size >= this.maxPendingInputs) {
+      return this.overflow(key, state);
     }
 
     // Register the waiter before any admission wait so `flush` and the failure
@@ -225,6 +247,14 @@ export class TerminalHttpInputBatcher {
     ) {
       state.outstandingBytes += incomingBytes;
       this.acceptChunks(key, state, chunks, request.data, waiter);
+      return waiter.promise;
+    }
+    if (
+      state.parkedBytes + incomingBytes >
+      this.maxQueuedBytes * TERMINAL_HTTP_INPUT_PARKED_CEILINGS
+    ) {
+      // Rejecting only this input would let later keystrokes overtake it.
+      this.overflow(key, state).catch(() => undefined);
       return waiter.promise;
     }
     const entry = this.admit(state, incomingBytes);
@@ -262,6 +292,53 @@ export class TerminalHttpInputBatcher {
     if (!state) return Promise.resolve();
     if (state.failed) return Promise.reject(state.failure);
     return this.flushState(state);
+  }
+
+  /**
+   * Fails one terminal's queue closed, as a failed send would. Used when a
+   * lifecycle command's outcome is ambiguous and input must stop until the
+   * session restarts. Rejects everything the queue still holds.
+   */
+  failQueue(command: TerminalInputCommand, sessionId: string, error: unknown): void {
+    const key = this.keyFor(command, sessionId);
+    let state = this.pending.get(key);
+    if (!state) {
+      state = this.createState(command, sessionId);
+      this.pending.set(key, state);
+    }
+    this.fail(key, state, error);
+  }
+
+  /** Whether a terminal's queue has failed closed. */
+  hasFailed(command: TerminalInputCommand, sessionId: string): boolean {
+    return this.pending.get(this.keyFor(command, sessionId))?.failed ?? false;
+  }
+
+  /** Aggregate bounds usage, for tests and diagnostics. Carries no input. */
+  getStats(): {
+    terminals: number;
+    failedTerminals: number;
+    queuedBytes: number;
+    parkedBytes: number;
+    pendingInputs: number;
+  } {
+    let failedTerminals = 0;
+    let queuedBytes = 0;
+    let parkedBytes = 0;
+    let pendingInputs = 0;
+    for (const state of this.pending.values()) {
+      if (state.failed) failedTerminals += 1;
+      queuedBytes += state.outstandingBytes;
+      parkedBytes += state.parkedBytes;
+      pendingInputs += state.waiters.size;
+    }
+    return {
+      terminals: this.pending.size,
+      failedTerminals,
+      queuedBytes,
+      parkedBytes,
+      pendingInputs,
+    };
   }
 
   /** Flushes all input already handed to every terminal. */
@@ -314,6 +391,32 @@ export class TerminalHttpInputBatcher {
     return `${command}\0${sessionId}`;
   }
 
+  private createState(command: TerminalInputCommand, sessionId: string): PendingInput {
+    return {
+      command,
+      sessionId,
+      batches: [],
+      waiters: new Set(),
+      admission: [],
+      parkedBytes: 0,
+      flushing: 0,
+      timer: null,
+      inFlight: null,
+      outstandingBytes: 0,
+      failed: false,
+      failure: null,
+      retired: false,
+    };
+  }
+
+  private overflow(key: string, state: PendingInput): Promise<never> {
+    const error = new RangeError(
+      "Terminal input queue limit exceeded; restart the session before sending more input",
+    );
+    this.fail(key, state, error);
+    return Promise.reject(error);
+  }
+
   /** Parks one enqueue at the ceiling and ships accepted input to make room. */
   private admit(state: PendingInput, bytes: number): AdmissionWaiter {
     let resolve!: () => void;
@@ -324,6 +427,7 @@ export class TerminalHttpInputBatcher {
     });
     const entry: AdmissionWaiter = { bytes, released: false, promise, resolve, reject };
     state.admission.push(entry);
+    state.parkedBytes += bytes;
     // Waiting out the typing timer cannot free bytes, so stop waiting for it.
     this.markReady(state);
     return entry;
@@ -339,6 +443,7 @@ export class TerminalHttpInputBatcher {
       // as microtasks, so releasing without reserving would admit the whole
       // parked queue at once and blow through the ceiling.
       state.outstandingBytes += next.bytes;
+      state.parkedBytes -= next.bytes;
       next.resolve();
     }
   }
@@ -362,7 +467,9 @@ export class TerminalHttpInputBatcher {
 
     for (const chunk of chunks) this.appendChunk(state, chunk, waiter);
 
-    if (state.flushing > 0 || terminalInputRequiresImmediateFlush(data)) {
+    // A zero delay means "no typing timer": a send starts at once, and input
+    // typed while it is in flight still coalesces into the next request.
+    if (state.flushing > 0 || this.delayMs === 0 || terminalInputRequiresImmediateFlush(data)) {
       this.markReady(state);
       return;
     }
@@ -385,6 +492,7 @@ export class TerminalHttpInputBatcher {
   private rejectAll(state: PendingInput, reason: unknown): void {
     const admission = state.admission;
     state.admission = [];
+    state.parkedBytes = 0;
     for (const entry of admission) entry.reject(reason);
     for (const waiter of state.waiters) {
       if (waiter.settled) continue;
@@ -399,8 +507,11 @@ export class TerminalHttpInputBatcher {
     chunk: { data: string; bytes: number },
     waiter: InputWaiter,
   ): void {
+    // A ready batch still waiting behind the one in flight keeps absorbing
+    // input, so typing during a slow round trip costs one request, not one per
+    // keystroke. The in-flight batch has already left `batches`.
     let batch = state.batches.at(-1);
-    if (!batch || batch.ready || batch.bytes + chunk.bytes > this.maxBufferBytes) {
+    if (!batch || batch.bytes + chunk.bytes > this.maxBufferBytes) {
       batch = { data: "", bytes: 0, ready: false, waiters: new Set() };
       state.batches.push(batch);
     }

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
-  BackendHttpClient,
-  MAX_TERMINAL_QUEUED_BYTES,
-  MAX_TERMINAL_QUEUE_OPERATIONS,
-  MAX_TERMINAL_QUEUE_WAITERS,
-  MAX_TERMINAL_QUEUES,
-  MAX_TERMINAL_WRITE_BATCH_BYTES,
-} from "../../../apps/desktop/electron/backend-process";
+  TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
+  TERMINAL_HTTP_INPUT_MAX_PENDING_INPUTS,
+} from "@orkestrator/protocol/terminal-input-batcher";
+import { TERMINAL_MAX_PENDING_LIFECYCLE_OPERATIONS } from "@orkestrator/protocol/terminal-input-sequencer";
+import {
+  terminalInputContractScenarios,
+  type TerminalContractAdapter,
+} from "@orkestrator/protocol/terminal-input-contract-fixtures";
+import { BackendHttpClient } from "../../../apps/desktop/electron/backend-process";
 import { nativeWebPlatform } from "../../register-dom";
 
 const originalFetch = globalThis.fetch;
@@ -48,23 +50,6 @@ function fixture(
     bodies,
   };
 }
-function queueSnapshot(client: BackendHttpClient) {
-  return Array.from(
-    (
-      client as unknown as {
-        terminalWrites: Map<
-          string,
-          { bytes: number; operationCount: number; waiters: Set<unknown>; operations: unknown[] }
-        >;
-      }
-    ).terminalWrites.values(),
-  ).map((queue) => ({
-    bytes: queue.bytes,
-    operations: queue.operationCount,
-    waiters: queue.waiters.size,
-    pending: queue.operations.length,
-  }));
-}
 const families = [
   ["terminal_write", "terminal_resize", "detach_terminal", "start_terminal_session"],
   [
@@ -82,18 +67,48 @@ const outcome = (promise: Promise<unknown>) =>
     (error) => error,
   );
 
+const desktopAdapter: TerminalContractAdapter = {
+  recovery: "fence-until-start",
+  create(backend, options = {}) {
+    globalThis.AbortController = nativeWebPlatform.AbortController;
+    globalThis.AbortSignal = nativeWebPlatform.AbortSignal;
+    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+      const reply = await backend(
+        JSON.parse(String(init?.body)) as Body,
+        (init?.signal as AbortSignal | null | undefined) ?? null,
+      );
+      return "result" in reply
+        ? Response.json({ result: reply.result })
+        : Response.json({ error: reply.error }, { status: reply.status });
+    }) as unknown as typeof fetch;
+    return new BackendHttpClient("http://127.0.0.1:34121/", "fixture-token", {
+      terminalSendTimeoutMs: options.sendTimeoutMs,
+    });
+  },
+};
+
+describe("Electron terminal input contract", () => {
+  for (const scenario of terminalInputContractScenarios) {
+    test(scenario.name, async () => {
+      const { actual, expected } = await scenario.run(desktopAdapter);
+      expect(actual).toEqual(expected);
+    });
+  }
+});
+
 describe("Electron terminal HTTP input", () => {
   test("splits a single oversized batch at UTF-8 boundaries and resolves only after all chunks", async () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
     let call = 0;
     const { client, bodies } = fixture(async () => (++call === 1 ? first.promise : second.promise));
-    const input = "a".repeat(MAX_TERMINAL_WRITE_BATCH_BYTES - 1) + "😀é\ud800";
+    const input = "a".repeat(TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES - 1) + "😀é\ud800";
     let settled = false;
     const write = client.invoke("terminal_write", { sessionId: "utf8", data: input }).then(() => {
       settled = true;
     });
-    expect(bodies[0]!.args.data).toBe("a".repeat(MAX_TERMINAL_WRITE_BATCH_BYTES - 1));
+    await Bun.sleep(0);
+    expect(bodies[0]!.args.data).toBe("a".repeat(TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES - 1));
     first.resolve(delivered());
     await Bun.sleep(0);
     expect(settled).toBe(false);
@@ -102,97 +117,32 @@ describe("Electron terminal HTTP input", () => {
     expect(
       bodies.every(
         (body) =>
-          Buffer.byteLength(String(body.args.data), "utf8") <= MAX_TERMINAL_WRITE_BATCH_BYTES,
+          Buffer.byteLength(String(body.args.data), "utf8") <= TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
       ),
     ).toBe(true);
     second.resolve(delivered());
     await write;
   });
 
-  test("coalesces exactly to 64 KiB but puts an overflowing UTF-8 character in the next batch", async () => {
+  test("coalesces input typed during a round trip into one request", async () => {
     const held = deferred<Response>();
     const { client, bodies } = fixture(async () =>
       bodies.length === 1 ? held.promise : delivered(),
     );
-    const writes = ["active", "a".repeat(MAX_TERMINAL_WRITE_BATCH_BYTES - 2), "é", "😀"].map(
-      (data) => client.invoke("terminal_write", { sessionId: "boundary", data }),
-    );
-    held.resolve(delivered());
-    await Promise.all(writes);
-    expect(bodies.map((body) => body.args.data)).toEqual([
-      "active",
-      "a".repeat(MAX_TERMINAL_WRITE_BATCH_BYTES - 2) + "é",
-      "😀",
-    ]);
-  });
-
-  test("command families, terminals, unrelated commands and invalid writes have independent dispatch", async () => {
-    const held = deferred<Response>();
-    const { client, bodies } = fixture(async (body) =>
-      body.command === "terminal_write" && body.args.data === "held" ? held.promise : delivered(),
-    );
-    const write = client.invoke("terminal_write", { sessionId: "same", data: "held" });
-    for (const [command, args] of [
-      ["local_terminal_write", { sessionId: "same", data: "local" }],
-      ["terminal_write", { sessionId: "other", data: "other" }],
-      ["greet", { sessionId: "same" }],
-      ["terminal_write", { sessionId: 1, data: "x" }],
-      ["terminal_write", { sessionId: "same", data: 1 }],
-      ["local_terminal_write", { sessionId: false, data: "x" }],
-      ["local_terminal_write", { sessionId: "same", data: null }],
-      ["terminal_resize", { sessionId: 1 }],
-      ["close_local_terminal_session", {}],
-    ] as Array<[string, Record<string, unknown>]>) {
-      await client.invoke(command, args);
-      expect(bodies.at(-1)).toEqual({ command, args });
+    const active = client.invoke("terminal_write", { sessionId: "typing", data: "active" });
+    await Bun.sleep(0);
+    // Typed across several timer turns while the first request is in flight.
+    const typed: Array<Promise<unknown>> = [];
+    for (const data of ["l", "s", " ", "-", "l", "a"]) {
+      typed.push(client.invoke("terminal_write", { sessionId: "typing", data }));
+      await Bun.sleep(2);
     }
     held.resolve(delivered());
-    await write;
+    await Promise.all([active, ...typed]);
+    expect(bodies.map((body) => body.args.data)).toEqual(["active", "ls -la"]);
   });
 
-  for (const [writeCommand, resizeCommand, closeCommand, startCommand] of families) {
-    for (const lifecycle of [resizeCommand, closeCommand, startCommand]) {
-      test(`${lifecycle} waits for accepted input and fences writes across the operation`, async () => {
-        const first = deferred<Response>();
-        const suffix = deferred<Response>();
-        const barrier = deferred<Response>();
-        const { client, bodies } = fixture(async (body) =>
-          body.args.data === "a"
-            ? first.promise
-            : body.args.data === "b"
-              ? suffix.promise
-              : body.command === lifecycle
-                ? barrier.promise
-                : delivered(),
-        );
-        const a = client.invoke(writeCommand, { sessionId: "ordered", data: "a" });
-        const b = client.invoke(writeCommand, { sessionId: "ordered", data: "b" });
-        const operation = client.invoke(lifecycle, { sessionId: "ordered", cols: 90, rows: 30 });
-        const later = outcome(client.invoke(writeCommand, { sessionId: "ordered", data: "later" }));
-        expect(bodies.map((body) => body.args.data)).toEqual(["a"]);
-        first.resolve(delivered());
-        await Bun.sleep(0);
-        expect(bodies.map((body) => body.args.data)).toEqual(["a", "b"]);
-        suffix.resolve(delivered());
-        await Bun.sleep(0);
-        expect(bodies.map((body) => body.command)).toEqual([writeCommand, writeCommand, lifecycle]);
-        barrier.resolve(delivered());
-        await Promise.all([a, b, operation]);
-        if (lifecycle === closeCommand) {
-          expect(await later).toBeInstanceOf(Error);
-          await expect(
-            client.invoke(writeCommand, { sessionId: "ordered", data: "stale" }),
-          ).rejects.toThrow("closed");
-          await client.invoke(startCommand, { sessionId: "ordered" });
-          await client.invoke(writeCommand, { sessionId: "ordered", data: "fresh" });
-          expect(bodies.map((body) => body.args.data).filter(Boolean)).toEqual(["a", "b", "fresh"]);
-        } else {
-          expect(await later).toEqual({ delivered: true });
-          expect(bodies.at(-1)!.args.data).toBe("later");
-        }
-      });
-    }
-
+  for (const [writeCommand, resizeCommand, , startCommand] of families) {
     test(`${writeCommand} stays fenced after applied input loses its response, even after resize or failed start`, async () => {
       const lost = deferred<Response>();
       let failStart = true;
@@ -208,6 +158,7 @@ describe("Electron terminal HTTP input", () => {
       const a = outcome(
         client.invoke(writeCommand, { sessionId: "lost", data: "dangerous-prefix" }),
       );
+      await Bun.sleep(0);
       const b = outcome(client.invoke(writeCommand, { sessionId: "lost", data: "suffix" }));
       lost.reject(new Error("response lost"));
       expect(await a).toBeInstanceOf(Error);
@@ -231,6 +182,20 @@ describe("Electron terminal HTTP input", () => {
       expect(applied).toEqual(["dangerous-prefix", "fresh"]);
       expect(bodies.filter((body) => body.command === writeCommand)).toHaveLength(2);
     });
+
+    test(`${resizeCommand} whose response is lost fences ${writeCommand}`, async () => {
+      const { client, bodies } = fixture(async (body) => {
+        if (body.command === resizeCommand) throw new Error("resize lost");
+        return delivered();
+      });
+      await expect(
+        client.invoke(resizeCommand, { sessionId: "uncertain", cols: 80, rows: 24 }),
+      ).rejects.toThrow("resize lost");
+      await expect(
+        client.invoke(writeCommand, { sessionId: "uncertain", data: "x" }),
+      ).rejects.toThrow("resize lost");
+      expect(bodies.map((body) => body.command)).toEqual([resizeCommand]);
+    });
   }
 
   for (const [writeCommand, , closeCommand, startCommand] of families) {
@@ -241,6 +206,7 @@ describe("Electron terminal HTTP input", () => {
         40,
       );
       const active = outcome(client.invoke(writeCommand, { sessionId: "recover", data: "prefix" }));
+      await Bun.sleep(0);
       const suffix = outcome(client.invoke(writeCommand, { sessionId: "recover", data: "stale" }));
       const close = client.invoke(closeCommand, { sessionId: "recover" });
       const start = client.invoke(startCommand, { sessionId: "recover" });
@@ -281,6 +247,7 @@ describe("Electron terminal HTTP input", () => {
     );
     const start = client.invoke("start_terminal_session", { sessionId: "closed" });
     const close = client.invoke("detach_terminal", { sessionId: "closed" });
+    await Bun.sleep(0);
     held.resolve(delivered());
     await start;
     await expect(
@@ -293,107 +260,22 @@ describe("Electron terminal HTTP input", () => {
     ]);
   });
 
-  for (const failure of ["undelivered", "network", "malformed"] as const) {
-    test(`${failure} rejects the queued suffix and keeps the failed fence`, async () => {
-      const held = deferred<Response>();
-      const { client, bodies } = fixture(async () => held.promise);
-      const first = outcome(client.invoke("terminal_write", { sessionId: "failed", data: "a" }));
-      const suffix = outcome(client.invoke("terminal_write", { sessionId: "failed", data: "b" }));
-      if (failure === "network") held.reject(new Error("network failed"));
-      else
-        held.resolve(
-          failure === "undelivered"
-            ? Response.json({ result: { delivered: false } })
-            : new Response("invalid json"),
-        );
-      expect(await first).toBeInstanceOf(Error);
-      expect(await suffix).toBeInstanceOf(Error);
-      await expect(
-        client.invoke("terminal_write", { sessionId: "failed", data: "later" }),
-      ).rejects.toThrow();
-      expect(bodies).toHaveLength(1);
-    });
-  }
-
-  for (const stall of ["fetch", "body"] as const) {
-    test(`deadline releases a never-settling ${stall}, aborts and rejects every suffix`, async () => {
-      const stuck = deferred<Response>();
-      let signal: AbortSignal | null | undefined;
-      const { client, bodies } = fixture(async (_body, inputSignal) => {
-        signal = inputSignal;
-        if (stall === "fetch") return stuck.promise;
-        return { ok: true, json: () => new Promise(() => {}) } as Response;
-      }, 40);
-      const first = outcome(client.invoke("terminal_write", { sessionId: "hung", data: "a" }));
-      const suffix = outcome(client.invoke("terminal_write", { sessionId: "hung", data: "b" }));
-      expect(String(await first)).toContain("timed out");
-      expect(String(await suffix)).toContain("timed out");
-      expect(signal!.aborted).toBe(true);
-      expect(queueSnapshot(client)).toEqual([{ bytes: 0, operations: 0, waiters: 0, pending: 0 }]);
-      await expect(
-        client.invoke("terminal_write", { sessionId: "hung", data: "later" }),
-      ).rejects.toThrow("timed out");
-      stuck.resolve(delivered());
-      await Bun.sleep(0);
-      expect(bodies).toHaveLength(1);
-    });
-  }
-
-  test("aggregate byte overflow rejects promptly and fences input without retaining the queued suffix", async () => {
+  test("pending input count is bounded and overflow fences the terminal", async () => {
     const held = deferred<Response>();
     const { client, bodies } = fixture(async () => held.promise);
-    const active = outcome(
-      client.invoke("terminal_write", {
-        sessionId: "bytes",
-        data: "a".repeat(MAX_TERMINAL_WRITE_BATCH_BYTES),
-      }),
+    const writes = Array.from({ length: TERMINAL_HTTP_INPUT_MAX_PENDING_INPUTS }, () =>
+      outcome(client.invoke("terminal_write", { sessionId: "count", data: "a" })),
     );
-    const queued = outcome(
-      client.invoke("terminal_write", {
-        sessionId: "bytes",
-        data: "é".repeat((MAX_TERMINAL_QUEUED_BYTES - MAX_TERMINAL_WRITE_BATCH_BYTES) / 2),
-      }),
-    );
-    expect(queueSnapshot(client)[0]!.bytes).toBe(MAX_TERMINAL_QUEUED_BYTES);
     await expect(
-      client.invoke("terminal_write", { sessionId: "bytes", data: "x" }),
+      client.invoke("terminal_write", { sessionId: "count", data: "b" }),
     ).rejects.toThrow("queue limit");
-    expect(await queued).toBeInstanceOf(Error);
-    expect(queueSnapshot(client)).toEqual([
-      { bytes: MAX_TERMINAL_WRITE_BATCH_BYTES, operations: 1, waiters: 1, pending: 0 },
-    ]);
-    await expect(
-      client.invoke("terminal_write", { sessionId: "bytes", data: "\r" }),
-    ).rejects.toThrow("queue limit");
+    // Overflow fails the queue closed rather than dropping one input mid-stream.
+    for (const result of await Promise.all(writes)) expect(result).toBeInstanceOf(Error);
     held.resolve(delivered());
-    await active;
-    expect(queueSnapshot(client)).toEqual([{ bytes: 0, operations: 0, waiters: 0, pending: 0 }]);
-    expect(bodies).toHaveLength(1);
-  });
-
-  test("a single input larger than the byte ceiling is rejected before dispatch", async () => {
-    const { client, bodies } = fixture();
     await expect(
-      client.invoke("local_terminal_write", {
-        sessionId: "large",
-        data: "x".repeat(MAX_TERMINAL_QUEUED_BYTES + 1),
-      }),
+      client.invoke("terminal_write", { sessionId: "count", data: "c" }),
     ).rejects.toThrow("queue limit");
-    expect(bodies).toHaveLength(0);
-  });
-
-  test("waiter count bounds tiny and empty writes as well as bytes", async () => {
-    const held = deferred<Response>();
-    const { client, bodies } = fixture(async () => held.promise);
-    const writes = Array.from({ length: MAX_TERMINAL_QUEUE_WAITERS }, (_, i) =>
-      outcome(client.invoke("terminal_write", { sessionId: "count", data: i === 0 ? "a" : "" })),
-    );
-    await expect(client.invoke("terminal_write", { sessionId: "count", data: "" })).rejects.toThrow(
-      "queue limit",
-    );
-    held.resolve(delivered());
-    await Promise.all(writes);
-    expect(bodies).toHaveLength(1);
+    expect(bodies.length).toBeLessThanOrEqual(1);
   });
 
   test("lifecycle operation count is bounded and allows recovery once the queue drains", async () => {
@@ -401,35 +283,16 @@ describe("Electron terminal HTTP input", () => {
     const { client, bodies } = fixture(async () =>
       bodies.length === 1 ? held.promise : delivered(),
     );
-    const operations = Array.from({ length: MAX_TERMINAL_QUEUE_OPERATIONS }, () =>
+    const operations = Array.from({ length: TERMINAL_MAX_PENDING_LIFECYCLE_OPERATIONS }, () =>
       client.invoke("terminal_resize", { sessionId: "operations", cols: 80, rows: 24 }),
     );
     await expect(client.invoke("detach_terminal", { sessionId: "operations" })).rejects.toThrow(
       "lifecycle queue limit",
     );
-    // Write admission at a full operation queue must also reject and fence.
-    await expect(
-      client.invoke("terminal_write", { sessionId: "operations", data: "x" }),
-    ).rejects.toThrow("operation limit");
+    await Bun.sleep(0);
     held.resolve(delivered());
     await Promise.all(operations);
-    await client.invoke("start_terminal_session", { sessionId: "operations" });
     await client.invoke("terminal_write", { sessionId: "operations", data: "fresh" });
-    expect(bodies.at(-1)!.args.data).toBe("fresh");
-  });
-
-  test("terminal fence capacity is bounded without evicting closed sessions", async () => {
-    const { client, bodies } = fixture();
-    for (let i = 0; i < MAX_TERMINAL_QUEUES; i++)
-      await client.invoke("detach_terminal", { sessionId: String(i) });
-    await expect(client.invoke("terminal_write", { sessionId: "new", data: "x" })).rejects.toThrow(
-      "capacity",
-    );
-    await expect(
-      client.invoke("terminal_write", { sessionId: "0", data: "stale" }),
-    ).rejects.toThrow("closed");
-    await client.invoke("start_terminal_session", { sessionId: "0" });
-    await client.invoke("terminal_write", { sessionId: "new", data: "fresh" });
     expect(bodies.at(-1)!.args.data).toBe("fresh");
   });
 });

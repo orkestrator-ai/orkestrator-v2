@@ -1,5 +1,5 @@
 import type { TmuxAgentUsageSummary } from "@orkestrator/protocol/tmux-observation";
-import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 
 interface IndexedUsageSummary extends TmuxAgentUsageSummary {
   index: number;

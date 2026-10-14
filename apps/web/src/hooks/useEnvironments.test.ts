@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { useClaudeStore } from "@/stores/claudeStore";
+import { afterEach, describe, expect, test } from "bun:test";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
@@ -17,11 +16,8 @@ import {
   markWindowBuildPipelineHandoffResolved,
 } from "@/lib/pane-selection-storage";
 
-const originalClaudeClose = useClaudeStore.getState().closeEventSubscription;
-
 afterEach(() => {
   localStorage.clear();
-  useClaudeStore.setState({ closeEventSubscription: originalClaudeClose });
   useEnvironmentStore.setState({ environments: [] });
 });
 
@@ -45,15 +41,6 @@ function environment(id: string, projectId: string): Environment {
 }
 
 describe("cleanupDeletedEnvironmentSubscriptions", () => {
-  test("stops the store-owned subscription for the deleted environment", () => {
-    const closeClaude = mock((_environmentId: string) => {});
-    useClaudeStore.setState({ closeEventSubscription: closeClaude });
-
-    cleanupDeletedEnvironmentSubscriptions("env-deleted");
-
-    expect(closeClaude).toHaveBeenCalledWith("env-deleted");
-  });
-
   test("retires the creating window's startup-agent handoff on deletion", () => {
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {
@@ -92,19 +79,32 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
     }
   });
 
-  test("stops only subscriptions removed by an authoritative project snapshot", () => {
-    const closeClaude = mock((_environmentId: string) => {});
-    useClaudeStore.setState({ closeEventSubscription: closeClaude });
-    const removed = environment("removed", "project-1");
-    const surviving = environment("surviving", "project-1");
-    const otherProject = environment("other-project", "project-2");
-    useEnvironmentStore.setState({
-      environments: [removed, surviving, otherProject],
+  test("cleans up only environments removed by an authoritative project snapshot", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
     });
+    try {
+      const removed = environment("removed", "project-1");
+      const surviving = environment("surviving", "project-1");
+      const otherProject = environment("other-project", "project-2");
+      useEnvironmentStore.setState({
+        environments: [removed, surviving, otherProject],
+      });
+      for (const id of ["removed", "surviving", "other-project"]) {
+        armWindowStartupAgentActivation(id);
+      }
 
-    cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving]);
+      cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving]);
 
-    expect(closeClaude.mock.calls).toEqual([["removed"]]);
+      expect(consumeWindowStartupAgentActivation("removed")).toBe(false);
+      expect(consumeWindowStartupAgentActivation("surviving")).toBe(true);
+      expect(consumeWindowStartupAgentActivation("other-project")).toBe(true);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
   });
 });
 

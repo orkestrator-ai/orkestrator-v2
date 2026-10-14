@@ -11,7 +11,7 @@
  * Its canonical data lives in @orkestrator/protocol so the Claude bridge's
  * fallback cannot drift from it.
  */
-import type { ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeModel } from "@/lib/claude-types";
 import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
 
 export const FALLBACK_CLAUDE_MODELS: Array<ClaudeModel & { resolvedModel?: string }> =

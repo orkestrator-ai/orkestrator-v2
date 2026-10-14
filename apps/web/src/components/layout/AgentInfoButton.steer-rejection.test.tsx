@@ -6,7 +6,7 @@
  * not sent, so the panel reports actionable text and keeps the draft; a full
  * steer history is shown as a content-free runtime card with no control.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   nativeAgentCapabilities,
@@ -16,24 +16,10 @@ import {
 import type { TabInfo } from "@/types/paneLayout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useCodexStore } from "@/stores/codexStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
-import * as realCodexClient from "@/lib/codex-client";
+import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentRuntimePanel } from "./AgentInfoButton.panels";
-
-// Only the network-facing Codex reads are replaced; the rest stays real.
-const realCodexClientSnapshot = { ...realCodexClient };
-mock.module("@/lib/codex-client", () => ({
-  ...realCodexClientSnapshot,
-  getSessionStatus: async () => ({ status: "running" }),
-  getSessionMessages: async () => [],
-  getCodexRuntimeHealth: async () => null,
-}));
-const { AgentInfoButton } = await import("./AgentInfoButton");
-afterAll(() => {
-  mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
-});
 
 const ENVIRONMENT_ID = "env-steer";
 const TAB_ID = "tab-steer";
@@ -52,10 +38,6 @@ const codexTab = {
 } as TabInfo;
 
 function seedRunningCodex() {
-  useCodexStore.setState({
-    clients: new Map([[ENVIRONMENT_ID, { baseUrl: "http://127.0.0.1:2222" }]]),
-    sessions: new Map([[SESSION_KEY, { sessionId: "codex-steer", messages: [], isLoading: true }]]),
-  } as never);
   useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
     platform: "codex",
     environmentId: ENVIRONMENT_ID,
@@ -98,7 +80,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useNativeAgentProjectionStore.getState().reset();
-  useCodexStore.setState({ clients: new Map(), sessions: new Map() } as never);
   nativeInvokeMock.mockImplementation(() => Promise.resolve());
 });
 

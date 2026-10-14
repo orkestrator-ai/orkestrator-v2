@@ -139,7 +139,7 @@ afterAll(() => {
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
-import { CODEX_MODELS } from "@/lib/codex-client";
+import { CODEX_MODELS } from "@/lib/codex-models";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";

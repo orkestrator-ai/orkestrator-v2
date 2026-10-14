@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
-import { useClaudeStore } from "@/stores/claudeStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentExtensionCatalog, AgentSkillProvider } from "@/lib/backend";
 import type { Environment } from "@/types";
@@ -216,12 +215,6 @@ describe("EnvironmentSettingsDialog", () => {
       },
       isLoading: false,
       error: null,
-    });
-
-    useClaudeStore.setState({
-      sessions: new Map(),
-      sessionInitData: new Map(),
-      serverStatuses: new Map(),
     });
   });
 

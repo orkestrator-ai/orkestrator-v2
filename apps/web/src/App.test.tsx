@@ -1,13 +1,10 @@
-import { createSessionKey } from "@/lib/utils";
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { useClaudeStore } from "@/stores/claudeStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -532,21 +529,11 @@ function resetStores({
     activeEnvironmentId: null,
   });
 
-  useClaudeStore.setState({
-    sessions: new Map(),
-    messageQueue: new Map(),
-  });
-
   useClaudeTmuxStore.setState({
     tabs: new Map(),
     attachments: new Map(),
     draftText: new Map(),
     draftMentions: new Map(),
-    messageQueue: new Map(),
-  });
-
-  useCodexStore.setState({
-    sessions: new Map(),
     messageQueue: new Map(),
   });
 
@@ -1360,58 +1347,18 @@ describe("App background processing mounts", () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
-        makeEnvironment("env-queued-claude", "project-2"),
         makeEnvironment("env-queued-tmux", "project-2"),
-        makeEnvironment("env-queued-codex", "project-2"),
       ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
 
-    const claudeSessionKey = createSessionKey("env-queued-claude", "tab-1");
     const tmuxStateKey = createClaudeTmuxStateKey("env-queued-tmux", "tab-1");
-    const codexSessionKey = createSessionKey("env-queued-codex", "tab-1");
-    useClaudeStore.setState({
-      messageQueue: new Map([
-        [
-          claudeSessionKey,
-          [
-            {
-              id: "queue-claude",
-              text: "Run queued Claude work",
-              attachments: [],
-              effort: "medium",
-              planModeEnabled: false,
-              fastModeEnabled: false,
-            },
-          ],
-        ],
-      ]),
-    });
     useClaudeTmuxStore.setState({
       messageQueue: new Map([
         [tmuxStateKey, [{ id: "queue-tmux", text: "Run queued tmux work", attachments: [] }]],
       ]),
     });
-    useCodexStore.setState({
-      messageQueue: new Map([
-        [
-          codexSessionKey,
-          [
-            {
-              id: "queue-codex",
-              text: "Run queued Codex work",
-              attachments: [],
-              model: "gpt-5",
-              mode: "build",
-              reasoningEffort: "medium",
-              fastMode: false,
-            },
-          ],
-        ],
-      ]),
-    });
-
     render(<App />);
 
     // The visible environment mounts, which is how we know the tree settled
@@ -1419,42 +1366,10 @@ describe("App background processing mounts", () => {
     await waitFor(() => {
       expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
     });
-    // `NativeAgentService` and `PromptQueueDrainer` dispatch these server-side.
-    // Force-mounting a hidden terminal for them kept an environment alive for
-    // work the renderer was not doing.
-    expect(screen.queryByTestId("terminal-env-queued-claude") === null).toBe(true);
+    // `PromptQueueDrainer` dispatches these server-side. Force-mounting a
+    // hidden terminal for them kept an environment alive for work the renderer
+    // was not doing.
     expect(screen.queryByTestId("terminal-env-queued-tmux") === null).toBe(true);
-    expect(screen.queryByTestId("terminal-env-queued-codex") === null).toBe(true);
-  });
-
-  test("does not mount off-screen environments for loading native sessions", async () => {
-    resetStores({
-      environments: [
-        makeEnvironment("env-visible", "project-1"),
-        makeEnvironment("env-loading-codex", "project-2"),
-      ],
-      selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-visible",
-    });
-
-    const sessionKey = createSessionKey("env-loading-codex", "tab-1");
-    useCodexStore.setState({
-      sessions: new Map([
-        [
-          sessionKey,
-          {
-            sessionId: "sess-loading",
-            messages: [],
-            isLoading: true,
-          } as any,
-        ],
-      ]),
-    });
-
-    render(<App />);
-
-    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-loading-codex") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for busy tmux sessions", async () => {

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   ArrowRight,
   ArrowRightLeft,
@@ -15,33 +23,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn, createSessionKey } from "@/lib/utils";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import {
-  compactClaudeSession,
-  forkClaudeSession,
-  getSession as getClaudeSession,
-  getSessionMessages as getClaudeSessionMessages,
-  rewindClaudeFiles,
-  stopClaudeBackgroundTask,
-} from "@/lib/claude-client";
-import {
-  CodexForkError,
-  compactCodexSession,
-  forkCodexSession,
-  getCodexRuntimeHealth,
-  getSessionMessages as getCodexSessionMessages,
-  getSessionStatus as getCodexSessionStatus,
-  startCodexNativeReview,
-} from "@/lib/codex-client";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
   AGENT_PROVIDER_LABELS,
-  agentHandoffTranscriptDigest,
   composeAgentHandoffTransferMessages,
   createAgentHandoffSnapshot,
   forgetAgentHandoff,
@@ -64,11 +52,7 @@ import {
   updateNativeAgentControls,
 } from "@/lib/backend";
 import { useSystemUsage } from "@/hooks/useSystemUsage";
-import {
-  normalizeClaudeMessagesForDisplay,
-  normalizeCodexNativeMessage,
-  normalizeNativeMessages,
-} from "@/lib/chat/native-message-adapters";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
@@ -105,8 +89,6 @@ interface ControlUpdateState {
   actionId: number;
   sessionIdentity: string;
 }
-
-const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
 
 /** Host-meter freshness requested while the agent-information popover is open. */
 export const AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS = 3_000;
@@ -167,7 +149,6 @@ import {
   Metric,
   SystemUsagePanel,
   UsagePanel,
-  codexLimitsFromHealth,
   describeRewindTarget,
   formatCount,
   summarizeRewindPreview,
@@ -334,76 +315,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         activeSession?.provider === "codex" ||
         activeSession?.provider === "opencode"));
 
-  const claudeUsage = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.contextUsage.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const claudeRateLimits = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.rateLimits.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const codexUsage = useCodexStore((state) =>
-    activeSession?.provider === "codex"
-      ? state.contextUsage.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const claudeModel = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.selectedModel.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const codexModel = useCodexStore((state) =>
-    activeSession?.provider === "codex"
-      ? state.selectedModel.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const claudeClient = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.clients.get(activeSession.environmentId)
-      : undefined,
-  );
-  const codexClient = useCodexStore((state) =>
-    activeSession?.provider === "codex"
-      ? state.clients.get(activeSession.environmentId)
-      : undefined,
-  );
-  const claudeSession = useClaudeStore((state) =>
-    activeSession?.provider === "claude" ? state.sessions.get(activeSession.sessionKey) : undefined,
-  );
-  const codexSession = useCodexStore((state) =>
-    activeSession?.provider === "codex" ? state.sessions.get(activeSession.sessionKey) : undefined,
-  );
-  const claudeInit = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.sessionInitData.get(activeSession.environmentId)
-      : undefined,
-  );
-  const claudeAgent = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.selectedAgent.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const includeLocalSettings = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? (state.includeLocalSettings.get(activeSession.sessionKey) ?? false)
-      : false,
-  );
-  const promptSuggestionOptIn = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? (state.promptSuggestionOptIn.get(activeSession.sessionKey) ?? false)
-      : false,
-  );
-  const claudeTasks = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? (state.backgroundTasks.get(activeSession.sessionKey) ?? EMPTY_CLAUDE_TASKS)
-      : EMPTY_CLAUDE_TASKS,
-  );
-
   const neutralContextUsage = neutralProjection?.contextUsage;
   const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
-  const neutralUsage: AgentInfoUsageSnapshot | undefined = neutralContextUsage
+  const usage: AgentInfoUsageSnapshot | undefined = neutralContextUsage
     ? {
         ...neutralContextUsage,
         usedTokens: neutralContextUsage.usedTokens,
@@ -419,50 +333,13 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
           : {}),
       }
     : undefined;
-  const legacyUsage: AgentInfoUsageSnapshot | undefined =
-    activeSession?.provider === "claude"
-      ? claudeUsage
-      : activeSession?.provider === "codex"
-        ? codexUsage
-        : undefined;
-  const usage: AgentInfoUsageSnapshot | undefined = legacyUsage
-    ? {
-        ...neutralUsage,
-        ...legacyUsage,
-        // The compatibility stores do not know the provider-neutral usage
-        // extensions. Keep their freshest context counters while retaining
-        // account windows and bounded per-turn rows from the projection.
-        ...(neutralUsage?.turns ? { turns: neutralUsage.turns } : {}),
-        ...(neutralUsage?.account ? { account: neutralUsage.account } : {}),
-        ...(neutralUsage?.permissionDenialDetails
-          ? { permissionDenialDetails: neutralUsage.permissionDenialDetails }
-          : {}),
-      }
-    : neutralUsage;
   const neutralRateLimits =
     neutralProjection?.rateLimits ?? neutralProjection?.contextUsage?.rateLimits;
-  const liveClaudeTasks = neutralProjection?.backgroundTasks ?? Object.values(claudeTasks);
-  const modelId =
-    (activeSession?.provider === "claude"
-      ? claudeModel
-      : activeSession?.provider === "codex"
-        ? codexModel
-        : undefined) ?? neutralProjection?.composer?.selectedModelId;
+  const liveClaudeTasks = neutralProjection?.backgroundTasks ?? [];
+  const modelId = neutralProjection?.composer?.selectedModelId;
 
-  const currentSessionId =
-    (activeSession?.provider === "claude"
-      ? claudeSession?.sessionId
-      : activeSession?.provider === "codex"
-        ? codexSession?.sessionId
-        : undefined) ??
-    neutralProjection?.sessionId ??
-    activeSession?.providerSessionId;
+  const currentSessionId = neutralProjection?.sessionId ?? activeSession?.providerSessionId;
   const currentSessionLoading =
-    (activeSession?.provider === "claude"
-      ? (claudeSession?.isLoading ?? false)
-      : activeSession?.provider === "codex"
-        ? (codexSession?.isLoading ?? false)
-        : false) ||
     neutralProjection?.turn.phase === "running" ||
     neutralProjection?.turn.phase === "recovering" ||
     neutralProjection?.turn.phase === "cancelling";
@@ -475,7 +352,26 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     ? `${activeSession.provider}:${activeSession.sessionKey}:${currentSessionId ?? "pending"}`
     : null;
   const currentSessionIdentityRef = useRef(sessionIdentity);
-  currentSessionIdentityRef.current = sessionIdentity;
+  // Read only by action continuations, which always resume after a commit.
+  useLayoutEffect(() => {
+    currentSessionIdentityRef.current = sessionIdentity;
+  }, [sessionIdentity]);
+  /*
+   * One component instance serves every tab, so everything typed or latched
+   * for the previous session has to go when the active tab changes. `steerText`
+   * in particular is posted to `currentSessionId`: text composed for session A
+   * would otherwise be delivered to session B's active turn. Reset while
+   * rendering the new identity so no frame shows the previous session's state.
+   */
+  const [renderedSessionIdentity, setRenderedSessionIdentity] = useState(sessionIdentity);
+  if (renderedSessionIdentity !== sessionIdentity) {
+    setRenderedSessionIdentity(sessionIdentity);
+    setOpen(false);
+    setHandoffOpen(false);
+    setRuntimeNoticeDialogId(null);
+    setShareState({ sessionIdentity, value: false });
+    setSteerState({ sessionIdentity, value: "" });
+  }
   const busyAction = busyState?.sessionIdentity === sessionIdentity ? busyState.name : null;
   const steerText = steerState.sessionIdentity === sessionIdentity ? steerState.value : "";
   // The projection's share URL is the backend's authoritative share state; the
@@ -484,38 +380,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     neutralProjection?.shareUrl !== undefined
       ? neutralProjection.shareUrl !== null
       : shareState.sessionIdentity === sessionIdentity && shareState.value;
-
-  // Keyed on the session, not the `activeSession` object: that is memoised on
-  // activeTab, so depending on it refetches runtime health every time the user
-  // switches tabs within one session. AgentInfoButton.test pins the call count.
-  /* oxlint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    if (!open || activeSession?.provider !== "codex" || !codexClient || !currentSessionId) {
-      return;
-    }
-    let cancelled = false;
-    void getCodexRuntimeHealth(codexClient, currentSessionId)
-      .then((health) => {
-        if (cancelled) return;
-        if (activeSession) {
-          const limits = codexLimitsFromHealth(health);
-          const store = useCodexStore.getState();
-          const current = store.contextUsage.get(activeSession.sessionKey);
-          if (current && (limits.rateLimits.length > 0 || limits.credits)) {
-            store.setContextUsage(activeSession.sessionKey, {
-              ...current,
-              ...limits,
-              updatedAt: new Date().toISOString(),
-            });
-          }
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSession?.provider, codexClient, currentSessionId, open]);
-  /* oxlint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     if (!open || !activeSession || !currentSessionId) return;
@@ -616,7 +480,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       },
     };
     accountReaderRef.current = reader;
-    setAccountReadFailed(false);
     void refresh();
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
@@ -625,6 +488,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       invalidate();
       window.removeEventListener("focus", onFocus);
       if (accountReaderRef.current === reader) accountReaderRef.current = null;
+      // A failure belongs to this read cycle; the next open or identity starts clean.
+      setAccountReadFailed(false);
     };
   }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
@@ -694,64 +559,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     sourceSession: ActiveNativeSession,
     sourceSessionId: string,
   ): Promise<NativeMessage[]> => {
-    if (sourceSession.provider === "claude" && claudeClient) {
-      const status = await getClaudeSession(claudeClient, sourceSessionId);
-      if (!status) throw new Error("Claude session is unavailable");
-      if (status.status !== "idle") {
-        throw new Error("Wait for Claude to finish before continuing in another agent");
-      }
-      const messages = normalizeClaudeMessagesForDisplay(
-        await getClaudeSessionMessages(claudeClient, sourceSessionId, { throwOnError: true }),
-      );
-      const statusAfterRead = await getClaudeSession(claudeClient, sourceSessionId);
-      if (!statusAfterRead) throw new Error("Claude session is unavailable");
-      if (statusAfterRead.status !== "idle") {
-        throw new Error("Claude started working while its conversation was being transferred");
-      }
-      if (statusAfterRead.lastActivity !== status.lastActivity) {
-        throw new Error("Claude conversation changed while it was being transferred");
-      }
-      return messages;
-    }
-    if (sourceSession.provider === "codex" && codexClient) {
-      const status = await getCodexSessionStatus(codexClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!status) throw new Error("Codex session is unavailable");
-      if (status.status !== "idle") {
-        throw new Error("Wait for Codex to finish before continuing in another agent");
-      }
-      const messages = (
-        await getCodexSessionMessages(codexClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeCodexNativeMessage);
-      const statusAfterRead = await getCodexSessionStatus(codexClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!statusAfterRead) throw new Error("Codex session is unavailable");
-      if (statusAfterRead.status !== "idle") {
-        throw new Error("Codex started working while its conversation was being transferred");
-      }
-      if (status.messageRevision !== undefined && statusAfterRead.messageRevision !== undefined) {
-        if (statusAfterRead.messageRevision !== status.messageRevision) {
-          throw new Error("Codex conversation changed while it was being transferred");
-        }
-        return messages;
-      }
-      /*
-       * `messageRevision` is optional: an older bridge or a malformed status
-       * payload drops it. Treating that as "unchanged" would fail open and
-       * transfer a torn snapshot silently, so re-read and compare instead.
-       */
-      const messagesAfterRead = (
-        await getCodexSessionMessages(codexClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeCodexNativeMessage);
-      if (
-        agentHandoffTranscriptDigest(messagesAfterRead) !== agentHandoffTranscriptDigest(messages)
-      ) {
-        throw new Error("Codex conversation changed while it was being transferred");
-      }
-      return messagesAfterRead;
-    }
     const identity = {
       environmentId: sourceSession.environmentId,
       agent: sourceSession.provider,
@@ -809,31 +616,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const forkCurrent = () =>
     runAction("fork", async ({ isCurrent }) => {
       if (!activeSession || !currentSessionId) return;
-      if (activeSession.provider === "claude" && claudeClient) {
-        const fork = await forkClaudeSession(claudeClient, currentSessionId);
-        openForkTab(fork.sessionId, fork.title, isCurrent());
-      } else if (activeSession.provider === "codex" && codexClient) {
-        /*
-         * The bridge differentiates its refusals (404 missing, 409 running, 422
-         * not a fork point, 503 unavailable) and `CodexForkError` carries that
-         * body verbatim. The old single message blamed "an active or empty
-         * session" for all four, including a bridge that was simply down.
-         */
-        let fork: Awaited<ReturnType<typeof forkCodexSession>>;
-        try {
-          fork = await forkCodexSession(codexClient, currentSessionId);
-        } catch (error) {
-          throw error instanceof CodexForkError ? error : new Error("Failed to fork Codex session");
-        }
-        openForkTab(fork.sessionId, fork.title, isCurrent());
-      } else {
-        const fork = await forkNativeAgentSession({
-          environmentId: activeSession.environmentId,
-          agent: activeSession.provider,
-          logicalSessionKey: activeSession.sessionKey,
-        });
-        openForkTab(fork.sessionId, fork.title, isCurrent());
-      }
+      const fork = await forkNativeAgentSession({
+        environmentId: activeSession.environmentId,
+        agent: activeSession.provider,
+        logicalSessionKey: activeSession.sessionKey,
+      });
+      openForkTab(fork.sessionId, fork.title, isCurrent());
     });
 
   const continueIn = (
@@ -871,17 +659,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         sourceProvider: sourceSession.provider,
         destinationProvider: destination,
         sourceSessionId,
-        // The legacy stores answer for the two providers that have one; every
-        // other agent's title lives only on the projection, which is also the
-        // fallback while a legacy store has not loaded its session yet.
-        sourceTitle:
-          (sourceSession.provider === "claude"
-            ? claudeSession?.title
-            : sourceSession.provider === "codex"
-              ? codexSession?.title
-              : undefined) ?? neutralProjection?.title,
+        sourceTitle: neutralProjection?.title,
         sourceModel: modelId,
-        sourceAgent: sourceSession.provider === "claude" ? claudeAgent : undefined,
         messages,
       });
       await persistAgentHandoff(handoff);
@@ -904,19 +683,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const compactCurrent = () =>
     runAction("compact", async () => {
       if (!activeSession || !currentSessionId) return;
-      const succeeded =
-        activeSession.provider === "claude" && claudeClient
-          ? await compactClaudeSession(claudeClient, currentSessionId)
-          : activeSession.provider === "codex" && codexClient
-            ? await compactCodexSession(codexClient, currentSessionId)
-            : (await performNativeAgentSessionAction({
-                environmentId: activeSession.environmentId,
-                agent: activeSession.provider,
-                logicalSessionKey: activeSession.sessionKey,
-                action: { kind: "compact", modelId },
-              }),
-              true);
-      if (!succeeded) throw new Error("The provider could not compact this session");
+      await performNativeAgentSessionAction({
+        environmentId: activeSession.environmentId,
+        agent: activeSession.provider,
+        logicalSessionKey: activeSession.sessionKey,
+        action: { kind: "compact", modelId },
+      });
       toast.success("Context compaction started");
     });
 
@@ -925,20 +697,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     setRuntimeNoticeDialogId(null);
     setOpen(false);
   };
-
-  /*
-   * One component instance serves every tab, so everything typed or latched
-   * for the previous session has to go when the active tab changes. `steerText`
-   * in particular is posted to `currentSessionId`: text composed for session A
-   * would otherwise be delivered to session B's active turn.
-   */
-  useEffect(() => {
-    setOpen(false);
-    setHandoffOpen(false);
-    setRuntimeNoticeDialogId(null);
-    setShareState({ sessionIdentity, value: false });
-    setSteerState({ sessionIdentity, value: "" });
-  }, [sessionIdentity]);
 
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
@@ -1080,59 +838,40 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   usage={usage}
                   modelId={modelId}
                   /*
-                   * Claude answers limit reads directly and its store holds the
-                   * authoritative snapshot, including an empty one. Every other
-                   * provider reports through the usage snapshot, falling back to
-                   * the neutral projection when the snapshot has no limits yet.
+                   * Claude's projection carries its quota windows as an
+                   * independent authoritative snapshot, including an empty one.
+                   * Every other provider reports through the usage snapshot,
+                   * falling back to the projection's windows when it has none.
                    */
                   rateLimits={
                     activeSession.provider === "claude"
-                      ? (claudeRateLimits ?? neutralRateLimits)
+                      ? neutralRateLimits
                       : (usage?.rateLimits ?? neutralRateLimits)
                   }
                 />
               </div>
 
-              {!isBuildStage &&
-              ((activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0) ||
-                (neutralProjection?.composer?.executionProfiles?.length ?? 0) > 0) ? (
+              {!isBuildStage && neutralProjection?.composer?.executionProfiles?.length ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Execution profile
                   </div>
                   <select
                     disabled={neutralControlUpdatePending}
-                    value={
-                      neutralProjection?.composer?.selectedExecutionProfileId ??
-                      (activeSession.provider === "claude" ? claudeAgent : undefined) ??
-                      ""
-                    }
+                    value={neutralProjection.composer.selectedExecutionProfileId ?? ""}
                     onChange={(event) => {
-                      const value = event.target.value || undefined;
-                      if (neutralProjection) {
-                        void updateNeutralControls({ executionProfileId: value ?? null });
-                        return;
-                      }
-                      if (activeSession.provider === "claude") {
-                        useClaudeStore.getState().setSelectedAgent(activeSession.sessionKey, value);
-                      }
+                      void updateNeutralControls({
+                        executionProfileId: event.target.value || null,
+                      });
                     }}
                     className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-sm"
                     aria-label="Execution profile"
                   >
                     <option value="">Provider default</option>
-                    {(neutralProjection?.composer?.executionProfiles?.length
-                      ? neutralProjection.composer.executionProfiles.map((profile) => ({
-                          name: profile.id,
-                          model: profile.modelId,
-                        }))
-                      : activeSession.provider === "claude"
-                        ? (claudeInit?.agents ?? [])
-                        : []
-                    ).map((agent) => (
-                      <option key={agent.name} value={agent.name}>
-                        {agent.name}
-                        {agent.model ? ` · ${agent.model}` : ""}
+                    {neutralProjection.composer.executionProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.id}
+                        {profile.modelId ? ` · ${profile.modelId}` : ""}
                       </option>
                     ))}
                   </select>
@@ -1156,21 +895,11 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     <input
                       type="checkbox"
                       disabled={neutralControlUpdatePending}
-                      checked={
-                        neutralProjection?.composer?.includeLocalSettings ?? includeLocalSettings
-                      }
+                      checked={neutralProjection?.composer?.includeLocalSettings ?? false}
                       onChange={(event) => {
-                        if (neutralProjection) {
-                          void updateNeutralControls({
-                            includeLocalSettings: event.target.checked,
-                          });
-                        } else
-                          useClaudeStore
-                            .getState()
-                            .setIncludeLocalSettings(
-                              activeSession.sessionKey,
-                              event.target.checked,
-                            );
+                        void updateNeutralControls({
+                          includeLocalSettings: event.target.checked,
+                        });
                       }}
                     />
                     Include .claude/settings.local.json
@@ -1179,20 +908,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     <input
                       type="checkbox"
                       disabled={neutralControlUpdatePending}
-                      checked={
-                        neutralProjection?.composer?.promptSuggestionsEnabled ??
-                        promptSuggestionOptIn
-                      }
+                      checked={neutralProjection?.composer?.promptSuggestionsEnabled ?? false}
                       onChange={(event) => {
-                        if (neutralProjection) {
-                          void updateNeutralControls({ promptSuggestions: event.target.checked });
-                        } else
-                          useClaudeStore
-                            .getState()
-                            .setPromptSuggestionOptIn(
-                              activeSession.sessionKey,
-                              event.target.checked,
-                            );
+                        void updateNeutralControls({ promptSuggestions: event.target.checked });
                       }}
                     />
                     Suggest a follow-up after each turn
@@ -1289,31 +1007,20 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("rewind", async () => {
-                            const target =
-                              claudeSession?.messages
-                                .filter((message) => message.role === "user")
-                                .at(-1) ??
-                              neutralMessages.filter((message) => message.role === "user").at(-1);
+                            const target = neutralMessages
+                              .filter((message) => message.role === "user")
+                              .at(-1);
                             if (!target?.id) throw new Error("No file checkpoint is available");
-                            const preview = claudeClient
-                              ? await rewindClaudeFiles(
-                                  claudeClient,
-                                  currentSessionId,
-                                  target.id,
-                                  true,
-                                )
-                              : (
-                                  await performNativeAgentSessionAction({
-                                    environmentId: activeSession.environmentId,
-                                    agent: activeSession.provider,
-                                    logicalSessionKey: activeSession.sessionKey,
-                                    action: {
-                                      kind: "rewind-files",
-                                      messageId: target.id,
-                                      dryRun: true,
-                                    },
-                                  })
-                                ).preview;
+                            const { preview } = await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: {
+                                kind: "rewind-files",
+                                messageId: target.id,
+                                dryRun: true,
+                              },
+                            });
                             /*
                              * This mutates the worktree, so the confirmation names
                              * the message it is anchored to and lists the files it
@@ -1342,16 +1049,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                               )
                             )
                               return;
-                            if (claudeClient) {
-                              await rewindClaudeFiles(claudeClient, currentSessionId, target.id);
-                            } else {
-                              await performNativeAgentSessionAction({
-                                environmentId: activeSession.environmentId,
-                                agent: activeSession.provider,
-                                logicalSessionKey: activeSession.sessionKey,
-                                action: { kind: "rewind-files", messageId: target.id },
-                              });
-                            }
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "rewind-files", messageId: target.id },
+                            });
                             toast.success(
                               fileCount === 0
                                 ? "Claude files rewound"
@@ -1509,24 +1212,16 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={busyAction !== null || codexSession?.isLoading}
+                        disabled={busyAction !== null}
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("review", async () => {
-                            if (codexClient) {
-                              const started = await startCodexNativeReview(
-                                codexClient,
-                                currentSessionId,
-                              );
-                              if (!started) throw new Error("Codex native review could not start");
-                            } else {
-                              await performNativeAgentSessionAction({
-                                environmentId: activeSession.environmentId,
-                                agent: activeSession.provider,
-                                logicalSessionKey: activeSession.sessionKey,
-                                action: { kind: "review" },
-                              });
-                            }
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "review" },
+                            });
                             toast.success("Reviewing uncommitted changes");
                           })
                         }
@@ -1642,21 +1337,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           className="h-7 shrink-0 gap-1.5"
                           onClick={() =>
                             void runAction(`stop-${task.id}`, async () => {
-                              if (claudeClient) {
-                                const stopped = await stopClaudeBackgroundTask(
-                                  claudeClient,
-                                  currentSessionId,
-                                  task.id,
-                                );
-                                if (!stopped) throw new Error("Claude could not stop this task");
-                              } else {
-                                await stopNativeAgentBackgroundTask({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  taskId: task.id,
-                                });
-                              }
+                              await stopNativeAgentBackgroundTask({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                taskId: task.id,
+                              });
                             })
                           }
                         >
@@ -1788,25 +1474,15 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <Metric
                       label="MCP"
-                      value={String(
-                        neutralProjection?.runtime?.mcpServers ??
-                          claudeInit?.mcpServers.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
                     />
                     <Metric
                       label="Plugins"
-                      value={String(
-                        neutralProjection?.runtime?.plugins ?? claudeInit?.plugins.length ?? 0,
-                      )}
+                      value={String(neutralProjection?.runtime?.plugins ?? 0)}
                     />
                     <Metric
                       label="Commands"
-                      value={String(
-                        neutralProjection?.runtime?.commands ??
-                          claudeInit?.slashCommands?.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.commands ?? 0)}
                     />
                   </div>
                 ) : activeSession.provider === "opencode" ? (

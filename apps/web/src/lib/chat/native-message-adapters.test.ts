@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type { NativeMessage } from "./native-message-types";
 import { buildPromptWithTranscriptAnnotations } from "./transcript-annotations";
 import {
@@ -18,7 +18,6 @@ import {
   normalizeClaudeMessages,
   normalizeClaudeMessagesForDisplay,
   normalizeClaudePart,
-  normalizeCodexNativeMessage,
   normalizeNativeMessage,
   normalizeNativeMessages,
   parseNativeAttachmentsFromContent,
@@ -1685,7 +1684,7 @@ describe("native message adapters", () => {
       modelId: "provider/model",
     };
 
-    expect(normalizeCodexNativeMessage(message).modelId).toBe("provider/model");
+    expect(normalizeNativeMessage(message).modelId).toBe("provider/model");
     expect(normalizeNativeMessage(message).modelId).toBe("provider/model");
   });
 
@@ -2192,7 +2191,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeCodexNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["subagent", "tool-group"]);
     expect(normalized.parts[0]?.type).toBe("subagent");
@@ -2217,7 +2216,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeCodexNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["text", "agent-group", "text"]);
     expect(normalized.parts[1]?.type).toBe("agent-group");
@@ -2243,7 +2242,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeCodexNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["subagent", "text", "subagent"]);
   });
@@ -3423,8 +3422,8 @@ describe("normalization identity cache", () => {
   test("returns the identical normalized object for an unchanged source message", () => {
     const message = makeMessage();
 
-    const first = normalizeCodexNativeMessage(message);
-    const second = normalizeCodexNativeMessage(message);
+    const first = normalizeNativeMessage(message);
+    const second = normalizeNativeMessage(message);
     const third = normalizeNativeMessage(message);
 
     expect(second).toBe(first);
@@ -3437,7 +3436,7 @@ describe("normalization identity cache", () => {
 
   test("returns a new normalized object when the source message object changes", () => {
     const message = makeMessage();
-    const first = normalizeCodexNativeMessage(message);
+    const first = normalizeNativeMessage(message);
 
     // Stores replace the message object on every update, so a changed message
     // is a new object and must miss the cache.
@@ -3445,7 +3444,7 @@ describe("normalization identity cache", () => {
       ...message,
       parts: [...message.parts, { type: "text", content: "More" }],
     };
-    const second = normalizeCodexNativeMessage(updated);
+    const second = normalizeNativeMessage(updated);
 
     expect(second).not.toBe(first);
     expect(second.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text", "text"]);

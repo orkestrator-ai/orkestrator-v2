@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeModel } from "@/lib/claude-types";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import { firstModelFor, type AgentModelCatalog } from "@/lib/agent-launch";
 import {

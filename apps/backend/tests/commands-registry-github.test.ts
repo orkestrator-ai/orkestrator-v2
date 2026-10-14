@@ -463,7 +463,8 @@ describe("Electron backend command registry", () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
     const secret = "github_secret_token";
-    let completionRecord: Record<string, unknown> | null = null;
+    // Assigned inside storage mocks, so widen past the initial null narrowing.
+    let completionRecord = null as Record<string, unknown> | null;
 
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({

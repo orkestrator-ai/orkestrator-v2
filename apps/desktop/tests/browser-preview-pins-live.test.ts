@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { HTMLElement } from "happy-dom";
 import {
   BROWSER_PREVIEW_PINS_SNAPSHOT_SCRIPT,
   browserPreviewPinsShowScript,

@@ -1,6 +1,10 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
-import type { RepositoryConfig } from "../../../apps/web/src/types";
+import type { AppConfig, RepositoryConfig } from "../../../apps/web/src/types";
+import {
+  DEFAULT_TERMINAL_APPEARANCE,
+  DEFAULT_TERMINAL_SCROLLBACK,
+} from "../../../apps/web/src/constants/terminal";
 
 describe("configStore", () => {
   beforeEach(() => {
@@ -14,6 +18,9 @@ describe("configStore", () => {
             memoryGb: 4,
           },
           envFilePatterns: [".env.local", ".env"],
+          allowedDomains: [],
+          terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
+          terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
           experimentalCodexRawEventLogging: true,
           agentSettings: { platforms: { claude: { model: "claude-sonnet-4-6" } } },
         },
@@ -38,7 +45,7 @@ describe("configStore", () => {
   });
 
   test("setConfig replaces entire config", () => {
-    const newConfig = {
+    const newConfig: AppConfig = {
       version: "2.0",
       global: {
         containerResources: {
@@ -46,6 +53,9 @@ describe("configStore", () => {
           memoryGb: 8,
         },
         envFilePatterns: [".env"],
+        allowedDomains: [],
+        terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
+        terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
       },
       repositories: {
         "repo-1": {

@@ -13,7 +13,7 @@ import {
   stripTransformedRepresentationHeaders,
 } from "../src/gateway";
 import { stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type OutgoingHttpHeaders } from "node:http";
 
 import {
   auxiliaryServers,
@@ -35,7 +35,7 @@ import {
 
 describe("remote gateway", () => {
   test("separates content-coded metadata from full transformed-representation stripping", () => {
-    const upstream = () => ({
+    const upstream = (): OutgoingHttpHeaders => ({
       etag: '"upstream"',
       "content-md5": "identity-md5",
       "content-digest": "sha-256=:content:",
@@ -137,7 +137,7 @@ describe("remote gateway", () => {
       },
     });
     expect(unacceptable.status).toBe(200);
-    expect(["br", "gzip"]).toContain(unacceptable.headers["content-encoding"]);
+    expect(unacceptable.headers["content-encoding"]).toBeOneOf(["br", "gzip"]);
     expect(decodeResponseBody(unacceptable)).toBe("x");
   });
 
@@ -420,7 +420,7 @@ describe("remote gateway", () => {
     client.writableLength = 0;
     const flushed = (
       gateway as unknown as {
-        flushDesyncNotices(client: object, state: typeof state): boolean;
+        flushDesyncNotices(client: object, clientState: typeof state): boolean;
       }
     ).flushDesyncNotices(client, state);
 
@@ -446,7 +446,7 @@ describe("remote gateway", () => {
     expect(
       (
         gateway as unknown as {
-          flushDesyncNotices(client: object, state: typeof state): boolean;
+          flushDesyncNotices(client: object, clientState: typeof state): boolean;
         }
       ).flushDesyncNotices(client, state),
     ).toBe(true);
@@ -508,7 +508,7 @@ describe("remote gateway", () => {
     client.writableLength = 0;
     const flushed = (
       gateway as unknown as {
-        flushDesyncNotices(client: object, state: typeof state): boolean;
+        flushDesyncNotices(client: object, clientState: typeof state): boolean;
       }
     ).flushDesyncNotices(client, state);
 

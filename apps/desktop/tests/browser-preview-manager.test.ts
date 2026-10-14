@@ -186,6 +186,7 @@ function createContextMenuParams(overrides: Partial<ContextMenuParams> = {}): Co
       isMuted: false,
       hasAudio: false,
       isLooping: false,
+      canLoop: false,
       isControlsVisible: false,
       canToggleControls: false,
       canPrint: false,

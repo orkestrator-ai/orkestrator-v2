@@ -169,19 +169,19 @@ describe("pane layout commands", () => {
     const commands = createCommandRegistry();
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
 
-    const rejection = await commands
-      .get("save_pane_layout")?.(
+    const rejection = await Promise.resolve(
+      commands.get("save_pane_layout")?.(
         {
           environmentId: "env-1",
           layout: { version: 3, containerId: null, activePaneId: "default", root },
           expectedRevision: 3,
         },
         context,
-      )
-      .then(
-        () => null,
-        (error: unknown) => error,
-      );
+      ),
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
 
     expect(rejection).toBe(conflict);
     // The renderer's rebase-and-retry path keys off this predicate alone.

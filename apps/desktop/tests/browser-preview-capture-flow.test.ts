@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureAnchor } from "@orkestrator/protocol/web-annotations-fixtures";
 import { validateWebAnnotationCaptureInput } from "@orkestrator/protocol/web-annotations-validation";
 import {
   createHarness,
@@ -313,7 +313,7 @@ describe("recapture of a stale pending capture", () => {
     expect(restarted).toMatchObject({ status: "selecting", mode: "element" });
     expect((contents as CaptureContents).config?.initialTarget).toEqual({
       kind: "element",
-      anchor: fixtureTargets.element.anchor,
+      anchor: fixtureAnchor,
     });
     contents.selection = elementSelection();
     const second = await captured(harness);

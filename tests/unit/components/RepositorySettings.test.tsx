@@ -171,12 +171,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       containerResources: { cpuCores: 2, memoryGb: 4 },
       envFilePatterns: [".env"],
       allowedDomains: [],
-      defaultAgent: "claude",
-      opencodeModel: "opencode/grok-code",
-      codexModel: "gpt-5.3-codex",
-      codexReasoningEffort: "medium",
-      opencodeMode: "terminal",
-      claudeMode: "terminal",
       terminalAppearance: {
         fontFamily: "monospace",
         fontSize: 14,

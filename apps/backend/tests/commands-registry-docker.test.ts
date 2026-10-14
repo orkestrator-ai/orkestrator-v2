@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { AppConfig } from "../src/core/models";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -46,11 +47,14 @@ exit 1
       status: "stopped",
     });
     const created = createContext(environment);
-    created.context.storage.loadConfig = mock(async () => ({
-      version: "1.0.0",
-      global: { useHostGitHubCredentials: false, githubToken: "", ...globalConfig },
-      repositories: {},
-    }));
+    created.context.storage.loadConfig = mock(
+      async () =>
+        ({
+          version: "1.0.0",
+          global: { useHostGitHubCredentials: false, githubToken: "", ...globalConfig },
+          repositories: {},
+        }) as AppConfig,
+    );
     return created;
   }
 
@@ -461,7 +465,7 @@ exit 0
         repositories: {},
       };
       const { context } = createContext(environment);
-      context.storage.loadConfig = mock(async () => config);
+      context.storage.loadConfig = mock(async () => config as AppConfig);
       const commands = createCommandRegistry();
 
       await withFakeDocker(

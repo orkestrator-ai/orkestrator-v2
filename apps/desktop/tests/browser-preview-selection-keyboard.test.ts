@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { EventTarget, HTMLElement, IKeyboardEventInit } from "happy-dom";
 import {
   BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT,
   browserPreviewCaptureSettleScript,
@@ -15,7 +16,7 @@ import {
 
 type Harness = ReturnType<typeof page>;
 
-function keyWith(harness: Harness, name: string, init: KeyboardEventInit = {}) {
+function keyWith(harness: Harness, name: string, init: IKeyboardEventInit = {}) {
   const event = trusted(
     new harness.window.KeyboardEvent("keydown", {
       key: name,
@@ -42,17 +43,15 @@ function startWith(harness: Harness, mode: string, initialTarget: unknown) {
 }
 
 function announcer(harness: Harness): HTMLElement {
-  return harness.document.querySelector("[data-orkestrator-annotation-ui][role='status']")!;
+  return harness.document.querySelector<HTMLElement>(
+    "[data-orkestrator-annotation-ui][role='status']",
+  )!;
 }
 
-function overlay(harness: Harness): HTMLElement {
+function overlay(harness: Harness): HTMLElement | undefined {
   return harness
     .ui()
-    .find(
-      (node) =>
-        (node as HTMLElement).style.cursor === "default" &&
-        (node as HTMLElement).style.display === "block",
-    ) as HTMLElement;
+    .find((node) => node.style.cursor === "default" && node.style.display === "block");
 }
 
 describe("click suppression at the earliest point", () => {
@@ -78,6 +77,7 @@ describe("click suppression at the earliest point", () => {
 
     const cover = overlay(harness);
     expect(cover).toBeDefined();
+    if (!cover) throw new Error("inspector overlay was not rendered");
     expect(cover.style.inset).toBe("0");
     expect(cover.style.pointerEvents).not.toBe("none");
 

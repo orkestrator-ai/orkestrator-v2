@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import type { BrowserPreviewAnchorQuery } from "@orkestrator/protocol/browser-preview";
+import type { WebAnnotationTarget } from "@orkestrator/protocol/web-annotations";
 import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
 import { createHarness, type Json } from "./browser-preview-capture-harness";
 
-const pin = (annotationId: string, route: string, target: unknown = fixtureTargets.element) => ({
+const pin = (
+  annotationId: string,
+  route: string,
+  target: WebAnnotationTarget = fixtureTargets.element,
+): BrowserPreviewAnchorQuery => ({
   annotationId,
   number: Number(annotationId.split("-")[1]),
   target,
@@ -52,7 +58,7 @@ describe("pins across document changes", () => {
       tabId: "browser-1",
       pins: [pin("annotation-1", "/settings")],
     });
-    expect(results[0]!.resolution.documentGeneration).toBe(invalidated[0]!.documentGeneration);
+    expect(results[0]!.resolution.documentGeneration).toBe(invalidated[0]!.documentGeneration!);
   });
 
   test("a hash-route change invalidates pins immediately", async () => {
@@ -278,7 +284,7 @@ describe("responsive capture sets", () => {
     ]);
     const first = (await harness.manager.readPendingCapture(result.captures[0]!.captureId))!;
     expect(first.capture.geometry?.viewport.width).toBe(390);
-    expect(first.capture.responsive).toEqual(result.captures[0]!.responsive);
+    expect(result.captures[0]!.responsive).toEqual(first.capture.responsive);
     expect(first.capture.page.route).toBe("/settings");
   });
 

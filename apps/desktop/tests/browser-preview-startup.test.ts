@@ -100,7 +100,7 @@ describe("browser preview startup wiring", () => {
           requestingOrigin: string,
           details: { isMainFrame: boolean },
         ) => boolean)
-      | null = null;
+      | undefined;
     let permissionRequest:
       | ((
           webContents: unknown,
@@ -108,9 +108,9 @@ describe("browser preview startup wiring", () => {
           callback: (allowed: boolean) => void,
           details: { isMainFrame: boolean; requestingUrl: string },
         ) => void)
-      | null = null;
-    let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
-    let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
+      | undefined;
+    let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | undefined;
+    let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | undefined;
     const webRequest = {
       onBeforeSendHeaders: mock((_filter: unknown, listener: typeof beforeHeaders) => {
         beforeHeaders = listener;
@@ -129,7 +129,7 @@ describe("browser preview startup wiring", () => {
       }),
     };
     const fromPartition = mock(() => browserSession);
-    const addChildView = mock(() => undefined);
+    const addChildView = mock((_view: FakeWebContentsView) => undefined);
     const window = {
       isDestroyed: () => false,
       contentView: { addChildView, removeChildView: mock(() => undefined) },
@@ -187,7 +187,7 @@ describe("browser preview startup wiring", () => {
       bounds: { x: 1, y: 2, width: 300, height: 200 },
       visible: true,
     });
-    const previewView = addChildView.mock.calls[0]![0] as unknown as FakeWebContentsView;
+    const previewView = addChildView.mock.calls[0]![0];
     const previewContents = previewView.webContents;
 
     const ambientWriteResult = mock(() => undefined);
@@ -399,7 +399,7 @@ describe("browser preview startup wiring", () => {
   });
 
   test("single-flights missing-window recreation and reports retry failures", async () => {
-    let activate: (() => void) | null = null;
+    let activate: (() => void) | undefined;
     let windowCount = 1;
     let resolveCreation!: () => void;
     const createWindow = mock(
@@ -516,7 +516,7 @@ describe("configurePreviewServiceSession", () => {
     // A connection switch back, or a reopened window in the same slot, reuses the partition.
     configurePreviewServiceSession(serviceSession as never, () => current);
 
-    const request = (permission: string) => {
+    const request = (permission: string): boolean | null => {
       let granted: boolean | null = null;
       requestHandler!({}, permission, (value) => (granted = value), {
         isMainFrame: true,

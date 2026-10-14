@@ -238,7 +238,7 @@ describe("expired-capture notices", () => {
     await spool.store.sweepExpired();
     const notices = await spool.store.listExpiredNotices();
     expect(notices).toHaveLength(MAX_EXPIRED_CAPTURE_NOTICES);
-    expect(notices[0]!.captureId).toBe(ids.at(-1));
+    expect(notices[0]!.captureId).toBe(ids.at(-1)!);
     expect(JSON.stringify(notices)).not.toContain("Save");
 
     await spool.store.dismissExpiredNotices([ids.at(-1)!]);

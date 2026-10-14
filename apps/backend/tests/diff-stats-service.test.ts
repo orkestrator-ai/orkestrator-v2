@@ -678,9 +678,10 @@ describe("DiffStatsService", () => {
 
   test("the default interval is unrefed so tracking cannot hold the process open", async () => {
     const unref = mock(() => undefined);
-    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation((() => ({
-      unref,
-    })) as typeof setInterval);
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+      // A fake handle: the service only calls unref() on it.
+      (() => ({ unref })) as unknown as typeof setInterval,
+    );
     const service = new DiffStatsService({
       emit: () => undefined,
       scan: async () => ({ stats: stats(), changes: [] }),

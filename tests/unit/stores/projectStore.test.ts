@@ -31,6 +31,7 @@ describe("projectStore", () => {
       gitUrl: "git@github.com:test/repo.git",
       localPath: null,
       addedAt: new Date().toISOString(),
+      order: 0,
     };
 
     useProjectStore.getState().addProject(project);
@@ -47,6 +48,7 @@ describe("projectStore", () => {
       gitUrl: "git@github.com:test/repo.git",
       localPath: null,
       addedAt: new Date().toISOString(),
+      order: 0,
     };
 
     useProjectStore.getState().addProject(project);
@@ -63,6 +65,7 @@ describe("projectStore", () => {
       gitUrl: "git@github.com:test/repo.git",
       localPath: null,
       addedAt: new Date().toISOString(),
+      order: 0,
     };
 
     useProjectStore.getState().addProject(project);
@@ -79,6 +82,7 @@ describe("projectStore", () => {
       gitUrl: "git@github.com:test/repo1.git",
       localPath: null,
       addedAt: new Date().toISOString(),
+      order: 0,
     };
     const project2: Project = {
       id: "test-2",
@@ -86,6 +90,7 @@ describe("projectStore", () => {
       gitUrl: "git@github.com:test/repo2.git",
       localPath: null,
       addedAt: new Date().toISOString(),
+      order: 1,
     };
 
     useProjectStore.getState().addProject(project1);

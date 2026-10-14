@@ -271,12 +271,12 @@ exit 0
 
       try {
         await withFakeDocker(dockerScript, async (logs) => {
-          const failure = await commands
-            .get(commandName)?.({ containerId }, context)
-            .then(
-              () => null,
-              (error: unknown) => error as Error,
-            );
+          const failure = await Promise.resolve(
+            commands.get(commandName)?.({ containerId }, context),
+          ).then(
+            () => null,
+            (error: unknown) => error as Error,
+          );
 
           expect(failure).toBeInstanceOf(Error);
           const execLog = await fs.readFile(logs.exec, "utf8");

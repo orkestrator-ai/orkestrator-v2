@@ -3,7 +3,11 @@ import {
   createToolchainProgressController,
   preparePinnedToolchains,
 } from "../electron/toolchain-startup";
-import type { ToolchainProgress } from "@orkestrator/toolchain/manager";
+import type {
+  EnsurePinnedToolchainsOptions,
+  PinnedToolchainResult,
+  ToolchainProgress,
+} from "@orkestrator/toolchain/manager";
 
 function progress(phase: ToolchainProgress["phase"]): ToolchainProgress {
   return { phase, completedTools: 0, totalTools: 3, overallFraction: 0, message: phase };
@@ -28,7 +32,7 @@ function fakeWindow() {
       closedListener?.();
     }),
     isDestroyed: mock(() => destroyed),
-    once: mock((_event: "closed", listener: () => void) => {
+    once: mock((_event: string, listener: () => void) => {
       closedListener = listener;
       return undefined as never;
     }),
@@ -138,7 +142,7 @@ describe("toolchain startup orchestration", () => {
       binDir: "/data/toolchains/bin",
       executables: {},
     });
-    const showMessageBox = mock(async () => ({ response: 0 }));
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 0 }));
     const quit = mock(() => undefined);
     const logError = mock(() => undefined);
 
@@ -160,11 +164,14 @@ describe("toolchain startup orchestration", () => {
   });
 
   test("starts successfully when selected platforms require no managed artifacts", async () => {
-    const ensure = mock(async () => ({
-      rootDir: "/data/toolchains",
-      binDir: "/data/toolchains/bin/empty",
-      executables: {},
-    }));
+    const ensure = mock(
+      async (_options: EnsurePinnedToolchainsOptions): Promise<PinnedToolchainResult> => ({
+        rootDir: "/data/toolchains",
+        binDir: "/data/toolchains/bin/empty",
+        // No artifacts were requested, so no executable is installed.
+        executables: {} as PinnedToolchainResult["executables"],
+      }),
+    );
 
     await expect(
       preparePinnedToolchains({
@@ -185,7 +192,7 @@ describe("toolchain startup orchestration", () => {
 
   test("quits after a rejected retry prompt and handles non-Error failures", async () => {
     const quit = mock(() => undefined);
-    const showMessageBox = mock(async () => ({ response: 1 }));
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 1 }));
 
     await expect(
       preparePinnedToolchains({
@@ -207,7 +214,7 @@ describe("toolchain startup orchestration", () => {
 
   test("fails an unattended profile instead of waiting on a retry prompt", async () => {
     const error = new Error("network down");
-    const showMessageBox = mock(async () => ({ response: 0 }));
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 0 }));
     const quit = mock(() => undefined);
     const logError = mock(() => undefined);
     const ensure = mock(async () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { BrowserPreviewExpiredCaptureNotice } from "@orkestrator/protocol/browser-preview";
 import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
 import {
   BrowserPreviewCaptureStore,
@@ -179,7 +180,7 @@ describe("browser preview capture spool", () => {
       createdAt: created.createdAt,
       expiredAt: created.expiresAt,
       whileClosed: false,
-    };
+    } satisfies BrowserPreviewExpiredCaptureNotice;
     expect(spool.changes.at(-1)).toEqual({
       captureId: created.captureId,
       tabId: "browser-1",

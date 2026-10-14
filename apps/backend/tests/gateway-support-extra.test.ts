@@ -24,6 +24,7 @@ import {
   normalizeMetricLabel,
   normalizeNextHopProtocol,
   parseGatewayCompressionMode,
+  type PreparedBody,
   prepareCompressedBody,
   recoverBodyResponseError,
   resolveGatewayCompressionMode,
@@ -195,7 +196,7 @@ describe("remote gateway", () => {
     expect(storedHeaders.get("vary")).toBe("Accept-Encoding");
     expect(identityResponse.destroy).not.toHaveBeenCalled();
 
-    const destroy = mock(() => undefined);
+    const destroy = mock((_error?: Error) => undefined);
     const sentResponse = {
       headersSent: true,
       destroy,
@@ -224,7 +225,7 @@ describe("remote gateway", () => {
       200,
       { "content-type": "text/plain" },
       source,
-      Promise.resolve({
+      Promise.resolve<PreparedBody>({
         body: Buffer.from("compressed"),
         encoding: "gzip",
         variesByEncoding: true,
@@ -282,7 +283,7 @@ describe("remote gateway", () => {
       if (compression === "off" || metricsBytes < COMPRESSION_MIN_BYTES) {
         expect(metricsResponse.headers["content-encoding"]).toBeUndefined();
       } else {
-        expect(["br", "gzip"]).toContain(metricsResponse.headers["content-encoding"]);
+        expect(metricsResponse.headers["content-encoding"]).toBeOneOf(["br", "gzip"]);
       }
       expect(JSON.parse(decodeResponseBody(metricsResponse)).replay).toBeDefined();
 
@@ -291,7 +292,7 @@ describe("remote gateway", () => {
       if (compression === "off") {
         expect(staticResponse.headers["content-encoding"]).toBeUndefined();
       } else {
-        expect(["br", "gzip"]).toContain(staticResponse.headers["content-encoding"]);
+        expect(staticResponse.headers["content-encoding"]).toBeOneOf(["br", "gzip"]);
         expect(decodeResponseBody(staticResponse)).toContain("root");
       }
 

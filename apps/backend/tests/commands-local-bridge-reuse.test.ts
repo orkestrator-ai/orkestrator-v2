@@ -227,14 +227,16 @@ describe("local bridge reuse under load", () => {
     const child = commandTesting.getLocalServerProcess(`codex:${environmentId}`);
     expect(child).toBeDefined();
     if (!child) return;
-    const originalExitCode = child.exitCode;
+    // ChildProcess types exitCode as readonly; the test fakes an exit in place.
+    const mutableChild: { exitCode: number | null } = child;
+    const originalExitCode = mutableChild.exitCode;
     try {
-      child.exitCode = 1;
+      mutableChild.exitCode = 1;
       await expect(
         commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
       ).resolves.toBeNull();
     } finally {
-      child.exitCode = originalExitCode;
+      mutableChild.exitCode = originalExitCode;
     }
     expect(isProcessRunning(first.pid)).toBe(true);
   });

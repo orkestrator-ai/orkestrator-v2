@@ -40,10 +40,17 @@ import {
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
+  type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 import { randomBytes } from "node:crypto";
 import { chmod, stat, utimes, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { connect as netConnect } from "node:net";
 import type { Duplex } from "node:stream";
 import { constants as zlibConstants, createGunzip, gzipSync } from "node:zlib";
@@ -1557,7 +1564,7 @@ describe("remote gateway", () => {
       },
     });
 
-    expect(["br", "gzip"]).toContain(response.headers["content-encoding"]);
+    expect(response.headers["content-encoding"]).toBeOneOf(["br", "gzip"]);
     expect(decodeResponseBody(response)).toContain("fallback");
   });
 
@@ -1674,7 +1681,7 @@ describe("remote gateway", () => {
     await chmod(assetPath, 0o000);
     const outcome = await requestUrl(`${info.url}assets/broken-12345678.png`, {
       headers: authorization,
-    }).catch((error: unknown) => error);
+    }).catch((error: Error) => error);
     // Whether the client surfaces this as a transport error or as a truncated
     // read is its own business. What must never happen is a complete-looking
     // 4096-byte payload the client would cache as the immutable asset.
@@ -2096,7 +2103,7 @@ describe("remote gateway", () => {
     client.writableLength = 0;
     const flushed = (
       gateway as unknown as {
-        flushDesyncNotices(client: object, state: typeof state): boolean;
+        flushDesyncNotices(client: object, clientState: typeof state): boolean;
       }
     ).flushDesyncNotices(client, state);
     expect(flushed).toBe(true);
@@ -2696,7 +2703,7 @@ describe("remote gateway", () => {
       gateway as unknown as {
         initializeEventReplay(
           client: object,
-          state: typeof state,
+          clientState: typeof state,
           cursor: ReturnType<typeof parseGatewayCursor>,
         ): void;
       }
@@ -2838,7 +2845,7 @@ describe("remote gateway", () => {
       gateway as unknown as {
         initializeEventReplay(
           client: object,
-          state: typeof state,
+          clientState: typeof state,
           cursor: ReturnType<typeof parseGatewayCursor>,
         ): void;
       }
@@ -2886,7 +2893,7 @@ describe("remote gateway", () => {
       gateway as unknown as {
         initializeEventReplay(
           client: object,
-          state: typeof state,
+          clientState: typeof state,
           cursor: ReturnType<typeof parseGatewayCursor>,
         ): void;
       }
@@ -2958,7 +2965,7 @@ describe("remote gateway", () => {
       gateway as unknown as {
         initializeEventReplay(
           client: object,
-          state: typeof state,
+          clientState: typeof state,
           cursor: ReturnType<typeof parseGatewayCursor>,
         ): void;
       }
@@ -3007,7 +3014,7 @@ describe("remote gateway", () => {
         gateway as unknown as {
           initializeEventReplay(
             client: object,
-            state: typeof state,
+            clientState: typeof state,
             cursor: ReturnType<typeof parseGatewayCursor>,
           ): void;
         }
@@ -3067,7 +3074,7 @@ describe("remote gateway", () => {
         gateway as unknown as {
           initializeEventReplay(
             client: object,
-            state: typeof state,
+            clientState: typeof state,
             cursor: ReturnType<typeof parseGatewayCursor>,
           ): void;
         }
@@ -3124,7 +3131,11 @@ describe("remote gateway", () => {
 
     expect(clients.size).toBe(0);
     expect(destroy).toHaveBeenCalledTimes(1);
-    const stream = gateway.metrics.snapshot().stream as Record<string, number>;
+    const stream = (
+      gateway as unknown as {
+        metrics: { snapshot(): { stream: { connecting: number; open: number; opened: number } } };
+      }
+    ).metrics.snapshot().stream;
     expect(stream.connecting).toBe(0);
     expect(stream.open).toBe(0);
     expect(stream.opened).toBe(0);
@@ -3179,7 +3190,11 @@ describe("remote gateway", () => {
       clients.set(client, state);
       const written = (
         gateway as unknown as {
-          writeReplayFrame(client: object, state: typeof state, frame: typeof frame): boolean;
+          writeReplayFrame(
+            client: object,
+            clientState: typeof state,
+            replayFrame: typeof frame,
+          ): boolean;
         }
       ).writeReplayFrame(client, state, frame);
       expect(written).toBe(false);
@@ -3227,7 +3242,7 @@ describe("remote gateway", () => {
       gateway as unknown as {
         initializeEventReplay(
           client: object,
-          state: typeof state,
+          clientState: typeof state,
           cursor: ReturnType<typeof parseGatewayCursor>,
         ): void;
       }
@@ -3531,31 +3546,29 @@ describe("remote gateway", () => {
     const { info } = await startGateway({ compression: "on" });
     const endpoint = new URL(`${info.url}__orkestrator/proxy/loopback/${address.port}/events`);
 
-    let downstream: ReturnType<typeof httpRequest> | null = null;
-    const firstFrame = new Promise<string>((resolve, reject) => {
-      downstream = httpRequest(
-        {
-          hostname: endpoint.hostname,
-          port: endpoint.port,
-          path: endpoint.pathname,
-          headers: {
-            authorization: `Bearer ${info.token}`,
-            "accept-encoding": "gzip",
-          },
+    const { promise: firstFrame, resolve, reject } = Promise.withResolvers<string>();
+    const downstream = httpRequest(
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "gzip",
         },
-        (response) => {
-          expect(response.headers["content-encoding"]).toBe("gzip");
-          const decoder = createGunzip({
-            finishFlush: zlibConstants.Z_SYNC_FLUSH,
-          });
-          response.pipe(decoder);
-          decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
-          decoder.once("error", reject);
-        },
-      );
-      downstream.once("error", reject);
-      downstream.end();
-    });
+      },
+      (response) => {
+        expect(response.headers["content-encoding"]).toBe("gzip");
+        const decoder = createGunzip({
+          finishFlush: zlibConstants.Z_SYNC_FLUSH,
+        });
+        response.pipe(decoder);
+        decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
+        decoder.once("error", reject);
+      },
+    );
+    downstream.once("error", reject);
+    downstream.end();
 
     await expect(
       Promise.race([
@@ -3565,7 +3578,7 @@ describe("remote gateway", () => {
         ),
       ]),
     ).resolves.toContain("data: first");
-    downstream?.destroy();
+    downstream.destroy();
   });
 
   test("serves browser previews with rewritten root assets and iframe-safe headers", async () => {

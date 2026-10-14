@@ -282,7 +282,7 @@ describe("main IPC registration", () => {
     expect(new Uint8Array(await writtenPayload.arrayBuffer())).toEqual(
       new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
     );
-    expect(harness.clipboardApi.write.mock.calls[0]![0]).toEqual([
+    expect(harness.clipboardApi.write.mock.calls[0]![0]).toEqual<unknown[]>([
       harness.createClipboardItem.mock.results[0]!.value,
     ]);
 

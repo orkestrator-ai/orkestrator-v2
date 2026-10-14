@@ -34,6 +34,7 @@ const {
 } = await createCommandFixtures();
 
 import type { Environment } from "./command-fixtures";
+import type { KanbanTask } from "../src/core/storage-shared-core";
 
 function shimTest(name: string, run: () => Promise<void>): void {
   test(name, run, ASYNC_TEST_BUDGET_MS);
@@ -1094,28 +1095,33 @@ exit 1
       });
       const { context, updates } = createContext(environment);
       const commands = createCommandRegistry();
-      const task = {
+      const task: KanbanTask = {
         id: "task-merge-cleanup",
-        environmentId: environment.id,
+        projectId: environment.projectId,
+        title: "Merge cleanup",
+        description: "",
+        acceptanceCriteria: "",
         status: "in-progress",
-        prUrl: environment.prUrl,
+        comments: [],
+        images: [],
+        createdAt: new Date(0).toISOString(),
+        order: 0,
+        environmentId: environment.id,
+        prUrl: environment.prUrl ?? undefined,
         prState: "open",
         prMergeCommented: false,
-        comments: [] as Array<{ text: string }>,
       };
-      context.storage.getKanbanTasks = mock(async () => [
-        task,
-      ]) as typeof context.storage.getKanbanTasks;
+      context.storage.getKanbanTasks = mock(async (_projectId: string) => [task]);
       context.storage.updateKanbanTask = mock(
-        async (_taskId: string, taskUpdates: Record<string, unknown>) => ({
+        async (_taskId: string, taskUpdates: Partial<KanbanTask>) => ({
           ...task,
           ...taskUpdates,
         }),
-      ) as typeof context.storage.updateKanbanTask;
+      );
       context.storage.addKanbanComment = mock(async (_taskId: string, text: string) => ({
         ...task,
-        comments: [{ text }],
-      })) as typeof context.storage.addKanbanComment;
+        comments: [{ id: "comment-1", text, createdAt: new Date(0).toISOString() }],
+      }));
 
       await withFakeGh(
         `#!/bin/sh

@@ -47,6 +47,11 @@ function createHarness() {
 
   return {
     FakeBrowserWindow,
+    firstWindow(): FakeBrowserWindow {
+      const window = windows[0];
+      if (!window) throw new Error("createMainWindow did not construct a BrowserWindow");
+      return window;
+    },
     listenersAtLoad,
     menu,
     writeClipboardText,
@@ -84,9 +89,9 @@ describe("createMainWindow", () => {
       appPath: "/app",
     });
 
-    expect(window).toBe(harness.windows[0]);
+    expect(window).toBe<unknown>(harness.windows[0]);
     expect(harness.windows).toHaveLength(1);
-    expect(harness.windows[0].options).toMatchObject({
+    expect(harness.firstWindow().options).toMatchObject({
       title: PRODUCT_NAME,
       width: 1400,
       height: 900,
@@ -99,12 +104,12 @@ describe("createMainWindow", () => {
         sandbox: false,
       },
     });
-    expect(harness.windows[0].webContents.on.mock.calls[0]?.[0]).toBe("context-menu");
-    expect(harness.windows[0].loadFile).toHaveBeenCalledWith(
+    expect(harness.firstWindow().webContents.on.mock.calls[0]?.[0]).toBe("context-menu");
+    expect(harness.firstWindow().loadFile).toHaveBeenCalledWith(
       path.join("/app", "dist", "index.html"),
     );
-    expect(harness.windows[0].loadURL).not.toHaveBeenCalled();
-    expect(harness.windows[0].webContents.openDevTools).not.toHaveBeenCalled();
+    expect(harness.firstWindow().loadURL).not.toHaveBeenCalled();
+    expect(harness.firstWindow().webContents.openDevTools).not.toHaveBeenCalled();
     expect(harness.listenersAtLoad[0]).toEqual(
       expect.arrayContaining([
         "preload-error",
@@ -143,7 +148,7 @@ describe("createMainWindow", () => {
       appPath: "/app",
       platform: "darwin",
     });
-    expect(darwin.windows[0].options.titleBarStyle).toBe("hiddenInset");
+    expect(darwin.firstWindow().options.titleBarStyle).toBe("hiddenInset");
 
     const linux = createHarness();
     await createMainWindow({
@@ -155,7 +160,7 @@ describe("createMainWindow", () => {
       appPath: "/app",
       platform: "linux",
     });
-    expect(linux.windows[0].options.titleBarStyle).toBe("default");
+    expect(linux.firstWindow().options.titleBarStyle).toBe("default");
   });
 
   test("loads the configured dev server and opens devtools in development", async () => {
@@ -171,9 +176,9 @@ describe("createMainWindow", () => {
       devServerUrl: "http://127.0.0.1:5173",
     });
 
-    expect(harness.windows[0].loadURL).toHaveBeenCalledWith("http://127.0.0.1:5173");
-    expect(harness.windows[0].webContents.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
-    expect(harness.windows[0].loadFile).not.toHaveBeenCalled();
+    expect(harness.firstWindow().loadURL).toHaveBeenCalledWith("http://127.0.0.1:5173");
+    expect(harness.firstWindow().webContents.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
+    expect(harness.firstWindow().loadFile).not.toHaveBeenCalled();
   });
 
   test("uses the default dev server URL when none is configured", async () => {
@@ -188,7 +193,7 @@ describe("createMainWindow", () => {
       appPath: "/app",
     });
 
-    expect(harness.windows[0].loadURL).toHaveBeenCalledWith("http://127.0.0.1:1420");
+    expect(harness.firstWindow().loadURL).toHaveBeenCalledWith("http://127.0.0.1:1420");
   });
 
   test("registers a partitioned window before loading its renderer", async () => {
@@ -209,11 +214,11 @@ describe("createMainWindow", () => {
       beforeLoad: beforeLoad as never,
     });
 
-    expect(harness.windows[0].options.webPreferences).toMatchObject({
+    expect(harness.firstWindow().options.webPreferences).toMatchObject({
       partition: "orkestrator-renderer-window-1",
     });
     expect(beforeLoad).toHaveBeenCalledWith(harness.windows[0]);
-    expect(harness.windows[0].loadFile).toHaveBeenCalledTimes(1);
+    expect(harness.firstWindow().loadFile).toHaveBeenCalledTimes(1);
   });
 
   test("blocks untrusted navigation and renderer-created windows", async () => {
@@ -245,7 +250,7 @@ describe("createMainWindow", () => {
     onWillNavigate?.(untrustedNavigation);
     expect(untrustedNavigation.preventDefault).toHaveBeenCalledTimes(1);
 
-    const openHandler = harness.windows[0].webContents.setWindowOpenHandler.mock.calls[0]?.[0];
+    const openHandler = harness.firstWindow().webContents.setWindowOpenHandler.mock.calls[0]?.[0];
     expect(openHandler?.()).toEqual({ action: "deny" });
   });
 
@@ -263,7 +268,7 @@ describe("createMainWindow", () => {
     });
 
     const customIndexUrl = pathToFileURL(path.join("/custom/renderer", "index.html")).href;
-    expect(harness.windows[0].loadFile).toHaveBeenCalledWith(
+    expect(harness.firstWindow().loadFile).toHaveBeenCalledWith(
       path.join("/custom/renderer", "index.html"),
     );
 

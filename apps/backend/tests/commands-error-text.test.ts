@@ -90,8 +90,8 @@ describe("Electron backend command registry", () => {
     expect(classify(undefined)).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown);
 
     // Every reachable value is one of the fixed constants.
-    expect(Object.values(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES)).toContain(
-      classify(new Error("anything at all")),
+    expect(classify(new Error("anything at all"))).toBeOneOf(
+      Object.values(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES),
     );
   });
 

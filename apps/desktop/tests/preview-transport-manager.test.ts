@@ -233,7 +233,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       headers,
     });
     const hello = await new Promise<string>((resolve, reject) => {
-      socket.on("message", (data) => resolve(String(data)));
+      socket.on("message", (data: unknown) => resolve(String(data)));
       socket.on("error", reject);
     });
     expect(JSON.parse(hello)).toEqual({ hello: "desktop-app", protocol: "fixture.v1" });

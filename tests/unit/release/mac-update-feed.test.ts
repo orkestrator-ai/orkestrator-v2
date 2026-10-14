@@ -30,6 +30,8 @@ describe("macOS update feed compatibility", () => {
     const file = path.join(dir, "latest-mac.yml");
     const config = createReleaseConfig({ APPLE_KEYCHAIN_PROFILE: "test-only" });
     expect(config.mac?.minimumSystemVersion).toBe("13.0");
+    const publish = config.publish;
+    if (!Array.isArray(publish)) throw new Error("Release config must publish a provider list");
     const info = {
       version: "2.19.15",
       files: [{ url: "app.zip", sha512: "fixture-hash", size: 123 }],
@@ -39,7 +41,7 @@ describe("macOS update feed compatibility", () => {
     };
     // Use builder's real YAML writer without signing or uploading a release.
     await writeUpdateInfoFiles(
-      [{ file, info, publishConfiguration: config.publish[0], packager: {}, arch: 1 }],
+      [{ file, info, publishConfiguration: publish[0], packager: {}, arch: 1 }],
       { emitArtifactCreated: async () => undefined },
     );
     expect(() => assertMacUpdateFeed(readFileSync(file, "utf8"))).toThrow("Darwin 22");

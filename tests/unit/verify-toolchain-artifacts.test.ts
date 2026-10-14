@@ -563,9 +563,9 @@ describe("verify-toolchain-artifacts", () => {
         sha256: createHash("sha256").update(contents).digest("hex"),
       });
       const companionUrl = "https://downloads.example.test/codex-code-mode-host.tar.gz";
-      const body = (contents: Buffer) =>
+      const body = (contents: NonSharedBuffer) =>
         contents.buffer.slice(contents.byteOffset, contents.byteOffset + contents.byteLength);
-      const fetchImpl = async (input: URL | string) =>
+      const fetchImpl = async (input: string | URL | Request) =>
         new Response(
           String(input) === companionUrl ? body(companionArchive) : body(primaryArchive),
         );
@@ -758,7 +758,7 @@ describe("verify-toolchain-artifacts", () => {
       expect(logged).toEqual(["Verified 3 pinned toolchain artifact(s)"]);
       // The scratch root holds full release archives; leaving it behind would
       // silently fill the disk across repeated runs.
-      expect(await Bun.file(join([...roots][0], "unused")).exists()).toBe(false);
+      expect(await Bun.file(join([...roots][0]!, "unused")).exists()).toBe(false);
     });
 
     test("passes --emit through and reports the paste-the-values summary", async () => {

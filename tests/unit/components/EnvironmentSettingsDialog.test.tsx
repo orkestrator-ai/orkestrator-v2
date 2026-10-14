@@ -221,7 +221,6 @@ describe("EnvironmentSettingsDialog", () => {
     useClaudeStore.setState({
       sessions: new Map(),
       sessionInitData: new Map(),
-      serverStatuses: new Map(),
     });
   });
 

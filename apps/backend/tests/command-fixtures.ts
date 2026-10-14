@@ -66,19 +66,9 @@ export async function createCommandFixtures() {
     process.env.DOCKER_HOST = `unix://${path.join(os.tmpdir(), `orkestrator-no-docker-${process.pid}.sock`)}`;
   }
 
-  const showOpenDialog = mock(async () => ({ canceled: false, filePaths: ["/tmp/project"] }));
-
-  mock.module("electron", () => ({
-    dialog: { showOpenDialog },
-    shell: {
-      openExternal: mock(async () => undefined),
-      showItemInFolder: mock(() => undefined),
-    },
-  }));
-
   const ptyProcesses: MockPtyProcess[] = [];
 
-  const ptySpawn = mock((command: string, args: string[], options: Record<string, unknown>) => {
+  const ptySpawn = mock((command: string, _args: string[], options: Record<string, unknown>) => {
     const dataCallbacks: Array<(data: string) => void> = [];
     const exitCallbacks: Array<(event: PtyExitEvent) => void> = [];
     const process: MockPtyProcess = {
@@ -145,8 +135,12 @@ export async function createCommandFixtures() {
 
   const TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS = 850;
 
-  function terminalSessionResult(value: unknown): { sessionId: string; created: boolean } {
-    return value as { sessionId: string; created: boolean };
+  function terminalSessionResult(value: unknown): {
+    sessionId: string;
+    created: boolean;
+    bootstrapped?: boolean;
+  } {
+    return value as { sessionId: string; created: boolean; bootstrapped?: boolean };
   }
 
   function framedContainerGitStatus(nameStatus = "", numstat = "", untracked = ""): string {
@@ -338,9 +332,10 @@ export async function createCommandFixtures() {
     await execFileAsync("git", ["-C", worktreePath, "checkout", "-b", "feature/local"]);
     const content = "after\n";
     await fs.writeFile(path.join(worktreePath, "review.txt"), content);
-    const extraNames = Object.keys(options.extraCommittedFiles ?? {});
-    for (const name of extraNames) {
-      await fs.writeFile(path.join(worktreePath, name), options.extraCommittedFiles![name]);
+    const extraFiles = Object.entries(options.extraCommittedFiles ?? {});
+    const extraNames = extraFiles.map(([name]) => name);
+    for (const [name, data] of extraFiles) {
+      await fs.writeFile(path.join(worktreePath, name), data);
     }
     await execFileAsync("git", ["-C", worktreePath, "add", "review.txt", ...extraNames]);
     await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "change"]);
@@ -1420,7 +1415,6 @@ exit 0
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );
-      showOpenDialog.mockClear();
       ptySpawn.mockClear();
       ptyProcesses.splice(0);
     }
@@ -1518,7 +1512,6 @@ exit 0
     resolveFileManagerRevealCommands,
     runGit,
     setAgentSkillsHomeForTesting,
-    showOpenDialog,
     shutdownDiffStatsTracking,
     shutdownLocalServers,
     shutdownPrMonitorTracking,

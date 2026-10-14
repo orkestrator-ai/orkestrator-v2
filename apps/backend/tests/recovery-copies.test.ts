@@ -166,7 +166,7 @@ exit 0
           { environmentId: environment.id, copyId: "legacy-container", expectedRevision: 9 },
           context,
         );
-        expect(result.discarded).toBe(true);
+        expect(result?.discarded).toBe(true);
         expect(await log.read()).toContain("rm -f legacy-container");
       },
     );

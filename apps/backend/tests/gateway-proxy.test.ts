@@ -22,6 +22,7 @@ import {
   MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES,
   OrkestratorGateway,
   parseStrictContentLengthHeader,
+  type PreparedBody,
   releaseReservationOnResponseSettled,
   responseStatusCanHaveBody,
   settleRewrittenProxyBodyResponse,
@@ -30,7 +31,13 @@ import {
 } from "../src/gateway";
 import { EventEmitter } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type OutgoingHttpHeaders,
+  type ServerResponse,
+} from "node:http";
 import { PassThrough } from "node:stream";
 import {
   constants as zlibConstants,
@@ -222,10 +229,10 @@ describe("remote gateway", () => {
   });
 
   test("fails rewritten proxy responses when asynchronous body preparation rejects", async () => {
-    const writeHead = mock(() => undefined);
-    const end = mock(() => undefined);
+    const writeHead = mock((_statusCode: number, _headers?: OutgoingHttpHeaders) => undefined);
+    const end = mock((_chunk?: Buffer) => undefined);
     const finish = mock(() => undefined);
-    const fail = mock(() => undefined);
+    const fail = mock((_error: Error) => undefined);
     const response = {
       destroyed: false,
       writeHead,
@@ -253,20 +260,17 @@ describe("remote gateway", () => {
   });
 
   test("settles a rewritten proxy body with its own length, vary, and encoding", async () => {
-    const settle = async (
-      prepared: { body: Buffer; encoding: string; variesByEncoding: boolean },
-      headers: OutgoingHttpHeaders,
-    ) => {
-      const writeHead = mock(() => undefined);
-      const end = mock(() => undefined);
+    const settle = async (prepared: PreparedBody, headers: OutgoingHttpHeaders) => {
+      const writeHead = mock((_statusCode: number, _headers?: OutgoingHttpHeaders) => undefined);
+      const end = mock((_chunk?: Buffer) => undefined);
       const finish = mock(() => undefined);
-      const fail = mock(() => undefined);
+      const fail = mock((_error: Error) => undefined);
       const response = { destroyed: false, writeHead, end } as unknown as ServerResponse;
       settleRewrittenProxyBodyResponse(
         response,
         200,
         headers,
-        Promise.resolve(prepared) as never,
+        Promise.resolve(prepared),
         () => false,
         finish,
         fail,
@@ -300,10 +304,10 @@ describe("remote gateway", () => {
 
   test("discards a rewritten proxy body when the response already settled or died", async () => {
     for (const scenario of ["settled", "destroyed"] as const) {
-      const writeHead = mock(() => undefined);
-      const end = mock(() => undefined);
+      const writeHead = mock((_statusCode: number, _headers?: OutgoingHttpHeaders) => undefined);
+      const end = mock((_chunk?: Buffer) => undefined);
       const finish = mock(() => undefined);
-      const fail = mock(() => undefined);
+      const fail = mock((_error: Error) => undefined);
       const response = {
         destroyed: scenario === "destroyed",
         writeHead,
@@ -315,13 +319,13 @@ describe("remote gateway", () => {
         response,
         200,
         { "content-type": "text/html" },
-        Promise.resolve({
+        Promise.resolve<PreparedBody>({
           body: Buffer.from("late"),
           encoding: "identity",
           variesByEncoding: false,
         }).finally(() => {
           settledPreparation = true;
-        }) as never,
+        }),
         () => scenario === "settled",
         finish,
         fail,
@@ -1184,7 +1188,9 @@ describe("remote gateway", () => {
   });
 
   test("allows null-origin browser preview preflights and forwards non-simple requests", async () => {
-    const received = mock(() => undefined);
+    const received = mock(
+      (_method?: string, _url?: string, _header?: string | string[], _body?: string) => undefined,
+    );
     const target = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk) =>
@@ -1608,30 +1614,28 @@ describe("remote gateway", () => {
     const { gateway, info } = await startGateway({ compression: "on" });
     const endpoint = new URL(`${info.url}__orkestrator/proxy/loopback/${address.port}/events`);
 
-    let downstream: ReturnType<typeof httpRequest> | null = null;
-    const firstFrame = new Promise<string>((resolve, reject) => {
-      downstream = httpRequest(
-        {
-          hostname: endpoint.hostname,
-          port: endpoint.port,
-          path: endpoint.pathname,
-          headers: {
-            authorization: `Bearer ${info.token}`,
-            "accept-encoding": "gzip",
-          },
+    const { promise: firstFrame, resolve, reject } = Promise.withResolvers<string>();
+    const downstream = httpRequest(
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "gzip",
         },
-        (response) => {
-          expect(response.headers["content-encoding"]).toBe("gzip");
-          expect(response.headers.etag).toBeUndefined();
-          const decoder = createGunzip({ finishFlush: zlibConstants.Z_SYNC_FLUSH });
-          response.pipe(decoder);
-          decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
-          decoder.once("error", reject);
-        },
-      );
-      downstream.once("error", reject);
-      downstream.end();
-    });
+      },
+      (response) => {
+        expect(response.headers["content-encoding"]).toBe("gzip");
+        expect(response.headers.etag).toBeUndefined();
+        const decoder = createGunzip({ finishFlush: zlibConstants.Z_SYNC_FLUSH });
+        response.pipe(decoder);
+        decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
+        decoder.once("error", reject);
+      },
+    );
+    downstream.once("error", reject);
+    downstream.end();
 
     await expect(firstFrame).resolves.toContain("data: first");
     const openMetrics = await readGatewayMetrics(info);
@@ -1644,7 +1648,7 @@ describe("remote gateway", () => {
     expect(openMetrics.compression.streamingSourceBytes).toBeGreaterThan(0);
     expect(openMetrics.compression.streamingEncodedBytes).toBeGreaterThan(0);
 
-    downstream?.destroy();
+    downstream.destroy();
     await waitUntil(
       () =>
         (

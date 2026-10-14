@@ -5,9 +5,15 @@ import {
   type IpcRendererLike,
 } from "../electron/preload-api";
 
+/** The IPC mock answers every invoke with the channel and arguments it was sent. */
+type IpcEcho = { channel: string; args: unknown[] };
+
 function createIpcMock() {
   const listeners = new Map<string, (event: unknown, name: string, payload: unknown) => void>();
-  const invoke = mock(async (channel: string, ...args: unknown[]) => ({ channel, args }));
+  const invoke = mock(async (channel: string, ...args: unknown[]): Promise<IpcEcho> => ({
+    channel,
+    args,
+  }));
   const on = mock(
     (channel: string, listener: (event: unknown, name: string, payload: unknown) => void) => {
       listeners.set(channel, listener);
@@ -93,11 +99,13 @@ describe("preload API factory", () => {
     const api = createOrkestratorElectronApi(ipc);
     expect(api.isolatedViewState).toBe(true);
 
-    await expect(api.invoke("get_projects")).resolves.toEqual({
+    await expect(api.invoke("get_projects")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:invoke",
       args: ["get_projects", {}],
     });
-    await expect(api.invoke("get_environment", { environmentId: "env-1" })).resolves.toEqual({
+    await expect(
+      api.invoke("get_environment", { environmentId: "env-1" }),
+    ).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:invoke",
       args: ["get_environment", { environmentId: "env-1" }],
     });
@@ -129,111 +137,111 @@ describe("preload API factory", () => {
     const { ipc } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);
 
-    await expect(api.clipboard.readText()).resolves.toEqual({
+    await expect(api.clipboard.readText()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:clipboard:read-text",
       args: [],
     });
-    await expect(api.clipboard.writeText("copy")).resolves.toEqual({
+    await expect(api.clipboard.writeText("copy")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:clipboard:write-text",
       args: ["copy"],
     });
-    await expect(api.clipboard.readImage()).resolves.toEqual({
+    await expect(api.clipboard.readImage()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:clipboard:read-image",
       args: [],
     });
-    await expect(api.clipboard.writeImage("data:image/png;base64,abc")).resolves.toEqual({
+    await expect(api.clipboard.writeImage("data:image/png;base64,abc")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:clipboard:write-image",
       args: ["data:image/png;base64,abc"],
     });
-    await expect(api.shell.openExternal("https://example.com/docs")).resolves.toEqual({
+    await expect(api.shell.openExternal("https://example.com/docs")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],
     });
-    await expect(api.permissions.getMacOsStatus()).resolves.toEqual({
+    await expect(api.permissions.getMacOsStatus()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:permissions:macos-status",
       args: [],
     });
-    await expect(api.permissions.openMacOsSettings("full-disk-access")).resolves.toEqual({
+    await expect(api.permissions.openMacOsSettings("full-disk-access")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:permissions:open-macos-settings",
       args: ["full-disk-access"],
     });
-    await expect(api.permissions.openMacOsSettings("photos")).resolves.toEqual({
+    await expect(api.permissions.openMacOsSettings("photos")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:permissions:open-macos-settings",
       args: ["photos"],
     });
-    await expect(api.permissions.openMacOsSettings("media-library")).resolves.toEqual({
+    await expect(api.permissions.openMacOsSettings("media-library")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:permissions:open-macos-settings",
       args: ["media-library"],
     });
-    await expect(api.webClient.getStatus()).resolves.toEqual({
+    await expect(api.webClient.getStatus()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:web-client:get-status",
       args: [],
     });
-    await expect(api.webClient.setEnabled(false)).resolves.toEqual({
+    await expect(api.webClient.setEnabled(false)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:web-client:set-enabled",
       args: [false],
     });
-    await expect(api.webClient.resetServe()).resolves.toEqual({
+    await expect(api.webClient.resetServe()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:web-client:reset-serve",
       args: [],
     });
-    await expect(api.webClient.getTokenSettings()).resolves.toEqual({
+    await expect(api.webClient.getTokenSettings()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:web-client:get-token-settings",
       args: [],
     });
-    await expect(api.webClient.setToken("replacement-token-123456")).resolves.toEqual({
+    await expect(api.webClient.setToken("replacement-token-123456")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:web-client:set-token",
       args: ["replacement-token-123456"],
     });
-    await expect(api.connections.list()).resolves.toEqual({
+    await expect(api.connections.list()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:list",
       args: [],
     });
-    await expect(api.connections.probe("remote-1")).resolves.toEqual({
+    await expect(api.connections.probe("remote-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:probe",
       args: ["remote-1"],
     });
     await expect(
       api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" }),
-    ).resolves.toEqual({
+    ).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:connect",
       args: [{ address: "https://desk.example", token: "gateway-token-123456" }],
     });
     await expect(
       api.connections.updateToken("remote-1", "replacement-token-123456"),
-    ).resolves.toEqual({
+    ).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:update-token",
       args: ["remote-1", "replacement-token-123456"],
     });
-    await expect(api.connections.rename("remote-1", "Studio Mac")).resolves.toEqual({
+    await expect(api.connections.rename("remote-1", "Studio Mac")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:rename",
       args: ["remote-1", "Studio Mac"],
     });
-    await expect(api.connections.use("remote-1")).resolves.toEqual({
+    await expect(api.connections.use("remote-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:use",
       args: ["remote-1"],
     });
-    await expect(api.connections.forget("remote-1")).resolves.toEqual({
+    await expect(api.connections.forget("remote-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:forget",
       args: ["remote-1"],
     });
-    await expect(api.connections.openWindow("remote-1")).resolves.toEqual({
+    await expect(api.connections.openWindow("remote-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:open-window",
       args: ["remote-1"],
     });
-    await expect(api.process.exit(7)).resolves.toEqual({
+    await expect(api.process.exit(7)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:process:exit",
       args: [7],
     });
-    await expect(api.process.restart()).resolves.toEqual({
+    await expect(api.process.restart()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:process:restart",
       args: [],
     });
-    await expect(api.window.startDragging()).resolves.toEqual({
+    await expect(api.window.startDragging()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:window:start-dragging",
       args: [],
     });
-    await expect(api.window.setZoomFactor(1.5)).resolves.toEqual({
+    await expect(api.window.setZoomFactor(1.5)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:window:set-zoom-factor",
       args: [1.5],
     });
@@ -245,37 +253,37 @@ describe("preload API factory", () => {
         bounds,
         visible: true,
       }),
-    ).resolves.toEqual({
+    ).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:attach",
       args: [{ tabId: "browser-1", url: "http://localhost:3000/", bounds, visible: true }],
     });
-    await expect(api.browserPreview.setBounds("browser-1", bounds)).resolves.toEqual({
+    await expect(api.browserPreview.setBounds("browser-1", bounds)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:set-bounds",
       args: ["browser-1", bounds],
     });
-    await expect(api.browserPreview.setVisible("browser-1", false)).resolves.toEqual({
+    await expect(api.browserPreview.setVisible("browser-1", false)).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:set-visible",
       args: ["browser-1", false],
     });
     await expect(
       api.browserPreview.navigate("browser-1", "http://localhost:4000/"),
-    ).resolves.toEqual({
+    ).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:navigate",
       args: ["browser-1", "http://localhost:4000/"],
     });
-    await expect(api.browserPreview.goBack("browser-1")).resolves.toEqual({
+    await expect(api.browserPreview.goBack("browser-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:go-back",
       args: ["browser-1"],
     });
-    await expect(api.browserPreview.goForward("browser-1")).resolves.toEqual({
+    await expect(api.browserPreview.goForward("browser-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:go-forward",
       args: ["browser-1"],
     });
-    await expect(api.browserPreview.reload("browser-1")).resolves.toEqual({
+    await expect(api.browserPreview.reload("browser-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:reload",
       args: ["browser-1"],
     });
-    await expect(api.browserPreview.openDevTools("browser-1")).resolves.toEqual({
+    await expect(api.browserPreview.openDevTools("browser-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:open-devtools",
       args: ["browser-1"],
     });
@@ -346,12 +354,12 @@ describe("preload API factory", () => {
       [capture.captureResponsiveSet!(responsive), "capture-responsive-set", [responsive]],
     ];
     for (const [call, channel, args] of calls) {
-      await expect(call).resolves.toEqual({
+      await expect(call).resolves.toEqual<IpcEcho>({
         channel: `orkestrator:browser-preview:${channel}`,
         args,
       });
     }
-    await expect(api.browserPreview.destroy("browser-1")).resolves.toEqual({
+    await expect(api.browserPreview.destroy("browser-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:browser-preview:destroy",
       args: ["browser-1"],
     });

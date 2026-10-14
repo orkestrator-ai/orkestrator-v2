@@ -716,12 +716,7 @@ beforeEach(() => {
     environments: [],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
-    sessionActivated: new Set(),
   });
   useFeaturePlanStore.setState({ chatDrafts: new Map() });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });

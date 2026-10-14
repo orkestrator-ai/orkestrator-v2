@@ -6,7 +6,7 @@ const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
 
 describe("mobile responsive layout contracts", () => {
-  test.each([
+  test.each<string[]>([
     [
       "apps/web/src/components/browser/BrowserTab.tsx",
       "@container/browser",

@@ -98,7 +98,7 @@ describe("Electron backend command registry", () => {
       ["R100\0old.txt\0", "1\t0\t\0old.txt\0new.txt\0"],
       ["M\0file.txt\0", "bad\t0\tfile.txt\0"],
       ["M\0file.txt\0", "1\t0\t\0old-only.txt\0"],
-    ]) {
+    ] satisfies Array<[string, string]>) {
       expect(() => commandTesting.parseGitFileChanges(nameStatus, numstat)).toThrow("Malformed");
     }
     for (const malformed of ["missing-nul", "x\tpath\0", "1\t\0"]) {
@@ -204,7 +204,7 @@ describe("Electron backend command registry", () => {
       ["M\0file.txt\0", "10\t0\0"], // numstat: header with one tab
       ["M\0file.txt\0", "\t0\tfile.txt\0"], // numstat: leading tab, no additions
       ["M\0file.txt\0", "1\t0\t\0\0\0"], // numstat: rename record, empty result path
-    ]) {
+    ] satisfies Array<[string, string]>) {
       expect(() => commandTesting.parseGitFileChanges(nameStatus, numstat)).toThrow("Malformed");
     }
   });

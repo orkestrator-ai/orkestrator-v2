@@ -4,19 +4,20 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 
 // Mock backend before importing the store
-const mockUpdateKanbanTask = mock((..._args: unknown[]) =>
-  Promise.resolve({
-    id: "task-1",
-    projectId: "proj-1",
-    title: "Test",
-    description: "desc",
-    acceptanceCriteria: "",
-    status: "backlog" as const,
-    comments: [],
-    images: [],
-    createdAt: new Date().toISOString(),
-    order: 0,
-  }),
+const mockUpdateKanbanTask = mock(
+  (..._args: Parameters<typeof realBackend.updateKanbanTask>): Promise<KanbanTask> =>
+    Promise.resolve({
+      id: "task-1",
+      projectId: "proj-1",
+      title: "Test",
+      description: "desc",
+      acceptanceCriteria: "",
+      status: "backlog" as const,
+      comments: [],
+      images: [],
+      createdAt: new Date().toISOString(),
+      order: 0,
+    }),
 );
 
 const mockGetKanbanTasks = mock(() => Promise.resolve([]));
@@ -25,21 +26,22 @@ const mockClearTaskBuildStatus = mock(async (taskId: string) => ({
   removedPipelineIds: [] as string[],
   failedPipelineIds: [] as string[],
 }));
-const mockAddKanbanTask = mock(() =>
-  Promise.resolve({
-    id: "new-task",
-    projectId: "proj-1",
-    title: "New",
-    description: "",
-    acceptanceCriteria: "",
-    status: "backlog" as const,
-    comments: [],
-    images: [],
-    createdAt: new Date().toISOString(),
-    order: 0,
-  }),
+const mockAddKanbanTask = mock(
+  (_projectId: string, _title: string, _description: string): Promise<KanbanTask> =>
+    Promise.resolve({
+      id: "new-task",
+      projectId: "proj-1",
+      title: "New",
+      description: "",
+      acceptanceCriteria: "",
+      status: "backlog" as const,
+      comments: [],
+      images: [],
+      createdAt: new Date().toISOString(),
+      order: 0,
+    }),
 );
-const mockAddKanbanComment = mock(() =>
+const mockAddKanbanComment = mock((_taskId: string, _text: string): Promise<KanbanTask> =>
   Promise.resolve({
     id: "task-1",
     projectId: "proj-1",
@@ -221,7 +223,9 @@ describe("kanbanStore", () => {
               environmentId: "env-1",
               environmentType: "local" as const,
               agentType: "claude" as const,
-              phase: "building" as any,
+              phase: "building",
+              backendRevision: 1,
+              controller: "backend",
               sessions: [],
               currentSessionIndex: -1,
               iteration: 0,
@@ -246,7 +250,9 @@ describe("kanbanStore", () => {
               environmentId: "env-2",
               environmentType: "local" as const,
               agentType: "claude" as const,
-              phase: "building" as any,
+              phase: "building",
+              backendRevision: 1,
+              controller: "backend",
               sessions: [],
               currentSessionIndex: -1,
               iteration: 0,
@@ -306,7 +312,7 @@ describe("kanbanStore", () => {
 
       // prUrl/prState are passed as undefined (positions 8/9) so they are left intact.
       const [, , , , , envArg, pipelineArg, prUrlArg, prStateArg] =
-        mockUpdateKanbanTask.mock.calls[0];
+        mockUpdateKanbanTask.mock.calls[0]!;
       expect(envArg).toBe("");
       expect(pipelineArg).toBe("");
       expect(prUrlArg).toBeUndefined();
@@ -327,7 +333,9 @@ describe("kanbanStore", () => {
               environmentId: "env-1",
               environmentType: "local" as const,
               agentType: "claude" as const,
-              phase: "building" as never,
+              phase: "building",
+              backendRevision: 1,
+              controller: "backend",
               sessions: [],
               currentSessionIndex: -1,
               iteration: 0,
@@ -419,7 +427,9 @@ describe("findTaskForEnvironment", () => {
             environmentId: "env-2",
             environmentType: "local" as const,
             agentType: "claude" as const,
-            phase: "building" as any,
+            phase: "building",
+            backendRevision: 1,
+            controller: "backend",
             sessions: [],
             currentSessionIndex: -1,
             iteration: 0,
@@ -460,7 +470,9 @@ describe("findTaskForEnvironment", () => {
             environmentId: "env-linear",
             environmentType: "local" as const,
             agentType: "claude" as const,
-            phase: "building" as any,
+            phase: "building",
+            backendRevision: 1,
+            controller: "backend",
             sessions: [],
             currentSessionIndex: -1,
             iteration: 0,
@@ -504,7 +516,9 @@ describe("findTaskForEnvironment", () => {
             environmentId: "env-github",
             environmentType: "local" as const,
             agentType: "claude" as const,
-            phase: "building" as any,
+            phase: "building",
+            backendRevision: 1,
+            controller: "backend",
             sessions: [],
             currentSessionIndex: -1,
             iteration: 0,
@@ -550,7 +564,9 @@ describe("findTaskForEnvironment", () => {
             environmentId: "env-1",
             environmentType: "local" as const,
             agentType: "claude" as const,
-            phase: "building" as any,
+            phase: "building",
+            backendRevision: 1,
+            controller: "backend",
             sessions: [],
             currentSessionIndex: -1,
             iteration: 0,

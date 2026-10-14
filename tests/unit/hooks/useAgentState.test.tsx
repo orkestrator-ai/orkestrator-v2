@@ -14,8 +14,6 @@ afterEach(() => {
     tabStates: {},
     containerStates: {},
     containerStateUpdatedAt: {},
-    containerRefCounts: {},
-    stateChangeCallbacks: new Map(),
   });
 });
 

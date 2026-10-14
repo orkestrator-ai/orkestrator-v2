@@ -3,7 +3,7 @@
  * `elementFromPoint` is mocked; `isTrusted` is set explicitly on user events.
  */
 import { expect } from "bun:test";
-import { Window } from "happy-dom";
+import { Window, type Element, type Event, type HTMLElement } from "happy-dom";
 import {
   BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT,
   BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT,
@@ -60,7 +60,7 @@ export function page(html: string, url = "http://localhost:3000/dashboard") {
       ).results;
     },
     ui() {
-      return Array.from(document.querySelectorAll("[data-orkestrator-annotation-ui]"));
+      return Array.from(document.querySelectorAll<HTMLElement>("[data-orkestrator-annotation-ui]"));
     },
   };
 }

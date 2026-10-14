@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { ConditionalResourceSnapshot } from "@orkestrator/protocol/resource-events";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -20,7 +21,7 @@ describe("Electron backend command registry", () => {
     );
     const exposedCommands = Array.from(
       source.matchAll(/invoke(?:<[^>]+>)?\("([^"]+)"/g),
-      (match) => match[1],
+      (match) => match[1]!,
     );
     const commands = createCommandRegistry();
 
@@ -146,7 +147,7 @@ describe("Electron backend command registry", () => {
         requestedGeneration: string,
         _requestedRevision: string,
         load: () => Promise<unknown> | unknown,
-      ) => ({
+      ): Promise<ConditionalResourceSnapshot<unknown>> => ({
         status: "changed" as const,
         generation: requestedGeneration,
         revision,

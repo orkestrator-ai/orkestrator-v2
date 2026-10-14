@@ -2,6 +2,15 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { renderHook, act } from "@testing-library/react";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
+type TimerResult = ReturnType<typeof useElapsedTimer>;
+
+interface TimerProps {
+  isLoading: boolean | undefined;
+  sessionId: string | undefined;
+  loadingStartedAt?: number;
+  finalElapsedSeconds?: number | null;
+}
+
 describe("useElapsedTimer", () => {
   let dateNowSpy: ReturnType<(typeof import("bun:test"))["spyOn"]> | undefined;
 
@@ -27,7 +36,7 @@ describe("useElapsedTimer", () => {
     test("elapsedSeconds is derived immediately from loadingStartedAt", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime + 5000);
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         { initialProps: { isLoading: false, sessionId: "session-1" } },
@@ -43,7 +52,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         { initialProps: { isLoading: false, sessionId: "session-1" } },
@@ -59,7 +68,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
-      const { result } = renderHook(
+      const { result } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         { initialProps: { isLoading: true, sessionId: "session-1", loadingStartedAt: startTime } },
@@ -74,7 +83,7 @@ describe("useElapsedTimer", () => {
     });
 
     test("returns stored finalElapsedSeconds when loading ends", () => {
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, finalElapsedSeconds }) =>
           useElapsedTimer(isLoading, sessionId, undefined, finalElapsedSeconds),
         { initialProps: { isLoading: false, sessionId: "session-1" } },
@@ -89,7 +98,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt, finalElapsedSeconds }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt, finalElapsedSeconds),
         { initialProps: { isLoading: false, sessionId: "session-1" } },
@@ -118,7 +127,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime + 1000);
 
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt, finalElapsedSeconds }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt, finalElapsedSeconds),
         {
@@ -147,7 +156,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime + 8000);
 
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         {
@@ -173,7 +182,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime + 12000);
 
-      const { result, unmount } = renderHook(
+      const { result, unmount } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         {
@@ -188,7 +197,7 @@ describe("useElapsedTimer", () => {
       expect(result.current.elapsedSeconds).toBe(12);
       unmount();
 
-      const remounted = renderHook(
+      const remounted = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         {
@@ -208,7 +217,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, loadingStartedAt, finalElapsedSeconds }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt, finalElapsedSeconds),
         {
@@ -232,13 +241,13 @@ describe("useElapsedTimer", () => {
     });
 
     test("resets when sessionId changes to undefined", () => {
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<TimerResult, TimerProps>(
         ({ isLoading, sessionId, finalElapsedSeconds }) =>
           useElapsedTimer(isLoading, sessionId, undefined, finalElapsedSeconds),
         {
           initialProps: {
-            isLoading: false as boolean | undefined,
-            sessionId: "session-1" as string | undefined,
+            isLoading: false,
+            sessionId: "session-1",
             finalElapsedSeconds: 5,
           },
         },

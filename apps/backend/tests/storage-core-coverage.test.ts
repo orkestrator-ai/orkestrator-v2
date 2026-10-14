@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createEnvironment, defaultConfig, StorageService } from "../src/core/storage";
+import type { ClaudeModelCatalogSnapshot } from "../src/core/models";
 
 const tempDirs: string[] = [];
 
@@ -285,7 +286,7 @@ describe("StorageService core coverage", () => {
     const environment = await storage.addEnvironment(
       createEnvironment("project-1", { name: "catalog" }),
     );
-    const validCatalog = {
+    const validCatalog: ClaudeModelCatalogSnapshot = {
       environmentId: environment.id,
       models: [
         {
@@ -305,7 +306,8 @@ describe("StorageService core coverage", () => {
       stale: false,
       sdkVersion: "1.2.3",
       cliVersion: "4.5.6",
-      error: null,
+      // Persisted snapshots may carry a null error, which the guard accepts as absent.
+      error: null as unknown as undefined,
     };
 
     await storage.updateEnvironment(environment.id, {

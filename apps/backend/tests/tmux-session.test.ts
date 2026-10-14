@@ -29,11 +29,15 @@ import {
   transcriptHeadCommand,
   TranscriptTail,
 } from "../src/core/tmux";
-import { tmuxSelectionPromptFingerprint } from "../../../packages/protocol/src/tmux-observation";
+import {
+  tmuxSelectionPromptFingerprint,
+  type TmuxSelectionPrompt,
+} from "../../../packages/protocol/src/tmux-observation";
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { localClaudeAccountPrefix } from "../src/core/tmux-session-manager";
+import type { ExecOutput } from "../src/core/tmux-shared";
 
 import {
   createHandlers,
@@ -669,12 +673,11 @@ describe("TranscriptTail incremental reads", () => {
     const tail = new TranscriptTail("/transcript.jsonl");
 
     await expect(tail.readNew(backend)).resolves.toEqual([{ n: 1 }]);
-    const unavailable = {
-      ...backend,
+    const unavailable: Backend = Object.assign({}, backend, {
       fileSize: async () => {
         throw new Error("combined poll unavailable");
       },
-    } as Backend;
+    });
     await expect(tail.readNew(unavailable)).rejects.toThrow("combined poll unavailable");
 
     file.bytes = Buffer.from(first + second, "utf8");
@@ -1313,7 +1316,7 @@ describe("live session read paths", () => {
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
-      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
@@ -1359,7 +1362,7 @@ describe("live session read paths", () => {
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
-      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
@@ -1490,7 +1493,7 @@ describe("live session read paths", () => {
         if (completionReads === 2) return undefined;
         return environment;
       });
-      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment },
@@ -1523,7 +1526,7 @@ describe("live session read paths", () => {
     const handlers = createHandlers();
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
-      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },

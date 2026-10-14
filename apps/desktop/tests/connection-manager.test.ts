@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import type { StoredDesktopConnections } from "@orkestrator/protocol/connections";
+import type { BackendHttpClient } from "../electron/backend-process";
 import { ConnectionManager, type SecureStorage } from "../electron/connection-manager";
 
 const originalFetch = globalThis.fetch;
@@ -44,7 +45,8 @@ function localBackendHarness(initial?: StoredDesktopConnections) {
   });
   return {
     backend: {
-      invoke,
+      // Bun's Mock type drops invoke's generic result; each command's payload is what callers expect.
+      invoke: invoke as typeof invoke & BackendHttpClient["invoke"],
       probe: mock(async () => true),
       getWebClientStatus: mock(async () => ({
         enabled: true,
@@ -305,7 +307,7 @@ describe("Electron connection manager", () => {
       );
     }) as unknown as typeof fetch;
 
-    const onEvent = mock(() => undefined);
+    const onEvent = mock((_event: string, _payload: unknown) => undefined);
     const manager = new ConnectionManager({
       localBackend: local.backend,
       secureStorage: secureStorage(),
@@ -564,13 +566,13 @@ describe("Electron connection manager", () => {
     const manager = new ConnectionManager({
       localBackend: {
         ...local.backend,
-        invoke: async (command, args) => {
+        invoke: async <T>(command: string, args?: Record<string, unknown>) => {
           if (command === "save_desktop_connections" && deferSave) {
             deferSave = false;
             startedSave();
             await saveGate;
           }
-          return local.backend.invoke(command, args);
+          return local.backend.invoke<T>(command, args);
         },
       },
       secureStorage: secureStorage(),
@@ -963,7 +965,7 @@ describe("Electron connection manager", () => {
         },
       ],
     });
-    let resolveRotation: ((response: Response) => void) | null = null;
+    let resolveRotation: ((response: Response) => void) | undefined;
     globalThis.fetch = mock(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/__orkestrator/events")) {
@@ -1012,8 +1014,8 @@ describe("Electron connection manager", () => {
   test("serializes simultaneous connection attempts and leaves the last requested server active", async () => {
     const local = localBackendHarness();
     const statusRequests: string[] = [];
-    let resolveFirst: ((response: Response) => void) | null = null;
-    let resolveSecond: ((response: Response) => void) | null = null;
+    let resolveFirst: ((response: Response) => void) | undefined;
+    let resolveSecond: ((response: Response) => void) | undefined;
     globalThis.fetch = mock(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/__orkestrator/events") {
@@ -1111,7 +1113,7 @@ describe("Electron connection manager", () => {
 
   test("forwards active remote events and stops them after returning to Local", async () => {
     const local = localBackendHarness();
-    const onEvent = mock(() => undefined);
+    const onEvent = mock((_event: string, _payload: unknown) => undefined);
     globalThis.fetch = mock(async (input, init) => {
       if (!String(input).endsWith("/__orkestrator/events"))
         return new Response(JSON.stringify({ ok: true }));
@@ -1152,7 +1154,7 @@ describe("Electron connection manager", () => {
 
   test("forwards local controls and local events and validates removal boundaries", async () => {
     const local = localBackendHarness();
-    const onEvent = mock(() => undefined);
+    const onEvent = mock((_event: string, _payload: unknown) => undefined);
     const manager = new ConnectionManager({
       localBackend: local.backend,
       secureStorage: secureStorage(),

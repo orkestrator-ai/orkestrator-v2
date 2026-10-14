@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { HTMLElement } from "happy-dom";
 import {
   BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT,
   BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT,
@@ -96,7 +97,7 @@ describe("selection-only capture runtime", () => {
     );
     const link = harness.document.querySelector("a")!;
     // Keyboard only: the focused element is the first candidate, no hover needed.
-    (link as HTMLElement).focus();
+    link.focus();
     harness.start("element");
 
     expect(key(harness, "ArrowUp").defaultPrevented).toBe(true);
@@ -148,11 +149,17 @@ describe("selection-only capture runtime", () => {
       value: { writeText: () => clipboardWrites++, write: () => clipboardWrites++ },
       configurable: true,
     });
-    const execCommand = harness.document.execCommand?.bind(harness.document);
-    harness.document.execCommand = ((...args: unknown[]) => {
-      clipboardWrites += 1;
-      return execCommand?.(...(args as [string]));
-    }) as typeof harness.document.execCommand;
+    // happy-dom has no execCommand; install a counting one, delegating to any real one.
+    const execCommand: unknown = Reflect.get(harness.document, "execCommand");
+    Object.defineProperty(harness.document, "execCommand", {
+      value: (...args: unknown[]) => {
+        clipboardWrites += 1;
+        return typeof execCommand === "function"
+          ? Reflect.apply(execCommand, harness.document, args)
+          : undefined;
+      },
+      configurable: true,
+    });
     harness.start("text");
     const text = harness.document.querySelector("p")!.firstChild!;
     const range = harness.document.createRange();
@@ -200,10 +207,9 @@ describe("selection-only capture runtime", () => {
       pagePointerDowns += 1;
     });
     harness.start("region");
-    const overlay = harness
-      .ui()
-      .find((node) => (node as HTMLElement).style.cursor === "crosshair") as HTMLElement;
+    const overlay = harness.ui().find((node) => node.style.cursor === "crosshair");
     expect(overlay).toBeDefined();
+    if (!overlay) throw new Error("region overlay was not rendered");
     const pointer = (type: string, x: number, y: number) =>
       overlay.dispatchEvent(
         trusted(
@@ -383,8 +389,7 @@ describe("bounded, sanitized evidence", () => {
       .ui()
       .filter(
         (node) =>
-          (node as HTMLElement).style.background === "rgb(31, 35, 40)" ||
-          (node as HTMLElement).style.background === "#1f2328",
+          node.style.background === "rgb(31, 35, 40)" || node.style.background === "#1f2328",
       );
     expect(masks).toHaveLength(4);
   });
@@ -460,10 +465,10 @@ describe("page-side anchor resolver", () => {
 
     expect(results[0]).toMatchObject({ state: "matched", rule: "stable-id", candidateCount: 1 });
     expect(results[1]).toMatchObject({ state: "missing", rect: null });
-    const pinsLayer = harness.document.querySelector("[data-orkestrator-pins]")!;
+    const pinsLayer = harness.document.querySelector<HTMLElement>("[data-orkestrator-pins]")!;
     // Only the matched target shows a pin; the unmatched one stays hidden until it resolves.
     expect(visiblePins(harness).map((node) => node.textContent)).toEqual(["7"]);
-    expect((pinsLayer as HTMLElement).style.pointerEvents).toBe("none");
+    expect(pinsLayer.style.pointerEvents).toBe("none");
 
     harness.window.eval(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
     expect(harness.document.querySelector("[data-orkestrator-pins]") === null).toBe(true);

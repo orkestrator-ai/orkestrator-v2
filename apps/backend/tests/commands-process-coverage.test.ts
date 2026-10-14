@@ -201,7 +201,7 @@ function environment(overrides: Partial<Environment> = {}): Environment {
     allowedDomains: [],
     order: 0,
     environmentType: "containerized",
-    worktreePath: null,
+    worktreePath: undefined,
     ...overrides,
   };
 }
@@ -1114,7 +1114,7 @@ describe("process and platform command behavior", () => {
         getOpenCodeModelCatalog,
         cacheOpenCodeModelCatalog,
       },
-    } as CommandContext;
+    } as unknown as CommandContext;
 
     expect(
       await invoke("get_opencode_model_catalog_cache", { projectId: " project-a " }, context),
@@ -1184,7 +1184,7 @@ describe("process and platform command behavior", () => {
     const context = {
       ...fixture.context,
       storage: { ...fixture.context.storage, cacheOpenCodeModelCatalog },
-    } as CommandContext;
+    } as unknown as CommandContext;
 
     await invoke(
       "cache_opencode_model_catalog",

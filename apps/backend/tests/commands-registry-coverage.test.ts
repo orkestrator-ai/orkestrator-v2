@@ -112,7 +112,7 @@ function environment(overrides: Partial<Environment> = {}): Environment {
     allowedDomains: [],
     order: 0,
     environmentType: "containerized",
-    worktreePath: null,
+    worktreePath: undefined,
     ...overrides,
   };
 }
@@ -1255,7 +1255,7 @@ describe("direct backend command registry coverage", () => {
     const paused = environment({
       environmentType: "local",
       containerId: null,
-      worktreePath: null,
+      worktreePath: undefined,
       status: "stopped",
     });
     const events: Array<{ event: string; payload: unknown }> = [];

@@ -26,7 +26,7 @@ import {
   leaseActivatedToolchainSet,
   type ToolchainProgress,
 } from "./manager.js";
-import { type ToolchainArtifact, type ToolchainCompanion } from "./manifest.js";
+import { type ToolchainArtifact, type ToolchainCompanion, type ToolchainName } from "./manifest.js";
 
 const ZIP_FIXTURE = Buffer.from(
   "UEsDBAoAAAAAADMD8VyEaD1TIAAAACAAAAAEAAAAdG9vbCMhL2Jpbi9zaApwcmludGYgInRvb2wgMS4yLjNcbiIKUEsBAh4DCgAAAAAAMwPxXIRoPVMgAAAAIAAAAAQAAAAAAAAAAQABAECBAAAAAHRvb2xQSwUGAAAAAAEAAQAyAAAAQgAAAAAA",
@@ -47,7 +47,7 @@ function probeTest(name: string, run: () => Promise<void>): void {
   test(name, run, EXECUTABLE_PROBE_TEST_BUDGET_MS);
 }
 
-const artifacts: readonly ToolchainArtifact[] = [
+const artifacts: readonly [ToolchainArtifact, ToolchainArtifact] = [
   {
     name: "codex",
     version: "1.2.3",
@@ -124,7 +124,9 @@ function artifactWithBody(
   base: ToolchainArtifact,
   body: Buffer,
   archive: Partial<ToolchainArtifact["archive"]> = {},
-  executable: Partial<ToolchainArtifact["executable"]> = {},
+  executable: Partial<
+    Omit<ToolchainArtifact["executable"], "installedSize" | "installedSha256">
+  > = {},
 ): ToolchainArtifact {
   return {
     ...base,
@@ -140,11 +142,11 @@ function artifactWithBody(
 
 async function tarGzip(
   entries: Array<{ name: string; body: Buffer; type?: "file" | "directory" }>,
-): Promise<Buffer> {
+): Promise<NonSharedBuffer> {
   const pack = tar.pack();
   const collecting = (async () => {
     const chunks: Buffer[] = [];
-    for await (const chunk of pack) chunks.push(Buffer.from(chunk));
+    for await (const chunk of pack as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
     return Buffer.concat(chunks);
   })();
   for (const entry of entries) {
@@ -167,7 +169,7 @@ async function tarGzip(
   return gzipSync(await collecting);
 }
 
-function storedZip(entries: Array<{ name: string; body: Buffer }>): Buffer {
+function storedZip(entries: Array<{ name: string; body: Buffer }>): NonSharedBuffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let localOffset = 0;
@@ -211,7 +213,7 @@ const COMPANION_BODY = Buffer.from('#!/bin/sh\nprintf "host 1.2.3\\n"\n');
 /** `artifacts[0]` plus one companion, the shape the Codex code-mode host uses. */
 function companionArtifact(
   base: ToolchainArtifact,
-  companionArchive: Buffer,
+  companionArchive: NonSharedBuffer,
   companionBody: Buffer,
   overrides: {
     fileName?: string;
@@ -219,7 +221,7 @@ function companionArtifact(
     url?: string;
     entryPath?: string;
   } = {},
-): ToolchainArtifact {
+): ToolchainArtifact & { companions: readonly [ToolchainCompanion] } {
   return {
     ...base,
     companions: [
@@ -242,7 +244,10 @@ function companionArtifact(
   };
 }
 
-function createCompanionFetch(companionArchive: Buffer, companionUrl = COMPANION_ARCHIVE_URL) {
+function createCompanionFetch(
+  companionArchive: NonSharedBuffer,
+  companionUrl = COMPANION_ARCHIVE_URL,
+) {
   return mock(async (input: string) => {
     const body = input === companionUrl ? companionArchive : ZIP_FIXTURE;
     return new Response(body, {
@@ -434,7 +439,7 @@ describe("pinned desktop toolchain cache", () => {
       name: "pi",
       activationAliases: ["pi-agent"],
     };
-    const install = async (onFetch = () => undefined) =>
+    const install = async (onFetch: () => void = () => undefined) =>
       ensurePinnedToolchains({
         dataDir,
         artifacts: [artifact],
@@ -900,12 +905,12 @@ describe("pinned desktop toolchain cache", () => {
       const handle = await open(...args);
       if (injected) return handle;
       injected = true;
-      return {
+      // Only `writeFile` is replaced; `close` stays the real handle's.
+      return Object.assign(handle, {
         writeFile: async () => {
           throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
         },
-        close: () => handle.close(),
-      } as Awaited<ReturnType<typeof open>>;
+      });
     }) as typeof open;
 
     await expect(
@@ -1816,12 +1821,12 @@ describe("pinned desktop toolchain cache", () => {
     const dataDir = await createDataDir();
     const failingLeaseOpen: typeof open = (async (...args: Parameters<typeof open>) => {
       const handle = await open(...args);
-      return {
+      // Only `writeFile` is replaced; `close` stays the real handle's.
+      return Object.assign(handle, {
         writeFile: async () => {
           throw Object.assign(new Error("lease disk full"), { code: "ENOSPC" });
         },
-        close: () => handle.close(),
-      } as Awaited<ReturnType<typeof open>>;
+      });
     }) as typeof open;
 
     await expect(
@@ -1884,7 +1889,7 @@ describe("pinned desktop toolchain cache", () => {
 
     const fractions = events.map((event) => event.overallFraction ?? -1);
     for (let index = 1; index < fractions.length; index += 1) {
-      expect(fractions[index]).toBeGreaterThanOrEqual(fractions[index - 1]);
+      expect(fractions[index]).toBeGreaterThanOrEqual(fractions[index - 1]!);
     }
     expect(fractions.at(-1)).toBe(1);
   });
@@ -2045,7 +2050,7 @@ describe("pinned desktop toolchain cache", () => {
     const withTwo: ToolchainArtifact = {
       ...base,
       companions: [
-        base.companions![0],
+        base.companions[0],
         {
           fileName: "second-host",
           archive: {
@@ -2149,7 +2154,8 @@ describe("pinned desktop toolchain cache", () => {
     const received = downloads.map((event) => event.bytesReceived ?? 0);
     expect(received).toEqual([...received].sort((left, right) => left - right));
     const fractions = events.map((event) => event.overallFraction);
-    expect(fractions).toEqual([...fractions].sort((left, right) => left - right));
+    // sort() moves undefined entries to the end without passing them to the comparator.
+    expect(fractions).toEqual([...fractions].sort((left, right) => left! - right!));
     expect(fractions.at(-1)).toBe(1);
     // The phase never moves backwards: "downloading" covers both archives as
     // one budget, so once "verifying" is announced nothing reports
@@ -2241,7 +2247,7 @@ describe("pinned desktop toolchain cache", () => {
     const withTwo: ToolchainArtifact = {
       ...base,
       companions: [
-        base.companions![0],
+        base.companions[0],
         {
           fileName: "second-host",
           archive: {
@@ -2327,12 +2333,16 @@ describe("pinned desktop toolchain cache", () => {
     const companionBody = COMPANION_BODY;
     const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
     const base = companionArtifact(artifacts[0], companionArchive, companionBody);
-    const pinned = base.companions![0];
+    const pinned = base.companions[0];
     const withCompanion = (companion: Partial<ToolchainCompanion>): ToolchainArtifact => ({
       ...base,
       companions: [{ ...pinned, ...companion }],
     });
-    const reject = async (artifact: ToolchainArtifact, archiveBody: Buffer, message: string) => {
+    const reject = async (
+      artifact: ToolchainArtifact,
+      archiveBody: NonSharedBuffer,
+      message: string,
+    ) => {
       const dataDir = await createDataDir();
       const fetchImpl = mock(async (input: string) => {
         const body = input === COMPANION_ARCHIVE_URL ? archiveBody : ZIP_FIXTURE;
@@ -2458,7 +2468,7 @@ describe("pinned desktop toolchain cache", () => {
     const companionBody = COMPANION_BODY;
     const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
     const base = companionArtifact(artifacts[0], companionArchive, companionBody);
-    const pinned = base.companions![0];
+    const pinned = base.companions[0];
     const withCompanion = (companion: Partial<ToolchainCompanion>): ToolchainArtifact => ({
       ...base,
       companions: [{ ...pinned, ...companion }],
@@ -2610,8 +2620,8 @@ describe("pinned desktop toolchain cache", () => {
       ...base,
       companions: [
         {
-          ...base.companions![0],
-          executable: { ...base.companions![0].executable, sha256: "0".repeat(64) },
+          ...base.companions[0],
+          executable: { ...base.companions[0].executable, sha256: "0".repeat(64) },
         },
       ],
     };
@@ -2635,7 +2645,7 @@ describe("pinned desktop toolchain cache", () => {
     const base = companionArtifact(artifacts[0], companionArchive, companionBody);
     const withFileName = (fileName: string): ToolchainArtifact => ({
       ...base,
-      companions: [{ ...base.companions![0], fileName }],
+      companions: [{ ...base.companions[0], fileName }],
     });
 
     for (const fileName of ["../escape", "nested/host", ".upstream-codex"]) {
@@ -2652,7 +2662,7 @@ describe("pinned desktop toolchain cache", () => {
     await expect(
       ensurePinnedToolchains({
         dataDir,
-        artifacts: [{ ...base, companions: [base.companions![0], base.companions![0]] }],
+        artifacts: [{ ...base, companions: [base.companions[0], base.companions[0]] }],
         fetchImpl: createCompanionFetch(companionArchive),
         skipExecutableProbeForTests: true,
       }),
@@ -2678,7 +2688,8 @@ describe("pinned desktop toolchain cache", () => {
       skipVersionLeaseForTests: true,
     });
 
-    expect(result.executables).toEqual({});
+    // Only the requested artifacts are activated, so the record is partial here.
+    expect<Partial<Record<ToolchainName, string>>>(result.executables).toEqual({});
     expect(path.dirname(result.binDir)).toBe(path.join(dataDir, "toolchains", "bin"));
     expect(events.at(-1)).toMatchObject({ phase: "ready", overallFraction: 1, totalTools: 0 });
   });

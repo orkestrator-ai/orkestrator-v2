@@ -82,15 +82,15 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
 }));
 const renameEnvironmentFromPromptMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
-const startEnvironmentMock = mock(async () => undefined);
+const startEnvironmentMock = mock(async (): Promise<void> => undefined);
 const loadEnvironmentsMock = mock(async () => {});
-const deleteEnvironmentMock = mock(async () => {});
+const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
 const stopEnvironmentMock = mock(async () => {});
 const restartEnvironmentMock = mock(async () => {});
 const reorderEnvironmentsMock = mock(async () => {});
 const addProjectMock = mock(async () => {});
 const createProjectFromScratchMock = mock(async () => {});
-const removeProjectMock = mock(async () => {});
+const removeProjectMock = mock(async (_projectId: string) => {});
 const updateProjectMock = mock(async () => {});
 const reorderProjectsMock = mock(async () => {});
 const arrangeProjectsMock = mock(async () => {});
@@ -220,7 +220,7 @@ function mockActivityRowOffsetTop(
   const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
   Object.defineProperty(HTMLElement.prototype, "offsetTop", {
     configurable: true,
-    get() {
+    get(this: HTMLElement) {
       if (this.dataset.environmentId && this.parentElement) {
         const rows = Array.from(
           this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
@@ -234,7 +234,7 @@ function mockActivityRowOffsetTop(
     if (originalDescriptor) {
       Object.defineProperty(HTMLElement.prototype, "offsetTop", originalDescriptor);
     } else {
-      delete (HTMLElement.prototype as Partial<HTMLElement>).offsetTop;
+      Reflect.deleteProperty(HTMLElement.prototype, "offsetTop");
     }
   };
 }
@@ -362,6 +362,7 @@ describe("HierarchicalSidebar", () => {
         connect: mock(async () => ({ activeConnectionId: "local", connections: [] })),
         use: mock(async () => ({ activeConnectionId: "local", connections: [] })),
         forget: mock(async () => ({ activeConnectionId: "local", connections: [] })),
+        updateToken: mock(async () => ({ activeConnectionId: "local", connections: [] })),
       },
     } as Window["orkestrator"];
     try {
@@ -2370,7 +2371,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     fireEvent.contextMenu(screen.getByRole("button", { name: "Project One 1" }));
     fireEvent.click(screen.getByText("Delete Project"));
-    fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(removeProjectMock).toHaveBeenCalledWith(project.id));
     expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual([
       home.id,

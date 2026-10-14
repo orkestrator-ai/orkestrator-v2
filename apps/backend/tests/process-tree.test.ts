@@ -11,10 +11,10 @@ import {
   type ProcessTreeSignal,
 } from "../src/core/process-tree";
 
-function createChild(pid = 100): ChildProcessWithoutNullStreams {
+function createChild(pid = 100, exitCode: number | null = null): ChildProcessWithoutNullStreams {
   return {
     pid,
-    exitCode: null,
+    exitCode,
     signalCode: null,
     kill: mock(() => true),
   } as unknown as ChildProcessWithoutNullStreams;
@@ -145,8 +145,7 @@ describe("process-tree termination", () => {
   });
 
   test("treats an already-exited child with no descendants as drained", async () => {
-    const child = createChild();
-    child.exitCode = 0;
+    const child = createChild(100, 0);
     const { runtime, signals } = createRuntime({ descendants: [] });
 
     await expect(

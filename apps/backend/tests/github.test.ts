@@ -88,6 +88,12 @@ function apiComment(
   };
 }
 
+function asFetch(
+  impl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): typeof fetch {
+  return Object.assign(impl, { preconnect: fetch.preconnect });
+}
+
 function assertSecureHeaders(init?: RequestInit): void {
   const headers = new Headers(init?.headers);
   expect(headers.get("authorization")).toBe(`Bearer ${token}`);
@@ -140,7 +146,7 @@ describe("GitHub issue workflow API", () => {
         url.pathname === "/repos/octo-org/octo-repo/labels" &&
         (init?.method ?? "GET") === "GET"
       ) {
-        return jsonResponse([...labels].map(apiLabel));
+        return jsonResponse([...labels].map((name) => apiLabel(name)));
       }
       if (url.pathname === "/repos/octo-org/octo-repo/labels" && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { name: string };
@@ -151,8 +157,8 @@ describe("GitHub issue workflow API", () => {
       throw new Error(`Unexpected request ${init?.method ?? "GET"} ${url.pathname}`);
     });
 
-    await ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch);
-    await ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch);
+    await ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
+    await ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
 
     expect(posts).toEqual(["ork:todo", "ork:inprogress", "ork:review"]);
   });
@@ -166,7 +172,7 @@ describe("GitHub issue workflow API", () => {
         url.pathname === "/repos/octo-org/octo-repo/labels" &&
         (init?.method ?? "GET") === "GET"
       ) {
-        return jsonResponse([...labels].map(apiLabel));
+        return jsonResponse([...labels].map((name) => apiLabel(name)));
       }
       if (url.pathname === "/repos/octo-org/octo-repo/labels" && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { name: string };
@@ -181,13 +187,13 @@ describe("GitHub issue workflow API", () => {
       return jsonResponse({ message: "Not Found" }, { status: 404 });
     });
 
-    await ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch);
+    await ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
     expect(createAttempts).toBe(3);
     expect(labels).toEqual(new Set(Object.values(GITHUB_STATUS_LABELS)));
   });
 
   test("loads every open issue page, excludes pull requests, and returns no credential", async () => {
-    const allLabels = Object.values(GITHUB_STATUS_LABELS).map(apiLabel);
+    const allLabels = Object.values(GITHUB_STATUS_LABELS).map((name) => apiLabel(name));
     const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
       assertSecureHeaders(init);
       const url = new URL(String(input));
@@ -222,7 +228,7 @@ describe("GitHub issue workflow API", () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
-    const result = await listGitHubIssues(token, repository, fetchMock as typeof fetch);
+    const result = await listGitHubIssues(token, repository, asFetch(fetchMock));
 
     expect(result.repository.fullName).toBe("octo-org/octo-repo");
     expect(result.viewer.login).toBe("viewer");
@@ -250,18 +256,12 @@ describe("GitHub issue workflow API", () => {
         // Simulate independent automation adding an unrelated label while the
         // status mutation is in progress.
         labels.add("automation");
-        return jsonResponse([...labels].map(apiLabel));
+        return jsonResponse([...labels].map((name) => apiLabel(name)));
       }
-      return jsonResponse(apiIssue(7, { labels: [...labels].map(apiLabel) }));
+      return jsonResponse(apiIssue(7, { labels: [...labels].map((name) => apiLabel(name)) }));
     });
 
-    const issue = await updateGitHubIssueStatus(
-      token,
-      repository,
-      7,
-      "review",
-      fetchMock as typeof fetch,
-    );
+    const issue = await updateGitHubIssueStatus(token, repository, 7, "review", asFetch(fetchMock));
     expect(issue.status).toBe("review");
     expect(issue.labels.map((label) => label.name)).toEqual(["bug", "ork:review", "automation"]);
   });
@@ -275,10 +275,10 @@ describe("GitHub issue workflow API", () => {
         return new Response(null, { status: 204 });
       }
       expect(init?.method).toBeUndefined();
-      return jsonResponse(apiIssue(8, { labels: [...labels].map(apiLabel) }));
+      return jsonResponse(apiIssue(8, { labels: [...labels].map((name) => apiLabel(name)) }));
     });
     await expect(
-      updateGitHubIssueStatus(token, repository, 8, "backlog", fetchMock as typeof fetch),
+      updateGitHubIssueStatus(token, repository, 8, "backlog", asFetch(fetchMock)),
     ).resolves.toMatchObject({ status: "backlog" });
   });
 
@@ -295,8 +295,8 @@ describe("GitHub issue workflow API", () => {
     });
 
     const [first, second] = await Promise.allSettled([
-      updateGitHubIssueStatus(token, repository, 8, "review", fetchMock as typeof fetch),
-      updateGitHubIssueStatus(token, repository, 8, "todo", fetchMock as typeof fetch),
+      updateGitHubIssueStatus(token, repository, 8, "review", asFetch(fetchMock)),
+      updateGitHubIssueStatus(token, repository, 8, "todo", asFetch(fetchMock)),
     ]);
 
     expect(first.status).toBe("rejected");
@@ -323,9 +323,9 @@ describe("GitHub issue workflow API", () => {
       repository,
       9,
       { title: " Updated issue ", body: "Updated body" },
-      fetchMock as typeof fetch,
+      asFetch(fetchMock),
     );
-    const closed = await closeGitHubIssue(token, repository, 9, fetchMock as typeof fetch);
+    const closed = await closeGitHubIssue(token, repository, 9, asFetch(fetchMock));
 
     expect(requests[0]).toEqual({
       url: "https://api.github.com/repos/octo-org/octo-repo/issues/9",
@@ -350,7 +350,7 @@ describe("GitHub issue comments API", () => {
       return jsonResponse([apiComment(2, "grace", { edited: true })]);
     });
 
-    const comments = await listGitHubIssueComments(token, repository, 1, fetchMock as typeof fetch);
+    const comments = await listGitHubIssueComments(token, repository, 1, asFetch(fetchMock));
 
     expect(comments).toHaveLength(2);
     expect(comments[0]).toMatchObject({ id: 1, isEdited: false, canEdit: false });
@@ -375,7 +375,7 @@ describe("GitHub issue comments API", () => {
       throw new Error(`Unexpected request ${url.pathname}`);
     });
 
-    const detail = await getGitHubIssue(token, repository, 1, fetchMock as typeof fetch);
+    const detail = await getGitHubIssue(token, repository, 1, asFetch(fetchMock));
     expect(detail.comments.map((comment) => comment.canEdit)).toEqual([true, false]);
   });
 
@@ -386,10 +386,10 @@ describe("GitHub issue comments API", () => {
     });
 
     await expect(
-      postGitHubIssueComment(token, repository, 1, "New comment", fetchMock as typeof fetch),
+      postGitHubIssueComment(token, repository, 1, "New comment", asFetch(fetchMock)),
     ).resolves.toMatchObject({ id: 5, body: "New comment", canEdit: true });
     await expect(
-      postGitHubIssueComment(token, repository, 1, "   ", fetchMock as typeof fetch),
+      postGitHubIssueComment(token, repository, 1, "   ", asFetch(fetchMock)),
     ).rejects.toThrow("cannot be empty");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -409,7 +409,7 @@ describe("GitHub issue comments API", () => {
     });
 
     await expect(
-      updateGitHubIssueComment(token, repository, 1, 12, "Draft", fetchMock as typeof fetch),
+      updateGitHubIssueComment(token, repository, 1, 12, "Draft", asFetch(fetchMock)),
     ).rejects.toThrow("does not have permission");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -437,7 +437,7 @@ describe("GitHub issue comments API", () => {
     });
 
     await expect(
-      updateGitHubIssueComment(token, repository, 1, 13, "Edited draft", fetchMock as typeof fetch),
+      updateGitHubIssueComment(token, repository, 1, 13, "Edited draft", asFetch(fetchMock)),
     ).resolves.toMatchObject({ id: 13, body: "Edited draft", canEdit: true });
   });
 });
@@ -457,13 +457,13 @@ describe("GitHub error handling", () => {
   test("reports authentication, permission, and rate-limit failures actionably", async () => {
     const unauthorized = mock(async () => jsonResponse({ message: token }, { status: 401 }));
     await expect(
-      listGitHubIssueComments(token, repository, 1, unauthorized as typeof fetch),
+      listGitHubIssueComments(token, repository, 1, asFetch(unauthorized)),
     ).rejects.toThrow("Update the global GitHub token");
 
     const forbidden = mock(async () => jsonResponse({ message: "Forbidden" }, { status: 403 }));
-    await expect(
-      listGitHubIssueComments(token, repository, 1, forbidden as typeof fetch),
-    ).rejects.toThrow("Issues write access");
+    await expect(listGitHubIssueComments(token, repository, 1, asFetch(forbidden))).rejects.toThrow(
+      "Issues write access",
+    );
 
     const limited = mock(async () =>
       jsonResponse(
@@ -471,18 +471,16 @@ describe("GitHub error handling", () => {
         { status: 403, headers: { "x-ratelimit-remaining": "0", "retry-after": "60" } },
       ),
     );
-    await expect(
-      listGitHubIssueComments(token, repository, 1, limited as typeof fetch),
-    ).rejects.toThrow("Try again in 60 seconds");
+    await expect(listGitHubIssueComments(token, repository, 1, asFetch(limited))).rejects.toThrow(
+      "Try again in 60 seconds",
+    );
   });
 
   test("maps network failures without reflecting low-level request details", async () => {
     const offline = mock(async () => {
       throw new Error(`fetch failed with ${token}`);
     });
-    await expect(
-      listGitHubIssueComments(token, repository, 1, offline as typeof fetch),
-    ).rejects.toEqual(
+    await expect(listGitHubIssueComments(token, repository, 1, asFetch(offline))).rejects.toEqual(
       new GitHubApiError("Unable to reach GitHub. Check your network connection and try again.", {
         code: "network",
       }),
@@ -508,7 +506,7 @@ describe("GitHub error handling", () => {
       async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         requests += 1;
         if (requests > 1) {
-          return jsonResponse(Object.values(GITHUB_STATUS_LABELS).map(apiLabel));
+          return jsonResponse(Object.values(GITHUB_STATUS_LABELS).map((name) => apiLabel(name)));
         }
         return await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener(
@@ -523,7 +521,7 @@ describe("GitHub error handling", () => {
     );
 
     try {
-      const stalled = ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch);
+      const stalled = ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
       await Promise.resolve();
       expect(timeoutDurations).toEqual([30_000]);
       timeoutControllers[0]?.abort(new DOMException(`timed out with ${token}`, "TimeoutError"));
@@ -535,7 +533,7 @@ describe("GitHub error handling", () => {
       );
 
       await expect(
-        ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch),
+        ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock)),
       ).resolves.toBeUndefined();
       expect(requests).toBe(2);
     } finally {
@@ -547,17 +545,17 @@ describe("GitHub error handling", () => {
 
   test("rejects empty tokens, invalid identifiers, titles, statuses, and payloads before mutation", async () => {
     const unused = mock(async () => jsonResponse([]));
+    await expect(listGitHubIssueComments(" ", repository, 1, asFetch(unused))).rejects.toThrow(
+      "not configured",
+    );
+    await expect(listGitHubIssueComments(token, repository, 0, asFetch(unused))).rejects.toThrow(
+      "positive integer",
+    );
     await expect(
-      listGitHubIssueComments(" ", repository, 1, unused as typeof fetch),
-    ).rejects.toThrow("not configured");
-    await expect(
-      listGitHubIssueComments(token, repository, 0, unused as typeof fetch),
-    ).rejects.toThrow("positive integer");
-    await expect(
-      updateGitHubIssue(token, repository, 1, { title: " ", body: "" }, unused as typeof fetch),
+      updateGitHubIssue(token, repository, 1, { title: " ", body: "" }, asFetch(unused)),
     ).rejects.toThrow("title cannot be empty");
     await expect(
-      updateGitHubIssueStatus(token, repository, 1, "invalid" as never, unused as typeof fetch),
+      updateGitHubIssueStatus(token, repository, 1, "invalid" as never, asFetch(unused)),
     ).rejects.toThrow("Unknown");
     expect(unused).not.toHaveBeenCalled();
   });
@@ -568,18 +566,18 @@ describe("GitHub error handling", () => {
         headers: { link: `<${String(input)}>; rel="next"` },
       }),
     );
-    await expect(
-      listGitHubIssueComments(token, repository, 1, repeated as typeof fetch),
-    ).rejects.toThrow("repeated a page");
+    await expect(listGitHubIssueComments(token, repository, 1, asFetch(repeated))).rejects.toThrow(
+      "repeated a page",
+    );
 
     const unsafe = mock(async () =>
       jsonResponse([], {
         headers: { link: '<https://example.com/comments?page=2>; rel="next"' },
       }),
     );
-    await expect(
-      listGitHubIssueComments(token, repository, 1, unsafe as typeof fetch),
-    ).rejects.toThrow("unsafe pagination URL");
+    await expect(listGitHubIssueComments(token, repository, 1, asFetch(unsafe))).rejects.toThrow(
+      "unsafe pagination URL",
+    );
   });
 
   test("reports not-found, conflict, validation, and malformed success responses", async () => {
@@ -589,9 +587,9 @@ describe("GitHub error handling", () => {
       [422, "rejected the request"],
     ] as const) {
       const failing = mock(async () => jsonResponse({ message: "failure" }, { status }));
-      await expect(
-        listGitHubIssueComments(token, repository, 1, failing as typeof fetch),
-      ).rejects.toThrow(message);
+      await expect(listGitHubIssueComments(token, repository, 1, asFetch(failing))).rejects.toThrow(
+        message,
+      );
     }
 
     const invalidJson = mock(
@@ -602,12 +600,12 @@ describe("GitHub error handling", () => {
         }),
     );
     await expect(
-      listGitHubIssueComments(token, repository, 1, invalidJson as typeof fetch),
+      listGitHubIssueComments(token, repository, 1, asFetch(invalidJson)),
     ).rejects.toThrow("invalid response");
 
     const invalidList = mock(async () => jsonResponse({ items: [] }));
     await expect(
-      listGitHubIssueComments(token, repository, 1, invalidList as typeof fetch),
+      listGitHubIssueComments(token, repository, 1, asFetch(invalidList)),
     ).rejects.toThrow("invalid list");
   });
 
@@ -630,7 +628,7 @@ describe("GitHub error handling", () => {
         });
       });
       await expect(
-        updateGitHubIssueComment(token, repository, 1, 20, "Draft", invalidTarget as typeof fetch),
+        updateGitHubIssueComment(token, repository, 1, 20, "Draft", asFetch(invalidTarget)),
       ).rejects.toThrow("does not belong");
     }
 
@@ -652,14 +650,7 @@ describe("GitHub error handling", () => {
       return jsonResponse(apiComment(21, "other-user"));
     });
     await expect(
-      updateGitHubIssueComment(
-        token,
-        repository,
-        1,
-        21,
-        "Maintainer edit",
-        maintainer as typeof fetch,
-      ),
+      updateGitHubIssueComment(token, repository, 1, 21, "Maintainer edit", asFetch(maintainer)),
     ).resolves.toMatchObject({ body: "Maintainer edit", canEdit: true });
   });
 });

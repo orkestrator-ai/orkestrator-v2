@@ -7,9 +7,24 @@ import {
   getLocalFileTreeSnapshot,
   getLocalGitStatusSnapshot,
   listBuildPipelinesConditional,
+  type ConditionalBuildPipeline,
 } from "../../../apps/web/src/lib/backend";
+import type { PersistedBuildPipeline } from "../../../apps/web/src/types";
+import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
+
+function pipelineRecord(id: string): PersistedBuildPipeline {
+  return {
+    version: 1,
+    id,
+    projectId: "project-1",
+    environmentId: "env-1",
+    snapshot: {},
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    revision: 1,
+  };
+}
 
 describe("conditional backend wrappers", () => {
   beforeEach(() => {
@@ -124,8 +139,8 @@ describe("conditional backend wrappers", () => {
   });
 
   test("normalizes and validates conditional build-pipeline lists", async () => {
-    const first = { id: "pipeline-1" };
-    const second = { id: "pipeline-2" };
+    const first = pipelineRecord("pipeline-1");
+    const second = pipelineRecord("pipeline-2");
     invokeMock
       .mockResolvedValueOnce([first, second])
       .mockResolvedValueOnce({ ids: ["pipeline-1"], records: [first] })
@@ -153,8 +168,8 @@ describe("conditional backend wrappers", () => {
   });
 
   test("validates conditional build-pipeline point-read envelopes", async () => {
-    const legacy = { id: "pipeline-1" };
-    const changed = {
+    const legacy = pipelineRecord("pipeline-1");
+    const changed: ConditionalBuildPipeline<unknown> = {
       unchanged: false,
       record: legacy,
       messagePatches: [
@@ -199,7 +214,7 @@ describe("conditional backend wrappers", () => {
   });
 
   test("forwards a refresh request and validates the additive owner stamp", async () => {
-    const view = {
+    const view: WorktreeReadStamp = {
       generation: "gen-1",
       environmentId: "env-1",
       targetGeneration: 2,

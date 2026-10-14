@@ -47,16 +47,27 @@ describe("storage-backed command delegation", () => {
   test("validates and delegates project and configuration commands", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
     const project = { id: "project-1", name: "repo", localPath: null };
-    let config = {
+    let config: {
+      version: string;
+      global: {
+        allowedDomains: string[];
+        githubToken?: string;
+        anthropicApiKey?: string;
+        cursorApiKey?: string;
+        openCodeZenApiKey?: string;
+        notificationSounds?: unknown;
+      };
+      repositories: Record<string, RepositoryConfig>;
+    } = {
       version: "1.0.0",
       global: {
-        allowedDomains: [] as string[],
+        allowedDomains: [],
         githubToken: "github_secret_token",
         anthropicApiKey: "anthropic_secret_key",
         cursorApiKey: "cursor_secret_key",
         openCodeZenApiKey: "opencode_zen_secret_key",
       },
-      repositories: {} as Record<string, RepositoryConfig>,
+      repositories: {},
     };
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
     const storage = {
@@ -658,7 +669,7 @@ describe("storage-backed command delegation", () => {
         { id: "pipeline-linked", snapshot: { taskId: "task-1" } },
         { id: "pipeline-stale", snapshot: { taskId: "task-1" } },
       ]),
-      updateKanbanTask: mock(async () => updated),
+      updateKanbanTask: mock(async () => ({ ...task, buildPipelineId: undefined })),
     };
     const remove = mock(async (pipelineId: string) => {
       if (pipelineId === "pipeline-stale") throw new Error("cleanup failed");
@@ -1413,9 +1424,9 @@ fi
 exit 0
 `,
         async (logs) => {
-          await commands
-            .get("provision_environment")?.({ environmentId: environment.id }, context)
-            .catch(() => undefined);
+          await Promise.resolve(
+            commands.get("provision_environment")?.({ environmentId: environment.id }, context),
+          ).catch(() => undefined);
 
           // Passing `-e CURSOR_API_KEY` with nothing to forward would hand the
           // container whatever the Docker CLI happened to inherit.
@@ -1479,9 +1490,9 @@ if [ "$1" = "create" ]; then exit 42; fi
 exit 0
 `,
           async (logs) => {
-            await commands
-              .get("start_environment")?.({ environmentId: created.id }, context)
-              .catch(() => undefined);
+            await Promise.resolve(
+              commands.get("start_environment")?.({ environmentId: created.id }, context),
+            ).catch(() => undefined);
             const dockerCalls = await fs.readFile(logs.all, "utf8");
             expect(dockerCalls).toContain(`GIT_URL=${movedUrl}`);
             expect(dockerCalls).not.toContain("GIT_URL=https://git.example.invalid/old.git");
@@ -1530,9 +1541,9 @@ fi
 exit 0
 `,
         async (logs) => {
-          await commands
-            .get("provision_environment")?.({ environmentId: environment.id }, context)
-            .catch(() => undefined);
+          await Promise.resolve(
+            commands.get("provision_environment")?.({ environmentId: environment.id }, context),
+          ).catch(() => undefined);
 
           const dockerCalls = await fs.readFile(logs.all, "utf8");
           expect(dockerCalls).toContain("-e CURSOR_API_KEY");
@@ -1735,9 +1746,9 @@ exit 0
           ),
         ).resolves.toMatchObject({ status: "reset", reason: "generation" });
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     });
 
@@ -1766,9 +1777,9 @@ exit 0
           await expect(fs.readFile(logPath, "utf8").catch(() => "")).resolves.toBe("");
         });
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     });
 
@@ -1853,9 +1864,9 @@ exit 0
             }),
           );
         } finally {
-          await commands
-            .get("delete_environment")?.({ environmentId: environment.id }, context)
-            .catch(() => undefined);
+          await Promise.resolve(
+            commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+          ).catch(() => undefined);
         }
       },
       ASYNC_TEST_BUDGET_MS,
@@ -2000,9 +2011,9 @@ exit 1
           "refreshed diff stats to be announced",
         );
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     });
 
@@ -2048,9 +2059,9 @@ exit 1
           }),
         );
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     });
 
@@ -2146,9 +2157,9 @@ exit 1
         expect(change.stats.filesChanged).toBe(2_001);
         expect(change.stats.additions).toBe(2_000);
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     }, 30_000);
 
@@ -2169,9 +2180,9 @@ exit 1
           ?.payload as { stats: { truncated: boolean } };
         expect(change.stats.truncated).toBe(false);
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     });
 
@@ -2215,7 +2226,12 @@ exit 1
             );
             const change = emitted.find((entry) => entry.event === "environment-diff-stats-changed")
               ?.payload as {
-              stats: { truncated: boolean; filesChanged: number; additions: number };
+              stats: {
+                truncated: boolean;
+                filesChanged: number;
+                additions: number;
+                deletions: number;
+              };
             };
             expect(change.stats).toEqual({
               additions: 2_000,
@@ -2302,9 +2318,9 @@ exit 1
           gitOutput(worktree, ["config", "--get", "core.fsmonitor"]).catch(() => ""),
         ).resolves.not.toBe("true");
       } finally {
-        await commands
-          .get("delete_environment")?.({ environmentId: environment.id }, context)
-          .catch(() => undefined);
+        await Promise.resolve(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).catch(() => undefined);
       }
     });
 
@@ -2781,7 +2797,7 @@ exit 1
                 platform: ${JSON.stringify(provider)},
                 id: ${JSON.stringify(`${provider}-live-model`)},
                 label: ${JSON.stringify(`${provider} live model`)},
-                providerLabel: ${JSON.stringify(provider === "cursor" ? "Cursor" : "Grok")},
+                providerLabel: "Grok",
                 supportsMode: true,
               }] }));
               return;
@@ -2793,8 +2809,7 @@ exit 1
       );
 
       const environment = createEnvironment({ id: `env-acp-${provider}`, worktreePath });
-      const globalConfig: { cursorApiKey?: string } =
-        provider === "cursor" ? { cursorApiKey: "configured-cursor-key" } : {};
+      const globalConfig: { cursorApiKey?: string } = {};
       const { context } = createContext(environment, {
         globalConfig,
         dataDir,
@@ -2848,34 +2863,8 @@ exit 1
         expect(marker.agentPath).toBe(managedAgentPath);
         expect(marker.approveProjectMcps).toBe("");
         expect(marker.hasToken).toBe(true);
-        expect(marker.hasCursorApiKey).toBe(provider === "cursor");
-        if (provider === "cursor") {
-          const cursorProviderHome = path.join(
-            dataDir,
-            "agent-credentials",
-            "provider-homes",
-            "cursor",
-          );
-          expect(marker.home).toBe(cursorProviderHome);
-          // The bridge runs with this as its HOME whether or not anything was
-          // imported, so it has to exist even on the revoke path. This run has
-          // no host records at all, which is exactly that path.
-          expect((await fs.stat(cursorProviderHome)).isDirectory()).toBe(true);
-          expect(marker.credentialStore).toBe("file");
-          expect(
-            await fs
-              .access(path.join(dataDir, "agent-credentials", "home", "Library", "Keychains"))
-              .then(
-                () => true,
-                () => false,
-              ),
-          ).toBe(false);
-        }
-        expect(marker.cursorApiKeyFingerprint).toBe(
-          createHash("sha256")
-            .update(provider === "cursor" ? "configured-cursor-key" : "")
-            .digest("hex"),
-        );
+        expect(marker.hasCursorApiKey).toBe(false);
+        expect(marker.cursorApiKeyFingerprint).toBe(createHash("sha256").update("").digest("hex"));
         // Local bridges bind loopback only, and each environment keeps its own
         // state directory so two environments cannot share a transcript.
         expect(marker.hostname).toBe("127.0.0.1");
@@ -2901,87 +2890,6 @@ exit 1
         expect(context.storage.cacheAgentModelCatalog).toHaveBeenCalledWith(provider, [
           expect.objectContaining({ id: `${provider}-live-model` }),
         ]);
-
-        if (provider === "cursor") {
-          // The fingerprint exists to restart on a *changed* credential. An
-          // unchanged one must reuse the live bridge: restarting here would
-          // kill the agent's in-flight turn on every start request, and
-          // `NativeAgentService.provider()` issues one per prompt dispatch.
-          const unchanged = (await commands.get("start_local_cursor_server_cmd")?.(
-            { environmentId: environment.id },
-            context,
-          )) as { wasRunning: boolean; authToken: string; pid: number };
-          expect(unchanged.wasRunning).toBe(true);
-          expect(unchanged.authToken).toBe(started.authToken);
-          expect(unchanged.pid).toBe(started.pid);
-
-          globalConfig.cursorApiKey = "rotated-cursor-key";
-          const rotated = (await commands.get("start_local_cursor_server_cmd")?.(
-            { environmentId: environment.id },
-            context,
-          )) as { wasRunning: boolean; authToken: string };
-          expect(rotated.wasRunning).toBe(false);
-          expect(rotated.authToken).not.toBe(started.authToken);
-          const rotatedMarker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<
-            string,
-            unknown
-          >;
-          expect(rotatedMarker.cursorApiKeyFingerprint).toBe(
-            createHash("sha256").update("rotated-cursor-key").digest("hex"),
-          );
-
-          delete globalConfig.cursorApiKey;
-          const cleared = (await commands.get("start_local_cursor_server_cmd")?.(
-            { environmentId: environment.id },
-            context,
-          )) as { wasRunning: boolean; authToken: string };
-          expect(cleared.wasRunning).toBe(false);
-          expect(cleared.authToken).not.toBe(rotated.authToken);
-          const clearedMarker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<
-            string,
-            unknown
-          >;
-          expect(clearedMarker.hasCursorApiKey).toBe(false);
-          expect(clearedMarker.cursorApiKeyFingerprint).toBe(
-            createHash("sha256").update("").digest("hex"),
-          );
-
-          // "No key" is a credential state like any other, so a second start
-          // with the key still absent must also reuse rather than restart.
-          const stillCleared = (await commands.get("start_local_cursor_server_cmd")?.(
-            { environmentId: environment.id },
-            context,
-          )) as { wasRunning: boolean; authToken: string };
-          expect(stillCleared.wasRunning).toBe(true);
-          expect(stillCleared.authToken).toBe(cleared.authToken);
-
-          // Reusing a persistent profile with host credentials disabled must
-          // restart any credential-bearing bridge and revoke its file snapshot,
-          // even when the host lookup currently returns no records.
-          const cursorAuthFile = path.join(
-            dataDir,
-            "agent-credentials",
-            "provider-homes",
-            "cursor",
-            ".cursor",
-            "auth.json",
-          );
-          await fs.mkdir(path.dirname(cursorAuthFile), { recursive: true });
-          await fs.writeFile(cursorAuthFile, JSON.stringify({ accessToken: "stale-token" }));
-          context.credentialSources = new Set();
-          const denied = (await commands.get("start_local_cursor_server_cmd")?.(
-            { environmentId: environment.id },
-            context,
-          )) as { wasRunning: boolean; authToken: string };
-          expect(denied.wasRunning).toBe(false);
-          expect(denied.authToken).not.toBe(stillCleared.authToken);
-          expect(
-            await fs.access(cursorAuthFile).then(
-              () => true,
-              () => false,
-            ),
-          ).toBe(false);
-        }
       } finally {
         await commands.get(`stop_local_${provider}_server_cmd`)?.(
           { environmentId: environment.id },

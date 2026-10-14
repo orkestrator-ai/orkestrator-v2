@@ -122,6 +122,12 @@ uncaught exceptions. A server-side test there is not exercising the runtime the
 code ships in. `tests/unit/test-suite-ownership.test.ts` therefore rejects
 root tests that import backend or desktop sources.
 
+`mise run typecheck` covers every location: package tests through each
+package's typecheck script (`tsconfig.test.json` in the backend and desktop),
+root tests and `scripts/` through `tests/tsconfig.json`, and the browser and
+agent specs through the two `e2e` configurations. Test code uses the same
+strict options as the code it tests.
+
 ## Focused test commands
 
 The standard focused form uses `test:logged`, which also places the command

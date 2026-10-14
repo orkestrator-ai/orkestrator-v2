@@ -3,6 +3,7 @@ import {
   endEnvironmentMove,
 } from "../src/core/environment-replacement-fence";
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import type { AgentAccountStore } from "../src/core/agent-accounts-store";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
 import { terminalAccountHomes } from "../src/core/terminal-account-usage";
 
@@ -1299,7 +1300,13 @@ describe("Electron backend command registry", () => {
     const changes = (await commands.get("get_local_git_status")?.(
       { worktreePath: worktree, targetBranch: "main" },
       createContext(createEnvironment()).context,
-    )) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+    )) as Array<{
+      path: string;
+      originalPath?: string;
+      additions: number;
+      deletions: number;
+      status: string;
+    }>;
 
     const renamed = changes.find((change) => change.path === "renamed.txt");
     expect(renamed).toBeDefined();
@@ -2381,11 +2388,9 @@ exec sleep 30
     const { context } = createContext(environment, { dataDir });
     const accountId = "11111111-2222-4333-8444-555555555555";
     const accountHome = path.join(dataDir, "agent-accounts", "codex", accountId);
-    context.storage.loadAgentAccounts = mock(async () => ({
+    context.storage.loadAgentAccounts = mock(async (): Promise<AgentAccountStore> => ({
       version: 1,
-      accounts: [
-        { id: accountId, platform: "codex" as const, label: "Work", createdAt: "2026-09-28" },
-      ],
+      accounts: [{ id: accountId, platform: "codex", label: "Work", createdAt: "2026-09-28" }],
       active: { codex: accountId },
     }));
     const originalApiKey = process.env.OPENAI_API_KEY;
@@ -3601,7 +3606,9 @@ test("a terminal suspended in account preparation cannot spawn after move cleanu
     return { version: 1, accounts: [], active: {} };
   });
   const count = ptyProcesses.length;
-  const starting = commands.get("start_local_terminal_session")!({ sessionId }, context);
+  const starting = Promise.resolve(
+    commands.get("start_local_terminal_session")!({ sessionId }, context),
+  );
   void starting.catch(() => undefined);
   try {
     await Promise.race([
@@ -3638,9 +3645,11 @@ test("terminal creation rechecks a move admitted during its environment read", a
     await gate.promise;
     return environment;
   });
-  const creating = createCommandRegistry().get("create_local_terminal_session")!(
-    { environmentId: environment.id },
-    context,
+  const creating = Promise.resolve(
+    createCommandRegistry().get("create_local_terminal_session")!(
+      { environmentId: environment.id },
+      context,
+    ),
   );
   void creating.catch(() => undefined);
   try {

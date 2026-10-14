@@ -653,7 +653,7 @@ describe("Electron StorageService", () => {
       "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1),
     ]) {
       const config = defaultConfig() as unknown as {
-        global: Record<string, unknown>;
+        global: { agentSettings?: object; [key: string]: unknown };
         repositories: Record<string, unknown>;
       };
       config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
@@ -1754,12 +1754,13 @@ describe("Electron StorageService", () => {
     });
     expect(loaded.global.codexMaxConcurrentThreads).toBe(8);
 
+    // Legacy flat Codex keys are no longer part of the global config type.
     await storage.updateGlobalConfig({
       ...config.global,
       codexModel: "gpt-5.6-luna",
       codexReasoningEffort: "max",
       codexMaxConcurrentThreads: 6,
-    });
+    } as typeof config.global);
     await expect(storage.loadConfig()).resolves.toMatchObject({
       global: {
         codexModel: "gpt-5.6-luna",
@@ -1792,7 +1793,7 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const first = await storage.createSession("env-1", "container-1", "tab-1", "terminal");
+    const first = await storage.createSession("env-1", "container-1", "tab-1", "plain");
     const second = await storage.createSession("env-1", "container-1", "tab-2", "claude");
     await expect(storage.updateSession("missing", { name: "x" })).rejects.toThrow(
       "Session not found",

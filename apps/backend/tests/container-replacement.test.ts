@@ -414,7 +414,7 @@ exit 0
             operationId: OPERATION_ID,
             kind: "migrate",
             status: "succeeded",
-            finishedAt: new Date(0).toISOString(),
+            completedAt: new Date(0).toISOString(),
           },
         ],
       },

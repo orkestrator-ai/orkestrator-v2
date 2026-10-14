@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { ConditionalResourceSnapshot } from "@orkestrator/protocol/resource-events";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
@@ -67,7 +68,7 @@ describe("Electron backend command registry", () => {
           requestedGeneration: string,
           _requestedRevision: string,
           load: () => Promise<unknown> | unknown,
-        ) => ({
+        ): Promise<ConditionalResourceSnapshot<unknown>> => ({
           status: "changed" as const,
           generation: requestedGeneration,
           revision,
@@ -216,8 +217,8 @@ describe("Electron backend command registry", () => {
       const { context, emitted } = createContext(environment);
       await isolateCodexBinaryLookup(context);
       const originalConsoleWarn = console.warn;
-      const consoleWarnMock = mock(() => undefined);
-      console.warn = consoleWarnMock as typeof console.warn;
+      const consoleWarnMock = mock((..._data: unknown[]) => undefined);
+      console.warn = consoleWarnMock;
 
       try {
         await withFakeCodex(

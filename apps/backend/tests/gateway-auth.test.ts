@@ -688,7 +688,7 @@ describe("remote gateway", () => {
     expect(cookie).not.toContain("Max-Age");
 
     const authenticated = await requestUrl(`${info.url}__orkestrator/status`, {
-      headers: { cookie },
+      headers: { cookie: cookie! },
     });
     expect(authenticated.status).toBe(200);
 

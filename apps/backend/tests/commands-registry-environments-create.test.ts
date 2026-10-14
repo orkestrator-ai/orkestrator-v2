@@ -336,7 +336,7 @@ exit 42
             context,
           );
         },
-      } as CommandContext["nativeAgents"];
+      } as unknown as CommandContext["nativeAgents"];
 
       await withFakeCodex(codexSlugScript("Review Lifecycle Queue"), async () => {
         await expect(

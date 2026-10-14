@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type {
+  StructuredReviewFindings,
+  StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import {
   COORDINATOR_DELEGATION_OMISSION_TEXT,
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -32,7 +35,7 @@ import {
 import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
 import { multiReviewCustomFixPrompt } from "../../apps/web/src/lib/review-actions";
 
-const report = {
+const findings: StructuredReviewFindings = {
   issues: [
     {
       severity: "P2",
@@ -55,7 +58,9 @@ const report = {
       untestedBehavior: "Producer-owned coverage gap",
     },
   ],
-} as StructuredReviewReport;
+};
+// The prompts under test read only the findings, so the rest of the report is deliberately absent.
+const report = findings as StructuredReviewReport;
 
 describe("backend prompt display contract", () => {
   test("filters both coordinator delegation producer variants only with trusted provenance", () => {

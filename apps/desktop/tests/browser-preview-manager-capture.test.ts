@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { BrowserPreviewAnchorQuery } from "@orkestrator/protocol/browser-preview";
+import type { WebAnnotationTarget } from "@orkestrator/protocol/web-annotations";
 import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
 import { validateWebAnnotationCaptureInput } from "@orkestrator/protocol/web-annotations-validation";
 import { BROWSER_PREVIEW_CAPTURE_WORLD_ID } from "../electron/browser-preview-capture";
@@ -8,6 +10,7 @@ import {
   start,
   VIEWPORT,
   type CaptureContents,
+  type Config,
   type Json,
 } from "./browser-preview-capture-harness";
 import { pngDataUrl } from "./png-fixture";
@@ -533,7 +536,11 @@ describe("BrowserPreviewManager trusted capture", () => {
 });
 
 describe("BrowserPreviewManager pins", () => {
-  const pin = (annotationId: string, target: unknown, route = "/settings?tab=profile") => ({
+  const pin = (
+    annotationId: string,
+    target: WebAnnotationTarget,
+    route = "/settings?tab=profile",
+  ): BrowserPreviewAnchorQuery => ({
     annotationId,
     number: Number(annotationId.split("-")[1]),
     target,
@@ -626,7 +633,8 @@ describe("BrowserPreviewManager pins", () => {
     await expect(
       harness.manager.showPins({
         tabId: "browser-1",
-        pins: [pin("annotation-1", { kind: "element" })],
+        // Deliberately incomplete: the manager must reject it.
+        pins: [pin("annotation-1", { kind: "element" } as WebAnnotationTarget)],
       }),
     ).rejects.toThrow("pin target");
   });

@@ -14,8 +14,11 @@ describe("Electron backend command registry", () => {
     const originalFetch = globalThis.fetch;
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
-    let auth: { apiKey: string; viewer?: { id: string; name: string; email?: string } } | null =
-      null;
+    // Assigned inside storage mocks, so widen past the initial null narrowing.
+    let auth = null as {
+      apiKey: string;
+      viewer?: { id: string; name: string; email?: string };
+    } | null;
 
     Object.assign(context.storage, {
       getLinearAuth: mock(async () => auth),

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { type FSWatcher, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   classifyWorktreeChange,
   isIgnorableWorktreeChange,
   startWorktreeWatcher,
+  type StartWatch,
   WATCH_BURST_OVERFLOW_EVENTS,
   WATCH_SETTLE_MS,
 } from "../src/core/worktree-watcher";
@@ -24,20 +25,18 @@ interface FakeWatch {
 }
 
 function fakeWatcher(): {
-  start: NonNullable<Parameters<typeof startWorktreeWatcher>[0]["startWatch"]>;
+  start: StartWatch;
   handle: FakeWatch;
 } {
   const handle: FakeWatch = { emit: () => {}, closed: false, fail: () => {} };
   const errorHandlers = new Set<(error: unknown) => void>();
 
-  const start = ((
-    _target: string,
-    listener: (eventType: string, filename: string | null) => void,
-  ) => {
+  const start: StartWatch = (_target, listener) => {
     handle.emit = listener;
     handle.fail = (error) => {
       for (const onError of errorHandlers) onError(error);
     };
+    // A fake handle: the watcher only calls on("error") and close().
     return {
       on(event: string, onError: (error: unknown) => void) {
         if (event === "error") errorHandlers.add(onError);
@@ -46,8 +45,8 @@ function fakeWatcher(): {
       close() {
         handle.closed = true;
       },
-    };
-  }) as NonNullable<Parameters<typeof startWorktreeWatcher>[0]["startWatch"]>;
+    } as unknown as FSWatcher;
+  };
 
   return { start, handle };
 }
@@ -192,17 +191,15 @@ describe("startWorktreeWatcher", () => {
   });
 
   test("close remains safe when the platform watcher throws while closing", () => {
-    const start = ((
-      _target: string,
-      _listener: (eventType: string, filename: string | null) => void,
-    ) => ({
-      on() {
-        return this;
-      },
-      close() {
-        throw new Error("watcher already torn down");
-      },
-    })) as NonNullable<Parameters<typeof startWorktreeWatcher>[0]["startWatch"]>;
+    const start: StartWatch = () =>
+      ({
+        on() {
+          return this;
+        },
+        close() {
+          throw new Error("watcher already torn down");
+        },
+      }) as unknown as FSWatcher;
     const watcher = startWorktreeWatcher({
       worktreePath: "/wt",
       startWatch: start,

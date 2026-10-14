@@ -32,7 +32,7 @@ describe("desktop backend lifecycle", () => {
       })),
       setToken: mock(async (token: string) => ({ token, editable: true, source: "file" as const })),
     };
-    const controls = createBackendWebClientControls(() => backend as never);
+    const controls = createBackendWebClientControls(() => backend);
 
     await expect(controls.getWebClientStatus()).resolves.toMatchObject({ enabled: true });
     await expect(controls.setWebClientEnabled(false)).resolves.toMatchObject({ enabled: false });
@@ -61,7 +61,7 @@ describe("desktop backend lifecycle", () => {
         source: "file",
       }),
       setToken: async (token) => ({ token, editable: true, source: "file" }),
-    } as never;
+    };
     await expect(controls.getWebClientStatus()).resolves.toMatchObject({ enabled: false });
   });
 

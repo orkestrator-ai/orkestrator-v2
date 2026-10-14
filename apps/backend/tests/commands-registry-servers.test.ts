@@ -24,6 +24,8 @@ const {
 
 import type { CommandContext } from "./command-fixtures";
 
+type ServerStart = { hostPort: number; wasRunning: boolean; authToken: string };
+
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
@@ -197,7 +199,7 @@ exit 0
         const [first, second] = (await Promise.all([
           commands.get("start_codex_server")?.({ containerId: "container-1" }, context),
           commands.get("start_codex_server")?.({ containerId: "container-1" }, context),
-        ])) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        ])) as [ServerStart, ServerStart];
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -516,7 +518,7 @@ exit 0
             { containerId: `container-${provider}` },
             context,
           ),
-        ])) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        ])) as [ServerStart, ServerStart];
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -647,7 +649,7 @@ exit 0
         const [first, second] = (await Promise.all([
           commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
           commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
-        ])) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        ])) as [ServerStart, ServerStart];
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -1544,12 +1546,15 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const failure = await commands
-          .get("start_codex_server")?.({ containerId: "container-codex-redaction" }, context)
-          .then(
-            () => null,
-            (error: unknown) => error as Error,
-          );
+        const failure = await Promise.resolve(
+          commands.get("start_codex_server")?.(
+            { containerId: "container-codex-redaction" },
+            context,
+          ),
+        ).then(
+          () => null,
+          (error: unknown) => error as Error,
+        );
 
         expect(failure).toBeInstanceOf(Error);
         const execLog = await fs.readFile(logs.exec, "utf8");

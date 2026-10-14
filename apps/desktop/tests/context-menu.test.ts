@@ -38,6 +38,7 @@ function createParams(overrides: Partial<ContextMenuParams> = {}): ContextMenuPa
       isMuted: false,
       hasAudio: false,
       isLooping: false,
+      canLoop: false,
       isControlsVisible: false,
       canToggleControls: false,
       canPrint: false,
@@ -338,7 +339,7 @@ describe("Electron context menu", () => {
   });
 
   test("installs a webContents listener and pops the menu when actions are available", () => {
-    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
+    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | undefined;
     const popup = mock(() => undefined);
     const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({
       template,
@@ -370,7 +371,7 @@ describe("Electron context menu", () => {
   });
 
   test("routes the image copy action through the window webContents", () => {
-    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
+    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | undefined;
     let builtTemplate: MenuItemConstructorOptions[] = [];
     const popup = mock(() => undefined);
     const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => {
@@ -413,7 +414,7 @@ describe("Electron context menu", () => {
   });
 
   test("uses the window webContents to replace a misspelled word", () => {
-    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
+    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | undefined;
     const popup = mock(() => undefined);
     let builtTemplate: MenuItemConstructorOptions[] = [];
     const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => {
@@ -463,7 +464,7 @@ describe("Electron context menu", () => {
   });
 
   test("does not build or pop a menu when no actions are available", () => {
-    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
+    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | undefined;
     const popup = mock(() => undefined);
     const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({
       template,

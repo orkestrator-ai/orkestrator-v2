@@ -387,12 +387,10 @@ describe("host Claude credential opt-out", () => {
     else process.env.PATH = originalPath;
   });
 
-  const globalConfig = (
-    overrides: Record<string, unknown> = {},
-  ): Parameters<typeof resolveContainerClaudeCredentials>[0] =>
-    ({ allowedDomains: [], ...overrides }) as Parameters<
-      typeof resolveContainerClaudeCredentials
-    >[0];
+  type GlobalConfig = Parameters<typeof resolveContainerClaudeCredentials>[0];
+  // Deliberately partial: credential resolution reads only the credential flags.
+  const globalConfig = (overrides: Partial<GlobalConfig> = {}): GlobalConfig =>
+    ({ allowedDomains: [], ...overrides }) as GlobalConfig;
 
   test("resolves nothing, and reads nothing, when explicitly disabled", async () => {
     await withTempDirAsync(async (dir) => {

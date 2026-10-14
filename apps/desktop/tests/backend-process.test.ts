@@ -29,6 +29,12 @@ const directories: string[] = [];
 const processes: BackendProcess[] = [];
 const originalFetch = globalThis.fetch;
 
+function stubFetch(
+  implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): void {
+  globalThis.fetch = Object.assign(mock(implementation), { preconnect: originalFetch.preconnect });
+}
+
 async function waitForWebClientStatus(
   client: BackendHttpClient,
   predicate: (status: Awaited<ReturnType<BackendHttpClient["getWebClientStatus"]>>) => boolean,
@@ -913,21 +919,19 @@ sleep 5
 
   test("HTTP client surfaces web access HTTP and malformed-response failures", async () => {
     const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
-    globalThis.fetch = mock(
+    stubFetch(
       async () =>
         new Response(JSON.stringify({ error: "lifecycle unavailable" }), {
           status: 503,
           headers: { "content-type": "application/json" },
         }),
-    ) as typeof fetch;
+    );
     await expect(client.getWebClientStatus()).rejects.toThrow("lifecycle unavailable");
 
-    globalThis.fetch = mock(
-      async () => new Response("upstream exploded", { status: 503 }),
-    ) as typeof fetch;
+    stubFetch(async () => new Response("upstream exploded", { status: 503 }));
     await expect(client.invoke("fail")).rejects.toThrow("Backend request failed with HTTP 503");
 
-    globalThis.fetch = mock(async () => new Response("not json", { status: 200 })) as typeof fetch;
+    stubFetch(async () => new Response("not json", { status: 200 }));
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
   });
 
@@ -935,11 +939,11 @@ sleep 5
     const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
     const bodies: Array<{ command: string; args: Record<string, unknown> }> = [];
     const releases: Array<() => void> = [];
-    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+    stubFetch(async (_url: unknown, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)));
       await new Promise<void>((resolve) => releases.push(resolve));
       return Response.json({ result: { delivered: true } });
-    }) as unknown as typeof fetch;
+    });
 
     const writes = ["a", "b", "c"].map((data) =>
       client.invoke("terminal_write", { sessionId: "remote-1", data }),
@@ -956,7 +960,8 @@ sleep 5
     await Bun.sleep(0);
     expect(bodies[2]?.args).toEqual({ sessionId: "remote-1", data: "bc" });
     for (const release of releases.splice(0)) release();
-    await expect(Promise.all([...writes, otherTerminal])).resolves.toEqual(
+    const allWrites = [...writes, otherTerminal];
+    await expect(Promise.all(allWrites)).resolves.toEqual(
       Array.from({ length: 4 }, () => ({ delivered: true })),
     );
   });
@@ -965,7 +970,7 @@ sleep 5
     const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
     const sent: string[] = [];
     let failFirst!: () => void;
-    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+    stubFetch(async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       if (body.command !== "terminal_write") return Response.json({ result: undefined });
       const data = String(body.args.data);
@@ -975,7 +980,7 @@ sleep 5
         return new Response("gone", { status: 502 });
       }
       return Response.json({ result: { delivered: true } });
-    }) as unknown as typeof fetch;
+    });
 
     const first = client.invoke("terminal_write", { sessionId: "remote-1", data: "a" });
     const queued = client.invoke("terminal_write", { sessionId: "remote-1", data: "b" });
@@ -1000,7 +1005,7 @@ sleep 5
     const frame = `data: ${JSON.stringify({ event: "large-snapshot", payload })}\n\n`;
     expect(Buffer.byteLength(frame, "utf8")).toBeGreaterThan(1024 * 1024);
     expect(Buffer.byteLength(frame, "utf8")).toBeLessThan(MAX_BACKEND_EVENT_FRAME_BYTES);
-    globalThis.fetch = mock(
+    stubFetch(
       async () =>
         new Response(
           new ReadableStream({
@@ -1011,7 +1016,7 @@ sleep 5
           }),
           { status: 200 },
         ),
-    ) as typeof fetch;
+    );
     const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
     const events: Array<{ event: string; payload: unknown }> = [];
     try {
@@ -1038,7 +1043,7 @@ sleep 5
   test("drops malformed event frames and reconnects after an oversized frame", async () => {
     let attempts = 0;
     let firstCancelled = false;
-    globalThis.fetch = mock(async () => {
+    stubFetch(async () => {
       attempts += 1;
       if (attempts === 1) {
         return new Response(
@@ -1066,7 +1071,7 @@ sleep 5
         }),
         { status: 200 },
       );
-    }) as typeof fetch;
+    });
     const error = mock(() => undefined);
     const warning = mock(() => undefined);
     const previousError = console.error;
@@ -1102,7 +1107,7 @@ sleep 5
 
   test("announces each successful event-stream reconnection", async () => {
     let attempts = 0;
-    globalThis.fetch = mock(async () => {
+    stubFetch(async () => {
       attempts += 1;
       return new Response(
         new ReadableStream({
@@ -1112,7 +1117,7 @@ sleep 5
         }),
         { status: 200 },
       );
-    }) as typeof fetch;
+    });
     const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
     const connected = new Promise<void>((resolve) => {
       let connectionCount = 0;

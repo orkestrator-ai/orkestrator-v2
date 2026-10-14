@@ -1232,7 +1232,7 @@ exit 0
           "Environment start failed. Check the backend logs and retry.",
         );
         expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret);
-        expect(JSON.stringify(errorLog.mock.calls)).toContain(environment.lifecycleError);
+        expect(JSON.stringify(errorLog.mock.calls)).toContain(environment.lifecycleError!);
 
         await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
           await withFakeDocker(
@@ -1333,9 +1333,8 @@ esac
     );
     const commands = createCommandRegistry();
     try {
-      const failure = await commands.get("start_environment")!(
-        { environmentId: environment.id },
-        context,
+      const failure = await Promise.resolve(
+        commands.get("start_environment")!({ environmentId: environment.id }, context),
       ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
       expect(failure).toMatchObject({
@@ -2695,7 +2694,7 @@ exit 0
       );
       expect(environment.createdFromCommit).toMatch(/^[0-9a-f]{40}$/);
       await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(
-        environment.createdFromCommit,
+        environment.createdFromCommit!,
       );
       await expect(configuredGitPushBehaviour(environment.worktreePath!)).resolves.toEqual({
         pushDefault: "current",

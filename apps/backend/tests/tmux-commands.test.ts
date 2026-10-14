@@ -1070,7 +1070,10 @@ describe("Electron tmux hooks and transcripts", () => {
           (item) =>
             item.payload as {
               line?: {
-                taskSnapshots?: Record<string, { items?: unknown; changedTaskId?: string }>;
+                taskSnapshots?: Record<
+                  string,
+                  { items?: unknown; complete?: boolean; changedTaskId?: string }
+                >;
               };
             },
         )

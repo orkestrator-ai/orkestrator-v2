@@ -12,6 +12,8 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
+import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
 
 // Attachment cases allocate and encode tens of megabytes. Under the aggregate
 // suite that work can legitimately outlive Bun's generic five-second budget.
@@ -169,7 +171,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("disables container creation and falls back to a local worktree without Docker", async () => {
-    const onCreate = mock(async () => {});
+    const onCreate = mock(async (_options: ClaudeOptions) => {});
     render(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />
@@ -186,7 +188,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("falls back to a local worktree when Docker stops while the dialog is open", async () => {
-    const onCreate = mock(async () => {});
+    const onCreate = mock(async (_options: ClaudeOptions) => {});
     const dialog = <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />;
     const view = render(
       <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
@@ -979,6 +981,8 @@ describe("resolveAgentDefaults", () => {
       actionDefaults: { newProject: { platform: "claude" } },
     };
     config.repositories["project-1"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
       agentSettings: {
         actionDefaults: {
           newProject: { platform: "codex", model: "repo-codex", reasoningEffort: "high" },
@@ -3745,7 +3749,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("submits the ticket to the feature build handler instead of creating an environment", async () => {
     const onCreate = mock(async () => {});
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     const onOpenChange = mock(() => {});
     render(
       <CreateEnvironmentDialog
@@ -3766,7 +3770,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     expect(onCreate).not.toHaveBeenCalled();
-    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
     expect(request.projectId).toBe("project-1");
     expect(request.title).toBe("Dark mode toggle");
     expect(request.acceptanceCriteria).toBe("The preference survives a reload.");
@@ -3780,7 +3784,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("allows a description-only feature so the backend can generate its name", async () => {
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -3843,7 +3847,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -3882,7 +3886,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -3907,7 +3911,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
     expect(onCreateFeatureBuild.mock.calls[0]![0].images).toEqual([
       {
-        filename: thumbnail.getAttribute("alt"),
+        filename: thumbnail.getAttribute("alt")!,
         data: "QUJD",
       },
     ]);
@@ -3952,7 +3956,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreate = mock(async () => true);
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
     const image = new File(["image"], "reference.png", { type: "image/png" });
     const documentFile = new File(["notes"], "notes.txt", { type: "text/plain" });
@@ -3983,7 +3987,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreate = mock(async () => true);
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
     const promptFiles = Array.from(
       { length: 20 },
@@ -4059,7 +4063,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("omits retained prompt-only files when submitting a feature build", async () => {
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -4190,7 +4194,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -4306,7 +4310,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       },
     };
     useConfigStore.setState({ config });
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open
@@ -4340,7 +4344,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
     useConfigStore.setState({ config });
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open
@@ -4397,7 +4401,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   }
 
   test("reuses the request id when an unchanged create is retried", async () => {
-    const onCreateFeatureBuild = mock(async () => false);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
     render(
       <CreateEnvironmentDialog
         open
@@ -4414,15 +4418,15 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     // A response that never arrived is indistinguishable from one that was
     // lost, so the identical retry has to land on the same ticket.
     expect(second.requestId).toBe(first.requestId);
   });
 
   test("pins implicit reviewers and the request id across a late catalog refresh", async () => {
-    const onCreateFeatureBuild = mock(async () => false);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
     render(
       <CreateEnvironmentDialog
         open
@@ -4451,15 +4455,15 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     expect(second.reviewers).toEqual(first.reviewers);
     expect(second.steps).toEqual(first.steps);
     expect(second.requestId).toBe(first.requestId);
   });
 
   test("mints a new request id when the ticket is edited after a failed create", async () => {
-    const onCreateFeatureBuild = mock(async () => false);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
     render(
       <CreateEnvironmentDialog
         open
@@ -4480,14 +4484,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     expect(second.title).toBe("Dark mode toggle v2");
     expect(second.requestId).not.toBe(first.requestId);
   });
 
   test("mints a new request id for the next feature after one succeeds", async () => {
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -4508,8 +4512,8 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     expect(second.title).toBe(first.title);
     expect(second.requestId).not.toBe(first.requestId);
   });
@@ -4531,7 +4535,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("offers a model per step behind Advanced, with two reviewers by default", async () => {
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open
@@ -4579,7 +4583,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
-    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
     expect((request.reviewers as unknown[]).length).toBe(2);
     expect((request.steps as Record<string, unknown>).verify).toEqual({
       agent: "claude",
@@ -4602,7 +4606,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       },
     };
     useConfigStore.setState({ config });
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open

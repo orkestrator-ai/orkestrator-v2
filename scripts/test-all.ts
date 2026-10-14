@@ -368,7 +368,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     let outputBytes = 0;
     let persistedBytes = 0;
     let outputLimitExceeded = false;
-    let outputTail = Buffer.alloc(0);
+    let outputTail: Buffer = Buffer.alloc(0);
     let spawnError: Error | undefined;
     let logError: Error | undefined;
     let childStatus: number | null = 1;

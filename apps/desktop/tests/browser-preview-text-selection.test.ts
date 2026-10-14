@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Node, Text } from "happy-dom";
 import { BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT } from "../electron/browser-preview-annotation-script";
 import { key, page, type Json } from "./browser-preview-page-harness";
 

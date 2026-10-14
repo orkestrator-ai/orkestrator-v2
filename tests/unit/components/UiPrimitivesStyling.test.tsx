@@ -46,7 +46,7 @@ describe("styled UI primitives", () => {
 
   test("ResizableHandle renders a 1px divider with orientation-specific classes", () => {
     const { container } = render(
-      <ResizablePanelGroup direction="horizontal">
+      <ResizablePanelGroup orientation="horizontal">
         <ResizablePanel defaultSize={50}>Left</ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize={50}>Right</ResizablePanel>

@@ -18,6 +18,10 @@ import type {
   StartEnvironmentResult,
 } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
+import {
+  DEFAULT_TERMINAL_APPEARANCE,
+  DEFAULT_TERMINAL_SCROLLBACK,
+} from "../../../apps/web/src/constants/terminal";
 import { loopedReviewFixture } from "../../../apps/web/src/test/looped-review-fixture";
 
 function createDeferred<T>() {
@@ -87,7 +91,7 @@ const mockCreateEnvironment = mock<
 );
 const mockForkEnvironment = mock<
   (environmentId: string, environmentType: EnvironmentType) => Promise<Environment>
->((environmentId, environmentType) =>
+>((_environmentId, environmentType) =>
   Promise.resolve(
     createMockEnvironment({
       id: "forked-env-id",
@@ -103,7 +107,7 @@ const mockDeleteEnvironment = mock<(environmentId: string) => Promise<void>>(() 
   Promise.resolve(),
 );
 const mockStartEnvironment = mock<(environmentId: string) => Promise<StartEnvironmentResult>>(() =>
-  Promise.resolve({ setupCommands: undefined }),
+  Promise.resolve({}),
 );
 const mockStartEnvironmentInBackground = mock<(environmentId: string) => Promise<void>>(() =>
   Promise.resolve(),
@@ -183,6 +187,9 @@ describe("useEnvironments", () => {
         global: {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [".env.local", ".env"],
+          allowedDomains: [],
+          terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
+          terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
         },
         repositories: {},
       },
@@ -229,7 +236,7 @@ describe("useEnvironments", () => {
       ),
     );
     mockDeleteEnvironment.mockImplementation(() => Promise.resolve());
-    mockStartEnvironment.mockImplementation(() => Promise.resolve({ setupCommands: undefined }));
+    mockStartEnvironment.mockImplementation(() => Promise.resolve({}));
     mockStartEnvironmentInBackground.mockImplementation(() => Promise.resolve());
     mockStopEnvironment.mockImplementation(() => Promise.resolve());
     mockSyncEnvironmentStatus.mockImplementation((environmentId) =>
@@ -422,7 +429,7 @@ describe("useEnvironments", () => {
       createdEnv = await result.current.createEnvironment("project-1");
     });
 
-    expect(mockCreateEnvironment.mock.calls[0][0]).toBe("project-1");
+    expect(mockCreateEnvironment.mock.calls[0]![0]).toBe("project-1");
     expect(createdEnv?.id).toBe("new-env-id");
     expect(result.current.allEnvironments).toHaveLength(1);
     expect(result.current.error).toBeNull();
@@ -1056,7 +1063,7 @@ describe("useEnvironments", () => {
     });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
-    mockStartEnvironment.mockImplementation(() => Promise.resolve({ setupCommands: undefined }));
+    mockStartEnvironment.mockImplementation(() => Promise.resolve({}));
     mockGetEnvironment.mockImplementation(() => Promise.resolve(startedEnv));
 
     const { result } = renderHook(() => useEnvironments("project-1"));
@@ -1105,8 +1112,6 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
     mockStartEnvironment.mockImplementation(() =>
       Promise.resolve({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: true,
         setupSessionId: "env-1:setup",
       }),
@@ -1159,8 +1164,6 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
     mockStartEnvironment.mockImplementation(() =>
       Promise.resolve({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: true,
         setupSessionId: "env-1:setup",
       }),

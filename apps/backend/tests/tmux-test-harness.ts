@@ -636,7 +636,7 @@ main().catch((error) => {
     networkAccessMode: "restricted",
     order: 0,
     environmentType: "containerized",
-    worktreePath: null,
+    worktreePath: undefined,
   };
   const runtimeRoot = path.join(RUNTIME_ROOT_PREFIX, environmentId);
 

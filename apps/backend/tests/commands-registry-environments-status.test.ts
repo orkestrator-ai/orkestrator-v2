@@ -639,19 +639,19 @@ exit 0
         // Recreate goes on to provision a fresh container, which this fake fails
         // at `create`. The regression under test is only that it got that far
         // rather than being refused by the ownership probe.
-        const recreateFailure = await commands
-          .get("recreate_environment")?.(
+        const recreateFailure = await Promise.resolve(
+          commands.get("recreate_environment")?.(
             {
               environmentId: recreatable.id,
               intent: "discard",
               expectedContainerId: "vanished-container",
             },
             context,
-          )
-          .then(
-            () => null,
-            (error: unknown) => String(error),
-          );
+          ),
+        ).then(
+          () => null,
+          (error: unknown) => String(error),
+        );
         expect(recreateFailure ?? "").not.toContain("not owned by this development profile");
 
         const log = await fs.readFile(all, "utf8");
@@ -744,9 +744,9 @@ exit 0
           process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
           process.env.CURSOR_API_KEY = "agent-test-cursor-key";
 
-          await commands
-            .get("provision_environment")?.({ environmentId: environment.id }, context)
-            .catch(() => undefined);
+          await Promise.resolve(
+            commands.get("provision_environment")?.({ environmentId: environment.id }, context),
+          ).catch(() => undefined);
 
           const log = await fs.readFile(all, "utf8");
           expect(log).toContain(`-v ${claudeConfigDir}:/claude-config:ro`);
@@ -814,9 +814,9 @@ exit 0
           process.env.CODEX_HOME = codexHome;
           process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
 
-          await commands
-            .get("provision_environment")?.({ environmentId: environment.id }, context)
-            .catch(() => undefined);
+          await Promise.resolve(
+            commands.get("provision_environment")?.({ environmentId: environment.id }, context),
+          ).catch(() => undefined);
 
           const log = await fs.readFile(all, "utf8");
           expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);

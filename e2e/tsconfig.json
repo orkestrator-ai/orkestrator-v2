@@ -2,6 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["node", "@playwright/test"],
     "paths": {
       "@/*": ["../apps/web/src/*"]

@@ -5,7 +5,6 @@ import type { PaneLeaf } from "@/types/paneLayout";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useClaudeStore } from "@/stores/claudeStore";
 import { createSessionKey } from "@/lib/utils";
 import { invoke } from "@/lib/native/backend";
 import { DraggableTabBar } from "./DraggableTabBar";
@@ -313,7 +312,7 @@ describe("DraggableTabBar", () => {
     });
   });
 
-  test("deletes native compose storage and clears its store when closing a tab", async () => {
+  test("deletes persisted Claude compose drafts when closing a native tab", async () => {
     const environmentId = "environment";
     const sessionKey = createSessionKey(environmentId, "claude-tab");
     usePaneLayoutStore.getState().initialize("container", environmentId);
@@ -326,7 +325,6 @@ describe("DraggableTabBar", () => {
       },
       environmentId,
     );
-    useClaudeStore.getState().setDraftText(sessionKey, "orphaned prompt");
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
     const { container } = render(
@@ -339,7 +337,6 @@ describe("DraggableTabBar", () => {
     fireEvent.click(close);
 
     await waitFor(() => {
-      expect(useClaudeStore.getState().draftText.has(sessionKey)).toBe(false);
       expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
     });
     expect(invoke).toHaveBeenCalledWith("delete_compose_draft", {

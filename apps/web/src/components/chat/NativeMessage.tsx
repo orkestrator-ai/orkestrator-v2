@@ -2,7 +2,6 @@ import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { writeText } from "@/lib/native/clipboard";
-import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
@@ -17,7 +16,9 @@ import {
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
 import {
+  ERROR_MESSAGE_PREFIX,
   PEER_MAIL_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
   splitPeerMailNativeMessageContent,
 } from "@/lib/chat/client-only-messages";
 import { toolUseIdFromImagePartId } from "@orkestrator/protocol/transcript-part-ids";

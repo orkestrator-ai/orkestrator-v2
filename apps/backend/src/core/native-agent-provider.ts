@@ -2,14 +2,39 @@
 import type { BridgeConnection, NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import { HttpBridgeProvider } from "./http-bridge-provider.js";
 import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js";
+import type { AppConfig } from "./models.js";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
+import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";
 
 export * from "./agent-provider-contract.js";
 
+/**
+ * What the shared native-agent service knows about the environment a provider
+ * serves, in platform-neutral terms. `createNativeAgentProvider` derives each
+ * platform's environment-scoped dependencies from it, so the service never
+ * assembles them itself.
+ */
+export interface NativeAgentProviderEnvironment {
+  environmentId: string;
+  /**
+   * Backend data directory. Absent for storage doubles without one, which then
+   * get no on-disk provider state rather than git runs in fixture directories.
+   */
+  dataDir?: string;
+  /**
+   * Reads the persisted configuration. Called per use rather than once:
+   * providers are cached for the life of a bridge connection, so a settings
+   * edit would otherwise not reach them until the environment restarted.
+   */
+  loadConfig?: () => Promise<Pick<AppConfig, "global">>;
+}
+
 export type ProviderDependencies = HttpBridgeProviderDependencies &
   OpenCodeProviderDependencies & {
     workflowResults?: WorkflowResultReader;
+    /** Platform-specific dependencies are derived from this; explicit ones win. */
+    environment?: NativeAgentProviderEnvironment;
   };
 
 export function createNativeAgentProvider(
@@ -18,7 +43,10 @@ export function createNativeAgentProvider(
 ): NativeAgentRuntimeProvider {
   const provider =
     connection.agent === "opencode"
-      ? new OpenCodeProvider(connection, dependencies)
+      ? new OpenCodeProvider(connection, {
+          ...openCodeEnvironmentDependencies(dependencies.environment),
+          ...dependencies,
+        })
       : new HttpBridgeProvider(connection, dependencies.fetch ?? fetch, dependencies.stageImages);
   if (dependencies.workflowResults) {
     const providerStructured = provider.structured.bind(provider);

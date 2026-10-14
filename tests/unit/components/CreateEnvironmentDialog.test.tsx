@@ -3,7 +3,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
@@ -28,7 +27,6 @@ const {
 const defaultConfig = structuredClone(useConfigStore.getInitialState().config);
 const defaultClaudeModels = useClaudeStore.getInitialState().models;
 const defaultCodexModels = useCodexStore.getInitialState().models;
-const defaultOpenCodeModels = useOpenCodeStore.getInitialState().models;
 const invokeMock = invoke as ReturnType<typeof mock>;
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -66,6 +64,28 @@ function attachmentDataTransfer(files: File[], types: string[] = ["Files"]) {
 }
 
 const AGENT_MODEL_PICKER_NAME = "Agent, model and reasoning";
+
+/** Serves `models` as the durable OpenCode catalogue for `projectId`. */
+function mockOpenCodeCatalogCache(
+  projectId: string,
+  models: Array<{ id: string; name: string; provider: string; variants?: string[] }>,
+) {
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "get_opencode_model_catalog_cache") {
+      return Promise.resolve({
+        schemaVersion: 2,
+        projectId,
+        catalogVersion: "catalog-v1",
+        updatedAt: "2026-07-27T12:00:00.000Z",
+        models,
+      });
+    }
+    if (command === "get_opencode_model_preferences") {
+      return Promise.resolve({ recent: [], favorite: [], variant: {} });
+    }
+    return Promise.resolve(undefined);
+  });
+}
 
 function getAgentModelPicker() {
   return screen.getByRole("combobox", { name: AGENT_MODEL_PICKER_NAME });
@@ -121,7 +141,6 @@ describe("resolveAgentDefaults", () => {
     });
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
-    useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
     useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
@@ -1347,7 +1366,6 @@ describe("resolveAgentDefaults", () => {
     // model no OpenCode server knows and — because a one-shot launch option is
     // treated as authoritative downstream — suppress the user's own saved
     // OpenCode preferences. It has to submit as "no explicit choice".
-    useOpenCodeStore.setState({ models: new Map() });
     // No configured default either, so nothing real gets injected into the
     // catalog and the placeholder is genuinely all there is.
     const config = structuredClone(defaultConfig);
@@ -1406,7 +1424,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("omits reasoning choices when the selected model supports none", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     render(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
@@ -1579,8 +1596,8 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Default");
   });
 
-  test("offers live OpenCode models and a configured project variant", async () => {
-    useOpenCodeStore.getState().setModels("existing-env", [
+  test("offers cached OpenCode models and a configured project variant", async () => {
+    mockOpenCodeCatalogCache("project-opencode", [
       {
         id: "provider/model-a",
         name: "Model A",
@@ -1626,7 +1643,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(getAgentModelPicker().textContent).toContain("Model B");
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Model B"));
     expect(getAgentModelPicker().textContent).toContain("Deep");
     fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
@@ -1648,7 +1665,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("loads the project-scoped durable OpenCode catalog, switches models, resets an incompatible effort, and submits", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -1736,7 +1752,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("shows Orkestrator-owned OpenCode favorites in their configured order", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -1790,21 +1805,14 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("preserves the target agent effort when selecting a cross-platform favorite", async () => {
-    useOpenCodeStore.setState({
-      models: new Map([
-        [
-          "existing-env",
-          [
-            {
-              id: "provider/source",
-              name: "OpenCode Source",
-              provider: "Provider",
-              variants: ["deep"],
-            },
-          ],
-        ],
-      ]),
-    });
+    mockOpenCodeCatalogCache("cross-platform", [
+      {
+        id: "provider/source",
+        name: "OpenCode Source",
+        provider: "Provider",
+        variants: ["deep"],
+      },
+    ]);
     useCodexStore.setState({
       models: [
         {
@@ -1859,7 +1867,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(getAgentModelPicker().textContent).toContain("OpenCode Source");
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("OpenCode Source"));
     expect(getAgentModelPicker().textContent).toContain("Deep");
     openAgentModelPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
@@ -1882,70 +1890,7 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("prefers a live OpenCode catalog over the durable project cache", async () => {
-    useOpenCodeStore.setState({
-      models: new Map([
-        [
-          "live-environment",
-          [
-            {
-              id: "live/model",
-              name: "Live Model",
-              provider: "Live Provider",
-              variants: ["live"],
-            },
-          ],
-        ],
-      ]),
-    });
-    const config = structuredClone(defaultConfig);
-    config.global.agentSettings = {
-      ...config.global.agentSettings,
-      platforms: {
-        ...config.global.agentSettings?.platforms,
-        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
-      },
-    };
-    useConfigStore.setState({ config });
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "get_opencode_model_catalog_cache") {
-        return Promise.resolve({
-          schemaVersion: 2,
-          projectId: "live-project",
-          catalogVersion: "stale",
-          updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [
-            {
-              id: "cached/model",
-              name: "Cached Model",
-              provider: "Cached Provider",
-            },
-          ],
-        });
-      }
-      if (command === "get_opencode_model_preferences") {
-        return Promise.resolve({ recent: [], favorite: [], variant: {} });
-      }
-      return Promise.resolve(undefined);
-    });
-
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-        projectId="live-project"
-      />,
-    );
-    await selectAgentPlatform("OpenCode");
-    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Live Model"));
-    openAgentModelPicker();
-    expect(await screen.findByRole("menuitemradio", { name: /Live Model/ })).toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }) === null).toBe(true);
-  });
-
   test("does not read an unscoped durable catalog without a project id", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -1968,7 +1913,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("ignores a late cache response after the project changes", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -2031,7 +1975,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("clears a previous durable catalog when a repeated open returns empty", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -2105,7 +2048,6 @@ describe("resolveAgentDefaults", () => {
         }),
     },
   ])("keeps durable state empty for a $name cache payload", async ({ cacheResult }) => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -2141,7 +2083,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("augments the durable catalog with a missing configured OpenCode model and effort", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2217,7 +2158,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("augments an existing durable OpenCode model with a missing configured effort", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2275,7 +2215,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("keeps the durable catalog usable when loading favorites fails", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2329,7 +2268,6 @@ describe("resolveAgentDefaults", () => {
     { name: "non-object", preferences: "preferences" },
     { name: "null", preferences: null },
   ])("ignores a $name preferences payload", async ({ preferences }) => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2378,7 +2316,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("keeps a model chosen before the durable catalog arrives", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     // A configured default is a real selectable entry before the cache lands,
@@ -3673,7 +3610,6 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
-    useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
     useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     mockReadImage.mockReset();
     mockReadImage.mockImplementation(() => Promise.reject(new Error("no image")));

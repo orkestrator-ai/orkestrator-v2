@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import {
   carryOverMessagesAddedDuringFetch,
   createPeerMailNativeMessage,
+  ERROR_MESSAGE_PREFIX,
   createPeerMailNativeMessageFromCarrier,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
@@ -11,6 +11,7 @@ import {
   normalizeMessageContent,
   positionOptimisticNativeMessage,
   splitPeerMailNativeMessageContent,
+  SYSTEM_MESSAGE_PREFIX,
 } from "./client-only-messages";
 import type { NativeMessage } from "./native-message-types";
 
@@ -361,9 +362,9 @@ describe("client-only optimistic messages", () => {
   });
 
   test("retires an attachment-only optimistic message against an echo carrying an empty text part", () => {
-    // The OpenCode shape. Its client always sends `{ type: "text", text }` even
-    // for an attachment-only prompt (`sendPrompt` in `opencode-client.ts`) and
-    // `normalizeOpenCodePart` keeps a zero-length text part, whereas the Codex
+    // The OpenCode shape. Its prompt always carries `{ type: "text", text }` even
+    // for an attachment-only prompt, and the OpenCode normalizer keeps a
+    // zero-length text part, whereas the Codex
     // bridge omits it. This helper is shared, so the fingerprint has to match
     // both or one agent duplicates every attachment-only prompt forever.
     const optimistic = createOptimisticNativeMessage(

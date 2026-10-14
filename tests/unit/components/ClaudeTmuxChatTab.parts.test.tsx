@@ -24,7 +24,7 @@ import * as realTmuxClient from "@/lib/claude-tmux-client";
 
 import * as realBackend from "@/lib/backend";
 
-import type { ClaudeMessage as ClaudeMessageType, ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeMessage as ClaudeMessageType, ClaudeModel } from "@/lib/claude-types";
 
 import * as realInteractiveTerminal from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 

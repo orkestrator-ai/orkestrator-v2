@@ -215,6 +215,8 @@ describe("test suite ownership", () => {
       "tests/unit/components/GitHubCloneIntegration.test.tsx",
       "tests/unit/components/SettingsPage.test.tsx",
       "tests/unit/firewall-refresh.test.ts",
+      // Exercises backend normalization through the renderer's pipeline adapter.
+      "tests/unit/lib/opencode-pipeline-transcript.test.ts",
       "tests/unit/migrate-copy.test.ts",
       "tests/unit/test-host-isolation.test.ts",
       "tests/unit/user-prompt-display-contract.test.ts",

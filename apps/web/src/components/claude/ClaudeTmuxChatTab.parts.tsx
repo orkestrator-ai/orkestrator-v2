@@ -60,7 +60,7 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
-import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-types";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import {
   tmuxPlanDraftKey,

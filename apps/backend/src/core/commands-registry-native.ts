@@ -77,6 +77,9 @@ export function registerNativeAgentCommands(
           ? undefined
           : asNonBlankString(args.expectedProviderSessionId, "expectedProviderSessionId"),
       title: typeof args.title === "string" ? args.title : undefined,
+      ...(args.controls === undefined
+        ? {}
+        : { controls: asNativeAgentControlUpdate(args.controls, "controls") }),
       model: typeof args.model === "string" ? args.model : undefined,
       reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
       phase:

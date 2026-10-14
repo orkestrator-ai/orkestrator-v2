@@ -75,7 +75,6 @@ import type {
 import type { AgentType } from "@/stores";
 import { useCodexStore, useConfigStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import {
@@ -352,7 +351,6 @@ export function CreateEnvironmentDialog({
         : configEnvironmentType;
   const claudeModels = useClaudeStore((state) => state.models);
   const codexModels = useCodexStore((state) => state.models);
-  const openCodeModels = useOpenCodeStore((state) => state.models);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
@@ -410,26 +408,21 @@ export function CreateEnvironmentDialog({
     openCodeDefaults.reasoningEffort;
   /**
    * `buildReviewModelCatalog` synthesises a single `{ id: "default" }` OpenCode
-   * entry when no environment has cached a live catalog yet. That id is a UI
-   * placeholder, not a model any OpenCode server knows, so submitting it would
+   * entry; only the project's durable OpenCode cache supplies concrete models.
+   * That id is a UI placeholder, not a model any OpenCode server knows, so
+   * submitting it would
    * pin a bogus one-shot model — and because a pending launch option is treated
    * as authoritative downstream, it would also suppress the user's own saved
    * OpenCode model preferences. Claude's `"default"` is a real catalog id and
    * must keep flowing through untouched.
    */
-  const hasAvailableOpenCodeModels = useMemo(
-    () =>
-      cachedOpenCodeModels.length > 0 ||
-      Array.from(openCodeModels.values()).some((models) => models.length > 0),
-    [cachedOpenCodeModels, openCodeModels],
-  );
+  const hasAvailableOpenCodeModels = cachedOpenCodeModels.length > 0;
   const modelCatalog = useMemo(() => {
-    const liveCatalog = buildReviewModelCatalog(undefined);
-    const hasLiveCatalog = Array.from(openCodeModels.values()).some((models) => models.length > 0);
+    const baseCatalog = buildReviewModelCatalog();
     const catalog =
-      !hasLiveCatalog && cachedOpenCodeModels.length > 0
+      cachedOpenCodeModels.length > 0
         ? {
-            ...liveCatalog,
+            ...baseCatalog,
             opencode: cachedOpenCodeModels.map((candidate) => ({
               id: candidate.id,
               name: openCodeModelDisplayLabel(candidate.id, candidate.name),
@@ -438,7 +431,7 @@ export function CreateEnvironmentDialog({
               reasoningEfforts: [...(candidate.variants ?? [])],
             })),
           }
-        : liveCatalog;
+        : baseCatalog;
     const withConfigured = (() => {
       if (!configuredOpenCodeModel) return catalog;
       const configuredModel = catalog.opencode.find(
@@ -506,7 +499,6 @@ export function CreateEnvironmentDialog({
     favoriteModels,
     grokModels,
     piModels,
-    openCodeModels,
   ]);
 
   const configuredAgentDefaults = useMemo(

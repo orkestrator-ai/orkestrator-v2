@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { CODEX_MODELS, type CodexModel } from "@/lib/codex-client";
-import type { ClaudeModel } from "@/lib/claude-client";
+import { CODEX_MODELS, type CodexModel } from "@/lib/codex-models";
+import type { ClaudeModel } from "@/lib/claude-types";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";

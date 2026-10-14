@@ -13,6 +13,14 @@ Status: Historical — 2026-08-16 inventory plus a 2026-09-11 current-state note
 > that still say Cursor is ACP or steer is Codex-only are the 2026-08-16
 > snapshot.
 
+> **Current (2026-10-14).** Closing a native tab retains the conversation on
+> every platform, OpenCode and native Claude included; see
+> [Agent engines](agent-engines.md#closing-a-tab-retains-the-conversation).
+> Every native tab, OpenCode's included, reads backend projections on the
+> shared cadence in `apps/web/src/lib/native-session-read-policy.ts`; OpenCode
+> no longer has a separate renderer-side client or store. §3.1 and §3.6
+> statements that say otherwise are the 2026-08-16 snapshot.
+
 > Historical note (2026-08-26): Cursor's ACP/CLI interface described below has
 > been removed. Cursor now runs only through `bridges/cursor-bridge/` and
 > `@cursor/sdk`; Grok remains on `bridges/acp-bridge/`. The retained comparison
@@ -210,10 +218,13 @@ attachments, discovered slash/plugin commands.
 Tmux-only: interactive terminal overlay, pane selection prompts, hook-based
 elicitations, `/config` `/login` `/mcp` as literal TUI commands.
 
-**Close semantics also diverge.** Closing a native Claude or OpenCode tab
+~~**Close semantics also diverge.** Closing a native Claude or OpenCode tab
 **deletes** the vendor session (`teardown_tab` → `DELETE /session/:id`). Closing
 Tmux **stops the pane** and leaves the JSONL, so resume still works. Codex is
-the third model: unsubscribe, never `thread/delete`.
+the third model: unsubscribe, never `thread/delete`.~~ **Fixed:** closing a tab
+retains the conversation on every platform. Native Claude uses the bridge's
+`POST /session/:id/close`; OpenCode goes through `OpenCodeProvider.closeSession`
+and never calls `client.session.delete`.
 
 Tmux queue drain used to live behind a mounted React tree. `PromptQueueDrainer`
 now owns claim → submit → acknowledge server-side. Remount hydrates from
@@ -369,10 +380,12 @@ paths only.
 - **ACP** has `/attach` (the only platforms that do) and a 4× session-create
   retry. Journal is in-memory. `/activity` is side-effect-free; unknown session
   is `{activity:"missing"}`. Stderr is drained, never logged.
-- **OpenCode** has **no Orkestrator SSE**; the live tab polls snapshots (500 ms
-  running / 1500 ms idle). Inactive tabs do not poll; remount reads the backend
-  snapshot. At-most-once is transcript-marker based, not a durable bridge
-  journal. Tab close **HTTP DELETE**s the vendor session.
+- **OpenCode** has no bridge. The backend subscribes to `opencode serve`'s
+  event stream and feeds the shared projection; the tab reads backend
+  projections like every other native platform. At-most-once is
+  transcript-marker based (a durable marker in OpenCode's own history), not a
+  bridge journal. ~~Tab close **HTTP DELETE**s the vendor session.~~ **Fixed:**
+  tab close is non-destructive.
 - **Tmux** events only reach mounted listeners. Remount hydrates from status /
   transcript / pending hooks. Queue drain is backend-owned. Interactive terminal
   detach is environment-scoped.

@@ -21,6 +21,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { normalizeOpenCodeTranscriptMessages } from "./opencode-messages.js";
+import { lastAssistantModelRef } from "./native-agent-composer-selection.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 
 // One more than the sessions we can track, so a full tracking set still leaves
@@ -100,10 +101,13 @@ export function openCodeSessionStateSnapshot(input: {
   // effective status so a running lifecycle never republishes a clock for a
   // turn the stream already reported as failed.
   const effectiveStatus: ProviderStatus = streamedError ? "error" : input.status;
+  const lastAssistant = lastAssistantModelRef(input.messages ?? []);
   const contextUsage = input.contextUsage ?? openCodeContextUsage(input.messages ?? []);
   return {
     status: effectiveStatus,
     providerRevision: input.revision,
+    ...(lastAssistant.modelId ? { lastAssistantModelId: lastAssistant.modelId } : {}),
+    ...(lastAssistant.reasoningId ? { lastAssistantReasoningId: lastAssistant.reasoningId } : {}),
     ...(effectiveStatus === "running" && input.turnStartedAt !== undefined
       ? { turnStartedAt: input.turnStartedAt }
       : {}),

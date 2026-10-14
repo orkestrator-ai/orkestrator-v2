@@ -457,6 +457,7 @@ export async function adoptNativeAgentSession(input: {
   sessionMode?: "plan" | "build";
   fastMode?: boolean;
   executionProfileId?: string;
+  controls?: NativeAgentControlUpdate;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>("adopt_native_agent_session", input);
 }

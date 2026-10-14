@@ -9,7 +9,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.296`, Anthropic SDK `0.133.0`, CLI `2.1.296` |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.162.1` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.0` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.0` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.37` (latest stable, verified 2026-10-13) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.52` (stable channel; verified 2026-10-13), ACP SDK `1.8.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.2.0` |
@@ -600,18 +600,18 @@ safety constraints behind this process. Upstream release source:
 OpenCode's SDK and CLI are intentionally kept at the same exact version.
 `tests/unit/version-drift.test.ts` enforces agreement across:
 
-- `@opencode-ai/sdk` in `apps/web/package.json`
-- `@opencode-ai/sdk` in `apps/backend/package.json`
+- `@opencode-ai/sdk` in `apps/backend/package.json`, the only workspace that
+  depends on the SDK
 - `PINNED_TOOLCHAIN_VERSIONS.opencode` in
   `packages/toolchain/src/manifest.ts`
 - `OPENCODE_CLI_VERSION` in `docker/Dockerfile`
 
-Both code paths import `@opencode-ai/sdk/v2/client`; do not change them to the v1
-package root:
+Every import uses `@opencode-ai/sdk/v2/client`; do not change one to the v1
+package root. The renderer does not talk to `opencode serve` or normalize
+OpenCode messages, and `apps/web` does not depend on the SDK (the drift test
+asserts that). `scripts/opencode-live-compatibility-probe.ts` resolves the SDK
+through the backend workspace.
 
-- `apps/web/src/lib/opencode-client.ts` is the renderer wrapper. It normalizes
-  OpenCode messages and exposes session, event, model/provider, command, agent,
-  skill, question, permission, MCP, formatter, and LSP operations.
 - `apps/backend/src/core/opencode-provider.ts` is the only backend file that
   calls `createOpencodeClient`. It uses sessions, async prompts,
   status/messages, event subscriptions, aborts, questions, and permissions, and
@@ -622,15 +622,11 @@ package root:
   signature change lands in `opencode-provider.ts`. The remaining backend
   `opencode-*.ts` files import v2 *types* only.
 
-The backend imports the SDK at runtime, so updating only the web workspace can
-leave native chat apparently healthy while build pipelines remain on the old
-contract.
-
 ### How to upgrade OpenCode
 
 1. Pick a release for which both the CLI assets and `@opencode-ai/sdk` package
    exist.
-2. Set that exact version in both package manifests and all three CLI mirrors
+2. Set that exact version in the backend manifest and all three CLI mirrors
    listed above.
 3. Refresh the root lockfile:
 
@@ -646,20 +642,19 @@ contract.
    not a workspace symlink into its shared cache, and inspect the generated
    patch before copying it back. Update the root `patchedDependencies` key,
    patch path and filename, and `bun.lock` together; remove the old patch.
-   Confirm both workspace resolutions in `bun.lock` use the intended version
-   and inspect both installed clients after `bun install`.
+   Confirm the backend resolution in `bun.lock` uses the intended version and
+   inspect the installed client after `bun install`.
 4. Refresh and verify all four OpenCode artifact records using the shared
    binary procedure. Preserve the macOS `repairInvalidMacSignature` behavior and
    do not add reproducible installed hashes for a locally re-signed file.
-5. Review the generated v2 types and compile both consumers. Flat v2 request
+5. Review the generated v2 types and compile the backend. Flat v2 request
    parameters such as `{ sessionID, parts }` must remain flat; do not migrate to
    the old nested `{ path, body }` API shape.
 6. Run:
 
    ```bash
-   bun run --cwd apps/web typecheck
    bun run --cwd apps/backend typecheck
-   (cd apps/web && bun test src/lib/opencode-*.test.ts --parallel)
+   bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel
    bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
      src/core/opencode-provider-dispatch.test.ts \
      src/core/opencode-provider-lifecycle.test.ts \
@@ -670,9 +665,10 @@ contract.
      mise run verify:opencode:live
    ```
 
-   The live compatibility test starts a clean Bun child process outside the web
-   test's browser preload, then starts `opencode serve` with isolated XDG
-   directories, verifies that CLI health reports the same version as the SDK
+   The live compatibility test
+   (`apps/backend/src/core/opencode-live-compatibility.live.test.ts`) runs the
+   probe as a clean Bun child process, which starts `opencode serve` with
+   isolated XDG directories, verifies that CLI health reports the same version as the SDK
    pin, constructs the real v2 client, and lists sessions. It does not call a
    model or spend credits.
 7. Smoke-test both UI native chat and a build-pipeline OpenCode phase. Exercise

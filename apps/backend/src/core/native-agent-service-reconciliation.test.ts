@@ -40,6 +40,7 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import type { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { httpProvider } from "./agent-provider-test-support.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -1569,12 +1570,12 @@ describe("NativeAgentService", () => {
       ],
     });
 
-    function recoveryTasks(service: NativeAgentService): Map<string, Promise<void>> {
-      return (
-        service as unknown as {
-          openCodeRecoveryTasks: Map<string, Promise<void>>;
-        }
-      ).openCodeRecoveryTasks;
+    function turnRecovery(service: NativeAgentService): NativeAgentTurnRecovery {
+      return (service as unknown as { turnRecovery: NativeAgentTurnRecovery }).turnRecovery;
+    }
+
+    function recoveryTaskCount(service: NativeAgentService): number {
+      return turnRecovery(service).pendingTasks().length;
     }
 
     test("continues a stalled interactive turn once, durably, then reports exhaustion", async () => {
@@ -1605,7 +1606,7 @@ describe("NativeAgentService", () => {
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
             await waitForCondition(() => send.mock.calls.length === 1);
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
 
           const [sessionId, prompt, options] = send.mock.calls[0]! as [
@@ -1630,7 +1631,7 @@ describe("NativeAgentService", () => {
           // durable request journal absorbs the retry.
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).toHaveBeenCalledTimes(1);
 
@@ -1650,7 +1651,7 @@ describe("NativeAgentService", () => {
           activityState = "idle";
           const warnings = await captureWarnings(async () => {
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).toHaveBeenCalledTimes(1);
           expect(warnings.join("\n")).toContain("incomplete again");
@@ -1707,7 +1708,7 @@ describe("NativeAgentService", () => {
           await service.reconcileAgentActivity();
           activityState = "idle";
           await service.reconcileAgentActivity();
-          await waitForCondition(() => recoveryTasks(service).size === 0);
+          await waitForCondition(() => recoveryTaskCount(service) === 0);
           // Still inside the first backoff window: nothing is sent yet.
           expect(send).not.toHaveBeenCalled();
 
@@ -1715,7 +1716,7 @@ describe("NativeAgentService", () => {
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
             await waitForCondition(() => send.mock.calls.length === 1);
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           const [sessionId, prompt, options] = send.mock.calls[0]! as [
             string,
@@ -1766,7 +1767,7 @@ describe("NativeAgentService", () => {
               providerSessionId: "provider-1",
             });
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
             expect(send).not.toHaveBeenCalled();
           },
         );
@@ -1818,7 +1819,7 @@ describe("NativeAgentService", () => {
           });
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).not.toHaveBeenCalled();
           expect(
@@ -1853,7 +1854,7 @@ describe("NativeAgentService", () => {
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
             await waitForCondition(() => send.mock.calls.length === 1);
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).toHaveBeenCalledTimes(1);
         },
@@ -1889,7 +1890,7 @@ describe("NativeAgentService", () => {
 
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).not.toHaveBeenCalled();
 
@@ -1897,7 +1898,7 @@ describe("NativeAgentService", () => {
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
             await waitForCondition(() => send.mock.calls.length === 1);
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).toHaveBeenCalledTimes(1);
         },
@@ -1932,7 +1933,7 @@ describe("NativeAgentService", () => {
             logicalSessionKey: "tab-1",
             providerSessionId: "provider-1",
           });
-          await storage.setOpenCodeIncompleteTurnNotice(
+          await storage.setIncompleteTurnNotice(
             nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
             "provider-1",
             {
@@ -1949,7 +1950,7 @@ describe("NativeAgentService", () => {
           ]);
           releaseRead();
           await reconcile;
-          await waitForCondition(() => recoveryTasks(service).size === 0);
+          await waitForCondition(() => recoveryTaskCount(service) === 0);
           expect(send).not.toHaveBeenCalled();
         },
       );
@@ -1986,8 +1987,9 @@ describe("NativeAgentService", () => {
 
           const reconcile = service.reconcileAgentActivity();
           await waitForCondition(() => reads === 2);
-          const claim = service.claimOpenCodeManualPrompt({
+          const claim = turnRecovery(service).claimManualPrompt({
             environmentId: "env-1",
+            agent: "opencode",
             logicalSessionKey: "tab-1",
             providerSessionId: "provider-1",
             requestId: "manual-1",
@@ -2005,10 +2007,11 @@ describe("NativeAgentService", () => {
             )?.openCodeIncompleteTurnNotice,
           ).toBeUndefined();
           await reconcile;
-          await waitForCondition(() => recoveryTasks(service).size === 0);
+          await waitForCondition(() => recoveryTaskCount(service) === 0);
           expect(send).not.toHaveBeenCalled();
-          service.releaseOpenCodeManualPrompt({
+          turnRecovery(service).releaseManualPrompt({
             environmentId: "env-1",
+            agent: "opencode",
             logicalSessionKey: "tab-1",
             providerSessionId: "provider-1",
             requestId: "manual-1",
@@ -2048,25 +2051,28 @@ describe("NativeAgentService", () => {
             await service.reconcileAgentActivity();
             await waitForCondition(() => send.mock.calls.length === 1);
             await expect(
-              service.claimOpenCodeManualPrompt({
+              turnRecovery(service).claimManualPrompt({
                 environmentId: "env-1",
+                agent: "opencode",
                 logicalSessionKey: "tab-1",
                 providerSessionId: "provider-1",
                 requestId: "manual-overlap",
               }),
             ).rejects.toThrow("automatic recovery is already being sent");
             releaseSend();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
 
-          await service.claimOpenCodeManualPrompt({
+          await turnRecovery(service).claimManualPrompt({
             environmentId: "env-1",
+            agent: "opencode",
             logicalSessionKey: "tab-1",
             providerSessionId: "provider-1",
             requestId: "manual-after-recovery",
           });
-          service.releaseOpenCodeManualPrompt({
+          turnRecovery(service).releaseManualPrompt({
             environmentId: "env-1",
+            agent: "opencode",
             logicalSessionKey: "tab-1",
             providerSessionId: "provider-1",
             requestId: "manual-after-recovery",
@@ -2099,7 +2105,7 @@ describe("NativeAgentService", () => {
 
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(
             (await storage.getNativeAgentSession(key))?.openCodeIncompleteTurnNotice,
@@ -2151,7 +2157,7 @@ describe("NativeAgentService", () => {
           activityState = "idle";
           await captureWarnings(async () => {
             await service.reconcileAgentActivity();
-            await waitForCondition(() => recoveryTasks(service).size === 0);
+            await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).not.toHaveBeenCalled();
         },

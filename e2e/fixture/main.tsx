@@ -1,3 +1,4 @@
+import { OpenCodePipelineTranscriptFixture } from "./OpenCodePipelineTranscriptFixture";
 import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { AgentUsageFixture } from "./AgentUsageFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
@@ -1679,6 +1680,8 @@ function fixtureForPath() {
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
+  if (window.location.pathname === "/opencode-pipeline-transcript")
+    return <OpenCodePipelineTranscriptFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
   if (window.location.pathname === "/tmux-compose-focus") return <TmuxComposeFocusFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;

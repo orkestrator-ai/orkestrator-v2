@@ -6,6 +6,7 @@ import {
   committedTranscriptCursor,
   snapshotWithoutInlineTranscripts,
 } from "./build-pipeline-transcripts.js";
+import { normalizeOpenCodeDisplayEntry } from "./opencode-display-transcript.js";
 
 /**
  * Transcript-aware projections for the build-pipeline read commands.
@@ -14,6 +15,10 @@ import {
  * bodies names the revision/count it already holds per session and receives
  * only the referenced window each stale session needs, read straight from the
  * transcript store (or the legacy inline array of an unmigrated record).
+ *
+ * Stored bodies are the provider's raw messages. OpenCode entries are
+ * normalized to display messages here, on the way out, so a pipeline persisted
+ * by any version renders through the renderer's one generic transcript path.
  */
 
 /**
@@ -135,12 +140,13 @@ export async function conditionalBuildPipelineRead(
     .map((session, index) => ({ session, index }))
     .sort((left, right) => rank(left.session) - rank(right.session) || right.index - left.index);
   const projectedRecord = withoutTranscriptBodies(record);
-  let remaining =
+  const responseAllowance =
     budgetBytes -
     Buffer.byteLength(
       JSON.stringify({ unchanged: false, record: projectedRecord, messagePatches: [] }),
       "utf8",
     );
+  let remaining = responseAllowance;
   const messagePatches: BuildPipelineMessagePatch[] = [];
   const defer = (sessionKey: string, revision: number) => {
     const patch: BuildPipelineMessagePatch = {
@@ -219,11 +225,35 @@ export async function conditionalBuildPipelineRead(
     let nextIndex = read.startIndex;
     let candidate: TranscriptRead = read;
     while (candidate.status === "found" && nextIndex < candidate.messageCount) {
-      const message = candidate.messages[0];
-      if (message === undefined) break;
-      const bytes =
+      const stored = candidate.messages[0];
+      if (stored === undefined) break;
+      // The store keeps what the provider returned; the renderer gets display
+      // messages. One in, one out, so `startIndex`/`baseCount` still address
+      // the client's copy. Measured after normalizing: that is what is sent.
+      let message = normalizeOpenCodeDisplayEntry(stored, nextIndex);
+      let bytes =
         Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
         (patch.messages.length > 0 ? 1 : 0);
+      // A row that cannot fit even in an otherwise empty response must not
+      // fence all later history forever. Keep one raw index and make the
+      // display limitation explicit; the persisted provider body stays intact.
+      if (bytes > responseAllowance - patchOverhead) {
+        const display = isRecord(message) ? message : {};
+        message = {
+          id:
+            typeof display.id === "string"
+              ? display.id.slice(0, 512)
+              : `pipeline-message-${nextIndex}`,
+          role: display.role === "user" || display.role === "system" ? display.role : "assistant",
+          content:
+            "[Transcript entry omitted from display: its normalized body exceeds the response byte limit. The complete entry remains in the persisted transcript.]",
+          ...(typeof display.createdAt === "string"
+            ? { createdAt: display.createdAt.slice(0, 64) }
+            : {}),
+        };
+        bytes =
+          Buffer.byteLength(JSON.stringify(message), "utf8") + (patch.messages.length > 0 ? 1 : 0);
+      }
       if (bytes > allowance) break;
       patch.messages.push(message);
       allowance -= bytes;

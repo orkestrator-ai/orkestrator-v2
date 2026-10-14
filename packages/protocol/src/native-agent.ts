@@ -884,6 +884,28 @@ export function nativeAsyncQuestionItemId(requestId: string): string | undefined
   }
 }
 
+/**
+ * Id prefix of an inline error row in a native-agent transcript. The renderer
+ * styles a message whose id starts with this as an error alert rather than an
+ * assistant reply, and treats it as display-only.
+ */
+export const NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX = "error-";
+
+/**
+ * Id of a durable inline error row a provider writes into its own transcript
+ * for a failed message: `error-<source>-<messageId>`. The source segment keeps
+ * provider rows apart from the renderer's own `error-` rows. Persisted and
+ * rendered ids depend on this shape, so it must not change.
+ */
+export function providerInlineErrorMessageId(source: string, messageId: string): string {
+  return `${NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX}${source}-${messageId}`;
+}
+
+/** Whether a transcript row is an inline error row (see the prefix above). */
+export function isNativeInlineErrorMessageId(id: unknown): id is string {
+  return typeof id === "string" && id.startsWith(NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX);
+}
+
 export interface NativeAgentAsyncQuestionResponse {
   itemId: string;
   requestId: string;
@@ -1432,6 +1454,8 @@ export interface NativeAgentResumeEntry {
 
 export interface NativeAgentForkOutcome {
   sessionId: string;
+  /** Source composer selection to persist when adopting the new session. */
+  controls?: NativeAgentControlUpdate;
   title?: string;
   /** Provider-selected editable prompt when a fork begins before a user entry. */
   draft?: string;

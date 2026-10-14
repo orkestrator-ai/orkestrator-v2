@@ -84,14 +84,6 @@ function scopedDraftKey(provider: string, sessionId: string, requestId: string):
   return `${provider}:${encodeURIComponent(sessionId)}:${encodeURIComponent(requestId)}`;
 }
 
-export const claudeQuestionDraftKey = (sessionId: string, requestId: string) =>
-  scopedDraftKey("claude-question", sessionId, requestId);
-export const claudePlanApprovalDraftKey = (sessionId: string, requestId: string) =>
-  scopedDraftKey("claude-plan-approval", sessionId, requestId);
-export const openCodeQuestionDraftKey = (sessionId: string, requestId: string) =>
-  scopedDraftKey("opencode-question", sessionId, requestId);
-export const codexInteractionDraftKey = (sessionKey: string, interactionId: string) =>
-  scopedDraftKey("codex-interaction", sessionKey, interactionId);
 export const nativeAgentInteractionDraftKey = (sessionId: string, interactionId: string) =>
   scopedDraftKey("native-agent-interaction", sessionId, interactionId);
 export const nativeAsyncQuestionDraftKey = (sessionScope: string, itemId: string) =>

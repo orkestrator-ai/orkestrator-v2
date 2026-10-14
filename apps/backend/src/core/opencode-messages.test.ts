@@ -248,3 +248,51 @@ describe("normalizeOpenCodeInteractiveMessage tool durations", () => {
     ).toBe(60_000);
   });
 });
+
+describe("normalizeOpenCodeInteractiveMessage reasoning and timestamps", () => {
+  function reasoning(text: string, time?: Record<string, unknown>) {
+    return firstTool(
+      normalizeOpenCodeInteractiveMessage(
+        message([{ id: "r1", type: "reasoning", text, ...(time ? { time } : {}) }]),
+        0,
+      ),
+    );
+  }
+
+  test("removes only OpenCode's balanced outer bold pair from reasoning", () => {
+    expect(reasoning("**Planning next changes**")?.content).toBe("Planning next changes");
+    expect(reasoning(" \n**Planning next changes** \n")?.content).toBe(
+      " \nPlanning next changes \n",
+    );
+    for (const content of [
+      "Use **care** when editing",
+      "Planning ends with **care**",
+      "**Planning** then inspect",
+      "**Planning**\n- inspect files",
+      "**Planning** then **care**",
+      "Planning next**",
+    ]) {
+      expect(reasoning(content)?.content).toBe(content);
+    }
+  });
+
+  test("drops an unmatched opening marker only while the reasoning still streams", () => {
+    expect(reasoning("**Planning next", { start: 1 })?.content).toBe("Planning next");
+    expect(reasoning("**Planning next", { start: 1, end: 2 })?.content).toBe("**Planning next");
+    expect(reasoning("**Planning next")?.content).toBe("**Planning next");
+  });
+
+  test("drops reasoning that is empty once the markers are gone", () => {
+    for (const content of ["****", "  **  ", " \n\t "]) expect(reasoning(content)).toBeUndefined();
+  });
+
+  test("never throws for a message clock outside Date's range", () => {
+    for (const created of [1e18, -1e18, Number.NaN, "not a date"]) {
+      const normalized = normalizeOpenCodeInteractiveMessage(
+        { info: { id: "m1", role: "assistant", time: { created } }, parts: [] },
+        0,
+      );
+      expect(normalized?.createdAt).toBe("1970-01-01T00:00:00.000Z");
+    }
+  });
+});

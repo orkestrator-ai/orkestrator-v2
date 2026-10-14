@@ -10,10 +10,7 @@ import {
 } from "@/lib/prompt-queue-persistence";
 import { retryAgentPromptQueueDispatch } from "@/lib/prompt-queue-sources";
 import { invoke } from "@/lib/native/backend";
-import { useClaudeStore } from "@/stores/claudeStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePromptQueueDispatchRecovery } from "./usePromptQueueDispatchRecovery";
 
 /**
@@ -24,8 +21,6 @@ import { usePromptQueueDispatchRecovery } from "./usePromptQueueDispatchRecovery
  */
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
-
-const stores = [useClaudeStore, useCodexStore, useOpenCodeStore, useClaudeTmuxStore];
 
 let renderCount = 0;
 let revision = 0;
@@ -93,11 +88,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetPromptQueueRevisions();
-  for (const store of stores) {
-    (store as unknown as { setState: (partial: unknown) => void }).setState({
-      messageQueue: new Map(),
-    });
-  }
+  useClaudeTmuxStore.setState({ messageQueue: new Map() });
 });
 
 describe("usePromptQueueDispatchRecovery", () => {
@@ -149,22 +140,22 @@ describe("usePromptQueueDispatchRecovery", () => {
   });
 
   test("retry clears the latch through the matching agent source", async () => {
-    render(<Probe agent="codex" sessionKey="env-abc123:tab-1" />);
+    render(<Probe agent="claude-tmux" sessionKey="env:abc123:tab:tab-1" />);
 
     await act(async () => {
       await latest?.retry();
     });
 
     expect(invokeMock).toHaveBeenCalledWith("retry_prompt_queue_dispatch", {
-      queueKey: promptQueueKey("codex", "env-abc123:tab-1"),
+      queueKey: promptQueueKey("claude-tmux", "env:abc123:tab:tab-1"),
     });
   });
 
   test("retry stays stable per queue and does not touch another agent", async () => {
-    render(<Probe agent="opencode" sessionKey="env-abc123:tab-9" />);
+    render(<Probe agent="claude-tmux" sessionKey="env:abc123:tab:tab-9" />);
     const retry = latest?.retry;
 
-    await publish("opencode", "env-abc123:tab-9", error("OpenCode refused."));
+    await publish("claude-tmux", "env:abc123:tab:tab-9", error("Claude refused."));
     expect(latest?.retry).toBe(retry);
 
     await act(async () => {
@@ -175,7 +166,7 @@ describe("usePromptQueueDispatchRecovery", () => {
       [
         "retry_prompt_queue_dispatch",
         {
-          queueKey: promptQueueKey("opencode", "env-abc123:tab-9"),
+          queueKey: promptQueueKey("claude-tmux", "env:abc123:tab:tab-9"),
         },
       ],
     ]);

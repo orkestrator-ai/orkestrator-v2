@@ -536,10 +536,10 @@ describe("reviewer history pages", () => {
     });
   });
 
-  test("OpenCode envelopes page by their info id", async () => {
+  test("OpenCode envelopes page by their info id and ship as display messages", async () => {
     const messages = Array.from({ length: 600 }, (_, i) => ({
-      info: { id: `msg_${i}`, role: "assistant" },
-      parts: [],
+      info: { id: `msg_${i}`, role: "assistant", time: { created: 1_800_000_000_000 + i } },
+      parts: [{ id: `part_${i}`, type: "text", text: `row ${i}` }],
     }));
     const provider = {
       agent: "opencode",
@@ -549,14 +549,70 @@ describe("reviewer history pages", () => {
     } as unknown as BuildPipelineProvider;
     const read = await readReviewerTranscript(provider, "ses", undefined, { key });
     if (read.kind !== "snapshot" || !read.historyCursor) throw new Error("expected a cursor");
+    // The renderer has no OpenCode normalizer: the raw envelope never leaves.
+    expect(read.messages[0]).toEqual({
+      id: "msg_100",
+      role: "assistant",
+      content: "row 100",
+      parts: [{ type: "text", content: "row 100", sourcePartId: "part_100" }],
+      createdAt: new Date(1_800_000_000_100).toISOString(),
+    });
+    expect(read.bytes).toBe(bytes(read.messages));
+    const owner = { sessionKey: key, providerSessionId: "ses" };
+    const page = await readReviewerHistoryPage(provider, owner, read.historyCursor, { limit: 40 });
+    if (page.kind !== "page") throw new Error("expected a page");
+    expect(page.messages).toHaveLength(40);
+    expect(page.messages[0]).toMatchObject({ id: "msg_60", content: "row 60" });
+    expect(page.messages.every((message) => !("info" in (message as object)))).toBe(true);
+    expect(page.bytes).toBe(bytes(page.messages));
+    // The page's cursor still names a raw row, so the next page continues
+    // exactly where this one began.
+    if (!page.nextCursor) throw new Error("expected a cursor");
+    const next = await readReviewerHistoryPage(provider, owner, page.nextCursor, { limit: 100 });
+    if (next.kind !== "page") throw new Error("expected a page");
+    expect(next.messages).toHaveLength(60);
+    expect(next.messages[0]).toMatchObject({ id: "msg_0" });
+    expect(next.messages.at(-1)).toMatchObject({ id: "msg_59" });
+    expect(next.complete).toBe(true);
+  });
+
+  test("the compatibility tail normalizes OpenCode rows and keeps its cursor on the raw row", async () => {
+    // An id-less envelope gets a display id; the cursor must still name a row
+    // the next page's raw window search can find, or none at all.
+    const messages = [
+      ...Array.from({ length: 499 }, (_, i) => ({
+        info: { id: `msg_${i}`, role: "assistant" },
+        parts: [{ type: "text", text: `row ${i}` }],
+      })),
+      {
+        info: { id: "failed", role: "assistant", error: { name: "UnknownError", data: {} } },
+        parts: [],
+      },
+      { id: "flat", role: "assistant", content: "bridge row" },
+    ];
+    const provider = {
+      agent: "opencode",
+      async messages(_id: string, options?: { limit?: number }) {
+        return options?.limit ? messages.slice(-options.limit) : messages;
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(provider, "ses", undefined, { key });
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(read.fallback).toBe(true);
+    expect(read.messages).toHaveLength(500);
+    expect(read.messages.at(-2)).toMatchObject({ id: "error-opencode-failed", role: "assistant" });
+    expect(read.messages.at(-1)).toBe(messages.at(-1));
+    expect(read.messages[0]).toMatchObject({ id: "msg_1", content: "row 1" });
+    if (!read.historyCursor) throw new Error("expected a cursor");
     const page = await readReviewerHistoryPage(
       provider,
       { sessionKey: key, providerSessionId: "ses" },
       read.historyCursor,
     );
-    if (page.kind !== "page") throw new Error("expected a page");
-    expect((page.messages[0] as { info: { id: string } }).info.id).toBe("msg_0");
-    expect(page.complete).toBe(true);
+    expect(page).toMatchObject({ kind: "page", complete: true });
+    expect(page.kind === "page" ? page.messages : []).toEqual([
+      expect.objectContaining({ id: "msg_0", content: "row 0" }),
+    ]);
   });
 
   test("the joined fallback reads no more than a bounded-tail provider accepts", async () => {
@@ -590,7 +646,7 @@ describe("reviewer history pages", () => {
       cursor = page.nextCursor;
     }
     if (page?.kind !== "page") throw new Error("expected a page");
-    expect((page.messages[0] as { info: { id: string } }).info.id).toBe("msg_0");
+    expect(page.messages[0]).toMatchObject({ id: "msg_0" });
     // A full provider window may have hidden older history: not complete.
     expect(page).toMatchObject({ complete: false, truncated: true });
     expect(page.nextCursor).toBeUndefined();

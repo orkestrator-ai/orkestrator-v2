@@ -1,4 +1,4 @@
-import type { ClaudeBackgroundTask, ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeBackgroundTask, ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
@@ -720,14 +720,6 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
     merged.push(message);
   }
   return merged;
-}
-
-export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
-  return normalizeNativeMessage(message);
-}
-
-export function normalizeCodexNativeMessage(message: NativeMessage): NativeMessage {
-  return normalizeNativeMessage(message);
 }
 
 /** Normalize ACP messages for Cursor and Grok below the shared tab boundary. */

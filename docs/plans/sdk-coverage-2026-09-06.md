@@ -469,7 +469,7 @@ declared dependencies but never imported.
 | 15 | Codex | Handle the eight unhandled notifications (handle or ignore) |
 | 16 | OpenCode | Render `SubtaskPart`, `CompactionPart`, `RetryPart`; keep `mime`/`source` on `FilePart` |
 | 17 | OpenCode | Consume `session.status`, `session.idle`, `todo.updated`, `session.diff`, `session.error` SSE events to cut polling latency |
-| 18 | OpenCode | Remove or wire the dead `openCodeStore` permission path and `OpenCodeQuestionCard`; update AGENTS.md |
+| 18 | OpenCode | ~~Remove or wire the dead `openCodeStore` permission path and `OpenCodeQuestionCard`; update AGENTS.md~~ done 2026-10-14: the renderer OpenCode store and client were removed |
 | 19 | Cursor | Read the `system` message from `Run.stream()` for the real toolset; render `user-message-appended` |
 | 20 | Cursor | ~~Pass `mcpServers`~~ done 2026-09-11. Remaining: decide whether host runs load `project` settings (still fail-closed) |
 | 21 | Grok | Carry `availableCommands` names through to the slash-command picker |

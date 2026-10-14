@@ -657,7 +657,7 @@ describe("NativeAgentService", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await storage.setOpenCodeIncompleteTurnNotice(key, session.providerSessionId, {
+        await storage.setIncompleteTurnNotice(key, session.providerSessionId, {
           kind: "failed",
           assistantMessageId: "assistant-1",
           updatedAt: "2026-09-10T00:00:00.000Z",
@@ -1798,6 +1798,121 @@ describe("NativeAgentService", () => {
           return session?.inferredComposerSelection?.modelId === "opencode-go/deepseek-v4-flash";
         });
         expect((await storage.getNativeAgentSession(key))?.controls?.modelId).toBeUndefined();
+      },
+    );
+  });
+
+  test.each([undefined, "opencode/nemotron-ultra-free"])(
+    "weak progressive OpenCode state (%s) does not pin a fallback before last-assistant evidence or fork adoption",
+    async (sessionModelId) => {
+      const composer = {
+        models: [
+          { platform: "opencode" as const, id: "opencode/nemotron-ultra-free", label: "Default" },
+        ],
+        selectedModelId: "opencode/nemotron-ultra-free",
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        modes: [],
+      };
+      const stub = createProviderStub("opencode", {
+        sessionStateSnapshot: async () => ({ status: "idle", composer, sessionModelId }),
+        interactiveSnapshot: async () => ({
+          status: "idle",
+          composer,
+          messages: [
+            {
+              id: "last-assistant",
+              role: "assistant",
+              modelId: "opencode-go/deepseek-v4-flash",
+              reasoningId: "high",
+              content: "done",
+              parts: [],
+              createdAt: "2026-09-12T10:00:00.000Z",
+            },
+          ],
+        }),
+      });
+      stub.provider.forkSession = async () => ({ sessionId: "fork-session", title: "Fork" });
+      await withService(
+        { prefix: "orkestrator-opencode-progressive-fork-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "opencode" as const,
+            logicalSessionKey: "source",
+          };
+          await service.ensureSession(identity);
+          const key = nativeAgentSessionStorageKey("env-1", "opencode", "source");
+          const weakState = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+          expect(weakState.status).toBe("snapshot");
+          expect(
+            (await storage.getNativeAgentSession(key))?.inferredComposerSelection,
+          ).toBeUndefined();
+          const source = await service.getProjection(identity);
+          expect(source?.composer?.selectedModelId).toBe("opencode-go/deepseek-v4-flash");
+          await waitForCondition(
+            async () =>
+              (await storage.getNativeAgentSession(key))?.inferredComposerSelection?.modelId ===
+              "opencode-go/deepseek-v4-flash",
+          );
+          const fork = await service.forkProjectionSession(identity);
+          expect(fork.controls).toMatchObject({
+            modelId: "opencode-go/deepseek-v4-flash",
+            reasoningId: "high",
+          });
+          const forkIdentity = { ...identity, logicalSessionKey: "fork" };
+          await service.adoptSession({
+            ...forkIdentity,
+            providerSessionId: fork.sessionId,
+            controls: fork.controls,
+          });
+          const update = await service.getSessionStateUpdate({ ...forkIdentity, viewVersion: 1 });
+          expect(update.status === "snapshot" && update.value.composer).toMatchObject({
+            selectedModelId: "opencode-go/deepseek-v4-flash",
+            selectedReasoningId: "high",
+          });
+          expect(
+            (
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "opencode", "fork"),
+              )
+            )?.controls,
+          ).toMatchObject(fork.controls!);
+        },
+      );
+    },
+  );
+
+  test("progressive OpenCode state persists compact last-assistant evidence", async () => {
+    const stub = createProviderStub("opencode", {
+      sessionStateSnapshot: async () => ({
+        status: "idle",
+        lastAssistantModelId: "opencode-go/deepseek-v4-flash",
+        lastAssistantReasoningId: "high",
+        sessionModelId: "opencode/nemotron-ultra-free",
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-opencode-state-evidence-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "state-evidence",
+        };
+        await service.ensureSession(identity);
+        const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(update.status === "snapshot" && update.value.composer?.selectedModelId).toBe(
+          "opencode-go/deepseek-v4-flash",
+        );
+        await waitForCondition(
+          async () =>
+            (
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "opencode", "state-evidence"),
+              )
+            )?.inferredComposerSelection?.modelId === "opencode-go/deepseek-v4-flash",
+        );
       },
     );
   });

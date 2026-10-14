@@ -320,17 +320,6 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function epochSecondsToIso(value: unknown): string | undefined {
-  const seconds = finiteNumber(value);
-  if (seconds === undefined) return undefined;
-  const date = new Date(seconds * 1_000);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
-}
-
 function formatNoticeTime(value: string | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -461,32 +450,6 @@ function RuntimeNoticeCard({
 }
 
 /**
- * Read the authoritative share state for an OpenCode session.
- *
- * The store's session record carries no share field, so the server's own
- * session document is the only snapshot that survives a tab switch or an app
- * restart. Probed structurally rather than against the SDK types so a partial
- * client (older server, test double) reports "not shared" instead of throwing.
- *
- * Follow-up for the lib owner: this belongs in `opencode-client.ts` as a typed
- * `getOpenCodeShareUrl(client, sessionId)`.
- */
-export async function readOpenCodeShareUrl(
-  client: unknown,
-  sessionId: string,
-): Promise<string | null> {
-  const sessions = record(client).session;
-  const get = record(sessions).get;
-  if (typeof get !== "function") return null;
-  const response = await (get as (parameters: { sessionID: string }) => Promise<unknown>).call(
-    sessions,
-    { sessionID: sessionId },
-  );
-  const url = record(record(record(response).data).share).url;
-  return typeof url === "string" && url.length > 0 ? url : null;
-}
-
-/**
  * Turn the opaque rewind dry-run payload into something a person can act on.
  *
  * `rewindClaudeFiles` returns `unknown` — it is whatever the installed Agent
@@ -537,104 +500,6 @@ export function describeRewindTarget(text: string | undefined): string {
   const normalized = (text ?? "").replace(/\s+/g, " ").trim();
   if (!normalized) return "your most recent message";
   return normalized.length > 80 ? `“${normalized.slice(0, 80)}…”` : `“${normalized}”`;
-}
-
-export function codexLimitsFromHealth(health: unknown): {
-  rateLimits: NonNullable<ContextUsageSnapshot["rateLimits"]>;
-  credits?: NonNullable<ContextUsageSnapshot["credits"]>;
-} {
-  const response = record(record(health).rateLimits);
-  const rateLimits: NonNullable<ContextUsageSnapshot["rateLimits"]> = [];
-  const byLimitId = record(response.rateLimitsByLimitId);
-  const keyedSnapshots = Object.entries(byLimitId).slice(0, 16);
-  const snapshots =
-    keyedSnapshots.length > 0
-      ? keyedSnapshots.map(([limitId, value]) => ({ limitId, snapshot: record(value) }))
-      : [{ limitId: undefined, snapshot: record(response.rateLimits) }];
-  let credits: NonNullable<ContextUsageSnapshot["credits"]> | undefined;
-
-  for (const { limitId, snapshot } of snapshots) {
-    for (const [key, fallback] of [
-      ["primary", "Primary"],
-      ["secondary", "Secondary"],
-    ] as const) {
-      const window = record(snapshot[key]);
-      if (Object.keys(window).length === 0) continue;
-      const rawUsedPercent = finiteNumber(window.usedPercent);
-      const usedPercent =
-        rawUsedPercent === undefined ? undefined : Math.max(0, Math.min(100, rawUsedPercent));
-      const resetsAt = epochSecondsToIso(window.resetsAt);
-      const rawWindowMinutes = finiteNumber(window.windowDurationMins);
-      const windowMinutes =
-        rawWindowMinutes !== undefined && rawWindowMinutes >= 0 ? rawWindowMinutes : undefined;
-      if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
-        continue;
-      }
-      rateLimits.push({
-        label: codexRateLimitLabel({
-          snapshot,
-          limitId,
-          slot: key,
-          fallback,
-          windowMinutes,
-          multiBucket: keyedSnapshots.length > 0,
-        }),
-        ...(usedPercent !== undefined ? { usedPercent } : {}),
-        ...(resetsAt !== undefined ? { resetsAt } : {}),
-        ...(windowMinutes !== undefined ? { windowMinutes } : {}),
-      });
-    }
-    credits ??= creditSnapshot(snapshot.credits);
-  }
-  credits ??= creditSnapshot(record(response.rateLimits).credits);
-  return {
-    rateLimits,
-    ...(credits ? { credits } : {}),
-  };
-}
-
-function creditSnapshot(value: unknown): NonNullable<ContextUsageSnapshot["credits"]> | undefined {
-  const raw = record(value);
-  const credits = {
-    ...(typeof raw.balance === "string" ? { balance: raw.balance } : {}),
-    ...(typeof raw.hasCredits === "boolean" ? { hasCredits: raw.hasCredits } : {}),
-    ...(typeof raw.unlimited === "boolean" ? { unlimited: raw.unlimited } : {}),
-  };
-  return Object.keys(credits).length > 0 ? credits : undefined;
-}
-
-function codexRateLimitLabel({
-  snapshot,
-  limitId,
-  slot,
-  fallback,
-  windowMinutes,
-  multiBucket,
-}: {
-  snapshot: Record<string, unknown>;
-  limitId: string | undefined;
-  slot: "primary" | "secondary";
-  fallback: string;
-  windowMinutes: number | undefined;
-  multiBucket: boolean;
-}): string {
-  const duration =
-    windowMinutes === WEEK_MINUTES
-      ? "Weekly limit"
-      : windowMinutes === 24 * 60
-        ? "Daily limit"
-        : windowMinutes && windowMinutes % 60 === 0
-          ? `${windowMinutes / 60}-hour limit`
-          : undefined;
-  const bucket =
-    typeof snapshot.limitName === "string" && snapshot.limitName.trim().length > 0
-      ? snapshot.limitName.trim()
-      : typeof snapshot.normalModelSlug === "string" && snapshot.normalModelSlug.trim().length > 0
-        ? snapshot.normalModelSlug.trim()
-        : limitId;
-  if (multiBucket && bucket) return `${bucket} · ${duration ?? fallback}`;
-  if (slot === "primary" && bucket) return bucket;
-  return duration ?? (slot === "primary" ? "Usage limit" : "Secondary limit");
 }
 
 /**

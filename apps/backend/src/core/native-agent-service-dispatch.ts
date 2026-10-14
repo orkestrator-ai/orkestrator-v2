@@ -44,7 +44,7 @@ type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
-type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
+type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type PersistedNativeAgentPendingSteer = shared.PersistedNativeAgentPendingSteer;
@@ -64,7 +64,6 @@ type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
-type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
@@ -92,7 +91,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   StorageService,
@@ -111,7 +110,6 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentActivityTransition,
   NativeAgentServiceOptions,
   AgentInteractionObservation,
-  OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
 
@@ -132,25 +130,24 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
     input = await this.trustedSessionInput(input);
-    let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
+    // A manual prompt to a session with automatic turn recovery claims it
+    // first, so a stale automatic continuation cannot be sent alongside.
+    let manualClaimSession: PersistedNativeAgentSession | null = null;
     try {
-      const isManualOpenCode =
-        input.agent === "opencode" &&
-        input.origin !== "build-pipeline" &&
-        input.origin !== "looped-review";
-      if (isManualOpenCode) {
-        manualOpenCodeSession = await this.ensureSession(input);
-        await this.claimOpenCodeManualPrompt({
+      if (this.turnRecovery.appliesTo(input)) {
+        manualClaimSession = await this.ensureSession(input);
+        await this.turnRecovery.claimManualPrompt({
           environmentId: input.environmentId,
+          agent: input.agent,
           logicalSessionKey: input.logicalSessionKey,
-          providerSessionId: manualOpenCodeSession.providerSessionId,
+          providerSessionId: manualClaimSession.providerSessionId,
           requestId: input.requestId,
         });
       }
       return await this.attemptDispatch(input, true, preserveExistingPending);
     } catch (error) {
       // Everything before the first dispatch attempt: session creation, the
-      // OpenCode manual claim. A normal send has no earlier record to preserve;
+      // manual-prompt claim. A normal send has no earlier record to preserve;
       // an explicit recovery retry does, and must leave it parked on failure.
       if (!preserveExistingPending) {
         await this.storage
@@ -165,11 +162,12 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
       };
     } finally {
-      if (manualOpenCodeSession) {
-        this.releaseOpenCodeManualPrompt({
+      if (manualClaimSession) {
+        this.turnRecovery.releaseManualPrompt({
           environmentId: input.environmentId,
+          agent: input.agent,
           logicalSessionKey: input.logicalSessionKey,
-          providerSessionId: manualOpenCodeSession.providerSessionId,
+          providerSessionId: manualClaimSession.providerSessionId,
           requestId: input.requestId,
         });
       }
@@ -725,7 +723,21 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!resolved.provider.forkSession) {
       throw new Error(`${input.agent} does not support session forks`);
     }
-    return resolved.provider.forkSession(resolved.session.providerSessionId, input.messageId);
+    const projection = await this.getProjection(input);
+    const composer = projection?.composer;
+    const outcome = await resolved.provider.forkSession(
+      resolved.session.providerSessionId,
+      input.messageId,
+    );
+    return {
+      ...outcome,
+      controls: {
+        ...resolved.session.controls,
+        ...(composer?.selectedModelId ? { modelId: composer.selectedModelId } : {}),
+        ...(composer?.selectedReasoningId ? { reasoningId: composer.selectedReasoningId } : {}),
+        ...outcome.controls,
+      },
+    };
   }
 
   async performProjectionAction(

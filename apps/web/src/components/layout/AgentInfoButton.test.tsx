@@ -1,8 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -10,10 +7,12 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import type { NativeMessage } from "@/lib/chat/native-message-types";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   nativeAgentCapabilities,
   type NativeAgentAccountUsageWindow,
+  type NativeAgentControlUpdate,
+  type NativeAgentForkOutcome,
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -28,154 +27,36 @@ import {
   mockToastSuccess,
   mockToastWarning,
 } from "../../../../../tests/mocks/sonner";
-
-/*
- * Only the network-facing helpers are replaced; everything else in each client
- * module stays real (snapshot-and-restore, per the testing guide) so the suites that
- * import those modules for real are unaffected once this file finishes.
- */
-import * as realClaudeClient from "@/lib/claude-client";
-import * as realOpenCodeClient from "@/lib/opencode-client";
-import * as realCodexClient from "@/lib/codex-client";
 import { createSessionKey } from "@/lib/utils";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 
-const realClaudeClientSnapshot = { ...realClaudeClient };
-const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
-const realCodexClientSnapshot = { ...realCodexClient };
-
-const mockForkClaudeSession = mock<
-  (_client: unknown, _sessionId: string) => Promise<{ sessionId: string; title?: string }>
->(async () => ({ sessionId: "claude-fork", title: "Claude fork title" }));
-const mockCompactClaudeSession = mock(async () => true);
-const mockGetClaudeSession = mock<
-  (
-    _client: unknown,
-    _sessionId: string,
-  ) => Promise<{
-    id: string;
-    status: "idle" | "running" | "error";
-    createdAt: string;
-    lastActivity: string;
-  } | null>
->(async () => ({
-  id: "claude-session-1",
-  status: "idle" as const,
-  createdAt: "2026-07-27T10:00:00.000Z",
-  lastActivity: "2026-07-27T10:01:00.000Z",
+/*
+ * No provider has a renderer-side client: every control on a native tab goes
+ * through the backend's native-agent session actions and projection.
+ */
+const mockNativeAction = mock<
+  (action: { kind: string; messageId?: string; dryRun?: boolean; modelId?: string }) => Promise<{
+    outcome: "applied";
+    shareUrl?: string;
+    preview?: unknown;
+  }>
+>(async () => ({ outcome: "applied" }));
+const mockNativeFork = mock<() => Promise<NativeAgentForkOutcome>>(async () => ({
+  sessionId: "opencode-fork",
+  title: "OpenCode fork title",
 }));
-const mockGetClaudeSessionMessages = mock(async () => [
-  {
-    id: "m1",
-    role: "user" as const,
-    content: "continue this",
-    parts: [{ type: "text" as const, content: "continue this" }],
-    createdAt: "2026-07-27T10:00:00.000Z",
-  },
-]);
-const mockRewindClaudeFiles = mock<
-  (_client: unknown, _sessionId: string, _messageId: string, _dryRun?: boolean) => Promise<unknown>
->(async () => ({ files: [] }));
-const mockStopClaudeBackgroundTask = mock(async () => true);
-
-const mockCompactOpenCodeSession = mock(async () => undefined);
-const mockForkOpenCodeSession = mock<
-  (_client: unknown, _sessionId: string) => Promise<{ id: string; title?: string }>
->(async () => ({ id: "opencode-fork", title: "OpenCode fork title" }));
-const mockGetOpenCodeSessionMessages = mock<
-  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
->(async () => [
-  {
-    id: "opencode-message-1",
-    role: "user" as const,
-    content: "continue from OpenCode",
-    parts: [{ type: "text" as const, content: "continue from OpenCode" }],
-    createdAt: "2026-07-27T10:00:00.000Z",
-  },
-]);
-const mockGetOpenCodeSessionStatus = mock<
-  (
-    _client: unknown,
-    _sessionId: string,
-    _options?: { throwOnError?: boolean },
-  ) => Promise<"idle" | "busy" | "retry" | null>
->(async () => "idle");
-const mockRevertOpenCodeSession = mock(async () => undefined);
-const mockUnrevertOpenCodeSession = mock(async () => undefined);
-const mockShareOpenCodeSession = mock<
-  (_client: unknown, _sessionId: string) => Promise<string | undefined>
->(async () => "https://share.opencode.test/abc");
-const mockUnshareOpenCodeSession = mock(async () => undefined);
-
-const mockCompactCodexSession = mock(async () => true);
-// `forkCodexSession` throws a `CodexForkError` carrying the bridge's status and
-// message rather than collapsing every refusal to null.
-const mockForkCodexSession = mock<
-  (
-    _client: unknown,
-    _sessionId: string,
-    _messageId?: string,
-  ) => Promise<{ sessionId: string; title?: string }>
->(async () => ({ sessionId: "codex-fork", title: "Codex fork title" }));
-const mockGetCodexSessionMessages = mock<
-  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
->(async () => [
-  {
-    id: "codex-message-1",
-    role: "user" as const,
-    content: "continue from Codex",
-    parts: [{ type: "text" as const, content: "continue from Codex" }],
-    createdAt: "2026-07-27T10:00:00.000Z",
-  },
-]);
-const mockGetCodexSessionStatus = mock<
-  (
-    _client: unknown,
-    _sessionId: string,
-    _options?: { throwOnError?: boolean },
-  ) => Promise<{
-    status: "idle" | "running" | "error";
-    title?: string;
-    messageRevision?: number;
-  } | null>
->(async () => ({ status: "idle" }));
-const mockGetCodexRuntimeHealth = mock<(_client: unknown, _sessionId: string) => Promise<unknown>>(
-  async () => null,
-);
-const mockStartCodexNativeReview = mock(async () => true);
-
-mock.module("@/lib/claude-client", () => ({
-  ...realClaudeClientSnapshot,
-  compactClaudeSession: mockCompactClaudeSession,
-  forkClaudeSession: mockForkClaudeSession,
-  getSession: mockGetClaudeSession,
-  getSessionMessages: mockGetClaudeSessionMessages,
-  rewindClaudeFiles: mockRewindClaudeFiles,
-  stopClaudeBackgroundTask: mockStopClaudeBackgroundTask,
-}));
-
-mock.module("@/lib/opencode-client", () => ({
-  ...realOpenCodeClientSnapshot,
-  compactOpenCodeSession: mockCompactOpenCodeSession,
-  forkOpenCodeSession: mockForkOpenCodeSession,
-  getSessionMessages: mockGetOpenCodeSessionMessages,
-  getSessionStatus: mockGetOpenCodeSessionStatus,
-  revertOpenCodeSession: mockRevertOpenCodeSession,
-  shareOpenCodeSession: mockShareOpenCodeSession,
-  unrevertOpenCodeSession: mockUnrevertOpenCodeSession,
-  unshareOpenCodeSession: mockUnshareOpenCodeSession,
-}));
-
-mock.module("@/lib/codex-client", () => ({
-  ...realCodexClientSnapshot,
-  compactCodexSession: mockCompactCodexSession,
-  forkCodexSession: mockForkCodexSession,
-  getSessionMessages: mockGetCodexSessionMessages,
-  getSessionStatus: mockGetCodexSessionStatus,
-  getCodexRuntimeHealth: mockGetCodexRuntimeHealth,
-  startCodexNativeReview: mockStartCodexNativeReview,
-}));
+const mockNativeControls = mock<
+  (update: NativeAgentControlUpdate) => Promise<NativeAgentSessionProjection | null>
+>(async () => null);
+const mockStopBackgroundTask = mock<(taskId: string) => Promise<void>>(async () => undefined);
+/** By default the backend answers whatever projection the store holds. */
+const readStoredProjection = async () =>
+  useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY) ?? null;
+const mockNativeProjectionRead =
+  mock<(args?: { refreshUsage?: boolean }) => Promise<NativeAgentSessionProjection | null>>(
+    readStoredProjection,
+  );
 
 const { SYSTEM_USAGE_STALE_AFTER_MS } = await import("@/hooks/useSystemUsage");
 const {
@@ -189,25 +70,146 @@ const {
   windowDurationMinutes,
 } = await import("./AgentInfoButton");
 
-afterAll(() => {
-  mock.module("@/lib/claude-client", () => realClaudeClientSnapshot);
-  mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
-  mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
-});
-
 const ENVIRONMENT_ID = "env-1";
 const TAB_ID = "tab-1";
-const CLAUDE_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
-const CODEX_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
-const OPENCODE_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
-const CLAUDE_CLIENT = { baseUrl: "http://127.0.0.1:1111" } as never;
-const CODEX_CLIENT = { baseUrl: "http://127.0.0.1:2222" } as never;
+/** Every provider's tab in this suite shares one environment and tab id. */
+const SESSION_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+const CLAUDE_KEY = SESSION_KEY;
+const CODEX_KEY = SESSION_KEY;
+const OPENCODE_KEY = SESSION_KEY;
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
 
-let openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-  data: { id: "opencode-session-1" },
-}));
-let openCodeClient: unknown;
+function nativeProjection(
+  platform: AgentPlatform,
+  sessionId: string,
+  overrides: Partial<NativeAgentSessionProjection> = {},
+): NativeAgentSessionProjection {
+  return {
+    platform,
+    environmentId: ENVIRONMENT_ID,
+    sessionId,
+    connection: "connected",
+    turn: { phase: "idle" },
+    messages: [
+      {
+        id: "m1",
+        role: "user",
+        content: "hi",
+        parts: [{ type: "text", content: "hi" }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      },
+    ],
+    interactions: [],
+    composerControls: [],
+    capabilities: nativeAgentCapabilities(platform),
+    revision: 1,
+    generation: `${platform}-generation`,
+    ...overrides,
+  };
+}
+
+function openCodeProjection(
+  sessionId = "opencode-session-1",
+  overrides: Partial<NativeAgentSessionProjection> = {},
+): NativeAgentSessionProjection {
+  return nativeProjection("opencode", sessionId, overrides);
+}
+
+/** Routes the backend commands a native tab issues to this suite's mocks. */
+function routeNativeCommands() {
+  nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "perform_native_agent_session_action") {
+      return mockNativeAction((args as { action: { kind: string; messageId?: string } }).action);
+    }
+    if (command === "fork_native_agent_session") return mockNativeFork();
+    if (command === "get_native_agent_projection") {
+      return mockNativeProjectionRead(args as { refreshUsage?: boolean } | undefined);
+    }
+    if (command === "update_native_agent_controls") {
+      return mockNativeControls((args as { update: NativeAgentControlUpdate }).update);
+    }
+    if (command === "stop_native_agent_background_task") {
+      return mockStopBackgroundTask((args as { taskId: string }).taskId);
+    }
+    if (command === "get_cursor_account_usage") return new Promise(() => undefined);
+    return undefined;
+  });
+}
+
+/**
+ * Publishes a provider's projection and routes the backend commands its tab
+ * issues. Projection reads answer whatever the store currently holds, so a test
+ * that swaps the session sees the panel's refresh agree with it.
+ */
+function seedNativeProjection(
+  platform: AgentPlatform,
+  sessionId: string,
+  overrides: Partial<NativeAgentSessionProjection> = {},
+) {
+  useNativeAgentProjectionStore
+    .getState()
+    .setProjection(SESSION_KEY, nativeProjection(platform, sessionId, overrides));
+  routeNativeCommands();
+}
+
+function seedOpenCodeProjection(
+  sessionId = "opencode-session-1",
+  overrides: Partial<NativeAgentSessionProjection> = {},
+) {
+  seedNativeProjection("opencode", sessionId, overrides);
+}
+
+function seedClaudeProjection(overrides: Partial<NativeAgentSessionProjection> = {}) {
+  seedNativeProjection("claude", "claude-session-1", overrides);
+}
+
+function seedCodexProjection(overrides: Partial<NativeAgentSessionProjection> = {}) {
+  seedNativeProjection("codex", "codex-session-1", overrides);
+}
+
+/**
+ * The projection's usage reading for a renderer snapshot: the backend reports
+ * the window as `maximumTokens`/`percentage`, and the panel derives the rest.
+ */
+function projectionUsage(
+  snapshot: ContextUsageSnapshot,
+): NonNullable<NativeAgentSessionProjection["contextUsage"]> {
+  return {
+    ...snapshot,
+    ...(snapshot.totalTokens !== undefined ? { maximumTokens: snapshot.totalTokens } : {}),
+    ...(snapshot.percentUsed !== undefined ? { percentage: snapshot.percentUsed } : {}),
+  } as NonNullable<NativeAgentSessionProjection["contextUsage"]>;
+}
+
+/** Publish a usage snapshot on the active tab's projection. */
+function seedUsage(
+  snapshot: ContextUsageSnapshot,
+  platform: AgentPlatform = "claude",
+  overrides: Partial<NativeAgentSessionProjection> = {},
+) {
+  seedNativeProjection(platform, `${platform}-session-1`, {
+    contextUsage: projectionUsage(snapshot),
+    ...overrides,
+  });
+}
+
+function composerState(
+  overrides: Partial<NonNullable<NativeAgentSessionProjection["composer"]>> = {},
+): NonNullable<NativeAgentSessionProjection["composer"]> {
+  return {
+    models: [],
+    fastModeEnabled: false,
+    fastModeAvailable: false,
+    modes: [],
+    includeLocalSettings: false,
+    promptSuggestionsEnabled: false,
+    ...overrides,
+  };
+}
+
+function nativeActionKinds(): string[] {
+  return mockNativeAction.mock.calls.map(([action]) => action.kind);
+}
 
 function claudeTab(overrides: Partial<TabInfo> = {}): TabInfo {
   return {
@@ -353,9 +355,7 @@ function open() {
 
 /** Publish one account window list as the active Claude tab's usage snapshot. */
 function seedDailyUsage(account: NativeAgentAccountUsageWindow[]) {
-  useClaudeStore.setState({
-    contextUsage: new Map([[CLAUDE_KEY, usage({ account })]]),
-  } as never);
+  seedUsage(usage({ account }));
 }
 
 /** `count` consecutive UTC days from 2026-08-01, newest last, as the provider reports them. */
@@ -449,133 +449,34 @@ beforeEach(() => {
     },
   });
 
-  openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-    data: { id: "opencode-session-1" },
-  }));
-  openCodeClient = { session: { get: openCodeSessionGet } };
-
-  mockForkClaudeSession.mockClear();
-  mockCompactClaudeSession.mockClear();
-  mockGetClaudeSession.mockClear();
-  mockGetClaudeSessionMessages.mockClear();
-  mockRewindClaudeFiles.mockClear();
-  mockStopClaudeBackgroundTask.mockClear();
-  mockCompactOpenCodeSession.mockClear();
-  mockForkOpenCodeSession.mockClear();
-  mockGetOpenCodeSessionMessages.mockClear();
-  mockGetOpenCodeSessionStatus.mockClear();
-  mockRevertOpenCodeSession.mockClear();
-  mockUnrevertOpenCodeSession.mockClear();
-  mockShareOpenCodeSession.mockClear();
-  mockUnshareOpenCodeSession.mockClear();
-  mockCompactCodexSession.mockClear();
-  mockForkCodexSession.mockClear();
-  mockGetCodexSessionMessages.mockClear();
-  mockGetCodexSessionStatus.mockClear();
-  mockGetCodexRuntimeHealth.mockClear();
-  mockStartCodexNativeReview.mockClear();
-
-  mockForkClaudeSession.mockImplementation(async () => ({
-    sessionId: "claude-fork",
-    title: "Claude fork title",
-  }));
-  mockCompactClaudeSession.mockImplementation(async () => true);
-  mockGetClaudeSession.mockImplementation(async () => ({
-    id: "claude-session-1",
-    status: "idle",
-    createdAt: "2026-07-27T10:00:00.000Z",
-    lastActivity: "2026-07-27T10:01:00.000Z",
-  }));
-  mockGetClaudeSessionMessages.mockImplementation(async () => [
-    {
-      id: "m1",
-      role: "user",
-      content: "continue this",
-      parts: [{ type: "text", content: "continue this" }],
-      createdAt: "2026-07-27T10:00:00.000Z",
-    },
-  ]);
-  mockRewindClaudeFiles.mockImplementation(async () => ({ files: [] }));
-  mockStopClaudeBackgroundTask.mockImplementation(async () => true);
-  mockCompactOpenCodeSession.mockImplementation(async () => undefined);
-  mockForkOpenCodeSession.mockImplementation(async () => ({
-    id: "opencode-fork",
+  mockNativeAction.mockClear();
+  mockNativeFork.mockClear();
+  mockNativeControls.mockClear();
+  mockStopBackgroundTask.mockClear();
+  mockNativeProjectionRead.mockClear();
+  mockNativeProjectionRead.mockImplementation(readStoredProjection);
+  mockNativeAction.mockImplementation(async (action) =>
+    action.kind === "share"
+      ? { outcome: "applied", shareUrl: "https://share.opencode.test/abc" }
+      : { outcome: "applied" },
+  );
+  mockNativeFork.mockImplementation(async () => ({
+    sessionId: "opencode-fork",
     title: "OpenCode fork title",
   }));
-  mockGetOpenCodeSessionMessages.mockImplementation(async () => [
-    {
-      id: "opencode-message-1",
-      role: "user",
-      content: "continue from OpenCode",
-      parts: [{ type: "text", content: "continue from OpenCode" }],
-      createdAt: "2026-07-27T10:00:00.000Z",
-    },
-  ]);
-  mockGetOpenCodeSessionStatus.mockImplementation(async () => "idle");
-  mockRevertOpenCodeSession.mockImplementation(async () => undefined);
-  mockUnrevertOpenCodeSession.mockImplementation(async () => undefined);
-  mockShareOpenCodeSession.mockImplementation(async () => "https://share.opencode.test/abc");
-  mockUnshareOpenCodeSession.mockImplementation(async () => undefined);
-  mockCompactCodexSession.mockImplementation(async () => true);
-  mockForkCodexSession.mockImplementation(async () => ({
-    sessionId: "codex-fork",
-    title: "Codex fork title",
-  }));
-  mockGetCodexSessionMessages.mockImplementation(async () => [
-    {
-      id: "codex-message-1",
-      role: "user",
-      content: "continue from Codex",
-      parts: [{ type: "text", content: "continue from Codex" }],
-      createdAt: "2026-07-27T10:00:00.000Z",
-    },
-  ]);
-  mockGetCodexSessionStatus.mockImplementation(async () => ({ status: "idle" }));
-  mockGetCodexRuntimeHealth.mockImplementation(async () => null);
-  mockStartCodexNativeReview.mockImplementation(async () => true);
+  mockNativeControls.mockImplementation(async () => null);
+  mockStopBackgroundTask.mockImplementation(async () => undefined);
   resetAgentHandoffCache();
 
   seedPaneLayout();
 });
 
-/*
- * Every store map this component reads is reset, not just the two the original
- * test cleared: a dirty `clients`/`sessions`/`sessionInitData` map leaks into
- * whatever file the worker picks up next.
- */
 afterEach(() => {
   cleanup();
   // The host-meter read is shared through the read coordinator; a retained
   // sample must not leak into the next test.
   resetReadCoordinatorForTests();
   window.confirm = originalConfirm;
-  useClaudeStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    contextUsage: new Map(),
-    rateLimits: new Map(),
-    selectedModel: new Map(),
-    sessionInitData: new Map(),
-    selectedAgent: new Map(),
-    includeLocalSettings: new Map(),
-    promptSuggestionOptIn: new Map(),
-    backgroundTasks: new Map(),
-    completionBlockedByBackgroundTasks: new Map(),
-  });
-  useCodexStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    contextUsage: new Map(),
-    selectedModel: new Map(),
-  });
-  useOpenCodeStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    contextUsage: new Map(),
-    selectedModel: new Map(),
-    selectedAgent: new Map(),
-    runtimeHealth: new Map(),
-  });
   usePaneLayoutStore.setState({
     environments: new Map(),
     activeEnvironmentId: null,
@@ -801,11 +702,25 @@ describe("AgentInfoButton provider resolution", () => {
     expect(screen.getByText("No native agent")).toBeTruthy();
   });
 
-  test("labels an OpenCode session and reads its environment-scoped model", () => {
-    useOpenCodeStore.setState({
-      contextUsage: new Map([[OPENCODE_KEY, usage({ source: "opencode" })]]),
-      selectedModel: new Map([[ENVIRONMENT_ID, "anthropic/claude-sonnet"]]),
-    } as never);
+  test("labels an OpenCode session and reads its model from the projection", () => {
+    seedOpenCodeProjection("opencode-session-1", {
+      contextUsage: {
+        usedTokens: 25_000,
+        maximumTokens: 100_000,
+        percentage: 25,
+        source: "opencode",
+        estimated: false,
+      },
+      composer: {
+        models: [],
+        selectedModelId: "anthropic/claude-sonnet",
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        modes: [],
+        includeLocalSettings: false,
+        promptSuggestionsEnabled: false,
+      },
+    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
@@ -813,11 +728,10 @@ describe("AgentInfoButton provider resolution", () => {
     expect(screen.getByText("anthropic/claude-sonnet")).toBeTruthy();
   });
 
-  test("labels a Codex session and reads its session-scoped model", () => {
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-      selectedModel: new Map([[CODEX_KEY, "gpt-5.3-codex"]]),
-    } as never);
+  test("labels a Codex session and reads its projected model", () => {
+    seedUsage(usage({ source: "codex" }), "codex", {
+      composer: composerState({ selectedModelId: "gpt-5.3-codex" }),
+    });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -862,10 +776,13 @@ describe("AgentInfoButton provider resolution", () => {
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
       viewedSessionIds: new Map([["pipeline-1", "pipeline-build-session"]]),
     });
-    useCodexStore.setState({
-      contextUsage: new Map([["pipeline-build-key", usage({ source: "codex" })]]),
-      selectedModel: new Map([["pipeline-build-key", "gpt-5.3-codex"]]),
-    } as never);
+    useNativeAgentProjectionStore.getState().setProjection(
+      "pipeline-build-key",
+      nativeProjection("codex", "pipeline-build-session", {
+        contextUsage: projectionUsage(usage({ source: "codex" })),
+        composer: composerState({ selectedModelId: "gpt-5.3-codex" }),
+      }),
+    );
 
     render(<AgentInfoButton activeTab={buildTab()} />);
     open();
@@ -940,11 +857,6 @@ describe("AgentInfoButton provider resolution", () => {
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
       viewedSessionIds: new Map([["pipeline-1", "validation:validation-1"]]),
     });
-    useCodexStore.setState({
-      contextUsage: new Map([["pipeline-verify-key", usage({ source: "codex" })]]),
-      selectedModel: new Map([["pipeline-verify-key", "gpt-5.3-codex"]]),
-    } as never);
-
     render(<AgentInfoButton activeTab={buildTab()} />);
     open();
 
@@ -1679,18 +1591,13 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("renders Claude rate limits before the first context snapshot", () => {
-    useClaudeStore.setState({
-      rateLimits: new Map([
-        [
-          CLAUDE_KEY,
-          [
-            { label: "5h window", usedPercent: 31 },
-            { label: "Weekly", resetsAt: "2026-07-30T09:00:00.000Z" },
-          ],
-        ],
-      ]),
-      selectedModel: new Map([[CLAUDE_KEY, "claude-sonnet"]]),
-    } as never);
+    seedClaudeProjection({
+      rateLimits: [
+        { label: "5h window", usedPercent: 31 },
+        { label: "Weekly", resetsAt: "2026-07-30T09:00:00.000Z" },
+      ],
+      composer: composerState({ selectedModelId: "claude-sonnet" }),
+    });
 
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
@@ -1705,42 +1612,38 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("renders context, token split, cache, reasoning, elapsed and denial rows", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            inputTokens: 20_000,
-            outputTokens: 5_000,
-            cacheReadTokens: 12_000,
-            reasoningTokens: 900,
-            sessionTokens: 30_000,
-            costUsd: 1.25,
-            durationMs: 95_000,
-            permissionDenials: 2,
-            account: [
-              {
-                window: "weekly",
-                label: "Weekly quota",
-                usedPercent: 40,
-                spendUsd: 12.5,
-                resetsAt: "2026-09-14T00:00:00.000Z",
-              },
-            ],
-            turns: [
-              {
-                turnId: "turn-1",
-                inputTokens: 500,
-                outputTokens: 100,
-                costUsd: 0.25,
-                modelId: "claude-opus",
-              },
-            ],
-          }),
+    seedUsage(
+      usage({
+        inputTokens: 20_000,
+        outputTokens: 5_000,
+        cacheReadTokens: 12_000,
+        reasoningTokens: 900,
+        sessionTokens: 30_000,
+        costUsd: 1.25,
+        durationMs: 95_000,
+        permissionDenials: 2,
+        account: [
+          {
+            window: "weekly",
+            label: "Weekly quota",
+            usedPercent: 40,
+            spendUsd: 12.5,
+            resetsAt: "2026-09-14T00:00:00.000Z",
+          },
         ],
-      ]),
-      selectedModel: new Map([[CLAUDE_KEY, "claude-opus"]]),
-    } as never);
+        turns: [
+          {
+            turnId: "turn-1",
+            inputTokens: 500,
+            outputTokens: 100,
+            costUsd: 0.25,
+            modelId: "claude-opus",
+          },
+        ],
+      }),
+      "claude",
+      { composer: composerState({ selectedModelId: "claude-opus" }) },
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -1770,21 +1673,16 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("charts daily token buckets instead of one card per day", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            account: [
-              { window: "lifetime", label: "Lifetime", tokens: 1_200_000_000 },
-              { window: "daily:2026-08-24", label: "2026-08-24", tokens: 60_000_000 },
-              { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
-              { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
-            ],
-          }),
+    seedUsage(
+      usage({
+        account: [
+          { window: "lifetime", label: "Lifetime", tokens: 1_200_000_000 },
+          { window: "daily:2026-08-24", label: "2026-08-24", tokens: 60_000_000 },
+          { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
+          { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
         ],
-      ]),
-    } as never);
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -1894,63 +1792,13 @@ describe("AgentInfoButton usage panel", () => {
     expect(within(chart).getByText("Peak 3d 0")).toBeTruthy();
   });
 
-  test("retains provider-neutral account rows beside legacy live counters", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ inputTokens: 123 })]]),
-    } as never);
-    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
-      platform: "claude",
-      environmentId: ENVIRONMENT_ID,
-      sessionId: "claude-session-1",
-      connection: "connected",
-      turn: { phase: "idle" },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: {
-        attachments: { files: true, images: true },
-        queue: true,
-        resume: true,
-        fork: true,
-        slashCommands: true,
-        backgroundTasks: false,
-        composer: {
-          provider: true,
-          model: true,
-          reasoning: true,
-          speed: true,
-          mode: true,
-        },
-      },
-      contextUsage: {
-        usedTokens: 25_000,
-        source: "claude",
-        account: [{ window: "weekly", label: "Projected weekly", usedPercent: 25 }],
-        turns: [{ turnId: "projected-turn", totalTokens: 42, costUsd: 0.01 }],
-      },
-      revision: 1,
-      generation: "test",
-    } satisfies NativeAgentSessionProjection);
-
-    render(<AgentInfoButton activeTab={claudeTab()} />);
-    open();
-
-    expect(metricValue("Input")).toBe("123");
-    expect(screen.getByText("Projected weekly")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Turn usage" })).toBe(null);
-    expect(screen.queryByText("Recent turns")).toBe(null);
-    expect(screen.queryByText("42 · $0.01")).toBe(null);
-  });
-
   test.each([
     [-5, -10, "0 / 0", "0 available"],
     [120_000, 100_000, "120k / 100k", "0 available"],
   ])(
     "clamps token boundaries for %p used of %p total",
     (usedTokens, totalTokens, expectedTotal, expectedRemaining) => {
-      useClaudeStore.setState({
-        contextUsage: new Map([[CLAUDE_KEY, usage({ usedTokens, totalTokens })]]),
-      } as never);
+      seedUsage(usage({ usedTokens, totalTokens }));
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
@@ -1969,9 +1817,7 @@ describe("AgentInfoButton usage panel", () => {
   ])(
     "formats the context percentage boundary at %p",
     (percentUsed, expectedText, expectedLabel) => {
-      useClaudeStore.setState({
-        contextUsage: new Map([[CLAUDE_KEY, usage({ percentUsed })]]),
-      } as never);
+      seedUsage(usage({ percentUsed }));
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
@@ -1981,7 +1827,7 @@ describe("AgentInfoButton usage panel", () => {
   );
 
   test("omits every optional metric the snapshot does not carry", () => {
-    useClaudeStore.setState({ contextUsage: new Map([[CLAUDE_KEY, usage()]]) } as never);
+    seedUsage(usage());
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2000,28 +1846,25 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("labels an estimated snapshot as estimated", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ estimated: true })]]),
-    } as never);
+    seedUsage(usage({ estimated: true }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("Estimated")).toBeTruthy();
     expect(screen.queryByText("Provider reported") === null).toBe(true);
   });
 
-  test("prefers the model named by the snapshot over the store's selection", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ modelId: "snapshot-model" })]]),
-      selectedModel: new Map([[CLAUDE_KEY, "store-model"]]),
-    } as never);
+  test("prefers the model named by the snapshot over the composer's selection", () => {
+    seedUsage(usage({ modelId: "snapshot-model" }), "claude", {
+      composer: composerState({ selectedModelId: "composer-model" }),
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("snapshot-model")).toBeTruthy();
-    expect(screen.queryByText("store-model") === null).toBe(true);
+    expect(screen.queryByText("composer-model") === null).toBe(true);
   });
 
   test("shows 'Model unavailable' when neither source names one", () => {
-    useClaudeStore.setState({ contextUsage: new Map([[CLAUDE_KEY, usage()]]) } as never);
+    seedUsage(usage());
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("Model unavailable")).toBeTruthy();
@@ -2034,9 +1877,7 @@ describe("AgentInfoButton usage panel", () => {
     [1.5, "$1.50"],
     [1234.567, "$1234.57"],
   ])("formats a cost of %p as %p", (costUsd, expected) => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ costUsd })]]),
-    } as never);
+    seedUsage(usage({ costUsd }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(metricValue("Cost")).toBe(expected);
@@ -2050,9 +1891,7 @@ describe("AgentInfoButton usage panel", () => {
     [65_000, "1m 5s"],
     [3_600_000, "60m 0s"],
   ])("formats a duration of %p as %p", (durationMs, expected) => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ durationMs })]]),
-    } as never);
+    seedUsage(usage({ durationMs }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(metricValue("Elapsed")).toBe(expected);
@@ -2064,9 +1903,7 @@ describe("AgentInfoButton usage panel", () => {
     [{ hasCredits: true }, "Available"],
     [{ hasCredits: false }, "Unavailable"],
   ])("renders credits %p as %p in the account section", (credits, expected) => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ credits })]]),
-    } as never);
+    seedUsage(usage({ credits }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -2076,28 +1913,23 @@ describe("AgentInfoButton usage panel", () => {
 
   test("preserves every fact on a mixed credits window", () => {
     const resetsAt = "2026-09-14T10:12:23.000Z";
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            credits: { balance: "$12.34" },
-            account: [
-              {
-                window: "credits",
-                label: "Credit allowance",
-                creditBalance: "$9.99",
-                usedPercent: 42.4,
-                resetsAt,
-                tokens: 1_200,
-                spendUsd: 1.25,
-                limitUsd: 5,
-              },
-            ],
-          }),
+    seedUsage(
+      usage({
+        credits: { balance: "$12.34" },
+        account: [
+          {
+            window: "credits",
+            label: "Credit allowance",
+            creditBalance: "$9.99",
+            usedPercent: 42.4,
+            resetsAt,
+            tokens: 1_200,
+            spendUsd: 1.25,
+            limitUsd: 5,
+          },
         ],
-      ]),
-    } as never);
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2116,26 +1948,21 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("merges complementary account facts into one matching limit row", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            rateLimits: [{ label: "Weekly quota", usedPercent: 25 }],
-            account: [
-              {
-                window: "weekly",
-                label: "Weekly quota",
-                tokens: 1_200,
-                spendUsd: 1.25,
-                limitUsd: 5,
-                creditsRemaining: 4,
-              },
-            ],
-          }),
+    seedUsage(
+      usage({
+        rateLimits: [{ label: "Weekly quota", usedPercent: 25 }],
+        account: [
+          {
+            window: "weekly",
+            label: "Weekly quota",
+            tokens: 1_200,
+            spendUsd: 1.25,
+            limitUsd: 5,
+            creditsRemaining: 4,
+          },
         ],
-      ]),
-    } as never);
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2157,17 +1984,12 @@ describe("AgentInfoButton usage panel", () => {
     // `windowMinutes` would leave the bar unplaceable in time.
     const windowMinutes = 31 * 24 * 60;
     const resetsAt = new Date(Date.now() + (windowMinutes / 4) * 60_000).toISOString();
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            rateLimits: [{ label: "Plan quota", usedPercent: 25, resetsAt }],
-            account: [{ window: "billing_cycle", label: "Plan quota", windowMinutes }],
-          }),
-        ],
-      ]),
-    } as never);
+    seedUsage(
+      usage({
+        rateLimits: [{ label: "Plan quota", usedPercent: 25, resetsAt }],
+        account: [{ window: "billing_cycle", label: "Plan quota", windowMinutes }],
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2179,19 +2001,14 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("names each account progress bar with its window and displayed percentage", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            rateLimits: [
-              { label: "5h window", usedPercent: 9.4 },
-              { label: "Weekly", usedPercent: 42 },
-            ],
-          }),
+    seedUsage(
+      usage({
+        rateLimits: [
+          { label: "5h window", usedPercent: 9.4 },
+          { label: "Weekly", usedPercent: 42 },
         ],
-      ]),
-    } as never);
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2202,19 +2019,14 @@ describe("AgentInfoButton usage panel", () => {
 
   test("renders rate limits, including a window with no percentage and a reset time", () => {
     const resetValue = "2026-07-27T09:00:00.000Z";
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [
-          CLAUDE_KEY,
-          usage({
-            rateLimits: [
-              { label: "5h window", usedPercent: 42.4 },
-              { label: "Weekly", resetsAt: resetValue },
-            ],
-          }),
+    seedUsage(
+      usage({
+        rateLimits: [
+          { label: "5h window", usedPercent: 42.4 },
+          { label: "Weekly", resetsAt: resetValue },
         ],
-      ]),
-    } as never);
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2232,22 +2044,17 @@ describe("AgentInfoButton usage panel", () => {
     const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
     Date.now = () => resetMs - 3.5 * 24 * 60 * 60 * 1_000;
     try {
-      useClaudeStore.setState({
-        contextUsage: new Map([
-          [
-            CLAUDE_KEY,
-            usage({
-              rateLimits: [
-                {
-                  label: "Weekly",
-                  usedPercent: 42,
-                  resetsAt: new Date(resetMs).toISOString(),
-                },
-              ],
-            }),
+      seedUsage(
+        usage({
+          rateLimits: [
+            {
+              label: "Weekly",
+              usedPercent: 42,
+              resetsAt: new Date(resetMs).toISOString(),
+            },
           ],
-        ]),
-      } as never);
+        }),
+      );
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
@@ -2279,22 +2086,17 @@ describe("AgentInfoButton usage panel", () => {
     window.clearInterval = clearIntervalMock as typeof window.clearInterval;
 
     try {
-      useClaudeStore.setState({
-        contextUsage: new Map([
-          [
-            CLAUDE_KEY,
-            usage({
-              rateLimits: [
-                {
-                  label: "Weekly",
-                  usedPercent: 42,
-                  resetsAt: new Date(resetMs).toISOString(),
-                },
-              ],
-            }),
+      seedUsage(
+        usage({
+          rateLimits: [
+            {
+              label: "Weekly",
+              usedPercent: 42,
+              resetsAt: new Date(resetMs).toISOString(),
+            },
           ],
-        ]),
-      } as never);
+        }),
+      );
       const view = render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       expect(
@@ -2337,11 +2139,7 @@ describe("AgentInfoButton usage panel", () => {
     window.clearInterval = clearIntervalMock as typeof window.clearInterval;
 
     try {
-      useClaudeStore.setState({
-        contextUsage: new Map([
-          [CLAUDE_KEY, usage({ rateLimits: [{ label: "5h window", usedPercent: 20 }] })],
-        ]),
-      } as never);
+      seedUsage(usage({ rateLimits: [{ label: "5h window", usedPercent: 20 }] }));
       const view = render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       expect(screen.queryByRole("img") === null).toBe(true);
@@ -2349,22 +2147,17 @@ describe("AgentInfoButton usage panel", () => {
 
       nowMs = resetMs - 3.5 * 24 * 60 * 60 * 1_000;
       act(() => {
-        useClaudeStore.setState({
-          contextUsage: new Map([
-            [
-              CLAUDE_KEY,
-              usage({
-                rateLimits: [
-                  {
-                    label: "Weekly",
-                    usedPercent: 40,
-                    resetsAt: new Date(resetMs).toISOString(),
-                  },
-                ],
-              }),
+        seedUsage(
+          usage({
+            rateLimits: [
+              {
+                label: "Weekly",
+                usedPercent: 40,
+                resetsAt: new Date(resetMs).toISOString(),
+              },
             ],
-          ]),
-        } as never);
+          }),
+        );
       });
       expect(
         screen.getByRole("img", {
@@ -2374,22 +2167,17 @@ describe("AgentInfoButton usage panel", () => {
       expect(setIntervalCalls).toBe(1);
 
       act(() => {
-        useClaudeStore.setState({
-          contextUsage: new Map([
-            [
-              CLAUDE_KEY,
-              usage({
-                rateLimits: [
-                  {
-                    label: "Weekly",
-                    usedPercent: 41,
-                    resetsAt: new Date(resetMs).toISOString(),
-                  },
-                ],
-              }),
+        seedUsage(
+          usage({
+            rateLimits: [
+              {
+                label: "Weekly",
+                usedPercent: 41,
+                resetsAt: new Date(resetMs).toISOString(),
+              },
             ],
-          ]),
-        } as never);
+          }),
+        );
       });
       expect(screen.getByText("41% used")).toBeTruthy();
       expect(setIntervalCalls).toBe(1);
@@ -2430,11 +2218,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("omits an invalid reset timestamp instead of rendering Invalid Date", () => {
     expect(formatResetDateTime("not-a-date")).toBeNull();
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [CLAUDE_KEY, usage({ rateLimits: [{ label: "Weekly", resetsAt: "not-a-date" }] })],
-      ]),
-    } as never);
+    seedUsage(usage({ rateLimits: [{ label: "Weekly", resetsAt: "not-a-date" }] }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2444,11 +2228,7 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("places the account section below the session's own context readout", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [CLAUDE_KEY, usage({ rateLimits: [{ label: "Weekly", usedPercent: 4 }] })],
-      ]),
-    } as never);
+    seedUsage(usage({ rateLimits: [{ label: "Weekly", usedPercent: 4 }] }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2464,22 +2244,17 @@ describe("AgentInfoButton usage panel", () => {
     const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
     Date.now = () => resetMs - 60 * 60_000;
     try {
-      useClaudeStore.setState({
-        contextUsage: new Map([
-          [
-            CLAUDE_KEY,
-            usage({
-              rateLimits: [
-                {
-                  label: "Five Hour",
-                  usedPercent: 30,
-                  resetsAt: new Date(resetMs).toISOString(),
-                },
-              ],
-            }),
+      seedUsage(
+        usage({
+          rateLimits: [
+            {
+              label: "Five Hour",
+              usedPercent: 30,
+              resetsAt: new Date(resetMs).toISOString(),
+            },
           ],
-        ]),
-      } as never);
+        }),
+      );
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
@@ -2492,21 +2267,16 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("omits the account section entirely when nothing account-scoped is reported", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([[CLAUDE_KEY, usage({ rateLimits: [] })]]),
-    } as never);
+    seedUsage(usage({ rateLimits: [] }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
   });
 
   test("an authoritative empty Claude limit snapshot hides stale nested limits", () => {
-    useClaudeStore.setState({
-      contextUsage: new Map([
-        [CLAUDE_KEY, usage({ rateLimits: [{ label: "Stale 5h", usedPercent: 90 }] })],
-      ]),
-      rateLimits: new Map([[CLAUDE_KEY, []]]),
-    } as never);
+    seedUsage(usage({ rateLimits: [{ label: "Stale 5h", usedPercent: 90 }] }), "claude", {
+      rateLimits: [],
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -2517,24 +2287,7 @@ describe("AgentInfoButton usage panel", () => {
 });
 
 describe("AgentInfoButton Codex runtime panel", () => {
-  function seedCodex(options: { isLoading?: boolean } = {}) {
-    useCodexStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
-      sessions: new Map([
-        [
-          CODEX_KEY,
-          {
-            sessionId: "codex-session-1",
-            messages: [],
-            isLoading: options.isLoading ?? false,
-            title: "Codex session",
-          },
-        ],
-      ]),
-    } as never);
-  }
-
-  function seedCodexProjection(runtime: NativeAgentSessionProjection["runtime"]) {
+  function seedCodexRuntime(runtime: NativeAgentSessionProjection["runtime"]) {
     useNativeAgentProjectionStore.getState().setProjection(CODEX_KEY, {
       platform: "codex",
       environmentId: ENVIRONMENT_ID,
@@ -2569,7 +2322,6 @@ describe("AgentInfoButton Codex runtime panel", () => {
     // Codex reads the same panel as every other platform now, so a session with
     // no projected runtime gets the same "nothing to report" line rather than a
     // Codex-shaped loading state fed by a second, renderer-owned health fetch.
-    seedCodex();
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -2577,8 +2329,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("renders the state and version the projection carries", async () => {
-    seedCodex();
-    seedCodexProjection({ state: "ready", version: "0.144.1" });
+    seedCodexRuntime({ state: "ready", version: "0.144.1" });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -2589,8 +2340,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   test("renders the inventory counts the projection carries", async () => {
     // Counting the bridge's inventory shapes is the backend's job — see
     // `bridgeRuntimeSummary`. The panel renders the numbers it is given.
-    seedCodex();
-    seedCodexProjection({ mcpServers: 2, skills: 3, hooks: 1 });
+    seedCodexRuntime({ mcpServers: 2, skills: 3, hooks: 1 });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -2600,8 +2350,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("shows drift as a count and the names of the kinds behind it", async () => {
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       state: "ready",
       drift: { unknownEvents: 7, unknownKinds: ["codex/brand/new", "codex/other"] },
     });
@@ -2615,8 +2364,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("counts a single unrecognised event in the singular", async () => {
-    seedCodex();
-    seedCodexProjection({ drift: { unknownEvents: 1, unknownKinds: [] } });
+    seedCodexRuntime({ drift: { unknownEvents: 1, unknownKinds: [] } });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -2626,8 +2374,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("renders at most the five most recent notices the projection carries", async () => {
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       state: "ready",
       notices: [
         { method: "m1", message: "notice one" },
@@ -2647,8 +2394,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("styles errors as errors without hiding provider diagnostics", async () => {
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       notices: [
         { method: "inventory", message: "MCP inventory refreshed", severity: "info" },
         {
@@ -2670,8 +2416,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("opens the selected notice when legacy messages share a method", async () => {
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       notices: [
         {
           method: "same/method",
@@ -2703,8 +2448,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   test("shows a repeated notice's total count and its retained occurrences", async () => {
     // Grouping happens in the bridge recorder and again in the backend; the
     // panel renders the group it is handed.
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       state: "ready",
       notices: [
         {
@@ -2746,8 +2490,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("opens projected notice details and dismisses only the nested dialog", async () => {
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       state: "ready",
       notices: [
         {
@@ -2817,8 +2560,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
   });
 
   test("shows a repeat count beside a grouped notice", async () => {
-    seedCodex();
-    seedCodexProjection({
+    seedCodexRuntime({
       state: "ready",
       notices: [{ method: "m1", message: "notice one", count: 2 }],
     });
@@ -2826,421 +2568,6 @@ describe("AgentInfoButton Codex runtime panel", () => {
     open();
 
     await waitFor(() => expect(screen.getByText("notice one (2)")).toBeTruthy());
-  });
-
-  test("a failed health read does not disturb the projected runtime", async () => {
-    // The health read exists for rate limits and credits now. Its failure must
-    // not blank a panel that is being fed by the projection.
-    seedCodex();
-    seedCodexProjection({ state: "ready", version: "0.144.1" });
-    mockGetCodexRuntimeHealth.mockImplementation(async () => {
-      throw new Error("bridge down");
-    });
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
-    expect(screen.getByText("Codex Native 0.144.1")).toBeTruthy();
-  });
-
-  test("does not request health while closed and drops a response that lands after close", async () => {
-    seedCodex();
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    let release: (value: unknown) => void = () => {};
-    mockGetCodexRuntimeHealth.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    expect(mockGetCodexRuntimeHealth).not.toHaveBeenCalled();
-
-    open();
-    expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
-
-    // The `cancelled` teardown must swallow the resolution rather than write
-    // limits for a panel nobody is looking at.
-    await act(async () => {
-      release({
-        engine: { state: "ready" },
-        rateLimits: { rateLimits: { primary: { usedPercent: 10 } } },
-      });
-    });
-    expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toBeUndefined();
-  });
-
-  test("drops stale health after the same tab resumes another session", async () => {
-    seedCodex();
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    let releaseOld: (value: unknown) => void = () => {};
-    mockGetCodexRuntimeHealth.mockImplementation((_client, sessionId) => {
-      if (sessionId === "codex-session-1") {
-        return new Promise((resolve) => {
-          releaseOld = resolve;
-        });
-      }
-      return Promise.resolve({
-        engine: { state: "replacement-ready" },
-        rateLimits: { rateLimits: { primary: { usedPercent: 20 } } },
-      });
-    });
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() =>
-      expect(mockGetCodexRuntimeHealth).toHaveBeenCalledWith(CODEX_CLIENT, "codex-session-1"),
-    );
-    act(() => {
-      useCodexStore.setState({
-        sessions: new Map([
-          [
-            CODEX_KEY,
-            {
-              sessionId: "codex-session-2",
-              messages: [],
-              isLoading: false,
-              title: "Replacement session",
-            },
-          ],
-        ]),
-      } as never);
-    });
-
-    expect(isPopoverOpen()).toBe(false);
-    open();
-    // The replacement's limits landing is what proves the new read won; the
-    // panel itself is fed by the projection and says nothing about which
-    // health response arrived.
-    await waitFor(() =>
-      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Usage limit", usedPercent: 20 },
-      ]),
-    );
-    expect(mockGetCodexRuntimeHealth).toHaveBeenCalledWith(CODEX_CLIENT, "codex-session-2");
-    await act(async () => {
-      releaseOld({
-        engine: { state: "stale-session" },
-        rateLimits: { rateLimits: { primary: { usedPercent: 90 } } },
-      });
-    });
-
-    expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-      { label: "Usage limit", usedPercent: 20 },
-    ]);
-  });
-
-  test("refreshes health when switching between tabs for the same Codex session", async () => {
-    const nextTabId = "tab-2";
-    const nextKey = createSessionKey(ENVIRONMENT_ID, nextTabId);
-    useCodexStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
-      sessions: new Map([
-        [
-          CODEX_KEY,
-          {
-            sessionId: "shared-codex-session",
-            messages: [],
-            isLoading: false,
-            title: "First tab",
-          },
-        ],
-        [
-          nextKey,
-          {
-            sessionId: "shared-codex-session",
-            messages: [],
-            isLoading: false,
-            title: "Second tab",
-          },
-        ],
-      ]),
-      contextUsage: new Map([
-        [CODEX_KEY, usage({ source: "codex" })],
-        [nextKey, usage({ source: "codex" })],
-      ]),
-    } as never);
-    let releaseOld: (value: unknown) => void = () => {};
-    let requestCount = 0;
-    mockGetCodexRuntimeHealth.mockImplementation(() => {
-      requestCount += 1;
-      if (requestCount === 1) {
-        return new Promise((resolve) => {
-          releaseOld = resolve;
-        });
-      }
-      return Promise.resolve({
-        engine: { state: "second-tab-ready" },
-        rateLimits: { rateLimits: { primary: { usedPercent: 30 } } },
-      });
-    });
-    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() => expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(1));
-    rerender(<AgentInfoButton activeTab={codexTab({ id: nextTabId })} />);
-    expect(isPopoverOpen()).toBe(false);
-    open();
-    await waitFor(() =>
-      expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
-        { label: "Usage limit", usedPercent: 30 },
-      ]),
-    );
-    expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(2);
-    await act(async () => {
-      releaseOld({
-        engine: { state: "stale-first-tab" },
-        rateLimits: { rateLimits: { primary: { usedPercent: 90 } } },
-      });
-    });
-
-    expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
-      { label: "Usage limit", usedPercent: 30 },
-    ]);
-    expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toBeUndefined();
-  });
-
-  test("folds Codex rate limits and credits into the stored usage snapshot", async () => {
-    seedCodex();
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    const resetsAtSeconds = 1_800_000_000;
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      engine: { state: "ready" },
-      rateLimits: {
-        rateLimits: {
-          limitName: "Codex weekly",
-          primary: {
-            usedPercent: 12.5,
-            resetsAt: resetsAtSeconds,
-            windowDurationMins: 10_080,
-          },
-          secondary: { usedPercent: 80 },
-          credits: { balance: "$20.00", hasCredits: true, unlimited: false },
-        },
-      },
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() =>
-      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toBeTruthy(),
-    );
-    const stored = useCodexStore.getState().contextUsage.get(CODEX_KEY)!;
-    /*
-     * Codex reports epoch *seconds*. A units bug here silently corrupts the
-     * snapshot this effect writes straight back into the store.
-     */
-    expect(stored.rateLimits).toEqual([
-      {
-        label: "Codex weekly",
-        usedPercent: 12.5,
-        resetsAt: new Date(resetsAtSeconds * 1_000).toISOString(),
-        windowMinutes: 10_080,
-      },
-      { label: "Secondary limit", usedPercent: 80 },
-    ]);
-    expect(stored.credits).toEqual({
-      balance: "$20.00",
-      hasCredits: true,
-      unlimited: false,
-    });
-    const resetValue = new Date(resetsAtSeconds * 1_000).toISOString();
-    expect(screen.getByText(`Resets ${formatResetDateTime(resetValue)}`)).toBeTruthy();
-    // The rest of the snapshot survives the merge.
-    expect(stored.usedTokens).toBe(25_000);
-  });
-
-  test("renders multi-bucket Codex account details once with formatted credits", async () => {
-    seedCodex();
-    seedCodexProjection({ state: "ready" });
-    const projection = useNativeAgentProjectionStore.getState().projections.get(CODEX_KEY)!;
-    useNativeAgentProjectionStore.getState().setProjection(CODEX_KEY, {
-      ...projection,
-      contextUsage: {
-        usedTokens: 25_000,
-        maximumTokens: 100_000,
-        percentage: 25,
-        source: "codex",
-        credits: { balance: "0.00", hasCredits: false, unlimited: false },
-        account: [
-          {
-            window: "primary",
-            label: "Primary",
-            usedPercent: 10,
-            resetsAt: "2026-09-14T10:12:23.000Z",
-          },
-          { window: "credits", label: "Credits", creditBalance: "0.00" },
-        ],
-      },
-    });
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      rateLimits: {
-        rateLimits: { primary: { usedPercent: 99 } },
-        rateLimitsByLimitId: {
-          codex: {
-            limitName: "Codex",
-            primary: { usedPercent: 10, windowDurationMins: 300 },
-            secondary: { usedPercent: 20, windowDurationMins: 10_080 },
-          },
-          review: {
-            limitName: "Review",
-            primary: { usedPercent: 30, windowDurationMins: 1_440 },
-          },
-        },
-      },
-    }));
-
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() => expect(screen.getByText("Codex · 5-hour limit")).toBeTruthy());
-    const account = screen.getByRole("region", { name: "Account usage" });
-    expect(within(account).getByText("Codex · Weekly limit")).toBeTruthy();
-    expect(within(account).getByText("Review · Daily limit")).toBeTruthy();
-    expect(within(account).queryByText("Primary") === null).toBe(true);
-    expect(within(account).getByText("10% used")).toBeTruthy();
-    expect(within(account).getByText("0.00")).toBeTruthy();
-    expect(screen.getAllByText("Credits")).toHaveLength(1);
-    expect(screen.queryByText("99% used") === null).toBe(true);
-  });
-
-  test("drops malformed rate-limit numbers without discarding valid fields", async () => {
-    seedCodex();
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      engine: { state: "ready" },
-      rateLimits: {
-        rateLimits: {
-          primary: {
-            usedPercent: 125,
-            resetsAt: Number.MAX_SAFE_INTEGER,
-            windowDurationMins: Number.NaN,
-          },
-          secondary: {
-            usedPercent: Number.POSITIVE_INFINITY,
-            resetsAt: Number.NEGATIVE_INFINITY,
-            windowDurationMins: -1,
-          },
-        },
-      },
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() =>
-      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Usage limit", usedPercent: 100 },
-      ]),
-    );
-    expect(screen.queryByText(/Runtime health unavailable/) === null).toBe(true);
-  });
-
-  test("skips a window the health payload does not report at all", async () => {
-    seedCodex();
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      rateLimits: { rateLimits: { primary: {}, secondary: { usedPercent: 3 } } },
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() =>
-      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Secondary limit", usedPercent: 3 },
-      ]),
-    );
-  });
-
-  test("skips a non-empty window when every recognized field is absent or invalid", async () => {
-    seedCodex();
-    useCodexStore.setState({
-      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-    } as never);
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      rateLimits: {
-        rateLimits: {
-          primary: {
-            usedPercent: "unknown",
-            resetsAt: Number.POSITIVE_INFINITY,
-            windowDurationMins: -1,
-            unrecognizedButPresent: true,
-          },
-          secondary: { windowDurationMins: 60 },
-        },
-      },
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() =>
-      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "1-hour limit", windowMinutes: 60 },
-      ]),
-    );
-  });
-
-  test("draws Codex limits in the account section with the shared bar and marker", async () => {
-    const originalDateNow = Date.now;
-    const resetsAtSeconds = 1_800_000_000;
-    const resetMs = resetsAtSeconds * 1_000;
-    Date.now = () => resetMs - 75 * 60_000;
-    try {
-      seedCodex();
-      useCodexStore.setState({
-        contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
-      } as never);
-      mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-        rateLimits: {
-          rateLimits: {
-            primary: {
-              usedPercent: 17,
-              resetsAt: resetsAtSeconds,
-              windowDurationMins: 300,
-            },
-          },
-        },
-      }));
-      render(<AgentInfoButton activeTab={codexTab()} />);
-      open();
-
-      const account = await waitFor(() => screen.getByRole("region", { name: "Account usage" }));
-      expect(within(account).getByText("5-hour limit")).toBeTruthy();
-      expect(within(account).getByText("17% used")).toBeTruthy();
-      // Three quarters through a five-hour window, on the same marker Claude gets.
-      const marker = within(account).getByRole("img", {
-        name: "Current point in the 5-hour limit period: 75%",
-      });
-      expect(marker.className).toContain("bg-red-500");
-      expect((marker as HTMLElement).style.left).toBe("75%");
-    } finally {
-      Date.now = originalDateNow;
-    }
-  });
-
-  test("does not invent a usage snapshot when the session has none yet", async () => {
-    seedCodex();
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      rateLimits: { rateLimits: { primary: { usedPercent: 5 } } },
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-
-    await waitFor(() => expect(mockGetCodexRuntimeHealth).toHaveBeenCalled());
-    expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)).toBeUndefined();
   });
 });
 
@@ -3290,18 +2617,7 @@ describe("AgentInfoButton Claude session options", () => {
     };
   }
 
-  function seedClaude(extra: Record<string, unknown> = {}) {
-    useClaudeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
-      sessions: new Map([
-        [CLAUDE_KEY, { sessionId: "claude-session-1", messages: [], isLoading: false }],
-      ]),
-      ...extra,
-    } as never);
-  }
-
   test("keeps Claude informational diagnostics in the runtime panel", () => {
-    seedClaude();
     useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
       ...neutralClaudeProjection(),
       runtime: {
@@ -3321,17 +2637,14 @@ describe("AgentInfoButton Claude session options", () => {
     expect(screen.getByText("Claude authentication refreshed")).toBeTruthy();
   });
 
-  test("renders both checkboxes even when the init payload reported no agents", () => {
+  test("renders both checkboxes even when the session reports no execution profiles", () => {
     /*
-     * `sessionInitData.agents` defaults to `[]` at both merge sites, so nesting
-     * these under a non-empty agent list hid the prompt-suggestion opt-in — the
-     * switch that enables the feature — for most Claude sessions.
+     * Nesting these under a non-empty profile list hid the prompt-suggestion
+     * opt-in — the switch that enables the feature — for most Claude sessions.
      */
-    seedClaude({
-      sessionInitData: new Map([
-        [ENVIRONMENT_ID, { mcpServers: [], plugins: [], slashCommands: [], agents: [] }],
-      ]),
-    });
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -3340,28 +2653,30 @@ describe("AgentInfoButton Claude session options", () => {
     expect(screen.getByText("Suggest a follow-up after each turn")).toBeTruthy();
   });
 
-  test("renders both checkboxes when no init payload arrived at all", () => {
-    seedClaude();
+  test("renders both checkboxes before the projection arrives", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   });
 
-  test("checkbox state comes from the store and writes back per session", () => {
-    seedClaude();
+  test("holds the session toggles until the projection arrives", () => {
+    // The backend owns these settings and there is no session to update yet,
+    // so the boxes stay disabled rather than sending an update it must refuse.
+    routeNativeCommands();
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const [localSettings, suggestions] = screen.getAllByRole("checkbox") as HTMLInputElement[];
     expect(localSettings!.checked).toBe(false);
     expect(suggestions!.checked).toBe(false);
+    expect(localSettings!.disabled).toBe(true);
+    expect(suggestions!.disabled).toBe(true);
 
     fireEvent.click(localSettings!);
-    fireEvent.click(suggestions!);
 
-    expect(useClaudeStore.getState().includeLocalSettings.get(CLAUDE_KEY)).toBe(true);
-    expect(useClaudeStore.getState().promptSuggestionOptIn.get(CLAUDE_KEY)).toBe(true);
-    expect((screen.getAllByRole("checkbox")[0] as HTMLInputElement).checked).toBe(true);
+    expect(mockNativeControls).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+    expect(localSettings!.checked).toBe(false);
   });
 
   test("applies a provider-neutral execution profile and locks controls while pending", async () => {
@@ -3508,31 +2823,23 @@ describe("AgentInfoButton Claude session options", () => {
   });
 
   test("neither checkbox is offered for a non-Claude provider", () => {
-    useCodexStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
-      sessions: new Map([
-        [CODEX_KEY, { sessionId: "codex-session-1", messages: [], isLoading: false }],
-      ]),
-    } as never);
+    seedCodexProjection();
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 
-  test("offers a Claude execution profile per reported agent and stores the choice", () => {
-    seedClaude({
-      sessionInitData: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            mcpServers: [],
-            plugins: [],
-            slashCommands: [],
-            agents: [{ name: "reviewer", model: "claude-opus" }, { name: "explorer" }],
-          },
+  test("offers each projected execution profile and sends the choice to the backend", async () => {
+    seedNativeProjection(
+      "claude",
+      "claude-session-1",
+      neutralClaudeProjection({
+        executionProfiles: [
+          { id: "reviewer", label: "Reviewer", modelId: "claude-opus" },
+          { id: "explorer", label: "Explorer" },
         ],
-      ]),
-    });
+      }),
+    );
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -3544,82 +2851,31 @@ describe("AgentInfoButton Claude session options", () => {
     ]);
 
     fireEvent.change(select, { target: { value: "reviewer" } });
-    expect(useClaudeStore.getState().selectedAgent.get(CLAUDE_KEY)).toBe("reviewer");
+    await waitFor(() =>
+      expect(mockNativeControls).toHaveBeenCalledWith({ executionProfileId: "reviewer" }),
+    );
+    await waitFor(() => expect(select.disabled).toBe(false));
 
     fireEvent.change(select, { target: { value: "" } });
-    expect(useClaudeStore.getState().selectedAgent.get(CLAUDE_KEY)).toBeUndefined();
-  });
-
-  test("offers only primary/all OpenCode agents and stores the choice", () => {
-    useOpenCodeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
-      sessions: new Map([
-        [OPENCODE_KEY, { sessionId: "opencode-session-1", messages: [], isLoading: false }],
-      ]),
-      runtimeHealth: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            agents: [
-              { name: "build", mode: "primary", modelId: "sonnet" },
-              { name: "helper", mode: "subagent" },
-              { name: "general", mode: "all" },
-            ],
-            skills: [],
-            mcpServers: [],
-            lspServers: [],
-            formatters: [],
-            fetchedAt: "2026-07-26T00:00:00.000Z",
-          },
-        ],
-      ]),
-    } as never);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "Provider default",
-      "build · sonnet",
-      "general",
-    ]);
-
-    fireEvent.change(select, { target: { value: "general" } });
-    expect(useOpenCodeStore.getState().selectedAgent.get(OPENCODE_KEY)).toBe("general");
+    await waitFor(() =>
+      expect(mockNativeControls).toHaveBeenCalledWith({ executionProfileId: null }),
+    );
   });
 });
 
 describe("AgentInfoButton session actions", () => {
-  function seedClaudeSession(messages: Array<{ id: string; role: string; content: string }> = []) {
-    useClaudeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
-      sessions: new Map([
-        [CLAUDE_KEY, { sessionId: "claude-session-1", messages, isLoading: false }],
-      ]),
-    } as never);
-  }
-
   function seedOpenCodeSession() {
-    useOpenCodeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
-      sessions: new Map([
-        [
-          OPENCODE_KEY,
-          {
-            sessionId: "opencode-session-1",
-            messages: [{ id: "m1", role: "user", content: "hi", parts: [], createdAt: "" }],
-            isLoading: false,
-          },
-        ],
-      ]),
-    } as never);
+    seedOpenCodeProjection();
   }
 
-  function seedCodexSession(isLoading = false) {
-    useCodexStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
-      sessions: new Map([[CODEX_KEY, { sessionId: "codex-session-1", messages: [], isLoading }]]),
-    } as never);
+  /**
+   * Answers a handoff's two consistency reads in order. The panel's own usage
+   * refresh (`refreshUsage`) keeps reading whatever the store holds.
+   */
+  function handoffReads(...reads: Array<NativeAgentSessionProjection | null>) {
+    mockNativeProjectionRead.mockImplementation(async (args) =>
+      args?.refreshUsage ? readStoredProjection() : (reads.shift() ?? null),
+    );
   }
 
   function startHandoff(tab: TabInfo, destination: "Claude" | "Codex" | "OpenCode") {
@@ -3652,7 +2908,7 @@ describe("AgentInfoButton session actions", () => {
   });
 
   test("reveals only the two other providers and explains the copy boundary", () => {
-    seedClaudeSession([{ id: "m1", role: "user", content: "continue this" }]);
+    seedClaudeProjection();
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -3667,38 +2923,75 @@ describe("AgentInfoButton session actions", () => {
     expect(screen.getByText(/source session stays intact/)).toBeTruthy();
   });
 
-  test("persists an authoritative Claude handoff and opens a Codex native tab", async () => {
-    seedClaudeSession([{ id: "optimistic", role: "user", content: "stale renderer copy" }]);
-    render(<AgentInfoButton activeTab={claudeTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+  test.each([
+    ["claude", "Codex", "codex"],
+    ["codex", "OpenCode", "opencode"],
+  ] as const)(
+    "persists an authoritative %s handoff from two projection reads",
+    async (source, destination, destinationProvider) => {
+      seedNativeProjection(source, `${source}-session-1`);
+      const saved: Array<Record<string, unknown>> = [];
+      const route = nativeInvokeMock.getMockImplementation()!;
+      nativeInvokeMock.mockImplementation(
+        async (command: string, args: Record<string, unknown>) => {
+          if (command === "save_agent_handoff") {
+            saved.push(args.snapshot as Record<string, unknown>);
+            return {
+              id: args.handoffId,
+              environmentId: args.environmentId,
+              version: args.version,
+              snapshot: args.snapshot,
+              createdAt: "2026-07-27T10:00:00.000Z",
+            };
+          }
+          return route(command, args);
+        },
+      );
+      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
-    await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
-    );
-    expect(mockGetClaudeSession).toHaveBeenCalledWith(CLAUDE_CLIENT, "claude-session-1");
-    expect(mockGetClaudeSessionMessages).toHaveBeenCalledWith(CLAUDE_CLIENT, "claude-session-1", {
-      throwOnError: true,
-    });
-    expect(mockGetClaudeSession).toHaveBeenCalledTimes(2);
-    const handoffTab = usePaneLayoutStore
-      .getState()
-      .getAllTabs(ENVIRONMENT_ID)
-      .find((tab) => tab.id !== TAB_ID)!;
-    expect(handoffTab.type).toBe("agent-native");
-    expect(handoffTab.agentHandoffId).toBeTruthy();
-    expect(handoffTab.nativeAgentData).toMatchObject({
-      environmentId: ENVIRONMENT_ID,
-    });
-    expect(handoffTab.initialPrompt).toBeUndefined();
-    expect(mockToastSuccess).toHaveBeenCalledWith(
-      "Continuing in Codex with 1 message and 0 tool calls",
-    );
-  });
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+      );
+      expect(
+        nativeInvokeMock.mock.calls.filter(
+          ([command, args]) =>
+            command === "get_native_agent_projection" &&
+            !(args as { refreshUsage?: boolean } | undefined)?.refreshUsage,
+        ),
+      ).toEqual([
+        [
+          "get_native_agent_projection",
+          { environmentId: ENVIRONMENT_ID, agent: source, logicalSessionKey: SESSION_KEY },
+        ],
+        [
+          "get_native_agent_projection",
+          { environmentId: ENVIRONMENT_ID, agent: source, logicalSessionKey: SESSION_KEY },
+        ],
+      ]);
+      expect(saved.at(-1)).toMatchObject({
+        sourceProvider: source,
+        destinationProvider,
+        sourceSessionId: `${source}-session-1`,
+      });
+      const handoffTab = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      expect(handoffTab.type).toBe("agent-native");
+      expect(handoffTab.agentHandoffId).toBeTruthy();
+      expect(handoffTab.nativeAgentData).toMatchObject({
+        environmentId: ENVIRONMENT_ID,
+        platform: destinationProvider,
+      });
+      expect(handoffTab.initialPrompt).toBeUndefined();
+      expect(mockToastSuccess).toHaveBeenCalledWith(
+        `Continuing in ${destination} with 1 message and 0 tool calls`,
+      );
+    },
+  );
 
   test("deletes a persisted handoff if its source session changes before the destination opens", async () => {
-    seedClaudeSession([{ id: "m1", role: "user", content: "continue this" }]);
+    seedClaudeProjection();
     let releaseSave!: () => void;
     let reportSaveStarted!: () => void;
     const saveStarted = new Promise<void>((resolve) => {
@@ -3708,6 +3001,7 @@ describe("AgentInfoButton session actions", () => {
       releaseSave = resolve;
     });
     nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_projection") return readStoredProjection();
       if (command === "save_agent_handoff") {
         reportSaveStarted();
         await saveReleased;
@@ -3735,7 +3029,23 @@ describe("AgentInfoButton session actions", () => {
   });
 
   test("reads and revalidates an authoritative OpenCode handoff before opening Claude", async () => {
-    seedOpenCodeSession();
+    const projection = openCodeProjection();
+    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, projection);
+    const saved: Array<Record<string, unknown>> = [];
+    nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_native_agent_projection") return projection;
+      if (command === "save_agent_handoff") {
+        saved.push(args.snapshot as Record<string, unknown>);
+        return {
+          id: args.handoffId,
+          environmentId: args.environmentId,
+          version: args.version,
+          snapshot: args.snapshot,
+          createdAt: "2026-07-27T10:00:00.000Z",
+        };
+      }
+      return undefined;
+    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
@@ -3744,40 +3054,18 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
     );
-    expect(mockGetOpenCodeSessionStatus).toHaveBeenCalledTimes(3);
-    expect(mockGetOpenCodeSessionStatus).toHaveBeenNthCalledWith(
-      1,
-      openCodeClient,
-      "opencode-session-1",
-      { throwOnError: true },
-    );
-    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledWith(
-      openCodeClient,
-      "opencode-session-1",
-      { throwOnError: true },
-    );
-    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(2);
-    const handoffTab = usePaneLayoutStore
-      .getState()
-      .getAllTabs(ENVIRONMENT_ID)
-      .find((tab) => tab.id !== TAB_ID)!;
-    expect(handoffTab.type).toBe("agent-native");
-    expect(handoffTab.nativeAgentData?.environmentId).toBe(ENVIRONMENT_ID);
-  });
-
-  test("reads and revalidates an authoritative Codex handoff before opening OpenCode", async () => {
-    seedCodexSession();
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "OpenCode" }));
-
-    await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
-    );
-    expect(mockGetCodexSessionStatus).toHaveBeenCalledTimes(2);
-    expect(mockGetCodexSessionMessages).toHaveBeenCalledWith(CODEX_CLIENT, "codex-session-1", {
-      throwOnError: true,
+    // Two consistency reads of the backend projection, apart from the panel's
+    // own usage refresh.
+    expect(
+      nativeInvokeMock.mock.calls.filter(
+        ([command, args]) =>
+          command === "get_native_agent_projection" &&
+          !(args as { refreshUsage?: boolean } | undefined)?.refreshUsage,
+      ),
+    ).toHaveLength(2);
+    expect(saved.at(-1)).toMatchObject({
+      sourceProvider: "opencode",
+      destinationProvider: "claude",
     });
     const handoffTab = usePaneLayoutStore
       .getState()
@@ -3788,417 +3076,82 @@ describe("AgentInfoButton session actions", () => {
   });
 
   test.each([
-    [
-      "Claude",
-      "Codex",
-      () => {
-        seedClaudeSession();
-        mockGetClaudeSession
-          .mockResolvedValueOnce({
-            id: "claude-session-1",
-            status: "idle",
-            createdAt: "2026-07-27T10:00:00.000Z",
-            lastActivity: "2026-07-27T10:01:00.000Z",
-          })
-          .mockResolvedValueOnce({
-            id: "claude-session-1",
-            status: "running",
-            createdAt: "2026-07-27T10:00:00.000Z",
-            lastActivity: "2026-07-27T10:02:00.000Z",
-          });
-        return claudeTab();
-      },
-    ],
-    [
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("idle").mockResolvedValueOnce("busy");
-        return openCodeTab();
-      },
-    ],
-    [
-      "Codex",
-      "OpenCode",
-      () => {
-        seedCodexSession();
-        mockGetCodexSessionStatus
-          .mockResolvedValueOnce({ status: "idle" })
-          .mockResolvedValueOnce({ status: "running" });
-        return codexTab();
-      },
-    ],
-  ] as const)(
-    "rejects a %s transfer when the provider starts working during the message read",
-    async (provider, destination, setup) => {
-      const tab = setup();
-      render(<AgentInfoButton activeTab={tab} />);
-      open();
-      fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-      fireEvent.click(screen.getByRole("button", { name: destination }));
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(
-          `${provider} started working while its conversation was being transferred`,
-        ),
-      );
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    },
-  );
-
-  test.each([
-    [
-      "Claude",
-      "Codex",
-      () => {
-        seedClaudeSession();
-        mockGetClaudeSession.mockResolvedValueOnce(null);
-        return claudeTab();
-      },
-    ],
-    [
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce(null);
-        return openCodeTab();
-      },
-    ],
-    [
-      "Codex",
-      "OpenCode",
-      () => {
-        seedCodexSession();
-        mockGetCodexSessionStatus.mockResolvedValueOnce(null);
-        return codexTab();
-      },
-    ],
+    ["Claude Native", "claude", "Codex"],
+    ["Codex Native", "codex", "OpenCode"],
   ] as const)(
     "rejects a %s transfer when its authoritative session is unavailable",
-    async (provider, destination, setup) => {
-      startHandoff(setup(), destination);
+    async (label, source, destination) => {
+      seedNativeProjection(source, `${source}-session-1`);
+      handoffReads(null);
+      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
       await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(`${provider} session is unavailable`),
+        expect(mockToastError).toHaveBeenCalledWith(`${label} session is unavailable`),
       );
-      expect(mockGetClaudeSessionMessages).not.toHaveBeenCalled();
-      expect(mockGetOpenCodeSessionMessages).not.toHaveBeenCalled();
-      expect(mockGetCodexSessionMessages).not.toHaveBeenCalled();
       expectNoHandoffCreated();
     },
   );
 
   test.each([
-    [
-      "Claude running",
-      "Claude",
-      "Codex",
-      () => {
-        seedClaudeSession();
-        mockGetClaudeSession.mockResolvedValueOnce({
-          id: "claude-session-1",
-          status: "running",
-          createdAt: "2026-07-27T10:00:00.000Z",
-          lastActivity: "2026-07-27T10:01:00.000Z",
-        });
-        return claudeTab();
-      },
-    ],
-    [
-      "OpenCode busy",
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("busy");
-        return openCodeTab();
-      },
-    ],
-    [
-      "OpenCode retry",
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("retry");
-        return openCodeTab();
-      },
-    ],
-    [
-      "Codex running",
-      "Codex",
-      "OpenCode",
-      () => {
-        seedCodexSession();
-        mockGetCodexSessionStatus.mockResolvedValueOnce({ status: "running" });
-        return codexTab();
-      },
-    ],
-  ] as const)(
-    "rejects an initially non-idle %s transfer",
-    async (_caseName, provider, destination, setup) => {
-      startHandoff(setup(), destination);
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(
-          `Wait for ${provider} to finish before continuing in another agent`,
-        ),
-      );
-      expect(mockGetClaudeSessionMessages).not.toHaveBeenCalled();
-      expect(mockGetOpenCodeSessionMessages).not.toHaveBeenCalled();
-      expect(mockGetCodexSessionMessages).not.toHaveBeenCalled();
-      expectNoHandoffCreated();
-    },
-  );
-
-  test.each([
-    [
-      "Claude",
-      "Codex",
-      () => {
-        seedClaudeSession();
-        mockGetClaudeSession
-          .mockResolvedValueOnce({
-            id: "claude-session-1",
-            status: "idle",
-            createdAt: "2026-07-27T10:00:00.000Z",
-            lastActivity: "2026-07-27T10:01:00.000Z",
-          })
-          .mockResolvedValueOnce(null);
-        return claudeTab();
-      },
-    ],
-    [
-      "OpenCode",
-      "Claude",
-      () => {
-        seedOpenCodeSession();
-        mockGetOpenCodeSessionStatus.mockResolvedValueOnce("idle").mockResolvedValueOnce(null);
-        return openCodeTab();
-      },
-    ],
-    [
-      "Codex",
-      "OpenCode",
-      () => {
-        seedCodexSession();
-        mockGetCodexSessionStatus
-          .mockResolvedValueOnce({ status: "idle" })
-          .mockResolvedValueOnce(null);
-        return codexTab();
-      },
-    ],
-  ] as const)(
-    "rejects a %s transfer when the session disappears after its message read",
-    async (provider, destination, setup) => {
-      startHandoff(setup(), destination);
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(`${provider} session is unavailable`),
-      );
-      expectNoHandoffCreated();
-    },
-  );
-
-  test("treats OpenCode retry after the first message read as active work", async () => {
-    seedOpenCodeSession();
-    mockGetOpenCodeSessionStatus.mockResolvedValueOnce("idle").mockResolvedValueOnce("retry");
-    startHandoff(openCodeTab(), "Claude");
+    ["Claude Native", "claude", "Codex"],
+    ["Codex Native", "codex", "OpenCode"],
+  ] as const)("rejects an initially non-idle %s transfer", async (label, source, destination) => {
+    seedNativeProjection(source, `${source}-session-1`);
+    handoffReads(nativeProjection(source, `${source}-session-1`, { turn: { phase: "running" } }));
+    startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
-        "OpenCode started working while its conversation was being transferred",
+        `Wait for ${label} to finish before continuing in another agent`,
       ),
     );
-    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(1);
     expectNoHandoffCreated();
   });
 
   test.each([
-    [null, "OpenCode session is unavailable"],
-    ["busy", "OpenCode started working while its conversation was being transferred"],
-    ["retry", "OpenCode started working while its conversation was being transferred"],
+    ["Claude Native", "claude", "Codex"],
+    ["Codex Native", "codex", "OpenCode"],
   ] as const)(
-    "rejects an OpenCode transfer when its final status is %p",
-    async (finalStatus, expectedError) => {
-      seedOpenCodeSession();
-      mockGetOpenCodeSessionStatus
-        .mockResolvedValueOnce("idle")
-        .mockResolvedValueOnce("idle")
-        .mockResolvedValueOnce(finalStatus);
-      startHandoff(openCodeTab(), "Claude");
+    "rejects a %s transfer when the session disappears after its message read",
+    async (label, source, destination) => {
+      seedNativeProjection(source, `${source}-session-1`);
+      handoffReads(nativeProjection(source, `${source}-session-1`), null);
+      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
-      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(expectedError));
-      expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(2);
-      expect(mockGetOpenCodeSessionStatus).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          `${label} conversation changed while it was being transferred`,
+        ),
+      );
       expectNoHandoffCreated();
     },
   );
 
   test.each([
-    [
-      "Claude",
-      "Codex",
-      () => {
-        seedClaudeSession();
-        mockGetClaudeSession
-          .mockResolvedValueOnce({
-            id: "claude-session-1",
-            status: "idle",
-            createdAt: "2026-07-27T10:00:00.000Z",
-            lastActivity: "2026-07-27T10:01:00.000Z",
-          })
-          .mockResolvedValueOnce({
-            id: "claude-session-1",
-            status: "idle",
-            createdAt: "2026-07-27T10:00:00.000Z",
-            lastActivity: "2026-07-27T10:02:00.000Z",
-          });
-        return claudeTab();
-      },
-    ],
-    [
-      "Codex",
-      "OpenCode",
-      () => {
-        seedCodexSession();
-        mockGetCodexSessionStatus
-          .mockResolvedValueOnce({ status: "idle", messageRevision: 1 })
-          .mockResolvedValueOnce({ status: "idle", messageRevision: 2 });
-        return codexTab();
-      },
-    ],
+    ["Claude Native", "claude", "Codex", "a new revision", { revision: 2 }],
+    ["Codex Native", "codex", "OpenCode", "a running turn", { turn: { phase: "running" } }],
+    ["Codex Native", "codex", "OpenCode", "a new generation", { generation: "replacement" }],
   ] as const)(
-    "rejects a fast %s turn that finishes during the message read",
-    async (provider, destination, setup) => {
-      render(<AgentInfoButton activeTab={setup()} />);
-      open();
-      fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-      fireEvent.click(screen.getByRole("button", { name: destination }));
+    "rejects a %s transfer whose second read reports %s",
+    async (label, source, destination, _change, after) => {
+      seedNativeProjection(source, `${source}-session-1`);
+      handoffReads(
+        nativeProjection(source, `${source}-session-1`),
+        nativeProjection(source, `${source}-session-1`, after),
+      );
+      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
       await waitFor(() =>
         expect(mockToastError).toHaveBeenCalledWith(
-          `${provider} conversation changed while it was being transferred`,
+          `${label} conversation changed while it was being transferred`,
         ),
       );
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
     },
   );
 
-  test("rejects a fast OpenCode turn when two idle reads return different messages", async () => {
-    seedOpenCodeSession();
-    mockGetOpenCodeSessionMessages
-      .mockResolvedValueOnce([
-        {
-          id: "m1",
-          role: "user",
-          content: "before",
-          parts: [{ type: "text", content: "before" }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: "m1",
-          role: "user",
-          content: "after",
-          parts: [{ type: "text", content: "after" }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-      ]);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "OpenCode conversation changed while it was being transferred",
-      ),
-    );
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-  });
-
-  test("rejects a Codex transfer that changed while no revision was reported", async () => {
-    /*
-     * `messageRevision` is optional: an older bridge or a malformed status
-     * payload drops it. Requiring both sides to be defined before comparing
-     * fails open — the snapshot is taken on trust and a torn transcript is
-     * transferred silently. Re-read and compare instead.
-     */
-    seedCodexSession();
-    mockGetCodexSessionStatus.mockResolvedValue({ status: "idle" });
-    mockGetCodexSessionMessages
-      .mockResolvedValueOnce([
-        {
-          id: "m1",
-          role: "user",
-          content: "before",
-          parts: [{ type: "text", content: "before" }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: "m1",
-          role: "user",
-          content: "after the turn",
-          parts: [{ type: "text", content: "after the turn" }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-      ]);
-
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "OpenCode" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Codex conversation changed while it was being transferred",
-      ),
-    );
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    expect(mockGetCodexSessionMessages).toHaveBeenCalledTimes(2);
-  });
-
-  test("transfers a Codex conversation with no revision when both reads agree", async () => {
-    seedCodexSession();
-    mockGetCodexSessionStatus.mockResolvedValue({ status: "idle" });
-
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
-
-    await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
-    );
-    // The fallback re-reads rather than trusting the missing revision, so an
-    // older bridge stays usable instead of being permanently rejected.
-    expect(mockGetCodexSessionMessages).toHaveBeenCalledTimes(2);
-    expect(mockToastError).not.toHaveBeenCalled();
-  });
-
-  test("skips the second read when Codex reports a matching revision", async () => {
-    seedCodexSession();
-    mockGetCodexSessionStatus.mockResolvedValue({ status: "idle", messageRevision: 4 });
-
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
-
-    await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
-    );
-    expect(mockGetCodexSessionMessages).toHaveBeenCalledTimes(1);
-  });
-
   test("does not open a destination tab when the source tab carries no native data", async () => {
-    seedCodexSession();
+    seedCodexProjection();
 
     render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />);
     open();
@@ -4227,23 +3180,24 @@ describe("AgentInfoButton session actions", () => {
       ],
     });
     rememberAgentHandoff(prior);
-    seedCodexSession();
-    mockGetCodexSessionMessages.mockImplementation(async () => [
-      {
-        id: "bootstrap",
-        role: "user",
-        content: prior.bootstrapPrompt,
-        parts: [{ type: "text", content: prior.bootstrapPrompt }],
-        createdAt: "2026-07-27T10:00:00.000Z",
-      },
-      {
-        id: "codex-answer",
-        role: "assistant",
-        content: "current provider answer",
-        parts: [{ type: "text", content: "current provider answer" }],
-        createdAt: "2026-07-27T10:01:00.000Z",
-      },
-    ]);
+    seedCodexProjection({
+      messages: [
+        {
+          id: "bootstrap",
+          role: "user",
+          content: prior.bootstrapPrompt,
+          parts: [{ type: "text", content: prior.bootstrapPrompt }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        },
+        {
+          id: "codex-answer",
+          role: "assistant",
+          content: "current provider answer",
+          parts: [{ type: "text", content: "current provider answer" }],
+          createdAt: "2026-07-27T10:01:00.000Z",
+        },
+      ],
+    });
 
     render(<AgentInfoButton activeTab={codexTab({ agentHandoffId: prior.id })} />);
     open();
@@ -4262,7 +3216,7 @@ describe("AgentInfoButton session actions", () => {
   });
 
   test("rejects a handoff when its referenced prior transfer cannot be loaded", async () => {
-    seedCodexSession();
+    seedCodexProjection();
     startHandoff(codexTab({ agentHandoffId: "missing-handoff" }), "OpenCode");
 
     await waitFor(() =>
@@ -4299,7 +3253,7 @@ describe("AgentInfoButton session actions", () => {
         ],
       });
       rememberAgentHandoff(prior);
-      seedCodexSession();
+      seedCodexProjection();
       startHandoff(codexTab({ agentHandoffId: prior.id }), "OpenCode");
 
       await waitFor(() =>
@@ -4312,8 +3266,7 @@ describe("AgentInfoButton session actions", () => {
   );
 
   test("rejects a handoff whose authoritative transcript is empty", async () => {
-    seedClaudeSession();
-    mockGetClaudeSessionMessages.mockResolvedValueOnce([]);
+    seedClaudeProjection({ messages: [] });
     startHandoff(claudeTab(), "Codex");
 
     await waitFor(() =>
@@ -4323,25 +3276,13 @@ describe("AgentInfoButton session actions", () => {
   });
 
   test("does not allow a handoff while the source turn is running", () => {
-    useClaudeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
-      sessions: new Map([
-        [
-          CLAUDE_KEY,
-          {
-            sessionId: "claude-session-1",
-            messages: [{ id: "m1", role: "user", content: "working" }],
-            isLoading: true,
-          },
-        ],
-      ]),
-    } as never);
+    seedClaudeProjection({ turn: { phase: "running" } });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByRole("button", { name: /Continue in/ }).hasAttribute("disabled")).toBe(true);
   });
 
-  test.each([["claude"], ["opencode"], ["codex"]])(
+  test.each([["claude"], ["opencode"], ["codex"]] as const)(
     "forks a %s session into a tab that carries no bootstrap fields",
     async (provider) => {
       /*
@@ -4355,21 +3296,17 @@ describe("AgentInfoButton session actions", () => {
         initialCommands: ["/review"],
       } as Partial<TabInfo>;
 
-      let tab: TabInfo;
-      let expectedSessionId: string;
-      if (provider === "claude") {
-        seedClaudeSession();
-        tab = claudeTab(bootstrap);
-        expectedSessionId = "claude-fork";
-      } else if (provider === "opencode") {
-        seedOpenCodeSession();
-        tab = openCodeTab(bootstrap);
-        expectedSessionId = "opencode-fork";
-      } else {
-        seedCodexSession();
-        tab = codexTab(bootstrap);
-        expectedSessionId = "codex-fork";
-      }
+      seedNativeProjection(provider, `${provider}-session-1`);
+      mockNativeFork.mockImplementation(async () => ({
+        sessionId: `${provider}-fork`,
+        title: `${provider} fork title`,
+      }));
+      const tab =
+        provider === "claude"
+          ? claudeTab(bootstrap)
+          : provider === "opencode"
+            ? openCodeTab(bootstrap)
+            : codexTab(bootstrap);
 
       render(<AgentInfoButton activeTab={tab} />);
       open();
@@ -4378,6 +3315,11 @@ describe("AgentInfoButton session actions", () => {
       await waitFor(() =>
         expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID).length).toBe(2),
       );
+      expect(nativeInvokeMock).toHaveBeenCalledWith("fork_native_agent_session", {
+        environmentId: ENVIRONMENT_ID,
+        agent: provider,
+        logicalSessionKey: SESSION_KEY,
+      });
       const forked = usePaneLayoutStore
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
@@ -4390,16 +3332,48 @@ describe("AgentInfoButton session actions", () => {
       expect(forked.type).toBe(tab.type);
       expect(forked.displayTitle).toMatch(/fork title$/);
       const nativeData = forked.nativeAgentData;
-      expect(nativeData?.sessionId).toBe(expectedSessionId);
+      expect(nativeData?.sessionId).toBe(`${provider}-fork`);
       expect(nativeData?.environmentId).toBe(ENVIRONMENT_ID);
       // A successful action closes the panel.
       expect(isPopoverOpen()).toBe(false);
     },
   );
 
+  test("Agent Info adopts an OpenCode fork with the source model and reasoning controls", async () => {
+    seedNativeProjection("opencode", "opencode-session-1");
+    const controls = {
+      modelId: "opencode-go/deepseek-v4-flash",
+      reasoningId: "high",
+      executionProfileId: "reviewer",
+    };
+    mockNativeFork.mockImplementation(async () => ({
+      sessionId: "opencode-fork",
+      title: "Fork",
+      controls,
+    }));
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    const forked = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((entry) => entry.id !== TAB_ID)!;
+    expect(nativeInvokeMock).toHaveBeenCalledWith("adopt_native_agent_session", {
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: createSessionKey(ENVIRONMENT_ID, forked.id),
+      providerSessionId: "opencode-fork",
+      controls,
+    });
+    expect(forked.initialPrompt).toBeUndefined();
+  });
+
   test("names the fork tab after the provider when the fork has no title", async () => {
-    seedClaudeSession();
-    mockForkClaudeSession.mockImplementation(async () => ({ sessionId: "claude-fork" }));
+    seedClaudeProjection();
+    mockNativeFork.mockImplementation(async () => ({ sessionId: "claude-fork" }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
@@ -4413,52 +3387,29 @@ describe("AgentInfoButton session actions", () => {
     });
   });
 
-  test.each([
-    [409, "Codex session cannot be forked while it is running"],
-    [422, "That message is not a usable fork point"],
-    [404, "Codex session or fork point was not found"],
-    [0, "network request failed"],
-  ])("surfaces the bridge's own %s fork refusal and opens no tab", async (status, message) => {
-    /*
-     * These four mean different things — wait for the turn, pick another
-     * message, the session is gone, the bridge is unreachable — and the old
-     * single line blamed "an active or empty session" for all of them.
-     */
-    seedCodexSession();
-    mockForkCodexSession.mockImplementation(async () => {
-      throw new realCodexClientSnapshot.CodexForkError(status, message);
-    });
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
-
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(message));
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    // A failed action leaves the panel open so the user can retry.
-    expect(isPopoverOpen()).toBe(true);
-  });
-
-  test("reports an unexpected Codex fork error with generic copy", async () => {
-    // Not a bridge answer: presenting a programming error as Codex's own reason
-    // would send the user looking for a session problem that does not exist.
-    seedCodexSession();
-    mockForkCodexSession.mockImplementation(async () => {
-      throw new TypeError("client.fetch is not a function");
+  test("surfaces the backend's fork refusal and opens no tab", async () => {
+    seedCodexProjection();
+    mockNativeFork.mockImplementation(async () => {
+      throw new Error("Codex session cannot be forked while it is running");
     });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to fork Codex session"),
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Codex session cannot be forked while it is running",
+      ),
     );
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    // A failed action leaves the panel open so the user can retry.
+    expect(isPopoverOpen()).toBe(true);
   });
 
   test("disables every action while one is running and re-enables afterwards", async () => {
-    seedClaudeSession();
+    seedClaudeProjection();
     let release: (value: { sessionId: string }) => void = () => {};
-    mockForkClaudeSession.mockImplementation(
+    mockNativeFork.mockImplementation(
       () =>
         new Promise((resolve) => {
           release = resolve;
@@ -4479,30 +3430,33 @@ describe("AgentInfoButton session actions", () => {
     expect(screen.getByRole("button", { name: /Compact/ }).hasAttribute("disabled")).toBe(false);
   });
 
-  test.each([["claude"], ["opencode"], ["codex"]])("compacts a %s session", async (provider) => {
-    let tab: TabInfo;
-    if (provider === "claude") {
-      seedClaudeSession();
-      tab = claudeTab();
-    } else if (provider === "opencode") {
-      seedOpenCodeSession();
-      tab = openCodeTab();
-    } else {
-      seedCodexSession();
-      tab = codexTab();
-    }
-    render(<AgentInfoButton activeTab={tab} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
+  test.each([["claude"], ["opencode"], ["codex"]] as const)(
+    "compacts a %s session through the backend",
+    async (provider) => {
+      seedNativeProjection(provider, `${provider}-session-1`, {
+        composer: composerState({ selectedModelId: `${provider}-model` }),
+      });
+      const tab =
+        provider === "claude" ? claudeTab() : provider === "opencode" ? openCodeTab() : codexTab();
+      render(<AgentInfoButton activeTab={tab} />);
+      open();
+      fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
 
-    await waitFor(() =>
-      expect(mockToastSuccess).toHaveBeenCalledWith("Context compaction started"),
-    );
-  });
+      await waitFor(() =>
+        expect(mockToastSuccess).toHaveBeenCalledWith("Context compaction started"),
+      );
+      expect(mockNativeAction).toHaveBeenCalledWith({
+        kind: "compact",
+        modelId: `${provider}-model`,
+      });
+    },
+  );
 
   test("reports a provider that refuses to compact", async () => {
-    seedClaudeSession();
-    mockCompactClaudeSession.mockImplementation(async () => false);
+    seedClaudeProjection();
+    mockNativeAction.mockImplementation(async () => {
+      throw new Error("The provider could not compact this session");
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
@@ -4510,31 +3464,34 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("The provider could not compact this session"),
     );
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Context compaction started");
   });
 
-  test("starts a Codex review, and blocks the button during an active turn", async () => {
-    seedCodexSession(true);
-    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
+  test("starts a Codex review through the backend", async () => {
+    seedCodexProjection();
+    render(<AgentInfoButton activeTab={codexTab()} />);
     open();
-    expect(screen.getByRole("button", { name: /Review changes/ }).hasAttribute("disabled")).toBe(
-      true,
-    );
-
-    act(() => {
-      seedCodexSession(false);
-    });
-    rerender(<AgentInfoButton activeTab={codexTab()} />);
     fireEvent.click(screen.getByRole("button", { name: /Review changes/ }));
 
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("Reviewing uncommitted changes"),
     );
-    expect(mockStartCodexNativeReview).toHaveBeenCalledWith(CODEX_CLIENT, "codex-session-1");
+    expect(nativeActionKinds()).toEqual(["review"]);
+    expect(nativeInvokeMock).toHaveBeenCalledWith(
+      "perform_native_agent_session_action",
+      expect.objectContaining({
+        environmentId: ENVIRONMENT_ID,
+        agent: "codex",
+        logicalSessionKey: CODEX_KEY,
+      }),
+    );
   });
 
   test("reports a Codex review that could not start", async () => {
-    seedCodexSession(false);
-    mockStartCodexNativeReview.mockImplementation(async () => false);
+    seedCodexProjection();
+    mockNativeAction.mockImplementation(async () => {
+      throw new Error("Codex native review could not start");
+    });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Review changes/ }));
@@ -4550,104 +3507,73 @@ describe("AgentInfoButton session actions", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
     await waitFor(() =>
-      expect(mockRevertOpenCodeSession).toHaveBeenCalledWith(
-        openCodeClient,
-        "opencode-session-1",
-        "m1",
-      ),
+      expect(mockNativeAction).toHaveBeenCalledWith({ kind: "undo", messageId: "m1" }),
     );
+    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
 
     reopen();
     fireEvent.click(screen.getByRole("button", { name: /Redo turn/ }));
-    await waitFor(() =>
-      expect(mockUnrevertOpenCodeSession).toHaveBeenCalledWith(
-        openCodeClient,
-        "opencode-session-1",
-      ),
+    await waitFor(() => expect(mockNativeAction).toHaveBeenCalledWith({ kind: "redo" }));
+    expect(nativeInvokeMock).toHaveBeenCalledWith(
+      "perform_native_agent_session_action",
+      expect.objectContaining({
+        environmentId: ENVIRONMENT_ID,
+        agent: "opencode",
+        logicalSessionKey: OPENCODE_KEY,
+      }),
     );
   });
 
   test("passes no message id when undoing without a user message", async () => {
-    seedOpenCodeSession();
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [
-          OPENCODE_KEY,
-          {
-            sessionId: "opencode-session-1",
-            messages: [
-              {
-                id: "a1",
-                role: "assistant",
-                content: "hello",
-                parts: [],
-                createdAt: "",
-              },
-            ],
-            isLoading: false,
-          },
-        ],
-      ]),
-    } as never);
+    seedOpenCodeProjection("opencode-session-1", {
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          content: "hello",
+          parts: [{ type: "text", content: "hello" }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        },
+      ],
+    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
     await waitFor(() =>
-      expect(mockRevertOpenCodeSession).toHaveBeenCalledWith(
-        openCodeClient,
-        "opencode-session-1",
-        undefined,
-      ),
+      expect(mockNativeAction).toHaveBeenCalledWith({ kind: "undo", messageId: undefined }),
     );
     expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
   });
 
-  test("reports an OpenCode undo rejection and re-enables actions", async () => {
-    seedOpenCodeSession();
-    mockRevertOpenCodeSession.mockImplementation(async () => {
-      throw new Error("OpenCode undo endpoint unavailable");
-    });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
+  test.each([
+    ["undo", /Undo turn/, "OpenCode session reverted"],
+    ["redo", /Redo turn/, "OpenCode revert undone"],
+  ] as const)(
+    "reports an OpenCode %s rejection and re-enables actions",
+    async (kind, button, success) => {
+      seedOpenCodeSession();
+      mockNativeAction.mockImplementation(async () => {
+        throw new Error(`OpenCode ${kind} endpoint unavailable`);
+      });
+      render(<AgentInfoButton activeTab={openCodeTab()} />);
+      open();
 
-    fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
+      fireEvent.click(screen.getByRole("button", { name: button }));
 
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("OpenCode undo endpoint unavailable"),
-    );
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode session reverted");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Undo turn/ }).hasAttribute("disabled")).toBe(
-        false,
-      ),
-    );
-  });
-
-  test("reports an OpenCode redo rejection and re-enables actions", async () => {
-    seedOpenCodeSession();
-    mockUnrevertOpenCodeSession.mockImplementation(async () => {
-      throw new Error("OpenCode redo endpoint unavailable");
-    });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    fireEvent.click(screen.getByRole("button", { name: /Redo turn/ }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("OpenCode redo endpoint unavailable"),
-    );
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode revert undone");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Redo turn/ }).hasAttribute("disabled")).toBe(
-        false,
-      ),
-    );
-  });
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(`OpenCode ${kind} endpoint unavailable`),
+      );
+      expect(mockToastSuccess).not.toHaveBeenCalledWith(success);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: button }).hasAttribute("disabled")).toBe(false),
+      );
+    },
+  );
 
   test("normalizes a non-Error OpenCode action rejection", async () => {
     seedOpenCodeSession();
-    mockRevertOpenCodeSession.mockImplementation(async () => {
+    mockNativeAction.mockImplementation(async () => {
       throw "transport closed";
     });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
@@ -4659,19 +3585,33 @@ describe("AgentInfoButton session actions", () => {
     expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode session reverted");
   });
 
-  test("stops a running background task and reports a refusal", async () => {
-    seedClaudeSession();
-    useClaudeStore.setState({
-      backgroundTasks: new Map([
-        [
-          CLAUDE_KEY,
-          {
-            "task-1": { id: "task-1", description: "Run the suite", status: "running" },
-            "task-2": { id: "task-2", description: "Finished", status: "completed" },
-          },
-        ],
-      ]),
-    } as never);
+  test("forks and compacts OpenCode through the backend session actions", async () => {
+    seedOpenCodeSession();
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenCalledWith("Context compaction started"),
+    );
+    expect(nativeActionKinds()).toEqual(["compact"]);
+
+    reopen();
+    fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
+    await waitFor(() => expect(mockNativeFork).toHaveBeenCalledTimes(1));
+    expect(nativeInvokeMock).toHaveBeenCalledWith("fork_native_agent_session", {
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: OPENCODE_KEY,
+    });
+  });
+
+  test("stops a running background task through the backend and reports a refusal", async () => {
+    seedClaudeProjection({
+      backgroundTasks: [
+        { id: "task-1", description: "Run the suite", status: "running" },
+        { id: "task-2", description: "Finished", status: "completed" },
+      ],
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -4679,23 +3619,23 @@ describe("AgentInfoButton session actions", () => {
     // Completed tasks are not offered a stop control.
     expect(screen.queryByText("Finished") === null).toBe(true);
 
-    mockStopClaudeBackgroundTask.mockImplementation(async () => false);
+    mockStopBackgroundTask.mockImplementation(async () => {
+      throw new Error("Claude could not stop this task");
+    });
     fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Claude could not stop this task"),
     );
-    expect(mockStopClaudeBackgroundTask).toHaveBeenCalledWith(
-      CLAUDE_CLIENT,
-      "claude-session-1",
-      "task-1",
-    );
+    expect(nativeInvokeMock).toHaveBeenCalledWith("stop_native_agent_background_task", {
+      environmentId: ENVIRONMENT_ID,
+      agent: "claude",
+      logicalSessionKey: CLAUDE_KEY,
+      taskId: "task-1",
+    });
   });
 
   test("hides the background-task section when nothing is running", () => {
-    seedClaudeSession();
-    useClaudeStore.setState({
-      backgroundTasks: new Map([[CLAUDE_KEY, { "task-2": { id: "task-2", status: "completed" } }]]),
-    } as never);
+    seedClaudeProjection({ backgroundTasks: [{ id: "task-2", status: "completed" }] });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.queryByText("Background tasks") === null).toBe(true);
@@ -4704,50 +3644,26 @@ describe("AgentInfoButton session actions", () => {
   test.each(["pending", "paused"] as const)(
     "keeps %s background tasks visible and stoppable",
     async (status) => {
-      seedClaudeSession();
       const taskId = `task-${status}`;
       const description = `${status[0]!.toUpperCase()}${status.slice(1)} review`;
-      useClaudeStore.setState({
-        backgroundTasks: new Map([
-          [
-            CLAUDE_KEY,
-            {
-              [taskId]: {
-                id: taskId,
-                description,
-                status,
-              },
-            },
-          ],
-        ]),
-      } as never);
+      seedClaudeProjection({ backgroundTasks: [{ id: taskId, description, status }] });
 
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       expect(screen.getByText(description)).toBeTruthy();
 
-      mockStopClaudeBackgroundTask.mockImplementation(async () => true);
       fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
-      await waitFor(() =>
-        expect(mockStopClaudeBackgroundTask).toHaveBeenCalledWith(
-          CLAUDE_CLIENT,
-          "claude-session-1",
-          taskId,
-        ),
-      );
+      await waitFor(() => expect(mockStopBackgroundTask).toHaveBeenCalledWith(taskId));
     },
   );
 
   test.each(["completed", "failed", "killed"] as const)(
     "hides the background-task section when every task is %s",
     (status) => {
-      seedClaudeSession();
-      useClaudeStore.setState({
-        backgroundTasks: new Map([
-          [CLAUDE_KEY, { "task-2": { id: "task-2", description: "Settled", status } }],
-        ]),
-      } as never);
+      seedClaudeProjection({
+        backgroundTasks: [{ id: "task-2", description: "Settled", status }],
+      });
 
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
@@ -4760,38 +3676,44 @@ describe("AgentInfoButton session actions", () => {
 
 describe("AgentInfoButton rewind confirmation", () => {
   function seedClaudeWithMessages() {
-    useClaudeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
-      sessions: new Map([
-        [
-          CLAUDE_KEY,
-          {
-            sessionId: "claude-session-1",
-            isLoading: false,
-            messages: [
-              { id: "u1", role: "user", content: "first request" },
-              { id: "a1", role: "assistant", content: "done" },
-              {
-                id: "u2",
-                role: "user",
-                content: "  Please   rewrite the authentication middleware  ",
-              },
-            ],
-          },
-        ],
-      ]),
-    } as never);
+    const text = (id: string, role: "user" | "assistant", content: string) => ({
+      id,
+      role,
+      content,
+      parts: [{ type: "text" as const, content }],
+      createdAt: "2026-07-27T10:00:00.000Z",
+    });
+    seedClaudeProjection({
+      messages: [
+        text("u1", "user", "first request"),
+        text("a1", "assistant", "done"),
+        text("u2", "user", "  Please   rewrite the authentication middleware  "),
+      ],
+    });
+  }
+
+  /** The backend's dry run answers with `preview`; the real rewind with none. */
+  function rewindPreview(preview: unknown) {
+    mockNativeAction.mockImplementation(async (action) =>
+      action.dryRun ? { outcome: "applied", preview } : { outcome: "applied" },
+    );
+  }
+
+  function rewindCalls() {
+    return mockNativeAction.mock.calls
+      .map(([action]) => action)
+      .filter((action) => action.kind === "rewind-files");
   }
 
   test("names the target message and lists the files instead of dumping JSON", async () => {
     seedClaudeWithMessages();
-    mockRewindClaudeFiles.mockImplementation(async () => ({
+    rewindPreview({
       files: [
         "src/auth/middleware.ts",
         { path: "src/auth/session.ts" },
         { file: "src/auth/index.ts" },
       ],
-    }));
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
@@ -4808,21 +3730,18 @@ describe("AgentInfoButton rewind confirmation", () => {
     expect(message).not.toContain('{"');
     expect(message).not.toContain('"files"');
 
-    await waitFor(() => expect(mockRewindClaudeFiles).toHaveBeenCalledTimes(2));
-    expect(mockRewindClaudeFiles.mock.calls[0]).toEqual([
-      CLAUDE_CLIENT,
-      "claude-session-1",
-      "u2",
-      true,
+    await waitFor(() => expect(rewindCalls()).toHaveLength(2));
+    expect(rewindCalls()).toEqual([
+      { kind: "rewind-files", messageId: "u2", dryRun: true },
+      { kind: "rewind-files", messageId: "u2" },
     ]);
-    expect(mockRewindClaudeFiles.mock.calls[1]).toEqual([CLAUDE_CLIENT, "claude-session-1", "u2"]);
     expect(mockToastSuccess).toHaveBeenCalledWith("Claude restored 3 files");
   });
 
   test("cancelling the confirm issues no second call", async () => {
     seedClaudeWithMessages();
     confirmResult = false;
-    mockRewindClaudeFiles.mockImplementation(async () => ({ files: ["a.ts"] }));
+    rewindPreview({ files: ["a.ts"] });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
@@ -4830,14 +3749,14 @@ describe("AgentInfoButton rewind confirmation", () => {
     await waitFor(() => expect(confirmMessages).toHaveLength(1));
     expect(confirmMessages[0]).toContain("1 file will be restored:");
     // Exactly one call — the dry run. The destructive call must not happen.
-    await waitFor(() => expect(mockRewindClaudeFiles).toHaveBeenCalledTimes(1));
-    expect(mockRewindClaudeFiles.mock.calls[0]?.[3]).toBe(true);
+    await waitFor(() => expect(rewindCalls()).toHaveLength(1));
+    expect(rewindCalls()[0]?.dryRun).toBe(true);
     expect(mockToastSuccess).not.toHaveBeenCalled();
   });
 
   test("says so when the dry run reports no files", async () => {
     seedClaudeWithMessages();
-    mockRewindClaudeFiles.mockImplementation(async () => ({ unexpected: "shape" }));
+    rewindPreview({ unexpected: "shape" });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
@@ -4848,19 +3767,17 @@ describe("AgentInfoButton rewind confirmation", () => {
   });
 
   test("refuses when the transcript holds no user message", async () => {
-    useClaudeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
-      sessions: new Map([
-        [
-          CLAUDE_KEY,
-          {
-            sessionId: "claude-session-1",
-            isLoading: false,
-            messages: [{ id: "a1", role: "assistant", content: "hello" }],
-          },
-        ],
-      ]),
-    } as never);
+    seedClaudeProjection({
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          content: "hello",
+          parts: [{ type: "text", content: "hello" }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        },
+      ],
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
@@ -4868,14 +3785,14 @@ describe("AgentInfoButton rewind confirmation", () => {
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("No file checkpoint is available"),
     );
-    expect(mockRewindClaudeFiles).not.toHaveBeenCalled();
+    expect(rewindCalls()).toEqual([]);
   });
 
   test("lists at most ten files and counts the rest", async () => {
     seedClaudeWithMessages();
-    mockRewindClaudeFiles.mockImplementation(async () => ({
+    rewindPreview({
       files: Array.from({ length: 13 }, (_, index) => `src/file-${index}.ts`),
-    }));
+    });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
@@ -4960,48 +3877,36 @@ describe("AgentInfoButton rewind confirmation", () => {
 
 describe("AgentInfoButton OpenCode sharing", () => {
   function seedShareableSession(sessionId = "opencode-session-1") {
-    useOpenCodeStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
-      sessions: new Map([[OPENCODE_KEY, { sessionId, messages: [], isLoading: false }]]),
-    } as never);
+    seedOpenCodeProjection(sessionId);
   }
 
-  test("rehydrates sharing from the provider-neutral projection without a legacy client", () => {
-    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, {
-      platform: "opencode",
-      environmentId: ENVIRONMENT_ID,
-      sessionId: "opencode-session-1",
+  /** Holds the next share open until the test releases it with a URL. */
+  function deferShare(): (url: string) => void {
+    let release: (url: string) => void = () => {};
+    mockNativeAction.mockImplementation((action) =>
+      action.kind === "share"
+        ? new Promise((resolve) => {
+            release = (url) => resolve({ outcome: "applied", shareUrl: url });
+          })
+        : Promise.resolve({ outcome: "applied" }),
+    );
+    return (url) => release(url);
+  }
+
+  async function shareAndWaitForRevocation() {
+    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+  }
+
+  test("rehydrates sharing from the provider-neutral projection", () => {
+    seedOpenCodeProjection("opencode-session-1", {
       shareUrl: "https://share.opencode.test/projected",
-      connection: "connected",
-      turn: { phase: "idle" },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: {
-        attachments: { files: true, images: true },
-        queue: true,
-        resume: true,
-        fork: true,
-        slashCommands: true,
-        backgroundTasks: false,
-        composer: {
-          provider: true,
-          model: true,
-          reasoning: true,
-          speed: false,
-          mode: true,
-        },
-        actions: { share: true },
-      },
-      revision: 1,
-      generation: "test",
     });
 
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
-    expect(openCodeSessionGet).not.toHaveBeenCalled();
   });
 
   test("copies the link and offers revocation", async () => {
@@ -5013,13 +3918,14 @@ describe("AgentInfoButton OpenCode sharing", () => {
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link copied"));
     expect(confirmMessages[0]).toContain("leave this machine");
+    expect(nativeActionKinds()).toEqual(["share"]);
     expect(clipboardWrites).toEqual(["https://share.opencode.test/abc"]);
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
   });
 
   test("a clipboard rejection still leaves the session revocable and surfaces the URL", async () => {
     /*
-     * The conversation is public the moment `share()` resolves. The flag used
+     * The conversation is public the moment the share resolves. The flag used
      * to be set after the clipboard write, so a rejection (focus or permission)
      * produced an error toast beside a live link and no way to revoke it.
      */
@@ -5039,7 +3945,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
   test("a share with no returned URL is still revocable", async () => {
     seedShareableSession();
-    mockShareOpenCodeSession.mockImplementation(async () => undefined);
+    mockNativeAction.mockImplementation(async () => ({ outcome: "applied" }));
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
@@ -5058,13 +3964,13 @@ describe("AgentInfoButton OpenCode sharing", () => {
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
     await waitFor(() => expect(confirmMessages).toHaveLength(1));
-    expect(mockShareOpenCodeSession).not.toHaveBeenCalled();
+    expect(nativeActionKinds()).toEqual([]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a share failure reports and offers no revocation", async () => {
     seedShareableSession();
-    mockShareOpenCodeSession.mockImplementation(async () => {
+    mockNativeAction.mockImplementation(async () => {
       throw new Error("OpenCode share endpoint unavailable");
     });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
@@ -5077,35 +3983,35 @@ describe("AgentInfoButton OpenCode sharing", () => {
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
-  test("rehydrates the shared state from the server when the panel opens", async () => {
+  test("rehydrates the shared state from the backend when the panel opens", async () => {
     /*
      * Component state is lost on every tab switch and app restart, but the link
-     * stays live — the server's session record is the authoritative snapshot.
+     * stays live — the backend projection is the authoritative snapshot.
      */
-    openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-      data: { id: "opencode-session-1", share: { url: "https://share.opencode.test/live" } },
-    }));
-    openCodeClient = { session: { get: openCodeSessionGet } };
     seedShareableSession();
+    mockNativeProjectionRead.mockImplementation(async () =>
+      openCodeProjection("opencode-session-1", { shareUrl: "https://share.opencode.test/live" }),
+    );
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
-    expect(openCodeSessionGet).toHaveBeenCalledWith({ sessionID: "opencode-session-1" });
   });
 
-  test("a failed share lookup does not hide an already-known share", async () => {
+  test("a failed projection refresh does not hide an already-known share", async () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
 
-    openCodeSessionGet.mockImplementation(async () => {
+    mockNativeProjectionRead.mockImplementation(async () => {
       throw new Error("server unreachable");
     });
+    const readsBefore = mockNativeProjectionRead.mock.calls.length;
     reopen();
-    await waitFor(() => expect(openCodeSessionGet).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(mockNativeProjectionRead.mock.calls.length).toBeGreaterThan(readsBefore),
+    );
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
   });
 
@@ -5113,63 +4019,42 @@ describe("AgentInfoButton OpenCode sharing", () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy(), {
-      timeout: 10_000,
-    });
+    await shareAndWaitForRevocation();
 
-    // A share can be revoked from another client. A successful provider read
-    // with no URL is authoritative and must remove the stale local action.
-    openCodeSessionGet.mockImplementation(async () => ({
-      data: { id: "opencode-session-1" },
-    }));
+    // A share can be revoked from another client. A projection that reports
+    // no share URL is authoritative and must remove the stale local action.
+    mockNativeProjectionRead.mockImplementation(async () =>
+      openCodeProjection("opencode-session-1", { shareUrl: null }),
+    );
     reopen();
 
-    await waitFor(
-      () => expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true),
-      { timeout: 10_000 },
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true),
     );
-  }, 20_000);
-
-  test("a client without a session.get surface reports not shared rather than throwing", async () => {
-    openCodeClient = {};
-    seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-    await waitFor(() => expect(screen.getByText("Session actions")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("stop sharing revokes and hides the control", async () => {
     seedShareableSession();
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
 
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
     );
-    expect(mockUnshareOpenCodeSession).toHaveBeenCalledWith(openCodeClient, "opencode-session-1");
+    expect(nativeActionKinds()).toEqual(["share", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
   test("a failed unshare remains visible and can be retried", async () => {
-    openCodeSessionGet = mock(async (_parameters: { sessionID: string }): Promise<unknown> => ({
-      data: {
-        id: "opencode-session-1",
-        share: { url: "https://share.opencode.test/live" },
-      },
-    }));
-    openCodeClient = { session: { get: openCodeSessionGet } };
     seedShareableSession();
-    mockUnshareOpenCodeSession.mockImplementation(async () => {
-      throw new Error("OpenCode unshare endpoint unavailable");
-    });
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
+    mockNativeAction.mockImplementation(async () => {
+      throw new Error("OpenCode unshare endpoint unavailable");
+    });
 
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
 
@@ -5183,12 +4068,12 @@ describe("AgentInfoButton OpenCode sharing", () => {
       ),
     );
 
-    mockUnshareOpenCodeSession.mockImplementation(async () => undefined);
+    mockNativeAction.mockImplementation(async () => ({ outcome: "applied" }));
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
     );
-    expect(mockUnshareOpenCodeSession).toHaveBeenCalledTimes(2);
+    expect(nativeActionKinds()).toEqual(["share", "unshare", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
 
@@ -5196,8 +4081,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     seedShareableSession();
     const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await shareAndWaitForRevocation();
 
     rerender(<AgentInfoButton activeTab={openCodeTab({ id: "tab-9" })} />);
     reopen();
@@ -5206,19 +4090,11 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
   test("a delayed share cannot mark a resumed session as shared", async () => {
     seedShareableSession("opencode-session-a");
-    let releaseShare: (url: string) => void = () => {};
-    mockShareOpenCodeSession.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseShare = resolve;
-        }),
-    );
+    const releaseShare = deferShare();
     const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() =>
-      expect(mockShareOpenCodeSession).toHaveBeenCalledWith(openCodeClient, "opencode-session-a"),
-    );
+    await waitFor(() => expect(nativeActionKinds()).toEqual(["share"]));
 
     act(() => {
       seedShareableSession("opencode-session-b");
@@ -5237,18 +4113,15 @@ describe("AgentInfoButton OpenCode sharing", () => {
   test("an old action finishing cannot clear the new session's busy latch", async () => {
     seedShareableSession("opencode-session-a");
     let releaseShare: (url: string) => void = () => {};
-    let releaseCompact: (value?: undefined) => void = () => {};
-    mockShareOpenCodeSession.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseShare = resolve;
-        }),
-    );
-    mockCompactOpenCodeSession.mockImplementation(
-      () =>
-        new Promise<undefined>((resolve) => {
-          releaseCompact = resolve;
-        }),
+    let releaseCompact: () => void = () => {};
+    mockNativeAction.mockImplementation((action) =>
+      action.kind === "share"
+        ? new Promise((resolve) => {
+            releaseShare = (url) => resolve({ outcome: "applied", shareUrl: url });
+          })
+        : new Promise((resolve) => {
+            releaseCompact = () => resolve({ outcome: "applied" });
+          }),
     );
     const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
@@ -5299,19 +4172,6 @@ describe("AgentInfoButton backend-owned steering", () => {
   }
 
   function seedRunningCodex(tabId = TAB_ID) {
-    useCodexStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
-      sessions: new Map([
-        [
-          createSessionKey(ENVIRONMENT_ID, TAB_ID),
-          { sessionId: `codex-${TAB_ID}`, messages: [], isLoading: true },
-        ],
-        [
-          createSessionKey(ENVIRONMENT_ID, tabId),
-          { sessionId: `codex-${tabId}`, messages: [], isLoading: true },
-        ],
-      ]),
-    } as never);
     seedProjection(TAB_ID);
     seedProjection(tabId);
   }
@@ -5328,12 +4188,6 @@ describe("AgentInfoButton backend-owned steering", () => {
   }
 
   test("only offers the steer panel when the backend projection enables a running turn", () => {
-    useCodexStore.setState({
-      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
-      sessions: new Map([
-        [CODEX_KEY, { sessionId: "codex-session-1", messages: [], isLoading: false }],
-      ]),
-    } as never);
     seedProjection(TAB_ID, "idle");
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
@@ -5535,110 +4389,14 @@ describe("AgentInfoButton runtime inventory", () => {
     expect(metricValue("Files")).toBe("6");
   });
 
-  test("counts Claude MCP servers, plugins and commands", () => {
-    useClaudeStore.setState({
-      sessionInitData: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            mcpServers: [{ name: "a" }, { name: "b" }],
-            plugins: [{ name: "p" }],
-            slashCommands: ["/one", "/two", "/three"],
-            agents: [],
-          },
-        ],
-      ]),
-    } as never);
+  test("counts Claude MCP servers, plugins and commands from the projection", () => {
+    seedClaudeProjection({ runtime: { mcpServers: 2, plugins: 1, commands: 3 } });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(metricValue("MCP")).toBe("2");
     expect(metricValue("Plugins")).toBe("1");
     expect(metricValue("Commands")).toBe("3");
-  });
-
-  test("prefers the session-scoped OpenCode snapshot for todos and files", () => {
-    /*
-     * Every OpenCode tab writes runtime health under the environment key, so
-     * the environment entry can describe a sibling session. The session-keyed
-     * mirror is the one that belongs to the tab the user is looking at.
-     */
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [OPENCODE_KEY, { sessionId: "opencode-session-1", messages: [], isLoading: false }],
-      ]),
-      runtimeHealth: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            agents: [],
-            skills: [{ name: "s1" }],
-            mcpServers: [{ name: "m1", status: "connected" }],
-            lspServers: [],
-            formatters: [],
-            todos: [{ content: "sibling todo", status: "pending", priority: "high" }],
-            diffs: [
-              { file: "sibling.ts", additions: 1, deletions: 0 },
-              { file: "sibling2.ts", additions: 1, deletions: 0 },
-            ],
-            fetchedAt: "2026-07-26T00:00:00.000Z",
-          },
-        ],
-        [
-          OPENCODE_KEY,
-          {
-            agents: [],
-            skills: [],
-            mcpServers: [],
-            lspServers: [],
-            formatters: [],
-            todos: [
-              { content: "mine", status: "pending", priority: "high" },
-              { content: "mine too", status: "pending", priority: "low" },
-              { content: "third", status: "completed", priority: "low" },
-            ],
-            diffs: [{ file: "mine.ts", additions: 3, deletions: 1 }],
-            fetchedAt: "2026-07-26T01:00:00.000Z",
-          },
-        ],
-      ]),
-    } as never);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    // Environment-wide inventory still comes from the environment entry.
-    expect(metricValue("MCP")).toBe("1");
-    expect(metricValue("Skills")).toBe("1");
-    expect(metricValue("LSP")).toBe("0");
-    expect(metricValue("Todos")).toBe("3");
-    expect(metricValue("Files")).toBe("1");
-  });
-
-  test("falls back to the environment snapshot before the first session-scoped write", () => {
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [OPENCODE_KEY, { sessionId: "opencode-session-1", messages: [], isLoading: false }],
-      ]),
-      runtimeHealth: new Map([
-        [
-          ENVIRONMENT_ID,
-          {
-            agents: [],
-            skills: [],
-            mcpServers: [],
-            lspServers: [],
-            formatters: [],
-            todos: [{ content: "only", status: "pending", priority: "high" }],
-            diffs: [],
-            fetchedAt: "2026-07-26T00:00:00.000Z",
-          },
-        ],
-      ]),
-    } as never);
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-
-    expect(metricValue("Todos")).toBe("1");
   });
 });
 
@@ -6335,7 +5093,7 @@ describe("AgentInfoButton ACP agents", () => {
     });
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
     const saved: Array<Record<string, unknown>> = [];
-    // An ACP session has no legacy client, so the transfer reads the backend
+    // Every transfer reads the backend
     // projection twice and refuses unless both reads agree. Both answer the
     // same snapshot; the revision guard is exercised by its own test below.
     nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {

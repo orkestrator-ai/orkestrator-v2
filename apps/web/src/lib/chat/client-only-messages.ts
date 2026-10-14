@@ -1,10 +1,19 @@
-import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import type { NativeMessage, NativeMessagePart } from "./native-message-types";
 import {
   AGENT_MAIL_TRUST_CLASSES,
   type AgentMailMessage,
   type MailActor,
 } from "@orkestrator/protocol/agent-mail";
+import { NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-agent";
+
+/**
+ * Prefix for error messages rendered inline in a transcript: client-only rows
+ * and the durable rows a provider writes (`providerInlineErrorMessageId`).
+ */
+export const ERROR_MESSAGE_PREFIX = NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX;
+
+/** Prefix for client-only system messages rendered inline in a transcript. */
+export const SYSTEM_MESSAGE_PREFIX = "system-";
 
 export const OPTIMISTIC_MESSAGE_PREFIX = "optimistic-";
 export const PEER_MAIL_MESSAGE_PREFIX = "peer-mail-";

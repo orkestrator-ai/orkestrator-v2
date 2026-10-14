@@ -39,6 +39,87 @@ function structuredTurn() {
   });
 }
 
+/** A reusable child spawned before `turn()` starts, with a persisted response. */
+async function withEarlierTurnChildTranscript(run: () => Promise<void>): Promise<void> {
+  const codexHome = await mkdtemp(join(tmpdir(), "orkestrator-render-earlier-child-"));
+  const sessions = join(codexHome, "sessions");
+  const previousCodexHome = process.env.CODEX_HOME;
+  try {
+    await mkdir(sessions, { recursive: true });
+    const transcripts = {
+      "thread-1": [
+        {
+          timestamp: "2026-07-25T11:59:00.000Z",
+          type: "session_meta",
+          payload: { id: "thread-1", cwd: "/workspace" },
+        },
+        {
+          timestamp: "2026-07-25T11:59:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ message: "Review the earlier turn" }),
+            call_id: "earlier-spawn",
+          },
+        },
+        {
+          timestamp: "2026-07-25T11:59:02.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "earlier-spawn",
+            output: JSON.stringify({ agent_id: "child-v2" }),
+          },
+        },
+      ],
+      "child-v2": [
+        {
+          timestamp: "2026-07-25T11:59:02.000Z",
+          type: "session_meta",
+          payload: {
+            id: "child-v2",
+            cwd: "/workspace",
+            agent_nickname: "Verifier",
+            agent_role: "worker",
+          },
+        },
+        {
+          timestamp: "2026-07-25T12:00:02.000Z",
+          type: "event_msg",
+          payload: {
+            type: "agent_message",
+            phase: "commentary",
+            message: "Reviewed the follow-up.",
+          },
+        },
+        {
+          timestamp: "2026-07-25T12:00:03.000Z",
+          type: "event_msg",
+          payload: { type: "task_complete" },
+        },
+      ],
+    };
+    await Promise.all(
+      Object.entries(transcripts).map(([id, records]) =>
+        writeFile(
+          join(sessions, `${id}.jsonl`),
+          `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+          "utf8",
+        ),
+      ),
+    );
+    process.env.CODEX_HOME = codexHome;
+    clearTranscriptCache();
+    await run();
+  } finally {
+    clearTranscriptCache();
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    await rm(codexHome, { recursive: true, force: true });
+  }
+}
+
 describe("turn render state", () => {
   test("begins the first turn with empty render state", () => {
     const state = beginTurnRenderState(undefined);
@@ -817,6 +898,43 @@ describe("renderTurn", () => {
       }
       await rm(codexHome, { recursive: true, force: true });
     }
+  });
+
+  test("hydrates an earlier turn's child from activity-only items after inactivity", async () => {
+    await withEarlierTurnChildTranscript(async () => {
+      const accumulator = turn();
+      for (const activity of ["interacted", "completed"] as const) {
+        accumulator.onItemCompleted({
+          id: activity,
+          type: "subagent_activity",
+          activity,
+          agent_thread_id: "child-v2",
+          agent_path: "/root/bot_fixes",
+        });
+      }
+      accumulator.complete("completed");
+      const options = { threadId: "thread-1", cwd: "/workspace" };
+      const rendered = await renderTurn(accumulator, {
+        ...options,
+        state: createTurnRenderState(),
+      });
+
+      expect(rendered.parts).toEqual([
+        expect.objectContaining({
+          type: "subagent",
+          subagentId: "child-v2",
+          subagentName: "Verifier",
+          subagentRole: "worker",
+          toolState: "success",
+          subagentActions: [{ type: "text", content: "Reviewed the follow-up." }],
+        }),
+      ]);
+      // Returning to an inactive environment must recover the full card from
+      // the authoritative rollouts without relying on the previous row cache.
+      expect(await renderTurn(accumulator, { ...options, state: createTurnRenderState() })).toEqual(
+        rendered,
+      );
+    });
   });
 
   test("uses the production subagent loader safely when no thread exists yet", async () => {
@@ -1717,6 +1835,57 @@ describe("sub-agent cards across a turn's rows", () => {
 
   const cardIds = (parts: Array<{ type: string; subagentId?: string }>) =>
     parts.filter((part) => part.type === "subagent").map((part) => part.subagentId);
+
+  test("a later activity-only row after a steer preserves the earlier row's hydrated card", async () => {
+    await withEarlierTurnChildTranscript(async () => {
+      const accumulator = turn();
+      accumulator.onItemCompleted({
+        id: "send",
+        type: "subagent_activity",
+        activity: "interacted",
+        agent_thread_id: "child-v2",
+        agent_path: "/root/bot_fixes",
+      });
+      const firstState = createTurnRenderState();
+      const options = { threadId: "thread-1", cwd: "/workspace" };
+      expect(
+        cardIds((await renderTurn(accumulator, { ...options, state: firstState })).parts),
+      ).toEqual(["child-v2"]);
+
+      const boundary = accumulator.freezeAssistantSegment(undefined, "2026-07-25T12:00:04.000Z");
+      accumulator.startAssistantSegment("message-2", boundary, "2026-07-25T12:00:04.000Z");
+      accumulator.onItemCompleted({
+        id: "done",
+        type: "subagent_activity",
+        activity: "completed",
+        agent_thread_id: "child-v2",
+        agent_path: "/root/bot_fixes",
+      });
+      accumulator.complete("completed");
+      const [first, second] = accumulator.assistantSegmentsInOrder();
+      const secondState = beginAssistantRowRenderState(firstState);
+      const later = await renderTurn(accumulator, {
+        ...options,
+        state: secondState,
+        segment: second!,
+      });
+      expect(later.parts).toEqual([]);
+      expect(secondState.subagentActivity).toBe(false);
+      expect(firstState.subagentOwners.get("child-v2")).toBe("message-1");
+
+      const earlier = await renderTurn(accumulator, {
+        ...options,
+        state: firstState,
+        segment: first!,
+      });
+      expect(cardIds(earlier.parts)).toEqual(["child-v2"]);
+      expect(earlier.parts[0]).toMatchObject({
+        subagentName: "Verifier",
+        toolState: "success",
+        subagentActions: [{ type: "text", content: "Reviewed the follow-up." }],
+      });
+    });
+  });
 
   test("a card stays on the row that spawned the agent, not on a later wait", async () => {
     const { render, first, second, firstState, secondState } = spawnThenWait();

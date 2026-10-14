@@ -383,17 +383,7 @@ function ownedSubagentIds(items: EngineItem[]): string[] | undefined {
     // Multi-agent v2 send_message/followup_task emit no collab item at all, only
     // `subagent_activity` beats; without their ids a row that messages an
     // earlier turn's child gets a status-only card with no transcript behind it.
-    const referenced = new Set<string>();
-    for (const item of items) {
-      if (item.type === "subagent_activity") {
-        referenced.add(item.agent_thread_id);
-        continue;
-      }
-      const collab = normalizeCodexCollabToolCallItem(item);
-      if (!collab) continue;
-      for (const agentId of collab.receiver_thread_ids ?? []) referenced.add(agentId);
-      for (const agentId of Object.keys(collab.agents_states ?? {})) referenced.add(agentId);
-    }
+    const referenced = subagentIdsNamedBy(items);
     return referenced.size > 0 ? [...referenced] : undefined;
   }
   // A partially identified segment cannot be filtered without dropping the

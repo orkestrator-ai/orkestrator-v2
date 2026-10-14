@@ -1,7 +1,10 @@
 import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
-import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
+import {
+  createOptimisticNativeMessage,
+  ERROR_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
+} from "@/lib/chat/client-only-messages";
 import {
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,

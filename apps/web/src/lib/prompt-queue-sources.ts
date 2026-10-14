@@ -26,12 +26,11 @@ import {
   useClaudeTmuxStore,
 } from "@/stores/claudeTmuxStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 
 /**
  * Adapts each agent store to backend-owned prompt-queue snapshots.
  *
- * All four agents already expose the same queue shape (an ordered list of
+ * Every projected agent exposes the same queue shape (an ordered list of
  * messages with stable ids, keyed by tab); they differ only in how their key
  * encodes the environment. The stores are renderer projections only; mutation
  * helpers below always call the backend before installing a new snapshot.
@@ -66,7 +65,7 @@ function createSource(
 }
 
 /**
- * Every agent whose queue is projected. Claude native, Codex and OpenCode share
+ * Every agent whose queue is projected. Claude native and Codex share
  * the `env-{id}:{tab}` key; tmux uses its own scoped form.
  */
 let sharedSources: PromptQueueSource[] | null = null;
@@ -82,11 +81,6 @@ function getSharedSources(): PromptQueueSource[] {
     createSource(
       "codex",
       useCodexStore as unknown as AnyQueueStore,
-      getEnvironmentIdFromSessionKey,
-    ),
-    createSource(
-      "opencode",
-      useOpenCodeStore as unknown as AnyQueueStore,
       getEnvironmentIdFromSessionKey,
     ),
     createSource(
@@ -134,7 +128,7 @@ export async function retryAgentPromptQueueDispatch(
  * backend is unavailable, the periodic scan reconciles the head on its next pass.
  */
 export async function clearQueuedLaunchPrompt(
-  agent: "claude" | "codex" | "opencode",
+  agent: "claude" | "codex",
   sessionKey: string,
   launchRequestId: string,
 ): Promise<void> {
@@ -268,7 +262,7 @@ export async function removeAgentPrompt<TItem extends QueuedItem>(
 }
 
 export async function transferAgentPromptToComposeDraft<TItem extends QueuedItem>(
-  agent: "claude" | "codex" | "opencode",
+  agent: "claude" | "codex",
   sessionKey: string,
   messageId: string,
 ): Promise<TItem | null> {

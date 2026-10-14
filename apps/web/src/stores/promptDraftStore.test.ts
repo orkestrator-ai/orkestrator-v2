@@ -4,7 +4,6 @@ import {
   claudePlanApprovalDraftKey,
   claudeQuestionDraftKey,
   codexInteractionDraftKey,
-  openCodeQuestionDraftKey,
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
   tmuxQuestionDraftKey,
@@ -71,7 +70,6 @@ describe("promptDraftStore", () => {
     const keys = [
       claudeQuestionDraftKey("session-a", "request-1"),
       claudeQuestionDraftKey("session-b", "request-1"),
-      openCodeQuestionDraftKey("session-a", "request-1"),
       codexInteractionDraftKey("session-a", "request-1"),
     ];
 
@@ -101,7 +99,6 @@ describe("promptDraftStore", () => {
     const builders = [
       claudeQuestionDraftKey,
       claudePlanApprovalDraftKey,
-      openCodeQuestionDraftKey,
       codexInteractionDraftKey,
       tmuxQuestionDraftKey,
       tmuxPlanDraftKey,

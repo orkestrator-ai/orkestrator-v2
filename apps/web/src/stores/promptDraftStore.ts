@@ -88,8 +88,6 @@ export const claudeQuestionDraftKey = (sessionId: string, requestId: string) =>
   scopedDraftKey("claude-question", sessionId, requestId);
 export const claudePlanApprovalDraftKey = (sessionId: string, requestId: string) =>
   scopedDraftKey("claude-plan-approval", sessionId, requestId);
-export const openCodeQuestionDraftKey = (sessionId: string, requestId: string) =>
-  scopedDraftKey("opencode-question", sessionId, requestId);
 export const codexInteractionDraftKey = (sessionKey: string, interactionId: string) =>
   scopedDraftKey("codex-interaction", sessionKey, interactionId);
 export const nativeAgentInteractionDraftKey = (sessionId: string, interactionId: string) =>

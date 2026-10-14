@@ -3,7 +3,7 @@ import type { NativeMessage } from "./native-message-types";
 import {
   applyClaudeBackgroundTaskStates,
   normalizeNativeMessages,
-  normalizeOpenCodeNativeMessage,
+  normalizeNativeMessage,
 } from "./native-message-adapters";
 import { pinNativeAgentParts, snapshotNativeAgentActivity } from "./native-agent-pinning";
 
@@ -296,7 +296,7 @@ describe("pinNativeAgentParts", () => {
   });
 
   test("extracts active children from normalized agent groups and retains terminal children", () => {
-    const normalized = normalizeOpenCodeNativeMessage(
+    const normalized = normalizeNativeMessage(
       assistantMessage("assistant-1", [
         {
           type: "subagent",
@@ -335,7 +335,7 @@ describe("pinNativeAgentParts", () => {
   });
 
   test("pins adjacent active agents in one shared group", () => {
-    const normalized = normalizeOpenCodeNativeMessage(
+    const normalized = normalizeNativeMessage(
       assistantMessage("assistant-1", [
         {
           type: "subagent",

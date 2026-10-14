@@ -722,10 +722,6 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
   return merged;
 }
 
-export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
-  return normalizeNativeMessage(message);
-}
-
 export function normalizeCodexNativeMessage(message: NativeMessage): NativeMessage {
   return normalizeNativeMessage(message);
 }

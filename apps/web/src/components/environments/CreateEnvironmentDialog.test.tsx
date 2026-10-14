@@ -3,7 +3,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { useConfigStore } from "@/stores/configStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
@@ -13,7 +12,6 @@ const baseConfig = useConfigStore.getState().config;
 afterEach(() => {
   cleanup();
   useConfigStore.setState({ config: baseConfig });
-  useOpenCodeStore.setState({ models: new Map() });
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
 });
 

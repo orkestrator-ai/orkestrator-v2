@@ -17,7 +17,6 @@ import { cn, createSessionKey } from "@/lib/utils";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -29,16 +28,6 @@ import {
   rewindClaudeFiles,
   stopClaudeBackgroundTask,
 } from "@/lib/claude-client";
-import {
-  compactOpenCodeSession,
-  forkOpenCodeSession,
-  getSessionMessages as getOpenCodeSessionMessages,
-  getSessionStatus as getOpenCodeSessionStatus,
-  revertOpenCodeSession,
-  shareOpenCodeSession,
-  unrevertOpenCodeSession,
-  unshareOpenCodeSession,
-} from "@/lib/opencode-client";
 import {
   CodexForkError,
   compactCodexSession,
@@ -78,7 +67,6 @@ import { useSystemUsage } from "@/hooks/useSystemUsage";
 import {
   normalizeClaudeMessagesForDisplay,
   normalizeCodexNativeMessage,
-  normalizeOpenCodeNativeMessage,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -182,7 +170,6 @@ import {
   codexLimitsFromHealth,
   describeRewindTarget,
   formatCount,
-  readOpenCodeShareUrl,
   summarizeRewindPreview,
 } from "./AgentInfoButton.panels";
 
@@ -220,7 +207,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const actionIdRef = useRef(0);
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
-  const shareVersionRef = useRef(0);
   const buildPipelineId =
     activeTab?.type === "claude-build" ? activeTab.buildTabData?.pipelineId : undefined;
   const buildPipeline = useBuildPipelineStore((state) =>
@@ -358,11 +344,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       ? state.rateLimits.get(activeSession.sessionKey)
       : undefined,
   );
-  const openCodeUsage = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.contextUsage.get(activeSession.sessionKey)
-      : undefined,
-  );
   const codexUsage = useCodexStore((state) =>
     activeSession?.provider === "codex"
       ? state.contextUsage.get(activeSession.sessionKey)
@@ -371,11 +352,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const claudeModel = useClaudeStore((state) =>
     activeSession?.provider === "claude"
       ? state.selectedModel.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const openCodeModel = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.selectedModel.get(activeSession.environmentId)
       : undefined,
   );
   const codexModel = useCodexStore((state) =>
@@ -388,11 +364,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       ? state.clients.get(activeSession.environmentId)
       : undefined,
   );
-  const openCodeClient = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.clients.get(activeSession.environmentId)
-      : undefined,
-  );
   const codexClient = useCodexStore((state) =>
     activeSession?.provider === "codex"
       ? state.clients.get(activeSession.environmentId)
@@ -400,11 +371,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   );
   const claudeSession = useClaudeStore((state) =>
     activeSession?.provider === "claude" ? state.sessions.get(activeSession.sessionKey) : undefined,
-  );
-  const openCodeSession = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.sessions.get(activeSession.sessionKey)
-      : undefined,
   );
   const codexSession = useCodexStore((state) =>
     activeSession?.provider === "codex" ? state.sessions.get(activeSession.sessionKey) : undefined,
@@ -434,27 +400,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       ? (state.backgroundTasks.get(activeSession.sessionKey) ?? EMPTY_CLAUDE_TASKS)
       : EMPTY_CLAUDE_TASKS,
   );
-  const openCodeHealth = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.runtimeHealth.get(activeSession.environmentId)
-      : undefined,
-  );
-  /*
-   * Todos and diffs belong to one session, but the environment-keyed snapshot
-   * is written by whichever OpenCode session reported last. The compatibility
-   * store mirrors each snapshot under the session key, so prefer that and fall
-   * back to the environment entry only until the first session-scoped write.
-   */
-  const openCodeSessionHealth = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.runtimeHealth.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const openCodeAgent = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.selectedAgent.get(activeSession.sessionKey)
-      : undefined,
-  );
 
   const neutralContextUsage = neutralProjection?.contextUsage;
   const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
@@ -477,11 +422,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const legacyUsage: AgentInfoUsageSnapshot | undefined =
     activeSession?.provider === "claude"
       ? claudeUsage
-      : activeSession?.provider === "opencode"
-        ? openCodeUsage
-        : activeSession?.provider === "codex"
-          ? codexUsage
-          : undefined;
+      : activeSession?.provider === "codex"
+        ? codexUsage
+        : undefined;
   const usage: AgentInfoUsageSnapshot | undefined = legacyUsage
     ? {
         ...neutralUsage,
@@ -502,30 +445,24 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const modelId =
     (activeSession?.provider === "claude"
       ? claudeModel
-      : activeSession?.provider === "opencode"
-        ? openCodeModel
-        : activeSession?.provider === "codex"
-          ? codexModel
-          : undefined) ?? neutralProjection?.composer?.selectedModelId;
+      : activeSession?.provider === "codex"
+        ? codexModel
+        : undefined) ?? neutralProjection?.composer?.selectedModelId;
 
   const currentSessionId =
     (activeSession?.provider === "claude"
       ? claudeSession?.sessionId
-      : activeSession?.provider === "opencode"
-        ? openCodeSession?.sessionId
-        : activeSession?.provider === "codex"
-          ? codexSession?.sessionId
-          : undefined) ??
+      : activeSession?.provider === "codex"
+        ? codexSession?.sessionId
+        : undefined) ??
     neutralProjection?.sessionId ??
     activeSession?.providerSessionId;
   const currentSessionLoading =
     (activeSession?.provider === "claude"
       ? (claudeSession?.isLoading ?? false)
-      : activeSession?.provider === "opencode"
-        ? (openCodeSession?.isLoading ?? false)
-        : activeSession?.provider === "codex"
-          ? (codexSession?.isLoading ?? false)
-          : false) ||
+      : activeSession?.provider === "codex"
+        ? (codexSession?.isLoading ?? false)
+        : false) ||
     neutralProjection?.turn.phase === "running" ||
     neutralProjection?.turn.phase === "recovering" ||
     neutralProjection?.turn.phase === "cancelling";
@@ -541,6 +478,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   currentSessionIdentityRef.current = sessionIdentity;
   const busyAction = busyState?.sessionIdentity === sessionIdentity ? busyState.name : null;
   const steerText = steerState.sessionIdentity === sessionIdentity ? steerState.value : "";
+  // The projection's share URL is the backend's authoritative share state; the
+  // local latch only covers the window before the next projection arrives.
   const openCodeShared =
     neutralProjection?.shareUrl !== undefined
       ? neutralProjection.shareUrl !== null
@@ -774,45 +713,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       }
       return messages;
     }
-    if (sourceSession.provider === "opencode" && openCodeClient) {
-      const status = await getOpenCodeSessionStatus(openCodeClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!status) throw new Error("OpenCode session is unavailable");
-      if (status === "busy" || status === "retry") {
-        throw new Error("Wait for OpenCode to finish before continuing in another agent");
-      }
-      const messages = (
-        await getOpenCodeSessionMessages(openCodeClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeOpenCodeNativeMessage);
-      const statusAfterRead = await getOpenCodeSessionStatus(openCodeClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!statusAfterRead) throw new Error("OpenCode session is unavailable");
-      if (statusAfterRead === "busy" || statusAfterRead === "retry") {
-        throw new Error("OpenCode started working while its conversation was being transferred");
-      }
-      const messagesAfterRead = (
-        await getOpenCodeSessionMessages(openCodeClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeOpenCodeNativeMessage);
-      const finalStatus = await getOpenCodeSessionStatus(openCodeClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!finalStatus) throw new Error("OpenCode session is unavailable");
-      if (finalStatus === "busy" || finalStatus === "retry") {
-        throw new Error("OpenCode started working while its conversation was being transferred");
-      }
-      // OpenCode exposes no revision counter, so a second read is the only way
-      // to detect a turn that started and finished inside the read window.
-      // Compare digests rather than serializing both transcripts twice: these
-      // can be tens of megabytes and this runs on the main thread.
-      if (
-        agentHandoffTranscriptDigest(messagesAfterRead) !== agentHandoffTranscriptDigest(messages)
-      ) {
-        throw new Error("OpenCode conversation changed while it was being transferred");
-      }
-      return messagesAfterRead;
-    }
     if (sourceSession.provider === "codex" && codexClient) {
       const status = await getCodexSessionStatus(codexClient, sourceSessionId, {
         throwOnError: true,
@@ -912,9 +812,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       if (activeSession.provider === "claude" && claudeClient) {
         const fork = await forkClaudeSession(claudeClient, currentSessionId);
         openForkTab(fork.sessionId, fork.title, isCurrent());
-      } else if (activeSession.provider === "opencode" && openCodeClient) {
-        const fork = await forkOpenCodeSession(openCodeClient, currentSessionId);
-        openForkTab(fork.id, fork.title, isCurrent());
       } else if (activeSession.provider === "codex" && codexClient) {
         /*
          * The bridge differentiates its refusals (404 missing, 409 running, 422
@@ -974,24 +871,17 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         sourceProvider: sourceSession.provider,
         destinationProvider: destination,
         sourceSessionId,
-        // The legacy stores answer for the three providers that have one; every
+        // The legacy stores answer for the two providers that have one; every
         // other agent's title lives only on the projection, which is also the
         // fallback while a legacy store has not loaded its session yet.
         sourceTitle:
           (sourceSession.provider === "claude"
             ? claudeSession?.title
-            : sourceSession.provider === "opencode"
-              ? openCodeSession?.title
-              : sourceSession.provider === "codex"
-                ? codexSession?.title
-                : undefined) ?? neutralProjection?.title,
+            : sourceSession.provider === "codex"
+              ? codexSession?.title
+              : undefined) ?? neutralProjection?.title,
         sourceModel: modelId,
-        sourceAgent:
-          sourceSession.provider === "claude"
-            ? claudeAgent
-            : sourceSession.provider === "opencode"
-              ? openCodeAgent
-              : undefined,
+        sourceAgent: sourceSession.provider === "claude" ? claudeAgent : undefined,
         messages,
       });
       await persistAgentHandoff(handoff);
@@ -1017,17 +907,15 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       const succeeded =
         activeSession.provider === "claude" && claudeClient
           ? await compactClaudeSession(claudeClient, currentSessionId)
-          : activeSession.provider === "opencode" && openCodeClient
-            ? (await compactOpenCodeSession(openCodeClient, currentSessionId, openCodeModel), true)
-            : activeSession.provider === "codex" && codexClient
-              ? await compactCodexSession(codexClient, currentSessionId)
-              : (await performNativeAgentSessionAction({
-                  environmentId: activeSession.environmentId,
-                  agent: activeSession.provider,
-                  logicalSessionKey: activeSession.sessionKey,
-                  action: { kind: "compact", modelId },
-                }),
-                true);
+          : activeSession.provider === "codex" && codexClient
+            ? await compactCodexSession(codexClient, currentSessionId)
+            : (await performNativeAgentSessionAction({
+                environmentId: activeSession.environmentId,
+                agent: activeSession.provider,
+                logicalSessionKey: activeSession.sessionKey,
+                action: { kind: "compact", modelId },
+              }),
+              true);
       if (!succeeded) throw new Error("The provider could not compact this session");
       toast.success("Context compaction started");
     });
@@ -1048,47 +936,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     setOpen(false);
     setHandoffOpen(false);
     setRuntimeNoticeDialogId(null);
-    shareVersionRef.current += 1;
     setShareState({ sessionIdentity, value: false });
     setSteerState({ sessionIdentity, value: "" });
   }, [sessionIdentity]);
-
-  /*
-   * `openCodeShared` is an optimistic flag; the server's session record is the
-   * truth. Re-reading it whenever the popover opens is what makes revocation
-   * reachable after a tab switch or an app restart — component state alone
-   * loses the fact that the conversation is published while the link stays
-   * live.
-   */
-  useEffect(() => {
-    if (!open || activeSession?.provider !== "opencode" || !openCodeClient || !currentSessionId) {
-      return;
-    }
-    let cancelled = false;
-    const shareVersion = shareVersionRef.current;
-    const requestedIdentity = sessionIdentity;
-    void readOpenCodeShareUrl(openCodeClient, currentSessionId)
-      .then((url) => {
-        if (
-          !cancelled &&
-          requestedIdentity !== null &&
-          currentSessionIdentityRef.current === requestedIdentity &&
-          shareVersionRef.current === shareVersion
-        ) {
-          // The provider snapshot is authoritative in both directions. A null
-          // URL means a formerly shared session was revoked elsewhere.
-          setShareState({ sessionIdentity: requestedIdentity, value: Boolean(url) });
-        }
-      })
-      .catch((error: unknown) => {
-        // A failed lookup must not clear the flag: that would hide "Stop
-        // sharing" for a conversation that is still published.
-        console.warn("[AgentInfoButton] Failed to read OpenCode share state:", error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSession?.provider, currentSessionId, open, openCodeClient, sessionIdentity]);
 
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
@@ -1245,8 +1095,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
 
               {!isBuildStage &&
               ((activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0) ||
-                (activeSession.provider === "opencode" &&
-                  (openCodeHealth?.agents.length ?? 0) > 0) ||
                 (neutralProjection?.composer?.executionProfiles?.length ?? 0) > 0) ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
@@ -1256,7 +1104,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     disabled={neutralControlUpdatePending}
                     value={
                       neutralProjection?.composer?.selectedExecutionProfileId ??
-                      (activeSession.provider === "claude" ? claudeAgent : openCodeAgent) ??
+                      (activeSession.provider === "claude" ? claudeAgent : undefined) ??
                       ""
                     }
                     onChange={(event) => {
@@ -1267,10 +1115,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       }
                       if (activeSession.provider === "claude") {
                         useClaudeStore.getState().setSelectedAgent(activeSession.sessionKey, value);
-                      } else {
-                        useOpenCodeStore
-                          .getState()
-                          .setSelectedAgent(activeSession.sessionKey, value);
                       }
                     }}
                     className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-sm"
@@ -1284,15 +1128,11 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                         }))
                       : activeSession.provider === "claude"
                         ? (claudeInit?.agents ?? [])
-                        : (openCodeHealth?.agents.filter(
-                            (agent) => agent.mode === "primary" || agent.mode === "all",
-                          ) ?? [])
+                        : []
                     ).map((agent) => (
                       <option key={agent.name} value={agent.name}>
                         {agent.name}
-                        {("mode" in agent ? agent.modelId : agent.model)
-                          ? ` · ${"mode" in agent ? agent.modelId : agent.model}`
-                          : ""}
+                        {agent.model ? ` · ${agent.model}` : ""}
                       </option>
                     ))}
                   </select>
@@ -1534,26 +1374,15 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           className="justify-start gap-2"
                           onClick={() =>
                             void runAction("undo", async () => {
-                              const messageId =
-                                openCodeSession?.messages
-                                  .filter((message) => message.role === "user")
-                                  .at(-1)?.id ??
-                                neutralMessages.filter((message) => message.role === "user").at(-1)
-                                  ?.id;
-                              if (openCodeClient) {
-                                await revertOpenCodeSession(
-                                  openCodeClient,
-                                  currentSessionId,
-                                  messageId,
-                                );
-                              } else {
-                                await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "undo", messageId },
-                                });
-                              }
+                              const messageId = neutralMessages
+                                .filter((message) => message.role === "user")
+                                .at(-1)?.id;
+                              await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "undo", messageId },
+                              });
                               toast.success("OpenCode session reverted");
                             })
                           }
@@ -1576,17 +1405,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                   )
                                 )
                                   return;
-                                shareVersionRef.current += 1;
-                                const url = openCodeClient
-                                  ? await shareOpenCodeSession(openCodeClient, currentSessionId)
-                                  : (
-                                      await performNativeAgentSessionAction({
-                                        environmentId: activeSession.environmentId,
-                                        agent: activeSession.provider,
-                                        logicalSessionKey: activeSession.sessionKey,
-                                        action: { kind: "share" },
-                                      })
-                                    ).shareUrl;
+                                const { shareUrl: url } = await performNativeAgentSessionAction({
+                                  environmentId: activeSession.environmentId,
+                                  agent: activeSession.provider,
+                                  logicalSessionKey: activeSession.sessionKey,
+                                  action: { kind: "share" },
+                                });
                                 /*
                                  * The conversation is published the moment `share()`
                                  * resolves. Latch that first: every failure after this
@@ -1634,16 +1458,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           className="justify-start gap-2"
                           onClick={() =>
                             void runAction("redo", async () => {
-                              if (openCodeClient) {
-                                await unrevertOpenCodeSession(openCodeClient, currentSessionId);
-                              } else {
-                                await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "redo" },
-                                });
-                              }
+                              await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "redo" },
+                              });
                               toast.success("OpenCode revert undone");
                             })
                           }
@@ -1661,17 +1481,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                               void runAction(
                                 "unshare",
                                 async ({ isCurrent, sessionIdentity: actionIdentity }) => {
-                                  shareVersionRef.current += 1;
-                                  if (openCodeClient) {
-                                    await unshareOpenCodeSession(openCodeClient, currentSessionId);
-                                  } else {
-                                    await performNativeAgentSessionAction({
-                                      environmentId: activeSession.environmentId,
-                                      agent: activeSession.provider,
-                                      logicalSessionKey: activeSession.sessionKey,
-                                      action: { kind: "unshare" },
-                                    });
-                                  }
+                                  await performNativeAgentSessionAction({
+                                    environmentId: activeSession.environmentId,
+                                    agent: activeSession.provider,
+                                    logicalSessionKey: activeSession.sessionKey,
+                                    action: { kind: "unshare" },
+                                  });
                                   if (isCurrent()) {
                                     setShareState({
                                       sessionIdentity: actionIdentity,
@@ -1998,42 +1813,18 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <Metric
                       label="MCP"
-                      value={String(
-                        neutralProjection?.runtime?.mcpServers ??
-                          openCodeHealth?.mcpServers.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
                     />
                     <Metric
                       label="Skills"
-                      value={String(
-                        neutralProjection?.runtime?.skills ?? openCodeHealth?.skills.length ?? 0,
-                      )}
+                      value={String(neutralProjection?.runtime?.skills ?? 0)}
                     />
                     <Metric
                       label="LSP"
-                      value={String(
-                        neutralProjection?.runtime?.lspServers ??
-                          openCodeHealth?.lspServers.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.lspServers ?? 0)}
                     />
-                    <Metric
-                      label="Todos"
-                      value={String(
-                        neutralProjection?.runtime?.todos ??
-                          (openCodeSessionHealth ?? openCodeHealth)?.todos?.length ??
-                          0,
-                      )}
-                    />
-                    <Metric
-                      label="Files"
-                      value={String(
-                        neutralProjection?.runtime?.files ??
-                          (openCodeSessionHealth ?? openCodeHealth)?.diffs?.length ??
-                          0,
-                      )}
-                    />
+                    <Metric label="Todos" value={String(neutralProjection?.runtime?.todos ?? 0)} />
+                    <Metric label="Files" value={String(neutralProjection?.runtime?.files ?? 0)} />
                   </div>
                 ) : (
                   // One panel for every platform, including Codex. Inventory,

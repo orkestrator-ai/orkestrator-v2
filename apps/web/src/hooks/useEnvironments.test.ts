@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { Environment } from "@/types";
 import {
   applyEnvironmentSetupComplete,
@@ -19,12 +18,10 @@ import {
 } from "@/lib/pane-selection-storage";
 
 const originalClaudeClose = useClaudeStore.getState().closeEventSubscription;
-const originalOpenCodeClose = useOpenCodeStore.getState().closeEventSubscription;
 
 afterEach(() => {
   localStorage.clear();
   useClaudeStore.setState({ closeEventSubscription: originalClaudeClose });
-  useOpenCodeStore.setState({ closeEventSubscription: originalOpenCodeClose });
   useEnvironmentStore.setState({ environments: [] });
 });
 
@@ -48,16 +45,13 @@ function environment(id: string, projectId: string): Environment {
 }
 
 describe("cleanupDeletedEnvironmentSubscriptions", () => {
-  test("stops both store-owned subscriptions for the deleted environment", () => {
+  test("stops the store-owned subscription for the deleted environment", () => {
     const closeClaude = mock((_environmentId: string) => {});
-    const closeOpenCode = mock((_environmentId: string) => {});
     useClaudeStore.setState({ closeEventSubscription: closeClaude });
-    useOpenCodeStore.setState({ closeEventSubscription: closeOpenCode });
 
     cleanupDeletedEnvironmentSubscriptions("env-deleted");
 
     expect(closeClaude).toHaveBeenCalledWith("env-deleted");
-    expect(closeOpenCode).toHaveBeenCalledWith("env-deleted");
   });
 
   test("retires the creating window's startup-agent handoff on deletion", () => {
@@ -100,9 +94,7 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
 
   test("stops only subscriptions removed by an authoritative project snapshot", () => {
     const closeClaude = mock((_environmentId: string) => {});
-    const closeOpenCode = mock((_environmentId: string) => {});
     useClaudeStore.setState({ closeEventSubscription: closeClaude });
-    useOpenCodeStore.setState({ closeEventSubscription: closeOpenCode });
     const removed = environment("removed", "project-1");
     const surviving = environment("surviving", "project-1");
     const otherProject = environment("other-project", "project-2");
@@ -113,7 +105,6 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
     cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving]);
 
     expect(closeClaude.mock.calls).toEqual([["removed"]]);
-    expect(closeOpenCode.mock.calls).toEqual([["removed"]]);
   });
 });
 

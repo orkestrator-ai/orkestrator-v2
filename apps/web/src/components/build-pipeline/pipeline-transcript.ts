@@ -23,7 +23,7 @@ import {
   normalizeClaudeMessagesForDisplay,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
-import { normalizeOpenCodeMessage } from "@/lib/opencode-client";
+import { normalizeOpenCodeMessage } from "@/lib/opencode-messages";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
   NativeAgentActivityPart,

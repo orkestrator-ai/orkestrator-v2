@@ -8,7 +8,7 @@ import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -111,7 +111,7 @@ describe("DraggableTab title precedence", () => {
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
     useCodexStore.setState({ sessions: new Map() });
-    useOpenCodeStore.setState({ sessions: new Map() });
+    useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
@@ -311,8 +311,8 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "Resolve",
       nativeAgentData: { platform: "opencode", environmentId: "env-1" },
     };
-    useOpenCodeStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
       ]),
     });
@@ -349,8 +349,8 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "Implementation",
       nativeAgentData: { platform: "opencode", environmentId: "env-1" },
     };
-    useOpenCodeStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
       ]),
     });
@@ -572,7 +572,7 @@ describe("DraggableTab title precedence", () => {
   });
 
   test("a Claude-native tab ignores a same-key Codex session title", () => {
-    // The ?? chain is claude ?? codex ?? openCode, and each selector is scoped
+    // The ?? chain is projection ?? claude ?? codex, and each store selector is scoped
     // to its own tab type. A stale Codex entry under the same key must never
     // win over — or stand in for — the Claude title on a Claude tab.
     const tab: TabInfo = {
@@ -587,22 +587,16 @@ describe("DraggableTab title precedence", () => {
     useCodexStore.setState({
       sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never]]),
     });
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "OpenCode title" } as never],
-      ]),
-    });
 
     renderTab(tab, 0);
 
     expect(screen.getByText("Claude 1 · Claude title")).toBeDefined();
     expect(screen.queryByText("Codex title") === null).toBe(true);
-    expect(screen.queryByText("OpenCode title") === null).toBe(true);
   });
 
-  test("a Claude-native tab with only Codex and OpenCode titles falls back to displayTitle", () => {
-    // Proves the other two selectors are type-scoped rather than key-scoped:
-    // with no Claude entry the chain yields undefined, not the Codex title.
+  test("a Claude-native tab with only a Codex title falls back to displayTitle", () => {
+    // Proves the Codex selector is type-scoped rather than key-scoped: with no
+    // Claude entry the chain yields undefined, not the Codex title.
     const tab: TabInfo = {
       id: "tab-a",
       type: "agent-native",
@@ -611,11 +605,6 @@ describe("DraggableTab title precedence", () => {
     };
     useCodexStore.setState({
       sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never]]),
-    });
-    useOpenCodeStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "OpenCode title" } as never],
-      ]),
     });
 
     renderTab(tab, 0);
@@ -702,7 +691,7 @@ describe("DraggableTab icons", () => {
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
     useCodexStore.setState({ sessions: new Map() });
-    useOpenCodeStore.setState({ sessions: new Map() });
+    useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
@@ -832,7 +821,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
     useCodexStore.setState({ sessions: new Map() });
-    useOpenCodeStore.setState({ sessions: new Map() });
+    useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
   });

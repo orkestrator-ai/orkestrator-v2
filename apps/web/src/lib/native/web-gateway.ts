@@ -6,16 +6,15 @@ import {
 } from "@/lib/native/gateway-auth-transport";
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
 import { GatewayHttpError } from "@/lib/native/gateway-http-error";
-import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import {
-  parseTerminalInputRequest,
-  TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
-  TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
-  TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
-  TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
-  TerminalHttpInputBatcher,
-  type TerminalInputCommand,
-} from "@/lib/native/terminal-input-batcher";
+  GATEWAY_EVENT_CURSOR_PARAM,
+  GatewayEventStreamState,
+  isGatewayTransportEvent,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  parseGatewayEventData,
+  readSseStream,
+} from "@orkestrator/protocol/gateway-event-stream";
+import { TerminalInputSequencer } from "@orkestrator/protocol/terminal-input-sequencer";
 import {
   TerminalWebSocketClient,
   terminalWebSocketUrl,
@@ -24,8 +23,6 @@ import {
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 
 const GATEWAY_PREFIX = "/__orkestrator";
-/** How many recently closed terminal input queues stay rejected. */
-const TERMINAL_CLOSED_QUEUE_MEMORY = 256;
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 /**
  * Consecutive main-stream failures back off to at most this multiple of the
@@ -35,9 +32,6 @@ const EVENT_RECONNECT_DELAY_MS = 2_000;
 const EVENT_RECONNECT_MAX_DELAY_FACTOR = 8;
 const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
-const GATEWAY_CONNECTED_EVENT = "gateway.connected";
-const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
-const GATEWAY_CURSOR_EVENT = "gateway.cursor";
 /**
  * `EventSource.CLOSED`, spelled as the spec's fixed numeric value rather than
  * read off the constructor: a same-origin browser may have replaced the global,
@@ -118,19 +112,6 @@ function terminalTransportEnabled(options: BrowserGatewayOptions): boolean {
   }
 }
 
-function parseEventBlock(block: string): { data: string | null; id: string | null } {
-  const idLine = block.split(/\r?\n/).findLast((line) => line.startsWith("id:"));
-  const data = block
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n");
-  return {
-    data: data || null,
-    id: idLine ? idLine.slice(3).trimStart() : null,
-  };
-}
-
 export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
   let eventSource: EventSource | null = null;
@@ -140,7 +121,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   // failures back off with jitter so those tabs do not retry in lock-step for
   // the whole outage; the first retry is never slower than the configured
   // delay, and only a stream that stayed up resets the ladder. Replay is
-  // unchanged: each attempt still resumes from `mainEventCursor`.
+  // unchanged: each attempt still resumes from `mainStream.cursor`.
   const eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
   const mainStreamBackoff = new ReconnectBackoff(
     {
@@ -158,8 +139,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     typeof document === "undefined" || document.readyState === "complete";
   let bootMetricsReported = false;
   let bootMetricsEventStreamConnectedMs: number | null = null;
-  let mainEventCursor: string | null = null;
-  let mainConnectionAnnounced = false;
+  /** Cursor and recovery state for the authoritative stream, across reconnects. */
+  const mainStream = new GatewayEventStreamState();
   type TerminalEventStream = {
     event: string;
     /**
@@ -175,9 +156,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     readyResolved: boolean;
     /**
      * Whether this stream has ever been open. A reconnect is not the same as a
-     * first connect: the gateway has no replay buffer, so everything the PTY
-     * emitted during the gap is gone from this socket and the consumer has to
-     * be told to re-read the authoritative snapshot.
+     * first connect: terminal output is deliberately outside the gateway's
+     * replay ring, so everything the PTY emitted during the gap is gone from
+     * this socket and the consumer has to re-read the authoritative snapshot.
      */
     connectedBefore: boolean;
     /**
@@ -333,7 +314,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         typeof terminalEvents === "string" ? terminalEvents : terminalEvents.join(",");
       if (included) params.set("includeEvents", included);
     }
-    if (!terminalEvents && since) params.set("since", since);
+    if (!terminalEvents && since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
     return `${GATEWAY_PREFIX}/events?${params.toString()}`;
   };
 
@@ -343,63 +324,36 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const hasMainEventListeners = (): boolean =>
     [...listeners.keys()].some((event) => !isTerminalOutputEvent(event));
 
-  const dispatchMessage = (
-    data: string,
-    options: {
-      mainStream?: boolean;
-      lastEventId?: string | null;
-      terminalFallback?: boolean;
-    } = {},
-  ) => {
-    let parsed: { event?: unknown; payload?: unknown };
-    try {
-      parsed = JSON.parse(data) as { event?: unknown; payload?: unknown };
-    } catch {
-      return;
-    }
-    if (typeof parsed.event !== "string") return;
-    if (options.terminalFallback && !terminalEventStreams.get(parsed.event)?.fallbackActive) return;
-    if (options.mainStream && options.lastEventId) {
-      mainEventCursor = options.lastEventId;
-    }
-    // Replay control frames are meaningful only on the authoritative stream, and
-    // only the transport may act on them. Swallow them everywhere so a frame
-    // arriving on a terminal socket can neither reach ordinary listeners nor
-    // latch main-stream connection state it has no authority over.
-    if (
-      parsed.event === GATEWAY_CONNECTED_EVENT ||
-      parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT ||
-      parsed.event === GATEWAY_CURSOR_EVENT
-    ) {
-      if (!options.mainStream) return;
-      if (parsed.event === GATEWAY_CURSOR_EVENT) return;
-      if (parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT) {
-        mainConnectionAnnounced = true;
-        announceEventStreamConnected();
-        return;
-      }
-      const status =
-        parsed.payload && typeof parsed.payload === "object" && "status" in parsed.payload
-          ? (parsed.payload as { status?: unknown }).status
-          : null;
-      if (status === "fresh" && !mainConnectionAnnounced) {
-        mainConnectionAnnounced = true;
-        announceEventStreamConnected();
-      }
-      return;
-    }
-    // Transport-level events are synthesized locally and share this listener
-    // map, so a server frame must never be able to impersonate one.
-    if (parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) return;
-    const callbacks = listeners.get(parsed.event);
+  const deliver = (event: string, payload: unknown) => {
+    const callbacks = listeners.get(event);
     if (!callbacks) return;
     for (const callback of callbacks) {
       try {
-        callback(parsed.payload);
+        callback(payload);
       } catch (error) {
-        console.error(`[RemoteGateway] Event listener for ${parsed.event} failed`, error);
+        console.error(`[RemoteGateway] Event listener for ${event} failed`, error);
       }
     }
+  };
+
+  /** One frame of the authoritative stream; only it may act on replay frames. */
+  const dispatchMainFrame = (data: string, lastEventId: string | null) => {
+    const message = mainStream.accept(data, lastEventId);
+    if (message.kind === "resync") announceEventStreamConnected();
+    else if (message.kind === "event") deliver(message.event, message.payload);
+  };
+
+  /**
+   * A frame from a terminal stream, or one synthesized locally. Replay control
+   * frames are swallowed so a terminal socket can neither reach ordinary
+   * listeners nor latch authoritative connection state, and transport events
+   * are swallowed so a server frame can never impersonate one.
+   */
+  const dispatchMessage = (data: string, options: { terminalFallback?: boolean } = {}) => {
+    const parsed = parseGatewayEventData(data);
+    if (!parsed || isGatewayTransportEvent(parsed.event)) return;
+    if (options.terminalFallback && !terminalEventStreams.get(parsed.event)?.fallbackActive) return;
+    deliver(parsed.event, parsed.payload);
   };
 
   const announceEventStreamConnected = () => {
@@ -536,38 +490,17 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     }, 15_000);
   };
 
-  const consumeFetchEventStream = async (
+  const consumeFetchEventStream = (
     response: Response,
     controller: AbortController,
-    mainStream = false,
+    mainStreamFrames = false,
     terminalFallback = false,
-  ): Promise<void> => {
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    try {
-      while (!controller.signal.aborted) {
-        const { done, value } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
-        let boundary = /\r?\n\r?\n/.exec(buffer);
-        while (boundary) {
-          const frame = parseEventBlock(buffer.slice(0, boundary.index));
-          buffer = buffer.slice(boundary.index + boundary[0].length);
-          if (frame.data) {
-            dispatchMessage(frame.data, {
-              mainStream,
-              lastEventId: frame.id,
-              terminalFallback,
-            });
-          }
-          boundary = /\r?\n\r?\n/.exec(buffer);
-        }
-        if (done) break;
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
-    }
-  };
+  ): Promise<void> =>
+    readSseStream(response.body!, controller.signal, (frame) => {
+      if (!frame.data) return;
+      if (mainStreamFrames) dispatchMainFrame(frame.data, frame.id);
+      else dispatchMessage(frame.data, { terminalFallback });
+    });
 
   const scheduleReconnect = () => {
     if (!hasMainEventListeners() || reconnectTimer) return;
@@ -585,7 +518,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
     void (async () => {
       try {
-        const response = await fetch(apiUrl(eventStreamPath(undefined, mainEventCursor)), {
+        const response = await fetch(apiUrl(eventStreamPath(undefined, mainStream.cursor)), {
           credentials,
           headers: requestHeaders(),
           signal: controller.signal,
@@ -620,7 +553,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
 
-    const source = new EventSource(apiUrl(eventStreamPath(undefined, mainEventCursor)), {
+    const source = new EventSource(apiUrl(eventStreamPath(undefined, mainStream.cursor)), {
       withCredentials: true,
     });
     eventSource = source;
@@ -633,10 +566,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     };
     source.onmessage = (message) => {
       if (eventSource !== source) return;
-      dispatchMessage(message.data, {
-        mainStream: true,
-        lastEventId: message.lastEventId,
-      });
+      dispatchMainFrame(message.data, message.lastEventId);
     };
     source.onerror = () => {
       if (eventSource !== source) return;
@@ -1039,270 +969,44 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return payload.result as T;
   };
 
-  const terminalInputBatcher = new TerminalHttpInputBatcher(
-    async (request, signal) => {
-      const result = await invokeImmediately<unknown>(
+  /**
+   * The shared terminal input ordering contract. The browser keeps the
+   * re-arming recovery rule; see `TerminalInputRecovery` before changing it.
+   */
+  const terminalInput = new TerminalInputSequencer({
+    recovery: "rearm-on-lifecycle",
+    batchDelayMs: options.terminalInputBatchDelayMs,
+    maxBatchBytes: options.terminalInputMaxBatchBytes,
+    maxQueuedBytes: options.terminalInputMaxQueuedBytes,
+    sendTimeoutMs: options.terminalInputSendTimeoutMs,
+    sendInput: (request, signal) =>
+      invokeImmediately<unknown>(
         request.command,
-        {
-          sessionId: request.sessionId,
-          data: request.data,
-        },
+        { sessionId: request.sessionId, data: request.data },
         signal,
-      );
-      // The HTTP batcher fans one backend write out to every original input
-      // waiter. Rejecting the batch is how an in-band refusal reaches all of
-      // those callers without weakening the ordering and backpressure rules.
+      ),
+    runLifecycle: async (operation, signal) => {
+      // A rejected socket resize must still reach the backend over HTTP; left
+      // to propagate it would leave the PTY at stale dimensions.
       if (
-        result &&
-        typeof result === "object" &&
-        (result as { delivered?: unknown }).delivered === false
+        operation.kind === "resize" &&
+        websocketTerminalsEnabled &&
+        terminalSocket &&
+        typeof operation.args.cols === "number" &&
+        typeof operation.args.rows === "number" &&
+        (await terminalSocket
+          .resize(operation.sessionId, operation.args.cols, operation.args.rows)
+          .catch(() => false))
       ) {
-        throw new Error("Terminal session is not running");
+        return undefined;
       }
+      return invokeImmediately<unknown>(operation.command, operation.args, signal);
     },
-    options.terminalInputBatchDelayMs ?? TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
-    options.terminalInputMaxBatchBytes ?? TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
-    options.terminalInputMaxQueuedBytes ?? TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
-    options.terminalInputSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
-  );
-
-  const terminalLifecycleTails = new Map<string, Promise<void>>();
-  /** Serializes socket sends per terminal; releases before the acknowledgement. */
-  const terminalInputSendTails = new Map<string, Promise<void>>();
-  /** Outstanding socket acknowledgements a lifecycle command must wait behind. */
-  const terminalInputAcks = new Map<string, Set<Promise<void>>>();
-  // Closed sessions are never reopened under the same id, so this only has to
-  // remember the recently closed ones. Evicting the oldest bounds the set for a
-  // long-lived page; the worst case for an evicted key is a write to a dead
-  // session, which the backend ignores.
-  const closedTerminalInputQueues = new Set<string>();
-  let terminalInputDisposedReason: unknown | null = null;
-
-  const terminalInputQueueKey = (command: TerminalInputCommand, sessionId: string): string =>
-    `${command}\0${sessionId}`;
-
-  const closeTerminalInputQueue = (key: string): void => {
-    closedTerminalInputQueues.delete(key);
-    closedTerminalInputQueues.add(key);
-    while (closedTerminalInputQueues.size > TERMINAL_CLOSED_QUEUE_MEMORY) {
-      const oldest = closedTerminalInputQueues.values().next().value;
-      if (oldest === undefined) break;
-      closedTerminalInputQueues.delete(oldest);
-    }
-  };
-
-  const terminalInputQueue = (
-    command: string,
-    args: Record<string, unknown> | undefined,
-  ): {
-    command: TerminalInputCommand;
-    sessionId: string;
-    closes: boolean;
-    starts: boolean;
-  } | null => {
-    if (typeof args?.sessionId !== "string") return null;
-    if (command === "terminal_resize") {
-      return { command: "terminal_write", sessionId: args.sessionId, closes: false, starts: false };
-    }
-    if (command === "detach_terminal") {
-      return { command: "terminal_write", sessionId: args.sessionId, closes: true, starts: false };
-    }
-    if (command === "start_terminal_session") {
-      return { command: "terminal_write", sessionId: args.sessionId, closes: false, starts: true };
-    }
-    if (command === "local_terminal_resize") {
-      return {
-        command: "local_terminal_write",
-        sessionId: args.sessionId,
-        closes: false,
-        starts: false,
-      };
-    }
-    if (command === "close_local_terminal_session") {
-      return {
-        command: "local_terminal_write",
-        sessionId: args.sessionId,
-        closes: true,
-        starts: false,
-      };
-    }
-    if (command === "start_local_terminal_session") {
-      return {
-        command: "local_terminal_write",
-        sessionId: args.sessionId,
-        closes: false,
-        starts: true,
-      };
-    }
-    return null;
-  };
-
-  const invokeWithTerminalOrdering = async <T>(
-    command: string,
-    args: Record<string, unknown> | undefined,
-    queue: NonNullable<ReturnType<typeof terminalInputQueue>>,
-  ): Promise<T> => {
-    if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-    const key = terminalInputQueueKey(queue.command, queue.sessionId);
-    const previous = terminalLifecycleTails.get(key) ?? Promise.resolve();
-
-    // Install the barrier before the first await. Writes invoked after this call
-    // therefore wait behind resize/start, while close rejects them immediately.
-    // The close marker is provisional: a close that never reached the backend
-    // leaves a live terminal behind, and that terminal must stay writable.
-    if (queue.closes) closeTerminalInputQueue(key);
-    if (queue.starts) closedTerminalInputQueues.delete(key);
-
-    const operation = previous
-      .catch(() => undefined)
-      .then(async () => {
-        // The gateway may have been replaced while this lifecycle command was
-        // queued behind an earlier operation for the same terminal.
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        if (queue.starts) {
-          terminalInputBatcher.reset(queue.command, queue.sessionId);
-          return invokeImmediately<T>(command, args);
-        }
-
-        // A failed input promise has already reported the transport error. Resize
-        // and close must still reach the backend, while accepted successful input
-        // is flushed first so the lifecycle command cannot overtake it.
-        await terminalInputBatcher.flush(queue.command, queue.sessionId).catch(() => undefined);
-        await drainTerminalSocketInput(key);
-        // Disposal also rejects the flush itself. Do not turn that rejection into
-        // a stale resize/close request against the backend being replaced.
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        try {
-          // A *rejected* socket resize must still reach the backend over HTTP.
-          // Left to propagate it would skip the request entirely and leave the
-          // PTY at stale dimensions with nothing surfaced to the user.
-          const resizedOverSocket =
-            !queue.closes &&
-            websocketTerminalsEnabled &&
-            terminalSocket &&
-            typeof args?.cols === "number" &&
-            typeof args.rows === "number" &&
-            (await terminalSocket.resize(queue.sessionId, args.cols, args.rows).catch(() => false));
-          if (resizedOverSocket) {
-            terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
-            return undefined as T;
-          }
-          const result = await invokeImmediately<T>(command, args);
-          // Resize proves the transport recovered, so re-arm a queue that failed
-          // closed. Without this a single transient write failure would leave a
-          // terminal that streams output but silently refuses every keystroke.
-          if (!queue.closes) terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
-          return result;
-        } catch (error) {
-          // The terminal is still alive, so undo the provisional close rather than
-          // rejecting its input for the lifetime of the page.
-          if (queue.closes) closedTerminalInputQueues.delete(key);
-          throw error;
-        } finally {
-          // Unconditional: whether or not the close landed, input queued against
-          // the old session must not be delivered.
-          if (queue.closes) terminalInputBatcher.reset(queue.command, queue.sessionId);
-        }
-      });
-    const tail = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    terminalLifecycleTails.set(key, tail);
-    void tail.finally(() => {
-      if (terminalLifecycleTails.get(key) === tail) terminalLifecycleTails.delete(key);
-    });
-    return operation;
-  };
-
-  /**
-   * Waits for every socket write already issued for one terminal. Lifecycle
-   * commands use this so a close cannot overtake accepted input, without input
-   * itself having to wait for the previous write's acknowledgement.
-   *
-   * One snapshot is enough: a write issued after the caller installed its
-   * lifecycle tail blocks on that tail, and a write issued before it is already
-   * registered here by the time this runs.
-   */
-  const drainTerminalSocketInput = async (key: string): Promise<void> => {
-    const outstanding = terminalInputAcks.get(key);
-    if (!outstanding || outstanding.size === 0) return;
-    await Promise.all(outstanding);
-  };
-
-  /**
-   * `WebSocket.send()` only means bytes entered a browser buffer, so the
-   * backend acknowledgement is what a later HTTP close must not overtake. But
-   * it is emphatically *not* what the next keystroke must wait for: chaining
-   * writes on their own acknowledgements costs one full round trip per
-   * character. Sends are serialized; acknowledgements are merely tracked.
-   */
-  const invokeTerminalInputWithOrdering = async <T>(
-    terminalInput: NonNullable<ReturnType<typeof parseTerminalInputRequest>>,
-  ): Promise<T> => {
-    if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-    const key = terminalInputQueueKey(terminalInput.command, terminalInput.sessionId);
-    if (closedTerminalInputQueues.has(key)) {
-      throw new Error("Terminal input is closed until the session restarts");
-    }
-    const previousSend =
-      terminalInputSendTails.get(key) ?? terminalLifecycleTails.get(key) ?? Promise.resolve();
-
-    const send = previousSend
-      .catch(() => undefined)
-      .then(async () => {
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        const lifecycle = terminalLifecycleTails.get(key);
-        if (lifecycle) await lifecycle.catch(() => undefined);
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        // A latched-failed HTTP queue must not veto a healthy socket. Its
-        // rejection has already been reported to whoever issued that write.
-        await terminalInputBatcher
-          .flush(terminalInput.command, terminalInput.sessionId)
-          .catch(() => undefined);
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        const acknowledgement =
-          terminalSocket?.enqueueInput(terminalInput.sessionId, terminalInput.data) ?? null;
-        if (acknowledgement) {
-          // The socket accepted this write, so a queue that failed closed on a
-          // transient HTTP error must not keep refusing later keystrokes.
-          terminalInputBatcher.clearFailure(terminalInput.command, terminalInput.sessionId);
-          // Wrapped, not returned bare: an async function *adopts* a returned
-          // promise, which would make the send tail wait for the acknowledgement
-          // and restore the very round trip per keystroke this avoids.
-          return { acknowledgement };
-        }
-        await terminalInputBatcher.enqueue(terminalInput);
-        return null;
-      });
-
-    // The send tail releases as soon as the frame is on the wire, so the next
-    // keystroke follows immediately and still in order.
-    const sendTail = send.then(
-      () => undefined,
-      () => undefined,
-    );
-    terminalInputSendTails.set(key, sendTail);
-    void sendTail.finally(() => {
-      if (terminalInputSendTails.get(key) === sendTail) terminalInputSendTails.delete(key);
-    });
-
-    const acknowledged = send.then((result) => result?.acknowledgement);
-    const settled = acknowledged.then(
-      () => undefined,
-      () => undefined,
-    );
-    const outstanding = terminalInputAcks.get(key) ?? new Set<Promise<void>>();
-    terminalInputAcks.set(key, outstanding);
-    outstanding.add(settled);
-    void settled.finally(() => {
-      outstanding.delete(settled);
-      if (outstanding.size === 0 && terminalInputAcks.get(key) === outstanding) {
-        terminalInputAcks.delete(key);
-      }
-    });
-    return acknowledged.then(() => ({ delivered: true }) as T);
-  };
+    pipelined: {
+      active: () => websocketTerminalsEnabled && terminalSocket !== null,
+      send: (request) => terminalSocket?.enqueueInput(request.sessionId, request.data) ?? null,
+    },
+  });
 
   const api = {
     async invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -1322,28 +1026,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         terminalSocket?.observeSnapshotFailure(args.sessionId);
         return { acknowledged: true } as T;
       }
-      const terminalInput = parseTerminalInputRequest(command, args);
-      if (terminalInput) {
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        const key = terminalInputQueueKey(terminalInput.command, terminalInput.sessionId);
-        if (closedTerminalInputQueues.has(key)) {
-          throw new Error("Terminal input is closed until the session restarts");
-        }
-        if (websocketTerminalsEnabled && terminalSocket) {
-          return invokeTerminalInputWithOrdering<T>(terminalInput);
-        }
-        const lifecycle = terminalLifecycleTails.get(key);
-        if (lifecycle) await lifecycle;
-        // Replacement can occur while this write is waiting behind a lifecycle
-        // barrier, before it has entered the batcher itself.
-        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-        await terminalInputBatcher.enqueue(terminalInput);
-        // A successful batched send is an explicit delivery verdict. The
-        // rejected case above carries `delivered:false` to the hook as an error.
-        return { delivered: true } as T;
-      }
-      const queue = terminalInputQueue(command, args);
-      if (queue) return invokeWithTerminalOrdering<T>(command, args, queue);
+      const ordered = terminalInput.invoke(command, args);
+      if (ordered) return ordered as Promise<T>;
       return invokeImmediately<T>(command, args);
     },
 
@@ -1461,8 +1145,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
     disposeAgentTestActivity();
-    terminalInputDisposedReason = reason;
-    terminalInputBatcher.dispose(reason);
+    terminalInput.dispose(reason);
     terminalSocket?.dispose();
     terminalSocket = null;
     stopTerminalEventFallbacks();

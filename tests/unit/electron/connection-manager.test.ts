@@ -1122,7 +1122,8 @@ describe("Electron connection manager", () => {
         start(controller) {
           controller.enqueue(
             new TextEncoder().encode(
-              'data: {"event":"remote-updated","payload":{"id":"env-remote"}}\n\n',
+              'id: fixture1:0\ndata: {"event":"gateway.connected","payload":{"status":"fresh","generation":"fixture1","revision":0}}\n\n' +
+                'id: fixture1:1\ndata: {"event":"remote-updated","payload":{"id":"env-remote"}}\n\n',
             ),
           );
           init?.signal?.addEventListener("abort", () => controller.close(), { once: true });
@@ -1151,6 +1152,66 @@ describe("Electron connection manager", () => {
     const callCount = onEvent.mock.calls.length;
     await Promise.resolve();
     expect(onEvent).toHaveBeenCalledTimes(callCount);
+  });
+
+  test("forwards fresh resync and replayed reconnect terminal recovery independently", async () => {
+    const local = localBackendHarness();
+    const onEvent = mock(() => undefined);
+    const cursors: Array<string | null> = [];
+    let first!: ReadableStreamDefaultController<Uint8Array>;
+    globalThis.fetch = mock(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/__orkestrator/events")
+        return new Response(JSON.stringify({ ok: true }));
+      cursors.push(url.searchParams.get("since"));
+      const attempt = cursors.length;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (attempt === 1) first = controller;
+            controller.enqueue(
+              new TextEncoder().encode(
+                attempt === 1
+                  ? 'id: fixture1:1\ndata: {"event":"gateway.connected","payload":{"status":"fresh","generation":"fixture1","revision":1}}\n\n'
+                  : 'id: fixture1:1\ndata: {"event":"gateway.connected","payload":{"status":"replayed","generation":"fixture1","revision":1}}\n\nid: fixture1:2\ndata: {"event":"remote-updated","payload":{"id":"env-remote"}}\n\n',
+              ),
+            );
+            if (attempt > 1)
+              init?.signal?.addEventListener("abort", () => controller.close(), { once: true });
+          },
+        }),
+      );
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent,
+    });
+    await manager.initialize();
+    await manager.connect({ address: "https://desk.example", token });
+    try {
+      for (let index = 0; index < 30; index += 1) await Promise.resolve();
+      first.close();
+      const deadline = Date.now() + 2000;
+      while (
+        !onEvent.mock.calls.some(([event]) => event === "remote-updated") &&
+        Date.now() < deadline
+      )
+        await Bun.sleep(5);
+      expect(cursors).toEqual([null, "fixture1:1"]);
+      expect(
+        onEvent.mock.calls.filter(([event]) => event === "native-event-stream-connected"),
+      ).toHaveLength(1);
+      expect(
+        onEvent.mock.calls.filter(([event]) => event === "terminal-event-stream-connected"),
+      ).toHaveLength(2);
+      expect(onEvent).toHaveBeenCalledWith("remote-updated", { id: "env-remote" });
+    } finally {
+      await manager.use("local");
+    }
+    const count = onEvent.mock.calls.length;
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    expect(onEvent).toHaveBeenCalledTimes(count);
   });
 
   test("forwards local controls and local events and validates removal boundaries", async () => {

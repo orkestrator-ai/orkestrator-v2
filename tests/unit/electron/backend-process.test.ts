@@ -5,6 +5,7 @@ import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { nativeWebPlatform } from "../../register-dom";
+import { MAX_GATEWAY_EVENT_FRAME_BYTES } from "@orkestrator/protocol/gateway-event-stream";
 import { defaultConfig } from "../../../apps/backend/src/core/storage";
 import {
   configureSshAgentSocketEnvironment,
@@ -16,7 +17,6 @@ import {
 import {
   BackendHttpClient,
   BackendProcess,
-  MAX_BACKEND_EVENT_FRAME_BYTES,
   agentTestDockerConfigDir,
   agentTestKeychainDir,
   createBackendProcessEnvironment,
@@ -113,6 +113,11 @@ afterEach(async () => {
 // Bun's 5s default is not enough when the suite runs files in parallel on a
 // loaded machine, which showed up as an intermittent timeout here.
 const SPAWN_TIMEOUT_MS = 30_000;
+/** What the gateway sends first to a client that has no cursor yet. */
+const FRESH_CONNECTED_FRAME = `id: desktop1:0\ndata: ${JSON.stringify({
+  event: "gateway.connected",
+  payload: { generation: "desktop1", revision: 0, status: "fresh", replayed: 0 },
+})}\n\n`;
 
 describe("Electron backend process supervisor", () => {
   test("accepts a live SSH-agent socket through a stable symlink and rejects an unreachable socket", async () => {
@@ -838,7 +843,9 @@ sleep 5
     const server = createServer(async (request, response) => {
       if (request.url === "/__orkestrator/events") {
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.write(': connected\n\ndata: {"event":"changed","payload":{"ok":true}}\n\n');
+        response.write(
+          `: connected\n\n${FRESH_CONNECTED_FRAME}data: {"event":"changed","payload":{"ok":true}}\n\n`,
+        );
         return;
       }
       const chunks: Buffer[] = [];
@@ -905,11 +912,12 @@ sleep 5
     const delivered = new Promise<void>((resolve) =>
       client.listen((event, payload) => {
         received.push({ event, payload });
-        if (received.length === 2) resolve();
+        if (event === "changed") resolve();
       }),
     );
     await delivered;
     expect(received).toEqual([
+      { event: "terminal-event-stream-connected", payload: undefined },
       { event: "native-event-stream-connected", payload: undefined },
       { event: "changed", payload: { ok: true } },
     ]);
@@ -954,10 +962,12 @@ sleep 5
       return Response.json({ result: { delivered: true } });
     }) as unknown as typeof fetch;
 
-    const writes = ["a", "b", "c"].map((data) =>
-      client.invoke("terminal_write", { sessionId: "remote-1", data }),
-    );
+    const writes = [client.invoke("terminal_write", { sessionId: "remote-1", data: "a" })];
     const otherTerminal = client.invoke("terminal_write", { sessionId: "remote-2", data: "z" });
+    await Bun.sleep(0);
+    writes.push(
+      ...["b", "c"].map((data) => client.invoke("terminal_write", { sessionId: "remote-1", data })),
+    );
     await Bun.sleep(0);
     // One in flight per terminal; other terminals and commands are not held up.
     expect(bodies.map((body) => body.args)).toEqual([
@@ -991,6 +1001,7 @@ sleep 5
     }) as unknown as typeof fetch;
 
     const first = client.invoke("terminal_write", { sessionId: "remote-1", data: "a" });
+    await Bun.sleep(0);
     const queued = client.invoke("terminal_write", { sessionId: "remote-1", data: "b" });
     await Bun.sleep(0);
     failFirst();
@@ -1013,13 +1024,13 @@ sleep 5
     const payload = "y".repeat(1.5 * 1024 * 1024);
     const frame = `data: ${JSON.stringify({ event: "large-snapshot", payload })}\n\n`;
     expect(Buffer.byteLength(frame, "utf8")).toBeGreaterThan(1024 * 1024);
-    expect(Buffer.byteLength(frame, "utf8")).toBeLessThan(MAX_BACKEND_EVENT_FRAME_BYTES);
+    expect(Buffer.byteLength(frame, "utf8")).toBeLessThan(MAX_GATEWAY_EVENT_FRAME_BYTES);
     globalThis.fetch = mock(
       async () =>
         new Response(
           new ReadableStream({
             start(controller) {
-              controller.enqueue(new TextEncoder().encode(frame));
+              controller.enqueue(new TextEncoder().encode(FRESH_CONNECTED_FRAME + frame));
               controller.close();
             },
           }),
@@ -1041,6 +1052,7 @@ sleep 5
         });
       });
       expect(events).toEqual([
+        { event: "terminal-event-stream-connected", payload: undefined },
         { event: "native-event-stream-connected", payload: undefined },
         { event: "large-snapshot", payload },
       ]);
@@ -1049,23 +1061,27 @@ sleep 5
     }
   });
 
-  test("drops malformed event frames and reconnects after an oversized frame", async () => {
+  test("drops malformed event frames and resumes from its cursor after an oversized frame", async () => {
     useNativeWebPlatform();
-    let attempts = 0;
+    const urls: string[] = [];
     let firstCancelled = false;
-    globalThis.fetch = mock(async () => {
-      attempts += 1;
-      if (attempts === 1) {
+    let reconnected!: () => void;
+    const secondAttempt = new Promise<void>((resolve) => {
+      reconnected = resolve;
+    });
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      if (urls.length === 1) {
         return new Response(
           new ReadableStream({
             start(controller) {
               controller.enqueue(
                 new TextEncoder().encode(
-                  'data: {not-json}\n\ndata: {"event":"kept","payload":1}\n\n',
+                  `${FRESH_CONNECTED_FRAME}data: {not-json}\n\nid: desktop1:1\ndata: {"event":"kept","payload":1}\n\n`,
                 ),
               );
               controller.enqueue(
-                new TextEncoder().encode("x".repeat(MAX_BACKEND_EVENT_FRAME_BYTES + 1)),
+                new TextEncoder().encode("x".repeat(MAX_GATEWAY_EVENT_FRAME_BYTES + 1)),
               );
             },
             cancel() {
@@ -1075,12 +1091,8 @@ sleep 5
           { status: 200 },
         );
       }
-      return new Response(
-        new ReadableStream({
-          start() {},
-        }),
-        { status: 200 },
-      );
+      reconnected();
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
     }) as typeof fetch;
     const error = mock(() => undefined);
     const warning = mock(() => undefined);
@@ -1088,22 +1100,22 @@ sleep 5
     const previousWarning = console.warn;
     console.error = error;
     console.warn = warning;
-    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456", {
+      eventReconnectDelayMs: 5,
+    });
     const events: string[] = [];
     try {
-      await new Promise<void>((resolve) => {
-        client.listen((event) => {
-          events.push(event);
-          if (events.filter((entry) => entry === "native-event-stream-connected").length === 2) {
-            client.stopListening();
-            resolve();
-          }
-        });
-      });
+      client.listen((event) => events.push(event));
+      await secondAttempt;
+      client.stopListening();
       expect(events).toEqual([
+        "terminal-event-stream-connected",
         "native-event-stream-connected",
         "kept",
-        "native-event-stream-connected",
+      ]);
+      expect(urls).toEqual([
+        "http://127.0.0.1:34121/__orkestrator/events",
+        "http://127.0.0.1:34121/__orkestrator/events?since=desktop1%3A1",
       ]);
       expect(firstCancelled).toBe(true);
       expect(warning).toHaveBeenCalledTimes(1);
@@ -1115,7 +1127,7 @@ sleep 5
     }
   });
 
-  test("announces each successful event-stream reconnection", async () => {
+  test("backs off instead of spinning when the gateway closes every stream at once", async () => {
     let attempts = 0;
     globalThis.fetch = mock(async () => {
       attempts += 1;
@@ -1128,21 +1140,15 @@ sleep 5
         { status: 200 },
       );
     }) as typeof fetch;
-    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
-    const connected = new Promise<void>((resolve) => {
-      let connectionCount = 0;
-      client.listen((event) => {
-        if (event !== "native-event-stream-connected") return;
-        connectionCount += 1;
-        if (connectionCount === 2) {
-          client.stopListening();
-          resolve();
-        }
-      });
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456", {
+      eventReconnectDelayMs: 20,
     });
-
-    await connected;
-    expect(attempts).toBe(2);
+    client.listen(() => undefined);
+    await Bun.sleep(100);
+    client.stopListening();
+    // 20 ms, then at most 40, 80: a tight loop would have made hundreds.
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(attempts).toBeLessThanOrEqual(5);
   });
 
   test(
@@ -1156,6 +1162,11 @@ sleep 5
       directories.push(dataDir);
       const backendProcess = new BackendProcess();
       processes.push(backendProcess);
+      const events: string[] = [];
+      let freshConnection!: () => void;
+      const connected = new Promise<void>((resolve) => {
+        freshConnection = resolve;
+      });
 
       const client = await backendProcess.start({
         isDev: true,
@@ -1165,7 +1176,10 @@ sleep 5
         gatewayHost: "127.0.0.1",
         gatewayPort: 0,
         allowNonTailscaleBind: true,
-        onEvent: () => undefined,
+        onEvent: (event) => {
+          events.push(event);
+          if (event === "native-event-stream-connected") freshConnection();
+        },
       });
 
       const info = backendProcess.getInfo();
@@ -1175,6 +1189,11 @@ sleep 5
       await expect(client.invoke("greet", { name: "Electron" })).resolves.toBe(
         "Hello, Electron! You've been greeted from the Orkestrator backend!",
       );
+      // The real gateway's replay handshake reaches the desktop client as one
+      // resync, and none of its control frames leak to the renderer.
+      await connected;
+      expect(events.filter((event) => event === "native-event-stream-connected")).toHaveLength(1);
+      expect(events.some((event) => event.startsWith("gateway."))).toBe(false);
 
       if (!info) throw new Error("Expected shared backend start information");
       const auth = JSON.parse(await readFile(info.authFile, "utf8")) as { token: string };

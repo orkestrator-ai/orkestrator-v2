@@ -4,7 +4,7 @@ import {
   installBrowserGatewayApi,
   TERMINAL_TRANSPORT_STORAGE_KEY,
 } from "./web-gateway";
-import { TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES } from "./terminal-input-batcher";
+import { TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES } from "@orkestrator/protocol/terminal-input-batcher";
 import {
   clearDirectGatewayTransport,
   configureDirectGatewayTransport,

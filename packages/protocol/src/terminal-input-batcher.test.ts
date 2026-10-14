@@ -35,6 +35,33 @@ const request = (
 ): TerminalInputRequest => ({ command, sessionId, data });
 
 describe("TerminalHttpInputBatcher", () => {
+  test("failure fences cannot bypass terminal capacity", () => {
+    const batcher = new TerminalHttpInputBatcher(async () => {}, 0, 4, 4, 1000, 2, 2);
+    batcher.failQueue("terminal_write", "a", new Error("a failed"));
+    batcher.failQueue("terminal_write", "b", new Error("b failed"));
+    expect(() => batcher.failQueue("terminal_write", "c", new Error("c failed"))).toThrow(
+      "capacity reached",
+    );
+    expect(batcher.getStats()).toMatchObject({ terminals: 2, failedTerminals: 2 });
+    expect(batcher.hasFailed("terminal_write", "a")).toBe(true);
+    expect(batcher.hasFailed("terminal_write", "b")).toBe(true);
+  });
+
+  test("reserved lifecycle slots survive reset and exclude new terminals until released", async () => {
+    const batcher = new TerminalHttpInputBatcher(async () => {}, 0, 4, 4, 1000, 2, 1);
+    const release = batcher.reserveTerminal("terminal_write", "a");
+    batcher.reset("terminal_write", "a");
+    expect(() => batcher.reserveTerminal("terminal_write", "b")).toThrow("capacity reached");
+    await expect(batcher.enqueue(request("x", "b"))).rejects.toThrow("capacity reached");
+    batcher.failQueue("terminal_write", "a", new Error("lost response"));
+    release();
+    release();
+    expect(batcher.getStats()).toMatchObject({ terminals: 1, failedTerminals: 1 });
+    batcher.clearFailure("terminal_write", "a");
+    await batcher.enqueue(request("x", "b"));
+    expect(batcher.getStats().terminals).toBe(0);
+  });
+
   test("micro-batches printable typing and preserves exact order", async () => {
     const sent: string[] = [];
     const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
@@ -749,6 +776,110 @@ describe("TerminalHttpInputBatcher", () => {
     for (const timeout of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => new TerminalHttpInputBatcher(send, 1, 4, 4, timeout)).toThrow("sendTimeoutMs");
     }
+  });
+});
+
+describe("TerminalHttpInputBatcher bounds", () => {
+  const held = () => {
+    const releases: Array<() => void> = [];
+    const sent: string[] = [];
+    const send = ({ data }: TerminalInputRequest) => {
+      sent.push(data);
+      return new Promise<void>((resolve) => releases.push(resolve));
+    };
+    return { sent, releases, send };
+  };
+
+  test("coalesces input typed during a round trip into the next request", async () => {
+    const { sent, releases, send } = held();
+    const batcher = new TerminalHttpInputBatcher(send, 1);
+    const first = batcher.enqueue(request("first\r"));
+    await tick();
+    const typed = ["a", "b"].map((data) => batcher.enqueue(request(data)));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // The typing timer fired while "first" was in flight; "c" still joins.
+    typed.push(batcher.enqueue(request("c")));
+    releases.shift()?.();
+    await settle();
+    releases.shift()?.();
+    await Promise.all([first, ...typed]);
+    expect(sent).toEqual(["first\r", "abc"]);
+  });
+
+  test("a zero delay sends at once instead of waiting for a timer", async () => {
+    const sent: string[] = [];
+    const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
+      sent.push(data);
+    }, 0);
+    const write = batcher.enqueue(request("x"));
+    await tick();
+    expect(sent).toEqual(["x"]);
+    await write;
+  });
+
+  test("fails the queue closed once pending input exceeds its count bound", async () => {
+    const { sent, releases, send } = held();
+    const batcher = new TerminalHttpInputBatcher(send, 0, 4, 64, 1_000, 3);
+    const accepted = ["a", "b", "c"].map((data) => rejectionOf(batcher.enqueue(request(data))));
+    const overflow = await rejectionOf(batcher.enqueue(request("d")));
+    expect(String(overflow)).toContain("queue limit");
+    for (const error of await Promise.all(accepted)) expect(String(error)).toContain("queue limit");
+    expect(batcher.hasFailed("terminal_write", "session-1")).toBe(true);
+    releases.shift()?.();
+    expect(sent).toEqual(["a"]);
+  });
+
+  test("fails the queue closed once parked input exceeds four ceilings", async () => {
+    const { releases, send } = held();
+    const batcher = new TerminalHttpInputBatcher(send, 0, 2, 2, 1_000);
+    const accepted = rejectionOf(batcher.enqueue(request("ab")));
+    // Four two-byte inputs park; the fifth would exceed 4 x 2 parked bytes.
+    const parked = ["cd", "ef", "gh", "ij"].map((data) =>
+      rejectionOf(batcher.enqueue(request(data))),
+    );
+    expect(batcher.getStats().parkedBytes).toBe(8);
+    const overflow = await rejectionOf(batcher.enqueue(request("kl")));
+    expect(String(overflow)).toContain("queue limit");
+    for (const error of await Promise.all([accepted, ...parked])) {
+      expect(String(error)).toContain("queue limit");
+    }
+    expect(batcher.getStats()).toMatchObject({ parkedBytes: 0, queuedBytes: 0, pendingInputs: 0 });
+    releases.shift()?.();
+  });
+
+  test("refuses a new terminal when every slot holds a live or failed queue", async () => {
+    const { releases, send } = held();
+    const batcher = new TerminalHttpInputBatcher(send, 0, 4, 4, 1_000, 8, 2);
+    const first = batcher.enqueue(request("a", "one"));
+    batcher.failQueue("terminal_write", "two", new Error("fenced"));
+    await expect(batcher.enqueue(request("b", "three"))).rejects.toThrow("capacity");
+    // Failed queues are fences and must not be evicted to make room.
+    await expect(batcher.enqueue(request("c", "two"))).rejects.toThrow("fenced");
+    releases.shift()?.();
+    await first;
+    // An idle healthy queue is forgotten, which frees its slot.
+    await settle();
+    const third = batcher.enqueue(request("d", "three"));
+    await tick();
+    releases.shift()?.();
+    await third;
+  });
+
+  test("failQueue rejects held input and clearFailure re-arms", async () => {
+    const { sent, releases, send } = held();
+    const batcher = new TerminalHttpInputBatcher(send, 0);
+    const active = rejectionOf(batcher.enqueue(request("a")));
+    await tick();
+    const queued = rejectionOf(batcher.enqueue(request("b")));
+    batcher.failQueue("terminal_write", "session-1", new Error("lost lifecycle"));
+    expect(String(await active)).toContain("lost lifecycle");
+    expect(String(await queued)).toContain("lost lifecycle");
+    expect(batcher.clearFailure("terminal_write", "session-1")).toBe(true);
+    const fresh = batcher.enqueue(request("c"));
+    await tick();
+    releases.at(-1)?.();
+    await fresh;
+    expect(sent).toEqual(["a", "c"]);
   });
 });
 

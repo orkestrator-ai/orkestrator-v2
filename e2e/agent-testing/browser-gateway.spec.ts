@@ -10,7 +10,6 @@ import path from "node:path";
 import { createServer } from "node:net";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { environmentCleanupLedger } from "../../apps/backend/src/core/environment-cleanup-ledger";
 import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
 import type {
   MultiReviewActionResult,
@@ -47,6 +46,30 @@ type AgentMessagingSettings = {
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
+
+/**
+ * Environment ids the deletion ledger still owes cleanup for. The ledger lives
+ * in the backend database, which Node cannot open; read it through Bun.
+ */
+function pendingCleanupEnvironmentIds(dataDir: string): string[] {
+  const result = spawnSync(
+    "bun",
+    [
+      path.join(import.meta.dirname, "backend-store.ts"),
+      dataDir,
+      "environment-cleanup-ledger.json",
+      "read",
+    ],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+  if (result.status !== 0) throw new Error(result.stderr || "backend-store read failed");
+  const stored = JSON.parse(result.stdout) as {
+    value?: { entries?: Record<string, { environmentId?: unknown }> };
+  } | null;
+  return Object.values(stored?.value?.entries ?? {}).flatMap((entry) =>
+    typeof entry.environmentId === "string" ? [entry.environmentId] : [],
+  );
+}
 
 async function profileStatus(): Promise<Status> {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -1130,11 +1153,7 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
       { encoding: "utf8" },
     );
     expect(branch.status).not.toBe(0);
-    expect(
-      (await environmentCleanupLedger(runtime.dataDir).list()).some(
-        (entry) => entry.environmentId === environment.id,
-      ),
-    ).toBe(false);
+    expect(pendingCleanupEnvironmentIds(runtime.dataDir)).not.toContain(environment.id);
   } finally {
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
   }

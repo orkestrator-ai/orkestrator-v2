@@ -28,6 +28,8 @@ export interface DesignSummary {
   recordBytes: number;
   fileSize: number;
   fileMtimeMs: number;
+  /** Identity (`fileKey` in design-records) of the file this summary was derived from. */
+  fileKey?: string;
   legacy?: boolean;
   /** History holds entries beyond the protected newest ones (prunable). */
   historyPrunable?: boolean;
@@ -55,6 +57,7 @@ const summarySchema = z
     recordBytes: z.number().nonnegative(),
     fileSize: z.number().nonnegative(),
     fileMtimeMs: z.number().nonnegative(),
+    fileKey: z.string().max(200).optional(),
     legacy: z.boolean().optional(),
     exportPending: z.boolean().optional(),
     historyPrunable: z.boolean().optional(),
@@ -64,7 +67,7 @@ const indexSchema = z.object({ version: z.literal(1), entries: z.array(summarySc
 
 export function summarizeRecord(
   record: DesignPrivateRecord,
-  file: { size: number; mtimeMs: number },
+  file: { size: number; mtimeMs: number; key?: string },
   legacy = false,
 ): DesignSummary {
   const metas = Object.values(record.frames);
@@ -92,6 +95,7 @@ export function summarizeRecord(
     recordBytes: file.size,
     fileSize: file.size,
     fileMtimeMs: file.mtimeMs,
+    ...(file.key ? { fileKey: file.key } : {}),
     ...(legacy ? { legacy: true } : {}),
     ...(record.pendingExport?.state === "writing" ? { exportPending: true } : {}),
     // Mirrors PROTECTED_HISTORY_ENTRIES (3) without importing history into the index.
@@ -99,7 +103,13 @@ export function summarizeRecord(
   };
 }
 
-/** Derived, bounded view of private records. Never authoritative for editing. */
+/**
+ * Derived, bounded view of private records. Never authoritative for editing.
+ * Every backend sharing the data directory keeps its own copy; the service
+ * rescans the records when another process signals a change (see
+ * `DesignService.refreshLibrary`). `index.json` is only a startup cache whose
+ * entries are trusted solely while their file identity still matches.
+ */
 export class DesignLibraryIndex {
   readonly entries = new Map<string, DesignSummary>();
   private persistTimer: ReturnType<typeof setTimeout> | undefined;

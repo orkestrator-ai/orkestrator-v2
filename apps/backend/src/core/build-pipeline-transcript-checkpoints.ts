@@ -2,8 +2,9 @@ import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build
 import type {
   TranscriptCommitInput,
   TranscriptCommitResult,
+  TranscriptRead,
+  TranscriptReadWindow,
 } from "./build-pipeline-transcript-store.js";
-import type { TranscriptRead } from "./build-pipeline-transcript-store.js";
 import { structuredRequestIdFromMessages } from "./build-pipeline-transcripts.js";
 import {
   normalizeTranscriptFingerprint,
@@ -16,7 +17,7 @@ export interface BuildPipelineTranscriptStorage {
   readBuildPipelineTranscript(
     pipelineId: string,
     session: Pick<PipelineSession, "sessionKey" | "transcript" | "messages" | "messageRevision">,
-    window?: { fromIndex?: number; toIndex?: number },
+    window?: TranscriptReadWindow,
   ): Promise<TranscriptRead>;
 }
 
@@ -39,7 +40,12 @@ const MAX_PENDING_TRANSCRIPTS = 256;
 const RECOVERY_TAIL_MESSAGES = 64;
 
 export interface TranscriptCheckpoint {
-  /** Drops the pending copies this checkpoint committed, once the control record referencing them is durable. */
+  /**
+   * Drops the pending copies this checkpoint staged, once the control record
+   * referencing them is durable. A copy whose manifest the control write
+   * refused is dropped too: that write restored the session's previous
+   * fingerprint, so the next observation re-detects the change.
+   */
   settle(): void;
 }
 
@@ -48,13 +54,15 @@ export interface TranscriptCheckpoint {
  *
  * The supervisor observes provider transcripts every tick but keeps them here
  * rather than on the snapshot it saves. At the save boundary, `prepare`
- * commits every changed transcript (chunks, then manifest) and stamps the
- * session with its new reference, so the control record written afterwards
- * only ever points at committed data. A checkpoint that fails leaves the
- * previous reference in place, keeps the pending copy for the next save, and
- * never blocks the control write: phase transitions, queues, leases and
- * dispatch evidence do not depend on display data. Structured results never
- * came from the display transcript and keep their own durable path.
+ * stages every changed transcript (chunk files written and fsynced, manifest
+ * held in memory) and stamps the session with its new reference; the control
+ * write that follows commits those manifests in its own transaction, so the
+ * control record only ever points at committed data. A checkpoint that fails
+ * — here, or when its manifest is refused inside that transaction — leaves the
+ * previous reference in place and never blocks the control write: phase
+ * transitions, queues, leases and dispatch evidence do not depend on display
+ * data. Structured results never came from the display transcript and keep
+ * their own durable path.
  */
 export class BuildPipelineTranscriptCheckpoints {
   private readonly pending = new Map<string, PendingTranscript>();
@@ -127,8 +135,9 @@ export class BuildPipelineTranscriptCheckpoints {
   }
 
   /**
-   * Commits pending and legacy inline transcripts for `pipeline` and points its
-   * sessions at them. Must run before the control record is written.
+   * Stages pending and legacy inline transcripts for `pipeline` and points its
+   * sessions at them. Must run before the control record is written; that
+   * write commits them.
    */
   async prepare(pipeline: BuildPipeline): Promise<TranscriptCheckpoint> {
     const committed: Array<[string, PendingTranscript]> = [];
@@ -154,10 +163,8 @@ export class BuildPipelineTranscriptCheckpoints {
           continue;
         }
         const result = await this.commit(pipeline, session, pending.messages, pending.fingerprint);
-        if (result.status === "committed") {
+        if (result.status === "staged") {
           this.apply(session, result);
-          committed.push([key, pending]);
-        } else if (result.status === "fenced") {
           committed.push([key, pending]);
         } else {
           // Explicit, content-free state: the referenced transcript is behind
@@ -184,15 +191,13 @@ export class BuildPipelineTranscriptCheckpoints {
         this.committedFingerprint(session) ?? transcriptFingerprint(messages),
         Math.max(session.messageRevision ?? 0, 1),
       );
-      if (result.status === "committed") {
+      if (result.status === "staged") {
         this.apply(session, result);
       } else {
         // Keep the inline body: the legacy format stays readable and bounded
         // by the old snapshot limit until the move succeeds.
         console.warn(
-          `[build-pipeline] Legacy transcript move deferred for ${pipeline.id}: ${
-            result.status === "fenced" ? "fenced" : result.reason
-          }`,
+          `[build-pipeline] Legacy transcript move deferred for ${pipeline.id}: ${result.reason}`,
         );
       }
     }
@@ -233,7 +238,7 @@ export class BuildPipelineTranscriptCheckpoints {
 
   private apply(
     session: PipelineSession,
-    result: Extract<TranscriptCommitResult, { status: "committed" }>,
+    result: Extract<TranscriptCommitResult, { status: "staged" }>,
   ): void {
     session.transcript = result.reference;
     session.messageRevision = result.reference.revision;

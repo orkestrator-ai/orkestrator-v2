@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Project } from "./models.js";
 import { StorageService } from "./storage.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { OrkestratorBackend } from "./index.js";
 
 function project(id: string): Project {
@@ -34,8 +35,8 @@ describe("StorageService project folders", () => {
     await fs.rm(dataDir, { recursive: true, force: true });
   });
 
-  const readStoredProjects = async (): Promise<Project[]> =>
-    JSON.parse(await fs.readFile(path.join(dataDir, "projects.json"), "utf8")) as Project[];
+  const readStoredProjects = (): Project[] =>
+    readStoredValue<Project[]>(dataDir, "projects.json") ?? [];
 
   test("applies order and folder membership in one write", async () => {
     const arranged = await storage.arrangeProjects(["gamma", "alpha", "beta"], {
@@ -76,7 +77,7 @@ describe("StorageService project folders", () => {
     await storage.arrangeProjects(["alpha", "beta", "gamma"], { alpha: "Work" });
     await storage.arrangeProjects(["alpha", "beta", "gamma"], { alpha: null });
 
-    const stored = await readStoredProjects();
+    const stored = readStoredProjects();
     const alpha = stored.find((candidate) => candidate.id === "alpha");
     expect(alpha).toBeDefined();
     expect("folder" in alpha!).toBe(false);
@@ -115,10 +116,7 @@ describe("StorageService project folders", () => {
   });
 
   test("projects stored before folders existed load unchanged", async () => {
-    await fs.writeFile(
-      path.join(dataDir, "projects.json"),
-      JSON.stringify([{ ...project("legacy"), order: 0 }]),
-    );
+    seedStore(dataDir, "projects.json", [{ ...project("legacy"), order: 0 }]);
     const legacyStorage = new StorageService(dataDir);
     await legacyStorage.init();
     const loaded = await legacyStorage.loadProjects();

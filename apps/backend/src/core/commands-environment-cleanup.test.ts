@@ -1,4 +1,5 @@
-import { describe, expect, mock, test } from "bun:test";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,9 +8,11 @@ import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
-  ENVIRONMENT_CLEANUP_LEDGER_FILE,
+  closeEnvironmentCleanupStorage,
+  ENVIRONMENT_CLEANUP_LEDGER_STORE,
   environmentCleanupLedger,
 } from "./environment-cleanup-ledger.js";
+import { StorageDatabase } from "./storage-database.js";
 import { reconcileEnvironmentCleanup } from "./environment-cleanup-reconciler.js";
 import { environmentStateDirectories } from "./environment-state-paths.js";
 import { terminalProcesses } from "./commands-runtime-state.js";
@@ -17,6 +20,8 @@ import { setupTerminalSessionId } from "./commands-terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
+
+afterEach(() => closeEnvironmentCleanupStorage());
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -274,16 +279,28 @@ describe("delete_environment host cleanup", () => {
     await withDeleteCommand(
       async (storage) => {
         worktreePath = await seedWorktree(storage);
-        // A directory where the ledger file belongs makes the write fail.
-        await fs.mkdir(path.join(storage.getDataDir(), ENVIRONMENT_CLEANUP_LEDGER_FILE));
       },
       async (invokeDelete, storage) => {
-        await expect(invokeDelete()).rejects.toThrow();
+        // The ledger's commit fails at the database write boundary.
+        const realWrite = StorageDatabase.prototype.writeStoreInTransaction;
+        const write = spyOn(
+          StorageDatabase.prototype,
+          "writeStoreInTransaction",
+        ).mockImplementation(function (this: StorageDatabase, store, ...rest) {
+          if (store === ENVIRONMENT_CLEANUP_LEDGER_STORE) throw new Error("disk I/O error");
+          return realWrite.call(this, store, ...rest);
+        });
+        try {
+          await expect(invokeDelete()).rejects.toThrow();
+        } finally {
+          write.mockRestore();
+        }
         expect(await exists(worktreePath)).toBe(true);
         expect(await storage.getEnvironment("e1")).toMatchObject({
           id: "e1",
           deletionRequestedAt: expect.any(String),
         });
+        expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
       },
     );
   });
@@ -332,29 +349,27 @@ describe("delete_environment durable child-state cleanup", () => {
         // A record written by a newer build. Nothing in this delete path can
         // read it, and refusing to finish here would strand the environment
         // itself — leaving the user no way to clear the record at all.
-        await fs.writeFile(
-          path.join(storage.getDataDir(), "native-agent-sessions.json"),
-          JSON.stringify({
-            "poisoned-key": {
-              version: 2,
-              key: "poisoned-key",
-              environmentId: "e2",
-              agent: "codex",
-              logicalSessionKey: "env-e2:tab-1",
-              providerSessionId: "future-provider-session",
-              createdAt: new Date(0).toISOString(),
-              updatedAt: new Date(0).toISOString(),
-            },
-          }),
-        );
+        seedStore(storage.getDataDir(), "native-agent-sessions.json", {
+          "poisoned-key": {
+            version: 2,
+            key: "poisoned-key",
+            environmentId: "e2",
+            agent: "codex",
+            logicalSessionKey: "env-e2:tab-1",
+            providerSessionId: "future-provider-session",
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          },
+        });
       },
       async (invokeDelete, storage) => {
         await expect(invokeDelete()).resolves.toBeUndefined();
         expect(await storage.getEnvironment("e1")).toBeNull();
-        const remaining = JSON.parse(
-          await fs.readFile(path.join(storage.getDataDir(), "native-agent-sessions.json"), "utf8"),
+        const remaining = readStoredValue<Record<string, unknown>>(
+          storage.getDataDir(),
+          "native-agent-sessions.json",
         );
-        expect(remaining["poisoned-key"]).toMatchObject({ version: 2 });
+        expect(remaining?.["poisoned-key"]).toMatchObject({ version: 2 });
       },
     );
   });

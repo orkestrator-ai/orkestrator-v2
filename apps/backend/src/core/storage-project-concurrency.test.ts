@@ -1,10 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Project } from "./models.js";
 import { StorageService } from "./storage.js";
+import type { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
 
 function project(id: string): Project {
   return {
@@ -31,21 +33,89 @@ async function withSharedStorage<T>(
   }
 }
 
-function creationLockDirectory(dataDir: string): string {
-  return path.join(dataDir, "project-creation-locks");
+const CREATION_LEASE_PREFIX = "project-creation-locks/";
+
+function creationLeaseName(canonicalPath: string): string {
+  return `${CREATION_LEASE_PREFIX}${createHash("sha256").update(canonicalPath).digest("hex")}`;
 }
 
-async function creationLockFiles(dataDir: string): Promise<string[]> {
-  return fs.readdir(creationLockDirectory(dataDir)).catch(() => [] as string[]);
+/** Names of the held creation leases, read through a separate connection. */
+function creationLeases(dataDir: string): string[] {
+  const database = openBackendDatabase(dataDir);
+  try {
+    const rows = database.db
+      .query("SELECT name FROM leases WHERE substr(name, 1, ?) = ? ORDER BY name")
+      .all(CREATION_LEASE_PREFIX.length, CREATION_LEASE_PREFIX) as Array<{ name: string }>;
+    return rows.map((row) => row.name);
+  } finally {
+    database.close();
+  }
+}
+
+function hasLease(dataDir: string, name: string): boolean {
+  const database = openBackendDatabase(dataDir);
+  try {
+    return database.db.query("SELECT 1 FROM leases WHERE name = ?").get(name) !== null;
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Takes `name` from another backend's connection. With `heartbeatAgeMs` the
+ * holder then stops heartbeating, as a crashed or stalled backend would.
+ */
+async function holdLease(
+  dataDir: string,
+  name: string,
+  heartbeatAgeMs?: number,
+): Promise<{ release: () => Promise<void>; crash: () => void }> {
+  const database = openBackendDatabase(dataDir);
+  const release = await database.acquireLease(name, "test");
+  if (heartbeatAgeMs !== undefined) {
+    database.db
+      .query("UPDATE leases SET heartbeat_at = ? WHERE name = ?")
+      .run(Date.now() - heartbeatAgeMs, name);
+  }
+  return {
+    release: async () => {
+      await release();
+      database.close();
+    },
+    crash: () => {
+      // Closing first leaves the row behind; the release only stops the timer.
+      database.close();
+      void release();
+    },
+  };
 }
 
 /** Reaches the private queue map so its cleanup can be asserted directly. */
 function creationQueueSize(storage: StorageService): number {
-  return (
-    storage as unknown as {
-      projectCreationMutationQueues: Map<string, unknown>;
-    }
-  ).projectCreationMutationQueues.size;
+  const tails = (storage as unknown as { mutationTails: Map<string, unknown> }).mutationTails;
+  return [...tails.keys()].filter((key) => key.startsWith(CREATION_LEASE_PREFIX)).length;
+}
+
+/** The queue drops a settled tail in a follow-up microtask. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Freezes the clock for the first `frozenCalls` reads and then jumps past an
+ * acquire deadline, so a wait on a live holder times out without sleeping.
+ */
+async function withClockJump<T>(frozenCalls: number, jumpMs: number, run: () => Promise<T>) {
+  const originalNow = Date.now;
+  const startedAt = originalNow();
+  let calls = 0;
+  Date.now = () => {
+    calls += 1;
+    return calls <= frozenCalls ? startedAt : startedAt + jumpMs;
+  };
+  try {
+    return await run();
+  } finally {
+    Date.now = originalNow;
+  }
 }
 
 describe("StorageService project mutation serialization", () => {
@@ -129,19 +199,20 @@ describe("StorageService project mutation serialization", () => {
       await expect(
         second.withProjectCreationLock("/canonical/fails", async () => "retried"),
       ).resolves.toBe("retried");
-      expect(await creationLockFiles(dataDir)).toEqual([]);
+      expect(creationLeases(dataDir)).toEqual([]);
     });
   });
 
-  test("removes the creation lock file and queue entry after success", async () => {
+  test("releases the creation lease and queue entry after success", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
       await first.withProjectCreationLock("/canonical/clean", async () => {
-        expect((await creationLockFiles(dataDir)).length).toBe(1);
+        expect(creationLeases(dataDir)).toEqual([creationLeaseName("/canonical/clean")]);
       });
 
-      // A leaked lock file would silently stall the next creation until the
-      // stale threshold expired, and a leaked queue entry would grow forever.
-      expect(await creationLockFiles(dataDir)).toEqual([]);
+      // A leaked lease would silently stall the next creation until the stale
+      // threshold expired, and a leaked queue entry would grow forever.
+      expect(creationLeases(dataDir)).toEqual([]);
+      await settle();
       expect(creationQueueSize(first)).toBe(0);
     });
   });
@@ -157,35 +228,28 @@ describe("StorageService project mutation serialization", () => {
       expect(creationQueueSize(first)).toBe(1);
       release();
       await Promise.all([held, queued]);
+      await settle();
       expect(creationQueueSize(first)).toBe(0);
     });
   });
 
   test("recovers a creation lock abandoned by a crashed backend", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
-      const key = createHash("sha256").update("/canonical/abandoned").digest("hex");
-      await fs.mkdir(creationLockDirectory(dataDir), { recursive: true });
-      const lockPath = path.join(creationLockDirectory(dataDir), `${key}.lock`);
-      await fs.writeFile(lockPath, "abandoned");
       // Older than the creation lock's 90s stale threshold, which is deliberately
       // longer than the default because the critical section spans CLI work.
-      const staleTime = new Date(Date.now() - 100_000);
-      await fs.utimes(lockPath, staleTime, staleTime);
+      const holder = await holdLease(dataDir, creationLeaseName("/canonical/abandoned"), 100_000);
+      holder.crash();
 
       await expect(
         first.withProjectCreationLock("/canonical/abandoned", async () => "taken"),
       ).resolves.toBe("taken");
+      expect(creationLeases(dataDir)).toEqual([]);
     });
   });
 
   test("does not steal a creation lock that is merely older than the default threshold", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
-      const key = createHash("sha256").update("/canonical/slow").digest("hex");
-      await fs.mkdir(creationLockDirectory(dataDir), { recursive: true });
-      const lockPath = path.join(creationLockDirectory(dataDir), `${key}.lock`);
-      await fs.writeFile(lockPath, "held-by-a-stalled-holder");
-      const recentlyStale = new Date(Date.now() - 30_000);
-      await fs.utimes(lockPath, recentlyStale, recentlyStale);
+      const holder = await holdLease(dataDir, creationLeaseName("/canonical/slow"), 30_000);
 
       let entered = false;
       const attempt = first.withProjectCreationLock("/canonical/slow", async () => {
@@ -196,7 +260,7 @@ describe("StorageService project mutation serialization", () => {
       // so a holder stalled mid-`gh` keeps its lock.
       expect(entered).toBe(false);
 
-      await fs.rm(lockPath, { force: true });
+      await holder.release();
       await attempt;
       expect(entered).toBe(true);
     });
@@ -249,28 +313,24 @@ describe("StorageService project mutation serialization", () => {
 
   test("times out rather than entering a creation lock another backend holds", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
-      const key = createHash("sha256").update("/canonical/busy").digest("hex");
-      await fs.mkdir(creationLockDirectory(dataDir), { recursive: true });
-      // A lock whose mtime cannot be read never looks stale, so acquisition
-      // runs to the deadline instead of taking the lock over.
-      await fs.symlink(
-        path.join(dataDir, "missing-lock-target"),
-        path.join(creationLockDirectory(dataDir), `${key}.lock`),
-      );
-
-      const originalNow = Date.now;
-      const startedAt = originalNow();
-      let calls = 0;
-      Date.now = () => {
-        calls += 1;
-        return calls === 1 ? startedAt : startedAt + 660_001;
-      };
+      // A live holder keeps heartbeating, so acquisition runs to the deadline
+      // instead of taking the lease over.
+      const holder = await holdLease(dataDir, creationLeaseName("/canonical/busy"));
+      let entered = false;
       try {
-        await expect(
-          first.withProjectCreationLock("/canonical/busy", async () => undefined),
-        ).rejects.toThrow("Timed out waiting for project creation lock");
+        // The deadline and the first claim read the frozen clock; the deadline
+        // check after that sees the 660s default timeout elapsed.
+        await withClockJump(2, 660_001, async () => {
+          await expect(
+            first.withProjectCreationLock("/canonical/busy", async () => {
+              entered = true;
+            }),
+          ).rejects.toThrow("Timed out waiting for project creation lock");
+        });
+        expect(entered).toBe(false);
+        expect(creationLeases(dataDir)).toEqual([creationLeaseName("/canonical/busy")]);
       } finally {
-        Date.now = originalNow;
+        await holder.release();
       }
     });
   });
@@ -279,54 +339,46 @@ describe("StorageService project mutation serialization", () => {
 describe("StorageService project storage lock", () => {
   test("recovers a project lock abandoned by a crashed backend", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
-      const lockPath = path.join(dataDir, "projects.json.lock");
-      await fs.writeFile(lockPath, "abandoned");
-      const staleTime = new Date(Date.now() - 20_000);
-      await fs.utimes(lockPath, staleTime, staleTime);
+      // Past the default 15s stale threshold.
+      const holder = await holdLease(dataDir, "projects.json", 20_000);
+      holder.crash();
 
       await expect(first.addProject(project("recovered"))).resolves.toMatchObject({
         id: "recovered",
       });
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      expect(hasLease(dataDir, "projects.json")).toBe(false);
     });
   });
 
-  test("times out when a project lock cannot be inspected", async () => {
+  test("times out while another backend holds the project lock", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
-      await fs.symlink(
-        path.join(dataDir, "missing-lock-target"),
-        path.join(dataDir, "projects.json.lock"),
-      );
-      const originalNow = Date.now;
-      const startedAt = originalNow();
-      let calls = 0;
-      Date.now = () => {
-        calls += 1;
-        return calls === 1 ? startedAt : startedAt + 20_001;
-      };
+      const holder = await holdLease(dataDir, "projects.json");
       try {
-        await expect(first.addProject(project("blocked"))).rejects.toThrow(
-          "Timed out waiting for project storage lock",
-        );
+        await withClockJump(2, 20_001, async () => {
+          await expect(first.addProject(project("blocked"))).rejects.toThrow(
+            "Timed out waiting for project storage lock",
+          );
+        });
       } finally {
-        Date.now = originalNow;
+        await holder.release();
       }
+      expect(await first.loadProjects()).toEqual([]);
     });
   });
 
-  test("propagates a non-EEXIST project lock failure", async () => {
+  test("propagates a database failure while claiming the project lock", async () => {
     await withSharedStorage(async (first) => {
-      const originalOpen = fs.open;
-      (fs as { open: typeof fs.open }).open = (async () => {
-        const error = new Error("permission denied") as NodeJS.ErrnoException;
-        error.code = "EACCES";
-        throw error;
-      }) as typeof fs.open;
+      const database = (first as unknown as { database: StorageDatabase }).database;
+      const transaction = spyOn(database, "transaction").mockImplementationOnce(() => {
+        throw new Error("disk I/O error");
+      });
       try {
-        await expect(first.addProject(project("denied"))).rejects.toThrow("permission denied");
+        await expect(first.addProject(project("denied"))).rejects.toThrow("disk I/O error");
       } finally {
-        (fs as { open: typeof fs.open }).open = originalOpen;
+        transaction.mockRestore();
       }
+      // The failed claim must not wedge the queue for the next mutation.
+      await expect(first.addProject(project("after"))).resolves.toMatchObject({ id: "after" });
     });
   });
 });

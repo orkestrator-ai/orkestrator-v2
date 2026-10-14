@@ -13,7 +13,16 @@ import {
   randomBytes,
   randomUUID,
 } from "./storage-shared.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { BACKUP_CHECK_INTERVAL_MS, takeHourlySnapshotIfDue } from "./storage-backups.js";
+import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
+import {
+  databaseStoreForPath,
+  openBackendDatabase,
+  scrubLegacyJsonStore,
+  storeLayout,
+} from "./storage-stores.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -146,29 +155,17 @@ export abstract class StorageBase {
   protected readonly dataDir: string;
   /** Process identity: client revision knowledge never crosses this boundary. */
   protected readonly resourceGeneration = randomBytes(16).toString("hex");
+  /** Serializes this process's writes of the JSON files that remain files. */
   protected writeQueue = Promise.resolve();
-  protected projectMutationQueue: Promise<unknown> = Promise.resolve();
-  protected readonly projectCreationMutationQueues = new Map<string, Promise<unknown>>();
-  protected environmentMutationQueue: Promise<unknown> = Promise.resolve();
-  protected configMutationQueue: Promise<unknown> = Promise.resolve();
-  protected openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
-  protected agentModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
-  protected githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
-  protected featurePlanMutation: Promise<unknown> = Promise.resolve();
-  protected paneLayoutMutation: Promise<unknown> = Promise.resolve();
-  protected loopedReviewMutation: Promise<unknown> = Promise.resolve();
-  protected multiReviewMutation: Promise<unknown> = Promise.resolve();
-  protected buildPipelineMutation: Promise<unknown> = Promise.resolve();
-  protected nativeAgentSessionMutation: Promise<unknown> = Promise.resolve();
-  protected agentInteractionJournalMutation: Promise<unknown> = Promise.resolve();
-  protected promptQueueMutation: Promise<unknown> = Promise.resolve();
+  /**
+   * In-process FIFO per mutation target. One map replaces the per-store
+   * promise-chain fields: a target's tail is dropped once it settles.
+   */
+  private readonly mutationTails = new Map<string, Promise<unknown>>();
   protected promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
-  protected composeDraftMutation: Promise<unknown> = Promise.resolve();
-  protected fileDraftMutation: Promise<unknown> = Promise.resolve();
-  protected kanbanMutation: Promise<unknown> = Promise.resolve();
-  protected agentHandoffMutation: Promise<unknown> = Promise.resolve();
-  protected agentMailMutation: Promise<unknown> = Promise.resolve();
-  protected coordinatorMutation: Promise<unknown> = Promise.resolve();
+  private storageDatabase: StorageDatabase | null = null;
+  /** Writes and announcements buffered by an open {@link atomically} scope. */
+  private readonly atomicScope = new AsyncLocalStorage<AtomicStorageScope>();
   protected changeListener: ResourceChangeListener | null = null;
   private readonly resourceChangeObservers = new Set<ResourceChangeListener>();
   protected changeRevision = 0;
@@ -182,21 +179,23 @@ export abstract class StorageBase {
   protected abstract deleteComposeDraftsByProject(projectId: string): Promise<void>;
   protected abstract deleteSessionBuffer(sessionId: string): Promise<void>;
   /**
-   * Parsed-JSON read cache for the hot stores, keyed by file path and
-   * validated against an (inode, size, mtime) fingerprint on every read.
-   *
-   * Other backend processes may share this data directory — that is what the
-   * cross-process mutation lock files exist for — so the cache can never
-   * simply trust itself. A cheap `fs.stat` per read replaces the full
-   * read-and-parse in the steady state while still observing every foreign
-   * write: our own atomic writes rename a fresh temp file into place (new
-   * inode), and an in-place foreign write moves size/mtime.
+   * Parsed-JSON read cache for the stores that remain JSON files, keyed by file
+   * path and validated against an (inode, size, mtime) fingerprint on every
+   * read, so writes by the desktop process are always observed.
    */
   protected readonly jsonReadCache = new Map<string, { fingerprint: string; value: unknown }>();
   protected readonly promptQueueClaimLeaseMs: number;
 
-  constructor(dataDir: string, options: { promptQueueClaimLeaseMs?: number } = {}) {
+  /** Periodic database snapshots; off by default under the test runner. */
+  private readonly snapshots: boolean;
+  private snapshotTimers: Array<ReturnType<typeof setTimeout>> = [];
+
+  constructor(
+    dataDir: string,
+    options: { promptQueueClaimLeaseMs?: number; snapshots?: boolean } = {},
+  ) {
     this.dataDir = dataDir;
+    this.snapshots = options.snapshots ?? process.env.NODE_ENV !== "test";
     this.promptQueueClaimLeaseMs = options.promptQueueClaimLeaseMs ?? PROMPT_QUEUE_CLAIM_LEASE_MS;
     if (!Number.isFinite(this.promptQueueClaimLeaseMs) || this.promptQueueClaimLeaseMs <= 0) {
       throw new Error("Prompt queue claim lease must be positive");
@@ -228,16 +227,22 @@ export abstract class StorageBase {
     resource: ResourceKind,
     id: string,
     projectId?: string,
-    scope?: { agent: string; logicalSessionKey: string },
+    scope_?: { agent: string; logicalSessionKey: string },
     deleted = false,
   ): void {
+    const scope = this.openAtomicScope();
+    if (scope) {
+      // Announce-after-commit: the scope commits first, then replays these.
+      scope.announcements.push(() => this.announce(resource, id, projectId, scope_, deleted));
+      return;
+    }
     this.changeRevision += 1;
     const change: ResourceChange = {
       resource,
       id,
       revision: this.changeRevision,
       ...(projectId ? { projectId } : {}),
-      ...(scope ? scope : {}),
+      ...(scope_ ? scope_ : {}),
       ...(deleted ? { deleted: true } : {}),
     };
     const journalEntry = {
@@ -344,16 +349,6 @@ export abstract class StorageBase {
     return this.file("native-agent-sessions.json");
   }
 
-  /** Legacy shared display-tail store; read only by the one-time import. */
-  protected nativeAgentDisplayTailsFile(): string {
-    return this.file("native-agent-display-tails.json");
-  }
-
-  /** Keyed display-tail records (one private file per session). */
-  protected nativeAgentDisplayTailRecordsDir(): string {
-    return this.file("native-agent-display-tail-records");
-  }
-
   protected agentInteractionJournalFile(): string {
     return this.file("agent-interaction-resolution-journal.json");
   }
@@ -428,22 +423,32 @@ export abstract class StorageBase {
   /**
    * Returns an opaque, content-free revision for one authoritative store.
    *
-   * The JSON writer atomically renames a fresh inode into place. Combining the
-   * inode with size and timestamps therefore detects both this process's writes
-   * and writes made by another backend sharing the same data directory, without
-   * reading or hashing user content.
+   * A database store's committed revision moves on every write by any backend
+   * sharing the data directory; the database identity keeps two databases'
+   * revisions apart. The configuration stays a file, fingerprinted by inode,
+   * size and timestamps (the writer renames a fresh inode into place), which
+   * also detects the desktop process's writes without reading user content.
    */
   async getResourceSnapshotRevision(
     resource: ResourceManifestKind,
   ): Promise<ResourceSnapshotRevision> {
     const filePath = this.resourceManifestFile(resource);
+    const store = this.storeForFile(filePath);
     let fingerprint: string;
-    try {
-      const stat = await fs.stat(filePath, { bigint: true });
-      fingerprint = [resource, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      fingerprint = `${resource}:missing`;
+    if (store !== null) {
+      const revision = this.database.storeRevision(store);
+      fingerprint =
+        revision === null
+          ? `${resource}:missing`
+          : [resource, this.database.instanceId, revision].join(":");
+    } else {
+      try {
+        const stat = await fs.stat(filePath, { bigint: true });
+        fingerprint = [resource, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        fingerprint = `${resource}:missing`;
+      }
     }
     return createHash("sha256").update(fingerprint).digest("hex").slice(0, 32);
   }
@@ -643,7 +648,173 @@ export abstract class StorageBase {
 
   async init(): Promise<void> {
     await fs.mkdir(this.dataDir, { recursive: true });
+    // Open (and on first run, import into) the database before any store is
+    // read, so a migration failure surfaces at start-up rather than mid-command.
+    this.database.purgeAbandonedLeases();
     await this.recoverExpiredPromptQueueClaims();
+    if (this.snapshots && this.snapshotTimers.length === 0) {
+      // Off the start-up path; then a cheap "is one due?" check every few minutes.
+      const check = () => void takeHourlySnapshotIfDue(this.database, this.dataDir);
+      const first = setTimeout(check, 60_000);
+      const periodic = setInterval(check, BACKUP_CHECK_INTERVAL_MS);
+      first.unref?.();
+      periodic.unref?.();
+      this.snapshotTimers = [first, periodic];
+    }
+  }
+
+  /**
+   * The backend database, opened on first use. Opening is synchronous and runs
+   * any pending migration, including the one-time import of the JSON stores.
+   */
+  protected get database(): StorageDatabase {
+    if (!this.storageDatabase || this.storageDatabase.isClosed()) {
+      this.storageDatabase = openBackendDatabase(this.dataDir, {
+        // Same meaning as for the JSON files: a validated cache hit is a
+        // "stat", re-reading the store's rows is a "read".
+        observe: (event) =>
+          recurringWorkMetrics.work(event === "cache-hit" ? "storage-stat" : "storage-read"),
+      });
+    }
+    return this.storageDatabase;
+  }
+
+  /** Closes the database connection. Later calls reopen it. */
+  close(): void {
+    for (const timer of this.snapshotTimers) clearInterval(timer);
+    this.snapshotTimers = [];
+    this.storageDatabase?.close();
+    this.storageDatabase = null;
+  }
+
+  /** The database store replacing `filePath`, or `null` for a file that stays a file. */
+  protected storeForFile(filePath: string): string | null {
+    const relative = path.relative(this.dataDir, filePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    return databaseStoreForPath(relative);
+  }
+
+  /** Whether a store has ever been written (its file existed, for file stores). */
+  protected async storeExists(filePath: string): Promise<boolean> {
+    const store = this.storeForFile(filePath);
+    if (store === null) return exists(filePath);
+    const scope = this.atomicScope.getStore();
+    if (scope?.writes.has(store)) return scope.writes.get(store) !== DELETED_STORE;
+    return this.database.hasStore(store);
+  }
+
+  /**
+   * Runs `operation` with every database-store write buffered, then commits
+   * them in one SQLite transaction and only afterwards publishes the resource
+   * announcements made inside. Reads inside see the buffered writes. Either
+   * every store changes or none does, which replaces ordering-plus-marker
+   * protocols between stores.
+   *
+   * Use only for pure storage work: anything that must be durable *before* an
+   * external side effect (a provider send, a Docker call) belongs outside.
+   * Locks are the caller's responsibility, exactly as without the scope.
+   */
+  protected async atomically<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.atomicScope.getStore()) return operation();
+    const scope: AtomicStorageScope = {
+      writes: new Map(),
+      announcements: [],
+      scrub: false,
+      closed: false,
+    };
+    let result: T;
+    try {
+      result = await this.atomicScope.run(scope, operation);
+    } finally {
+      scope.closed = true;
+    }
+    const writes = [...scope.writes];
+    if (writes.length > 0) {
+      this.database.transaction(() => {
+        for (const [store, value] of writes) {
+          if (value === DELETED_STORE) this.database.deleteStoreInTransaction(store);
+          else this.database.writeStoreInTransaction(store, value);
+        }
+      });
+      if (scope.scrub || writes.some(([, value]) => value === DELETED_STORE)) {
+        this.database.scrubDeletedContent();
+      }
+    }
+    for (const announcement of scope.announcements) announcement();
+    return result;
+  }
+
+  /** The open atomic scope, if any; a closed one no longer buffers. */
+  private openAtomicScope(): AtomicStorageScope | undefined {
+    const scope = this.atomicScope.getStore();
+    return scope && !scope.closed ? scope : undefined;
+  }
+
+  /**
+   * Synchronous read-modify-write of one database store in a single SQLite
+   * transaction. Because nothing awaits inside, SQLite's write lock alone
+   * serializes it against this and every other backend process; no lease or
+   * queue is needed. `mutate` changes the loaded value in place.
+   */
+  protected updateStore<V, T>(filePath: string, fallback: () => V, mutate: (value: V) => T): T {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("updateStore requires a database store");
+    const scope = this.openAtomicScope();
+    if (scope) {
+      const current = this.loadStore(store, fallback);
+      const result = mutate(current);
+      scope.writes.set(store, current);
+      return result;
+    }
+    recurringWorkMetrics.work("storage-write");
+    return this.database.updateStore(store, fallback, mutate);
+  }
+
+  /**
+   * Synchronous read-modify-write of one row of a database store (a record
+   * store's key, or a key in an envelope collection); see
+   * {@link StorageDatabase.updateStoreRow}. Inside an atomic scope it applies
+   * to the buffered whole value instead.
+   */
+  protected updateStoreRow<T>(
+    filePath: string,
+    key: string,
+    mutate: (current: unknown) => RowUpdate<T>,
+    options: { collection?: string } = {},
+  ): T {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("updateStoreRow requires a database store");
+    const scope = this.openAtomicScope();
+    if (scope) {
+      const whole = this.loadStore<unknown>(store, () => ({}));
+      const value: Record<string, unknown> = isRecord(whole) ? whole : {};
+      const records: Record<string, unknown> = options.collection
+        ? isRecord(value[options.collection])
+          ? (value[options.collection] as Record<string, unknown>)
+          : {}
+        : value;
+      const update = mutate(records[key]);
+      if (update.delete) delete records[key];
+      else if ("value" in update) records[key] = update.value;
+      else return update.result;
+      if (options.collection) value[options.collection] = records;
+      scope.writes.set(store, value);
+      return update.result;
+    }
+    recurringWorkMetrics.work("storage-write");
+    return this.database.updateStoreRow(store, key, mutate, options);
+  }
+
+  private readStoreOr<V>(store: string, fallback: () => V): V {
+    try {
+      const snapshot = this.database.readStore(store);
+      return snapshot ? (snapshot.value as V) : fallback();
+    } catch (error) {
+      // Imported from a legacy file that no backup could repair: like the old
+      // JSON reader, treat it as absent; the next write replaces it.
+      if (error instanceof StoreCorruptError) return fallback();
+      throw error;
+    }
   }
 
   protected async writeAtomic(
@@ -668,8 +839,7 @@ export abstract class StorageBase {
       : null;
 
     // Structural writes (makeBackup) fsync so a crash cannot promote an empty
-    // remnant. Volatile activity timestamps already treat a lost refresh as
-    // recoverable, so they skip the disk barrier.
+    // remnant. Volatile writes treat a lost refresh as recoverable.
     const writeDurableTemp = async (targetPath: string) => {
       const handle = await fs.open(targetPath, "w", mode ?? 0o666);
       try {
@@ -683,10 +853,8 @@ export abstract class StorageBase {
     await this.enqueueWrite(async () => {
       await writeDurableTemp(tempPath);
       if (recoveryTempPath) {
-        // Volatile environment updates deliberately do not rotate five
-        // historical backups, but they still need one current, valid recovery
-        // point. Write the same validated snapshot to .bak.1 before publishing
-        // the primary so corruption cannot roll structural fields back.
+        // Volatile updates do not rotate five historical backups, but they
+        // still need one current, valid recovery point.
         await writeDurableTemp(recoveryTempPath);
       }
       if (mode !== undefined) {
@@ -726,67 +894,58 @@ export abstract class StorageBase {
     return next;
   }
 
-  protected enqueueEnvironmentMutation<T>(operation: () => Promise<T>): Promise<T> {
+  /**
+   * Serializes one store's (or one key's) asynchronous read-modify-write in
+   * this process and, through a database lease named after `target`, across
+   * every backend process sharing the data directory.
+   *
+   * Prefer {@link updateStore} when the mutation is synchronous. This is for
+   * critical sections that await other stores or external work.
+   */
+  protected serializeMutation<T>(
+    target: string,
+    description: string,
+    operation: () => Promise<T>,
+    options: { staleMs?: number; acquireTimeoutMs?: number } = {},
+  ): Promise<T> {
+    const key = this.leaseName(target);
+    const previous = this.mutationTails.get(key) ?? Promise.resolve();
     const run = async () => {
-      const release = await this.acquireEnvironmentMutationLock();
+      const release = await this.acquireMutationLock(target, description, options);
       try {
         return await operation();
       } finally {
         await release();
       }
     };
-    const next = this.environmentMutationQueue.then(run, run);
-    this.environmentMutationQueue = next.then(
+    const next = previous.then(run, run);
+    const settled = next.then(
       () => undefined,
       () => undefined,
     );
+    this.mutationTails.set(key, settled);
+    void settled.finally(() => {
+      if (this.mutationTails.get(key) === settled) this.mutationTails.delete(key);
+    });
     return next;
   }
 
-  /**
-   * Serializes every projects.json read-modify-write in this process and across
-   * backend processes sharing the same data directory.
-   */
+  protected enqueueEnvironmentMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.serializeMutation(this.environmentsFile(), "environment storage", operation);
+  }
+
+  /** Serializes every project-store read-modify-write across processes. */
   protected enqueueProjectMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(this.projectsFile(), "project storage");
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.projectMutationQueue.then(run, run);
-    this.projectMutationQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.projectsFile(), "project storage", operation);
   }
 
   protected enqueueCoordinatorMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.coordinatorsFile(),
-        "coordinator storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.coordinatorMutation.then(run, run);
-    this.coordinatorMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.coordinatorsFile(), "coordinator storage", operation);
   }
 
   /**
    * Reserves one canonical local path for the complete repository creation
-   * transaction. The hashed lock filename avoids putting user paths in storage
+   * transaction. The hashed lease name avoids putting user paths in storage
    * or logs while still coordinating backend processes that share dataDir.
    *
    * The default acquire timeout covers one critical section: scratch creation
@@ -806,147 +965,58 @@ export abstract class StorageBase {
     options?: { acquireTimeoutMs?: number },
   ): Promise<T> {
     const key = createHash("sha256").update(canonicalProjectPath).digest("hex");
-    const target = this.file(path.join("project-creation-locks", key));
-    const previous = this.projectCreationMutationQueues.get(key) ?? Promise.resolve();
-    const run = async () => {
-      const release = await this.acquireMutationLock(target, "project creation", {
+    return this.serializeMutation(
+      this.file(path.join("project-creation-locks", key)),
+      "project creation",
+      operation,
+      {
         staleMs: StorageBase.PROJECT_CREATION_LOCK_STALE_MS,
         acquireTimeoutMs: options?.acquireTimeoutMs ?? StorageBase.PROJECT_CREATION_LOCK_TIMEOUT_MS,
-      });
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = previous.then(run, run);
-    const settled = next.then(
-      () => undefined,
-      () => undefined,
+      },
     );
-    this.projectCreationMutationQueues.set(key, settled);
-    void settled.finally(() => {
-      if (this.projectCreationMutationQueues.get(key) === settled) {
-        this.projectCreationMutationQueues.delete(key);
-      }
-    });
-    return next;
   }
 
   protected enqueueConfigMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireConfigMutationLock();
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.configMutationQueue.then(run, run);
-    this.configMutationQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
-
-  protected enqueueGitHubCompletionCommentMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.githubCompletionCommentsFile(),
-        "GitHub completion comment storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.githubCompletionCommentMutationQueue.then(run, run);
-    this.githubCompletionCommentMutationQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.configFile(), "configuration storage", operation);
   }
 
   protected enqueueLoopedReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.loopedReviewsFile(),
-        "looped review workflow storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.loopedReviewMutation.then(run, run);
-    this.loopedReviewMutation = next.then(
-      () => undefined,
-      () => undefined,
+    return this.serializeMutation(
+      this.loopedReviewsFile(),
+      "looped review workflow storage",
+      operation,
     );
-    return next;
   }
 
   protected enqueueMultiReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.multiReviewsFile(),
-        "multi review workflow storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.multiReviewMutation.then(run, run);
-    this.multiReviewMutation = next.then(
-      () => undefined,
-      () => undefined,
+    return this.serializeMutation(
+      this.multiReviewsFile(),
+      "multi review workflow storage",
+      operation,
     );
-    return next;
   }
 
   /**
    * Serializes build pipeline writes across backend processes sharing this data
-   * directory. The cross-process lock matters more here than the in-process
+   * directory. The cross-process lease matters more here than the in-process
    * queue: two renderers driving the same pipeline is precisely the race the
    * compare-and-swap revision exists to reject, and it can only reject it if the
    * read-modify-write is atomic.
    */
   protected enqueueBuildPipelineMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.buildPipelinesFile(),
-        "build pipeline storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.buildPipelineMutation.then(run, run);
-    this.buildPipelineMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.buildPipelinesFile(), "build pipeline storage", operation);
   }
 
   /**
-   * Serializes every native-agent-sessions.json read-modify-write in this
-   * process and across backend processes sharing the same data directory.
+   * Serializes one native agent session's read-modify-write in this process
+   * and across backend processes sharing the same data directory.
    *
    * The acquire timeout is sized for the critical section rather than for a
-   * JSON write, like `withProjectCreationLock` above. This lock is deliberately
-   * held across provider I/O: a prompt dispatch keeps it until the provider has
-   * acknowledged the request id, and `getOrCreateNativeAgentSession` keeps it
-   * across the external session create so two processes cannot mint two
-   * provider sessions for one logical key. Those bound at ~90s (the bridge
+   * store write, like `withProjectCreationLock` above. This lease is
+   * deliberately held across provider I/O: a prompt dispatch keeps it until the
+   * provider has acknowledged the request id, and `getOrCreateNativeAgentSession`
+   * keeps it across the external session create so two processes cannot mint
+   * two provider sessions for one logical key. Those bound at ~90s (the bridge
    * prompt/attach budget) and ~122s (four 30s ACP create attempts plus backoff)
    * respectively, so the 20s default would fail a second process that is
    * waiting on a perfectly healthy holder — and the caller most exposed to that
@@ -955,75 +1025,61 @@ export abstract class StorageBase {
    * pending prompt behind.
    *
    * This only extends patience with a *live* holder. A holder that dies stops
-   * heartbeating, so the unchanged 15s stale threshold still reclaims the lock.
+   * heartbeating, so the unchanged 15s stale threshold still reclaims the lease.
    */
   protected static readonly NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS = 180_000;
 
-  protected enqueueNativeAgentSessionMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.nativeAgentSessionsFile(),
-        "native agent session storage",
-        {
-          acquireTimeoutMs: StorageBase.NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS,
-        },
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.nativeAgentSessionMutation.then(run, run);
-    this.nativeAgentSessionMutation = next.then(
-      () => undefined,
-      () => undefined,
+  /**
+   * One lease per session key: a slow provider create or send for one session
+   * no longer stalls every other session in every environment. Keys are
+   * arbitrary strings, so the lease is named by their hash. Writes under it
+   * touch only that key's row (`updateStoreRow`), so holders of different
+   * keys cannot overwrite each other.
+   *
+   * Ordering: the service's per-key work fence, then this lease, then leaf
+   * leases (prompt queue, display tails). Never take a native session lease
+   * while holding another one, a prompt-queue lease or the environment lease.
+   */
+  protected enqueueNativeAgentSessionMutation<T>(
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const digest = createHash("sha256").update(key).digest("hex");
+    return this.serializeMutation(
+      this.file(path.join("native-agent-session-leases", digest)),
+      "native agent session storage",
+      operation,
+      { acquireTimeoutMs: StorageBase.NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS },
     );
-    return next;
   }
 
   protected enqueueAgentInteractionJournalMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.agentInteractionJournalFile(),
-        "agent interaction journal storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.agentInteractionJournalMutation.then(run, run);
-    this.agentInteractionJournalMutation = next.then(
-      () => undefined,
-      () => undefined,
+    return this.serializeMutation(
+      this.agentInteractionJournalFile(),
+      "agent interaction journal storage",
+      operation,
     );
-    return next;
   }
 
   protected enqueuePaneLayoutMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(this.paneLayoutsFile(), "pane layout storage");
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.paneLayoutMutation.then(run, run);
-    this.paneLayoutMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.paneLayoutsFile(), "pane layout storage", operation);
+  }
+
+  /** Data-dir relative lease name for a mutation target path. */
+  private leaseName(targetPath: string): string {
+    const relative = path.relative(this.dataDir, targetPath);
+    return relative.startsWith("..") || path.isAbsolute(relative)
+      ? path.resolve(targetPath)
+      : relative.split(path.sep).join("/");
   }
 
   /**
+   * Cross-process exclusive lease for `targetPath`, held in the database.
+   *
    * `staleMs` and `acquireTimeoutMs` must both exceed the critical section they
-   * guard. The defaults suit a JSON read-modify-write; a caller that holds the
-   * lock across child processes has to raise them, or a waiter will steal the
-   * lock from a live holder whose event loop merely stalled (machine sleep is
+   * guard. The defaults suit a store read-modify-write; a caller that holds the
+   * lease across child processes has to raise them, or a waiter will steal the
+   * lease from a live holder whose event loop merely stalled (machine sleep is
    * the realistic case) and both will enter at once.
    */
   protected async acquireMutationLock(
@@ -1031,83 +1087,7 @@ export abstract class StorageBase {
     description: string,
     options: { staleMs?: number; acquireTimeoutMs?: number } = {},
   ): Promise<() => Promise<void>> {
-    const staleMs = options.staleMs ?? 15_000;
-    const acquireTimeoutMs = options.acquireTimeoutMs ?? 20_000;
-    const heartbeatMs = Math.max(1_000, Math.floor(staleMs / 3));
-    const lockPath = `${targetPath}.lock`;
-    const token = randomUUID();
-    const deadline = Date.now() + acquireTimeoutMs;
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-
-    while (true) {
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for ${description} lock`);
-      }
-      try {
-        const handle = await fs.open(lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(token, "utf8");
-        } catch (error) {
-          await handle.close();
-          await fs.rm(lockPath, { force: true });
-          throw error;
-        }
-        const heartbeat = setInterval(() => {
-          void handle.utimes(new Date(), new Date()).catch(() => undefined);
-        }, heartbeatMs);
-        heartbeat.unref();
-        return async () => {
-          clearInterval(heartbeat);
-          await handle.close();
-          const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
-          if (currentToken === token) await fs.rm(lockPath, { force: true });
-        };
-      } catch (error) {
-        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-        if (code !== "EEXIST") throw error;
-        const stat = await fs.stat(lockPath).catch(() => null);
-        if (stat && Date.now() - stat.mtimeMs > staleMs) {
-          // Serialise stale reclamation separately from ownership of the real
-          // lock. Otherwise two waiters can both decide it is stale and the
-          // second can delete the fresh lock acquired after the first removal.
-          const reclaimPath = `${lockPath}.reclaim`;
-          let reclaimHandle;
-          try {
-            reclaimHandle = await fs.open(reclaimPath, "wx", 0o600);
-          } catch (reclaimError) {
-            const reclaimCode =
-              reclaimError && typeof reclaimError === "object" && "code" in reclaimError
-                ? reclaimError.code
-                : undefined;
-            if (reclaimCode === "EEXIST") {
-              const reclaimStat = await fs.stat(reclaimPath).catch(() => null);
-              if (reclaimStat && Date.now() - reclaimStat.mtimeMs > staleMs) {
-                // A process that died after creating the sentinel would
-                // otherwise leave every later mutation spinning forever.
-                await fs.rm(reclaimPath, { force: true });
-              }
-              await new Promise((resolve) => setTimeout(resolve, 25));
-              continue;
-            }
-            throw reclaimError;
-          }
-          try {
-            const current = await fs.stat(lockPath).catch(() => null);
-            if (current && Date.now() - current.mtimeMs > staleMs) {
-              await fs.rm(lockPath, { force: true });
-            }
-          } finally {
-            await reclaimHandle.close();
-            await fs.rm(reclaimPath, { force: true });
-          }
-          continue;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error(`Timed out waiting for ${description} lock`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
+    return this.database.acquireLease(this.leaseName(targetPath), description, options);
   }
 
   protected async acquireConfigMutationLock(): Promise<() => Promise<void>> {
@@ -1163,11 +1143,13 @@ export abstract class StorageBase {
   }
 
   /**
-   * Newest-first walk of the retained backups. Returns a box rather than the
-   * value itself so callers can tell "recovered `null`/`[]` from a backup"
-   * apart from "no backup was readable".
+   * Newest-first walk of a JSON file's retained backups. Returns a box rather
+   * than the value itself so callers can tell "recovered `null`/`[]` from a
+   * backup" apart from "no backup was readable". Database stores have no
+   * backups: SQLite's journal makes every commit atomic.
    */
   protected async recoverJsonFromBackups<T>(filePath: string): Promise<{ value: T } | null> {
+    if (this.storeForFile(filePath) !== null) return null;
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(filePath, index);
       if (!(await exists(backup))) continue;
@@ -1180,7 +1162,14 @@ export abstract class StorageBase {
     return null;
   }
 
+  /**
+   * Reads a store. Database stores come from SQLite (an unreadable imported
+   * document reads as absent, as a corrupt file without backups did); the
+   * stores that remain files keep the backup-ladder reader.
+   */
   protected async loadJson<T>(filePath: string, fallback: () => T): Promise<T> {
+    const store = this.storeForFile(filePath);
+    if (store !== null) return this.loadStore(store, fallback);
     if (!(await exists(filePath))) return fallback();
 
     try {
@@ -1195,18 +1184,70 @@ export abstract class StorageBase {
     }
   }
 
+  private loadStore<T>(store: string, fallback: () => T): T {
+    const scope = this.openAtomicScope();
+    if (scope?.writes.has(store)) {
+      const buffered = scope.writes.get(store);
+      return buffered === DELETED_STORE ? fallback() : (structuredClone(buffered) as T);
+    }
+    return this.readStoreOr(store, fallback);
+  }
+
   /**
-   * Stat-validated cached variant of {@link loadJson} for the stores that are
-   * read on nearly every command. Returns a clone so callers can mutate the
-   * result (every mutation path does) without corrupting the cached value.
-   *
-   * The stat happens *before* the read: if a foreign write lands in between,
-   * the fresh content is cached under the stale fingerprint, which merely
-   * costs one extra re-read on the next access — never a stale result.
-   *
-   * Only a genuinely absent file yields the fallback; see the stat catch.
+   * The items of an array/record store whose indexed owner column equals
+   * `owner` (e.g. one project's Kanban tickets), without assembling the whole
+   * store. Inside an atomic scope it filters the buffered value instead.
+   */
+  protected loadStoreRowsByOwner<T>(filePath: string, owner: string): T[] {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("loadStoreRowsByOwner requires a database store");
+    const scope = this.openAtomicScope();
+    if (scope?.writes.has(store)) {
+      const layout = storeLayout(store);
+      const ownerOf =
+        layout.kind === "array" || layout.kind === "record" ? layout.owner : undefined;
+      const buffered = this.loadStore<unknown>(store, () => []);
+      const items = Array.isArray(buffered)
+        ? buffered
+        : isRecord(buffered)
+          ? Object.values(buffered)
+          : [];
+      return items.filter((item) => ownerOf?.(item) === owner) as T[];
+    }
+    try {
+      return (this.database.readStoreRowsByOwner(store, owner) ?? []) as T[];
+    } catch (error) {
+      if (error instanceof StoreCorruptError) return [];
+      throw error;
+    }
+  }
+
+  /**
+   * Strict read of a database store: an unreadable value throws rather than
+   * reading as absent. For stores whose corruption must refuse work instead of
+   * looking empty (the public operation ledger).
+   */
+  protected loadStoreStrict<T>(filePath: string): { value: T } | null {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("loadStoreStrict requires a database store");
+    const scope = this.openAtomicScope();
+    if (scope?.writes.has(store)) {
+      const buffered = scope.writes.get(store);
+      return buffered === DELETED_STORE ? null : { value: structuredClone(buffered) as T };
+    }
+    const snapshot = this.database.readStore(store);
+    return snapshot ? { value: snapshot.value as T } : null;
+  }
+
+  /**
+   * Cached variant of {@link loadJson}. Database stores are always cached
+   * (validated against their committed revision); files are validated with a
+   * stat fingerprint, which also observes the desktop process's writes.
+   * Returns a fresh value callers may mutate.
    */
   protected async loadJsonCached<T>(filePath: string, fallback: () => T): Promise<T> {
+    const store = this.storeForFile(filePath);
+    if (store !== null) return this.loadStore(store, fallback);
     let stat;
     try {
       stat = await fs.stat(filePath);
@@ -1214,11 +1255,7 @@ export abstract class StorageBase {
       this.jsonReadCache.delete(filePath);
       if (!isMissingFileError(error)) {
         // A stat that fails for a reason other than "not there" is no evidence
-        // that the store is empty. Handing back the fallback would show the
-        // user zero environments while their data sits intact on disk, and the
-        // next mutation would load that empty list, append to it and persist it
-        // over the real file. Take the same backup ladder a corrupt primary
-        // takes, and surface the failure when nothing is readable.
+        // that the store is empty; take the backup ladder or surface it.
         const recovered = await this.recoverJsonFromBackups<T>(filePath);
         if (recovered) return recovered.value;
         throw error;
@@ -1237,18 +1274,19 @@ export abstract class StorageBase {
   }
 
   /**
-   * `backup: false` skips the five-file backup rotation. Reserved for
-   * high-churn writes that only refresh volatile activity fields (lease
-   * renewals, activity timestamps): rotating backups on every one of those
-   * costs ~13 extra fs operations per write and makes every retained backup a
-   * copy of a snapshot that differs only in timestamps. Structural mutations
-   * must keep the default so the backups stay useful for corruption recovery.
+   * Persists a store's complete new value. For database stores only the
+   * changed rows are written, in one transaction (or buffered by an open
+   * {@link atomically} scope); `backup` is meaningless there.
+   *
+   * For files, `backup: false` skips the five-file backup rotation. Reserved
+   * for high-churn writes that only refresh volatile fields.
    */
   protected async saveJson(
     filePath: string,
     value: unknown,
     options: { backup?: boolean } = {},
   ): Promise<void> {
+    if (this.saveStore(filePath, value)) return;
     await this.writeAtomic(
       filePath,
       `${JSON.stringify(value, null, 2)}\n`,
@@ -1263,6 +1301,23 @@ export abstract class StorageBase {
     value: unknown,
     options: { backup?: boolean } = {},
   ): Promise<void> {
+    // The database file itself is private (0600).
+    if (this.saveStore(filePath, value)) {
+      const store = this.storeForFile(filePath)!;
+      // Environment copies have an attributable scrub at the deleting boundary.
+      if (store !== "environments") {
+        scrubLegacyJsonStore(this.dataDir, store, (archived) => {
+          if (!isRecord(archived) || !isRecord(value))
+            throw new Error("Unattributable sensitive archive");
+          return Object.fromEntries(
+            Object.keys(archived)
+              .filter((key) => key in value)
+              .map((key) => [key, value[key]]),
+          );
+        });
+      }
+      return;
+    }
     await this.writeAtomic(
       filePath,
       `${JSON.stringify(value, null, 2)}\n`,
@@ -1272,16 +1327,47 @@ export abstract class StorageBase {
     );
   }
 
+  /** Writes a database store; `false` when `filePath` remains a file. */
+  private saveStore(filePath: string, value: unknown): boolean {
+    const store = this.storeForFile(filePath);
+    if (store === null) return false;
+    const scope = this.openAtomicScope();
+    if (scope) {
+      scope.writes.set(store, structuredClone(value));
+      return true;
+    }
+    recurringWorkMetrics.work("storage-write");
+    this.database.writeStore(store, value);
+    return true;
+  }
+
+  /** Removes a database store entirely, or the file that holds a file store. */
+  protected async deleteStore(filePath: string): Promise<void> {
+    const store = this.storeForFile(filePath);
+    if (store === null) {
+      await fs.rm(filePath, { force: true });
+      this.jsonReadCache.delete(filePath);
+      return;
+    }
+    const scope = this.openAtomicScope();
+    if (scope) {
+      scope.writes.set(store, DELETED_STORE);
+      return;
+    }
+    this.database.deleteStore(store);
+    this.database.scrubDeletedContent();
+  }
+
   /**
-   * Removes records from every retained backup of a sensitive JSON file.
+   * Makes records removed from a sensitive store unrecoverable.
    *
-   * Rotating the primary file leaves the deleted records readable in its
-   * backups, so a delete that is meant to remove user content — prompt text,
-   * pasted attachments, review findings — is not complete until the backups
-   * agree. Call while still holding the file's mutation lock.
+   * For a database store the deleting commit is already the only copy:
+   * `secure_delete` zeroes freed pages and a truncating checkpoint discards
+   * the WAL frames that still hold the old rows. The JSON files that remain
+   * files keep rewriting their retained backups.
    *
    * `keep` receives each stored entry; anything it rejects is dropped, so a
-   * caller passes the same predicate it used on the primary file.
+   * caller passes the same predicate it used on the primary store.
    */
   protected async scrubSensitiveJsonBackups(
     filePath: string,
@@ -1299,6 +1385,14 @@ export abstract class StorageBase {
     filePath: string,
     transform: (records: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
+    if (this.storeForFile(filePath) !== null) {
+      scrubLegacyJsonStore(this.dataDir, this.storeForFile(filePath)!, (value) => {
+        if (!isRecord(value)) throw new Error("Unattributable legacy backup");
+        return transform(value);
+      });
+      this.scrubDeletedDatabaseContent();
+      return;
+    }
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(filePath, index);
       if (!(await exists(backup))) continue;
@@ -1314,19 +1408,34 @@ export abstract class StorageBase {
     }
   }
 
+  /** Discards WAL frames holding content that a committed delete removed. */
+  protected scrubDeletedDatabaseContent(): void {
+    // Inside an atomic scope the delete has not committed yet: scrub once the
+    // scope's transaction has.
+    const scope = this.openAtomicScope();
+    if (scope) {
+      scope.scrub = true;
+      return;
+    }
+    this.database.scrubDeletedContent();
+  }
+
   protected async scrubPendingNativeAgentDispatchBackups(
     key: string,
     requestId: string,
   ): Promise<void> {
     await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
-      const stored = records[key];
-      if (!isRecord(stored)) return records;
-      const pending = stored.pendingDispatch;
-      if (!isRecord(pending) || pending.requestId !== requestId) return records;
-      return {
-        ...records,
-        [key]: { ...stored, pendingDispatch: undefined },
-      };
+      const record = records[key];
+      if (
+        isRecord(record) &&
+        isRecord(record.pendingDispatch) &&
+        record.pendingDispatch.requestId === requestId
+      ) {
+        const next = { ...record };
+        delete next.pendingDispatch;
+        return { ...records, [key]: next };
+      }
+      return records;
     });
   }
 
@@ -1335,14 +1444,28 @@ export abstract class StorageBase {
     requestId: string,
   ): Promise<void> {
     await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
-      const stored = records[key];
-      if (!isRecord(stored)) return records;
-      const pending = stored.pendingSteer;
-      if (!isRecord(pending) || pending.requestId !== requestId) return records;
-      return {
-        ...records,
-        [key]: { ...stored, pendingSteer: undefined },
-      };
+      const record = records[key];
+      if (
+        isRecord(record) &&
+        isRecord(record.pendingSteer) &&
+        record.pendingSteer.requestId === requestId
+      ) {
+        const next = { ...record };
+        delete next.pendingSteer;
+        return { ...records, [key]: next };
+      }
+      return records;
     });
   }
 }
+
+const DELETED_STORE: unique symbol = Symbol("deleted store");
+
+type AtomicStorageScope = {
+  /** Buffered new value per store, or {@link DELETED_STORE}. */
+  writes: Map<string, unknown>;
+  announcements: Array<() => void>;
+  /** A delete inside asked for the post-commit WAL scrub. */
+  scrub: boolean;
+  closed: boolean;
+};

@@ -14,6 +14,9 @@ import { MAX_TABS_PER_ENVIRONMENT, PANE_LAYOUT_VERSION } from "@orkestrator/prot
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
+import { readStoredValue, seedStore, seedUnreadableStore } from "./storage-test-support.js";
 
 async function withTemporaryStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -26,6 +29,11 @@ async function withTemporaryStorage<T>(
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+}
+
+/** The service's own database connection, for injecting failures. */
+function databaseOf(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
 }
 
 // The default model ids here are the backend source of truth used whenever a
@@ -726,7 +734,7 @@ describe("backend-owned setup and build surfaces", () => {
         delete record.setupOverride;
         return record;
       });
-      await fs.writeFile(path.join(dataDir, "environments.json"), `${JSON.stringify(legacy)}\n`);
+      seedStore(dataDir, "environments.json", legacy);
 
       const restarted = new StorageService(dataDir);
       await restarted.init();
@@ -2066,7 +2074,7 @@ describe("backend-owned setup and build surfaces", () => {
         available: true,
         layouts: {},
       });
-      await fs.writeFile(path.join(dataDir, "pane-layouts.json"), "{truncated", "utf8");
+      seedUnreadableStore(dataDir, "pane-layouts.json", "{truncated");
       await expect(storage.loadPaneLayoutsForReconciliation()).resolves.toEqual({
         available: false,
         layouts: {},
@@ -2074,8 +2082,8 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
-  test("recovers pane layouts from a valid backup during reconciliation", async () => {
-    await withTemporaryStorage(async (storage, dataDir) => {
+  test("recovers pane layouts from a valid legacy backup during reconciliation", async () => {
+    await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");
       environment.id = "env-layout-backup";
       await storage.addEnvironment(environment);
@@ -2089,18 +2097,28 @@ describe("backend-owned setup and build surfaces", () => {
         },
         0,
       );
-      const filePath = path.join(dataDir, "pane-layouts.json");
-      await fs.writeFile(
-        `${filePath}.bak.1`,
-        `${JSON.stringify({ [environment.id]: saved })}\n`,
-        "utf8",
-      );
-      await fs.writeFile(filePath, "{truncated", "utf8");
+      // Backups exist only in a directory that predates the database: the
+      // one-time import takes the newest readable one over a torn primary.
+      const legacyDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-legacy-layouts-"));
+      try {
+        const filePath = path.join(legacyDir, "pane-layouts.json");
+        await fs.writeFile(
+          `${filePath}.bak.1`,
+          `${JSON.stringify({ [environment.id]: saved })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(filePath, "{truncated", "utf8");
 
-      await expect(storage.loadPaneLayoutsForReconciliation()).resolves.toEqual({
-        available: true,
-        layouts: { [environment.id]: saved },
-      });
+        const imported = new StorageService(legacyDir);
+        await imported.init();
+        await expect(imported.loadPaneLayoutsForReconciliation()).resolves.toEqual({
+          available: true,
+          layouts: { [environment.id]: saved },
+        });
+        imported.close();
+      } finally {
+        await fs.rm(legacyDir, { recursive: true, force: true });
+      }
     });
   });
 });
@@ -2582,18 +2600,30 @@ describe("pane layout intent persistence", () => {
     });
   });
 
-  test("recovers the mutation queue after a filesystem write failure", async () => {
-    await withTemporaryStorage(async (storage, dataDir) => {
+  test("recovers the mutation queue after a storage write failure", async () => {
+    await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1", { environmentType: "local" });
       environment.id = "env-layout-write-recovery";
       await storage.addEnvironment(environment);
-      const filePath = path.join(dataDir, "pane-layouts.json");
-      await fs.mkdir(filePath);
+      const database = databaseOf(storage);
+      const writeStore = database.writeStore.bind(database);
+      let failNext = true;
+      const spy = spyOn(database, "writeStore").mockImplementation((store, value, options) => {
+        if (store === "pane-layouts" && failNext) {
+          failNext = false;
+          throw new Error("disk full");
+        }
+        return writeStore(store, value, options);
+      });
 
-      await expect(
-        storage.applyPaneLayoutIntent(environment.id, layout("tab-a"), layout("tab-a")),
-      ).rejects.toThrow();
-      await fs.rm(filePath, { recursive: true, force: true });
+      try {
+        await expect(
+          storage.applyPaneLayoutIntent(environment.id, layout("tab-a"), layout("tab-a")),
+        ).rejects.toThrow("disk full");
+      } finally {
+        spy.mockRestore();
+      }
+      expect(failNext).toBe(false);
       await expect(
         storage.applyPaneLayoutIntent(environment.id, layout("tab-a"), layout("tab-b")),
       ).resolves.toMatchObject({ revision: 1 });
@@ -2999,52 +3029,38 @@ describe("Codex max concurrent thread config storage", () => {
 });
 
 describe("hot store read caching", () => {
-  test("serves repeated environment reads from the cache and re-validates by stat", async () => {
+  test("serves environment reads as fresh clones and observes foreign writes", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      const environmentsPath = path.join(dataDir, "environments.json");
 
-      const readSpy = spyOn(fs, "readFile");
-      const environmentReads = () =>
-        readSpy.mock.calls.filter(([file]) => String(file).endsWith("environments.json")).length;
-      try {
-        await storage.loadEnvironments();
-        const readsAfterFirstLoad = environmentReads();
+      await storage.loadEnvironments();
+      await storage.getEnvironment(environment.id);
+      await storage.getEnvironmentsByProject("project-1");
 
-        // Steady state: no further reads of the file, only stats.
-        await storage.loadEnvironments();
-        await storage.getEnvironment(environment.id);
-        await storage.getEnvironmentsByProject("project-1");
-        expect(environmentReads()).toBe(readsAfterFirstLoad);
+      // Mutating a returned value must not poison the cache: reads hand out
+      // clones precisely because every mutation path edits in place.
+      (await storage.loadEnvironments())[0]!.name = "mutated-by-caller";
+      expect((await storage.getEnvironment(environment.id))!.name).toBe(environment.name);
 
-        // Mutating a returned value must not poison the cache: reads hand
-        // out clones precisely because every mutation path edits in place.
-        (await storage.loadEnvironments())[0]!.name = "mutated-by-caller";
-        expect((await storage.getEnvironment(environment.id))!.name).toBe(environment.name);
+      // A save through this process is visible to its next read.
+      await storage.updateEnvironment(environment.id, { name: "renamed" });
+      expect((await storage.getEnvironment(environment.id))!.name).toBe("renamed");
 
-        // A save through this process invalidates the cached parse.
-        await storage.updateEnvironment(environment.id, { name: "renamed" });
-        expect((await storage.getEnvironment(environment.id))!.name).toBe("renamed");
-
-        // A foreign in-place write (another backend process) is observed via
-        // the stat fingerprint even though this process never wrote.
-        const foreign = JSON.parse(await fs.readFile(environmentsPath, "utf8")) as Array<
-          Record<string, unknown>
-        >;
-        foreign[0]!.name = "foreign-writer";
-        await fs.writeFile(environmentsPath, JSON.stringify(foreign));
-        expect((await storage.getEnvironment(environment.id))!.name).toBe("foreign-writer");
-      } finally {
-        readSpy.mockRestore();
-      }
+      // A write by another backend process is observed through the store's
+      // committed revision even though this process never wrote.
+      const foreign = readStoredValue<Array<Record<string, unknown>>>(
+        dataDir,
+        "environments.json",
+      )!;
+      foreign[0]!.name = "foreign-writer";
+      seedStore(dataDir, "environments.json", foreign);
+      expect((await storage.getEnvironment(environment.id))!.name).toBe("foreign-writer");
     });
   });
 
-  test("refreshes one recovery backup for volatile writes without rotating history", async () => {
+  test("keeps volatile and structural environment writes out of JSON files", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      const backupPath = path.join(dataDir, "environments.json.bak.1");
-
       await storage.setEnvironmentAgentActivity(
         environment.id,
         "working",
@@ -3056,27 +3072,29 @@ describe("hot store read caching", () => {
         environment.id,
         new Date(Date.now() + 2_000).toISOString(),
       );
-      // Activity-only writes keep one current recovery point without shifting
-      // five timestamp-only copies through the historical backup chain.
-      await fs.access(backupPath);
-      await expect(fs.access(path.join(dataDir, "environments.json.bak.2"))).rejects.toThrow();
-
-      // A structural mutation still pays for the rotation.
       await storage.updateEnvironment(environment.id, { name: "renamed" });
-      await fs.access(path.join(dataDir, "environments.json.bak.2"));
+
+      // No primary, backup ladder, lock or temp file: every commit is atomic.
+      const entries = await fs.readdir(dataDir);
+      expect(entries.filter((entry) => entry.includes("environments.json"))).toEqual([]);
+      expect(readStoredValue<Array<{ name: string }>>(dataDir, "environments.json")).toEqual([
+        expect.objectContaining({ id: environment.id, name: "renamed" }),
+      ]);
     });
   });
 
-  test("recovers the latest structural state after later activity-only writes", async () => {
+  test("persists the latest structural state after later activity-only writes", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       await storage.updateEnvironment(environment.id, { name: "structurally-renamed" });
       const occurredAt = new Date(Date.now() + 1_000).toISOString();
       await storage.recordEnvironmentActivity(environment.id, occurredAt);
 
-      await fs.writeFile(path.join(dataDir, "environments.json"), "{corrupt", "utf8");
-      const recovered = await new StorageService(dataDir).getEnvironment(environment.id);
-      expect(recovered).toMatchObject({
+      // Activity-only writes are as durable as structural ones: a restarted
+      // backend sees both, with no backup ladder to fall back on.
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(await restarted.getEnvironment(environment.id)).toMatchObject({
         id: environment.id,
         name: "structurally-renamed",
         lastActivityAt: occurredAt,
@@ -3106,26 +3124,30 @@ describe("hot store read caching", () => {
     });
   });
 
-  test("recovers an empty primary from backup without promoting the empty file", async () => {
+  test("recovers an empty config primary from backup without promoting the empty file", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
-      const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      await storage.updateEnvironment(environment.id, { name: "recover-me" });
-      // Rotate the named snapshot into .bak.1 before simulating a torn write.
-      await storage.updateEnvironment(environment.id, { status: "running" });
-      const primary = path.join(dataDir, "environments.json");
+      // The configuration stays a JSON file and keeps its backup ladder.
+      const config = defaultConfig();
+      config.global.webClientEnabled = false;
+      await storage.saveConfig(config);
+      // Rotate the recoverable snapshot into .bak.1 before a torn write.
+      const later = structuredClone(config);
+      later.global.codexMaxConcurrentThreads = 2;
+      await storage.saveConfig(later);
+      const primary = path.join(dataDir, "config.json");
       const backup = `${primary}.bak.1`;
       await fs.writeFile(primary, "  \n", "utf8");
 
       const recovered = new StorageService(dataDir);
-      expect(await recovered.getEnvironment(environment.id)).toMatchObject({ name: "recover-me" });
-      await recovered.updateEnvironment(environment.id, { status: "stopped" });
+      expect((await recovered.loadConfig()).global.webClientEnabled).toBe(false);
+      const next = structuredClone(later);
+      next.global.webClientEnabled = true;
+      await recovered.saveConfig(next);
 
       expect((await fs.readFile(backup, "utf8")).trim()).not.toBe("");
-      expect(JSON.parse(await fs.readFile(backup, "utf8"))).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: environment.id, name: "recover-me" }),
-        ]),
-      );
+      expect(
+        (JSON.parse(await fs.readFile(backup, "utf8")) as AppConfig).global.webClientEnabled,
+      ).toBe(false);
     });
   });
 
@@ -3144,13 +3166,11 @@ describe("hot store read caching", () => {
       await storage.loadProjects();
       await storage.loadConfig();
 
-      const projectsPath = path.join(dataDir, "projects.json");
-      const projects = JSON.parse(await fs.readFile(projectsPath, "utf8")) as Array<{
-        name: string;
-      }>;
+      const projects = readStoredValue<Array<{ name: string }>>(dataDir, "projects.json")!;
       projects[0]!.name = "After!";
-      await fs.writeFile(projectsPath, `${JSON.stringify(projects)}\n`, "utf8");
+      seedStore(dataDir, "projects.json", projects);
 
+      // The desktop process writes the configuration file directly.
       const configPath = path.join(dataDir, "config.json");
       const foreignConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as AppConfig;
       foreignConfig.global.webClientEnabled = false;
@@ -3161,25 +3181,30 @@ describe("hot store read caching", () => {
     });
   });
 
-  test("recovers from backup when the store cannot be stat'd", async () => {
+  test("recovers the config from backup when its file cannot be stat'd", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
-      const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      // The second write is what puts a full record into the rotated backup:
-      // the first found no primary file to copy.
-      await storage.updateEnvironment(environment.id, { name: "renamed" });
+      const config = defaultConfig();
+      config.global.webClientEnabled = false;
+      await storage.saveConfig(config);
+      // The second write is what puts a full config into the rotated backup.
+      const later = structuredClone(config);
+      later.global.webClientEnabled = true;
+      await storage.saveConfig(later);
 
-      const environmentsPath = path.join(dataDir, "environments.json");
+      const configPath = path.join(dataDir, "config.json");
       const realStat = fs.stat.bind(fs);
       const statSpy = spyOn(fs, "stat").mockImplementation((async (
         target: Parameters<typeof fs.stat>[0],
       ) => {
-        if (String(target) === environmentsPath) {
+        if (String(target) === configPath) {
           throw Object.assign(new Error("EACCES: permission denied, stat"), { code: "EACCES" });
         }
         return realStat(target);
       }) as typeof fs.stat);
       try {
-        expect((await storage.loadEnvironments()).map((item) => item.id)).toEqual([environment.id]);
+        expect((await new StorageService(dataDir).loadConfig()).global.webClientEnabled).toBe(
+          false,
+        );
       } finally {
         statSpy.mockRestore();
       }
@@ -3187,29 +3212,25 @@ describe("hot store read caching", () => {
   });
 
   test("surfaces an unreadable store instead of presenting it as empty", async () => {
-    await withTemporaryStorage(async (storage, dataDir) => {
-      const environmentsPath = path.join(dataDir, "environments.json");
-      const stored = createEnvironment("project-1");
-      // Written directly so no backup exists to recover from.
-      await fs.writeFile(environmentsPath, `${JSON.stringify([stored])}\n`, "utf8");
+    await withTemporaryStorage(async (storage) => {
+      const stored = await storage.addEnvironment(createEnvironment("project-1"));
 
-      const realStat = fs.stat.bind(fs);
-      const statSpy = spyOn(fs, "stat").mockImplementation((async (
-        target: Parameters<typeof fs.stat>[0],
-      ) => {
-        if (String(target) === environmentsPath) {
-          throw Object.assign(new Error("EIO: i/o error, stat"), { code: "EIO" });
-        }
-        return realStat(target);
-      }) as typeof fs.stat);
+      const database = databaseOf(storage);
+      const readStore = database.readStore.bind(database);
+      const readSpy = spyOn(database, "readStore").mockImplementation((store) => {
+        if (store === "environments") throw new Error("SQLITE_IOERR: disk I/O error");
+        return readStore(store);
+      });
       try {
-        await expect(storage.loadEnvironments()).rejects.toThrow("EIO");
+        await expect(storage.loadEnvironments()).rejects.toThrow("SQLITE_IOERR");
         // The empty view was never the real damage: the next mutation would
         // have appended to that empty list and written it back over the
         // user's intact data.
-        await expect(storage.addEnvironment(createEnvironment("project-1"))).rejects.toThrow("EIO");
+        await expect(storage.addEnvironment(createEnvironment("project-1"))).rejects.toThrow(
+          "SQLITE_IOERR",
+        );
       } finally {
-        statSpy.mockRestore();
+        readSpy.mockRestore();
       }
 
       expect((await storage.loadEnvironments()).map((item) => item.id)).toEqual([stored.id]);
@@ -3219,14 +3240,15 @@ describe("hot store read caching", () => {
   test("skips the lease sweep without the cross-process lock when no leases exist", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       await storage.addEnvironment(createEnvironment("project-1"));
-      const lockPath = path.join(dataDir, "environments.json.lock");
-      // A fresh foreign lock blocks the mutation path for its full 20s
+      // A live foreign lease blocks the mutation path for its full 20s
       // timeout; the sweep must not need it when nothing can expire.
-      await fs.writeFile(lockPath, "held-by-another-process");
+      const holder = openBackendDatabase(dataDir);
+      const release = await holder.acquireLease("environments.json", "test");
       try {
         await expect(storage.expireFrontendAgentActivityLeases()).resolves.toEqual([]);
       } finally {
-        await fs.rm(lockPath, { force: true });
+        await release();
+        holder.close();
       }
     });
   });
@@ -3391,7 +3413,7 @@ describe("OpenCode model catalogue cache", () => {
     },
   ];
 
-  test("persists a normalized catalogue in the application config folder", async () => {
+  test("persists a normalized catalogue in the backend store", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const snapshot = await storage.cacheOpenCodeModelCatalog(projectId, models);
 
@@ -3402,9 +3424,7 @@ describe("OpenCode model catalogue cache", () => {
         "openrouter/openai/gpt-5",
       ]);
       expect(await storage.getOpenCodeModelCatalog(projectId)).toEqual(snapshot);
-      expect(
-        JSON.parse(await fs.readFile(path.join(dataDir, "opencode-model-catalog.json"), "utf8")),
-      ).toEqual({
+      expect(readStoredValue(dataDir, "opencode-model-catalog.json")).toEqual({
         schemaVersion: 2,
         catalogs: { [projectId]: snapshot },
       });
@@ -3525,29 +3545,26 @@ describe("OpenCode model catalogue cache", () => {
 
   test("repairs stored dates, versions, and normalized model data while reading", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
-      await fs.writeFile(
-        path.join(dataDir, "opencode-model-catalog.json"),
-        JSON.stringify({
-          schemaVersion: 2,
-          catalogs: {
-            " project-a ": {
-              schemaVersion: 999,
-              projectId: "wrong-project",
-              catalogVersion: "not-the-content-digest",
-              updatedAt: "not-a-date",
-              models: [
-                {
-                  id: " provider/model ",
-                  name: " Model ",
-                  provider: " provider ",
-                  variants: ["z", "a", "z"],
-                },
-              ],
-            },
-            malformed: { models: [{ id: "missing-fields" }] },
+      seedStore(dataDir, "opencode-model-catalog.json", {
+        schemaVersion: 2,
+        catalogs: {
+          " project-a ": {
+            schemaVersion: 999,
+            projectId: "wrong-project",
+            catalogVersion: "not-the-content-digest",
+            updatedAt: "not-a-date",
+            models: [
+              {
+                id: " provider/model ",
+                name: " Model ",
+                provider: " provider ",
+                variants: ["z", "a", "z"],
+              },
+            ],
           },
-        }),
-      );
+          malformed: { models: [{ id: "missing-fields" }] },
+        },
+      });
 
       const snapshot = await storage.getOpenCodeModelCatalog(projectId);
       expect(snapshot).not.toBeNull();
@@ -3576,14 +3593,14 @@ describe("OpenCode model catalogue cache", () => {
         updatedAt: new Date().toISOString(),
         models,
       };
-      const file = path.join(dataDir, "opencode-model-catalog.json");
-      await fs.writeFile(file, JSON.stringify(legacy));
+      const file = "opencode-model-catalog.json";
+      seedStore(dataDir, file, legacy);
 
       expect(await storage.getOpenCodeModelCatalog(projectId)).toBeNull();
-      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual(legacy);
+      expect(readStoredValue(dataDir, file)).toEqual(legacy);
 
       const scoped = await storage.cacheOpenCodeModelCatalog(projectId, models);
-      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+      expect(readStoredValue(dataDir, file)).toEqual({
         schemaVersion: 2,
         catalogs: { [projectId]: scoped },
         legacyUnscoped: legacy,
@@ -3766,28 +3783,25 @@ describe("host agent model catalogue cache", () => {
       const second = await storage.cacheAgentModelCatalog("codex", models);
       expect(second.codex?.updatedAt).toBe(first.codex?.updatedAt);
 
-      await fs.writeFile(
-        path.join(dataDir, "agent-model-catalog.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          claude: {
-            updatedAt: "not-a-date",
-            models: [{ id: "", name: "Broken" }],
-          },
-          codex: {
-            updatedAt: new Date().toISOString(),
-            models: [{ id: "gpt-broken", name: "Broken", reasoningEfforts: ["impossible"] }],
-          },
-          cursor: {
-            updatedAt: new Date().toISOString(),
-            models: [{ platform: "grok", id: "wrong-provider", label: "Wrong" }],
-          },
-          grok: {
-            updatedAt: new Date().toISOString(),
-            models: [{ platform: "grok", id: "broken", label: 42 }],
-          },
-        }),
-      );
+      seedStore(dataDir, "agent-model-catalog.json", {
+        schemaVersion: 1,
+        claude: {
+          updatedAt: "not-a-date",
+          models: [{ id: "", name: "Broken" }],
+        },
+        codex: {
+          updatedAt: new Date().toISOString(),
+          models: [{ id: "gpt-broken", name: "Broken", reasoningEfforts: ["impossible"] }],
+        },
+        cursor: {
+          updatedAt: new Date().toISOString(),
+          models: [{ platform: "grok", id: "wrong-provider", label: "Wrong" }],
+        },
+        grok: {
+          updatedAt: new Date().toISOString(),
+          models: [{ platform: "grok", id: "broken", label: 42 }],
+        },
+      });
       expect(await storage.getAgentModelCatalogCache()).toEqual({
         schemaVersion: 1,
       });
@@ -3893,22 +3907,19 @@ describe("host agent model catalogue cache", () => {
 
   test("retains valid models while replacing an invalid persisted timestamp", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
-      await fs.writeFile(
-        path.join(dataDir, "agent-model-catalog.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          codex: {
-            updatedAt: "not-a-date",
-            models: [
-              {
-                id: "gpt-valid",
-                name: "GPT Valid",
-                reasoningEfforts: ["medium"],
-              },
-            ],
-          },
-        }),
-      );
+      seedStore(dataDir, "agent-model-catalog.json", {
+        schemaVersion: 1,
+        codex: {
+          updatedAt: "not-a-date",
+          models: [
+            {
+              id: "gpt-valid",
+              name: "GPT Valid",
+              reasoningEfforts: ["medium"],
+            },
+          ],
+        },
+      });
 
       expect(await storage.getAgentModelCatalogCache()).toEqual({
         schemaVersion: 1,

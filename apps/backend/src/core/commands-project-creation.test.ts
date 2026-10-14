@@ -819,12 +819,20 @@ describe("create_project_from_scratch", () => {
       const first = invokeCommand("add_project", { gitUrl: remotePath, localPath: firstPath });
       await firstCloneEntered;
       const second = invokeCommand("add_project", { gitUrl: remotePath, localPath: secondPath });
+      // The waiter can reject as soon as the holder releases the URL lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       const urlWasProtected = await remainsPending(secondCloneEntered);
       releaseFirst();
       expect(urlWasProtected).toBe(true);
 
       await expect(first).resolves.toMatchObject({ localPath: firstPath });
-      await expect(second).rejects.toThrow(`Duplicate project URL: ${remotePath}`);
+      expect(await secondError).toMatchObject({
+        message: `Duplicate project URL: ${remotePath}`,
+      });
       expect(cloneCalls).toBe(1);
       await expect(fs.access(secondPath)).rejects.toThrow();
       expect(await storage.loadProjects()).toHaveLength(1);

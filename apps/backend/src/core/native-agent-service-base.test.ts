@@ -52,6 +52,8 @@ import {
   COORDINATOR_ASYNC_CONTRACT,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -374,10 +376,7 @@ async function seedLoopedReviewNativeSessions(
       ];
     }),
   );
-  await fs.writeFile(
-    path.join(storage.getDataDir(), "native-agent-sessions.json"),
-    `${JSON.stringify(sessions)}\n`,
-  );
+  seedStore(storage.getDataDir(), "native-agent-sessions.json", sessions);
 }
 
 /**
@@ -2913,12 +2912,17 @@ describe("NativeAgentService", () => {
         // A crashed renderer or an older observer left `working` behind. Unlike a
         // backoff-skipped group, a cooldown-skipped one has a real answer to
         // publish, so the environment must not be withheld from the commit.
-        await storage.setEnvironmentAgentActivity(
+        const working = await storage.setEnvironmentAgentActivity(
           "env-1",
           "working",
           new Date().toISOString(),
           "native-agent",
         );
+        // Storage writes take well under a millisecond, and a backend source
+        // rejects an observation stamped before the one it holds. Let the wall
+        // clock pass the stored `working` stamp so the sweep's commit is newer.
+        const workingAt = Date.parse(working.agentActivitySources!["native-agent"]!.updatedAt);
+        while (Date.now() <= workingAt) await new Promise((resolve) => setTimeout(resolve, 1));
         clock = 2_000;
         await service.reconcileAgentActivity();
 
@@ -3204,10 +3208,11 @@ describe("NativeAgentService", () => {
       async ({ storage, service }) => {
         const logicalSessionKey = "looped-review:workflow-1:review:round-1";
         const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
-        const file = path.join(storage.getDataDir(), "native-agent-sessions.json");
-        await fs.writeFile(
-          file,
-          JSON.stringify({
+        // As the legacy import leaves a record an older build wrote.
+        seedStore(
+          storage.getDataDir(),
+          "native-agent-sessions.json",
+          upgradeNativeAgentSessionRecords({
             [key]: {
               key,
               environmentId: "env-1",
@@ -3234,7 +3239,12 @@ describe("NativeAgentService", () => {
         });
         expect(createSession).not.toHaveBeenCalled();
         expect(status).toHaveBeenCalledWith("legacy-provider-session");
-        expect(JSON.parse(await fs.readFile(file, "utf8"))[key]).toMatchObject({
+        expect(
+          readStoredValue<Record<string, unknown>>(
+            storage.getDataDir(),
+            "native-agent-sessions.json",
+          )?.[key],
+        ).toMatchObject({
           version: 1,
           origin: "looped-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,

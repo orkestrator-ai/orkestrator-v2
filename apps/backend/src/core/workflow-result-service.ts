@@ -1,6 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { link, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-database";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import {
@@ -28,12 +27,23 @@ import {
   type WorkflowResultValidation,
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
+import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
 import {
   WorkflowResultMetrics,
   type WorkflowResultPreflightOutcome,
 } from "./workflow-result-metrics.js";
 
+/** Database stores that replaced `workflow-results.json` and `workflow-result-tools.json`. */
+export const WORKFLOW_RESULTS_STORE = "workflow-results";
+export const WORKFLOW_RESULT_TOOLS_STORE = "workflow-result-tools";
+const ENTRIES = "entries";
+/**
+ * Bound on the serialized entry rows (the sum of their JSON sizes). The JSON
+ * file measured its whole pretty-printed text; rows carry no indentation or
+ * envelope, so the same bound now holds slightly more entries.
+ */
 const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const MAX_CAPABILITY_IDENTITY_BYTES = 4 * 1024;
 const CAPABILITY_IDENTITY_VERSION = 1;
@@ -86,9 +96,78 @@ interface StoredWorkflowResult extends WorkflowResultSlotInput {
   firstSubmissionAt?: string;
 }
 
-interface WorkflowResultStore {
-  version: 1;
-  entries: Record<string, StoredWorkflowResult>;
+/** What a mutation needs to know about an entry without parsing its row. */
+interface IndexedEntry {
+  environmentId: string;
+  settled: boolean;
+  updatedAt: number;
+  bytes: number;
+}
+
+/**
+ * Every entry's identity, lifecycle and row size at one committed revision of
+ * the store. It lets pruning, environment deletion and the gauges run without
+ * parsing the store. It is trusted only while the store's revision matches, so
+ * another backend's commit forces a rebuild (which also revalidates every
+ * entry: a store another process corrupted fails closed).
+ */
+interface EntryIndex {
+  revision: number;
+  entries: Map<string, IndexedEntry>;
+  bytes: number;
+}
+
+function invalidStore(): Error {
+  return new Error("invalid store");
+}
+
+function isSettled(lifecycle: StoredWorkflowResult["lifecycle"]): boolean {
+  return (
+    lifecycle === "consumed" ||
+    lifecycle === "cancelled" ||
+    lifecycle === "superseded" ||
+    lifecycle === "exhausted"
+  );
+}
+
+function indexedEntry(entry: StoredWorkflowResult, bytes: number): IndexedEntry {
+  return {
+    environmentId: entry.environmentId,
+    settled: isSettled(entry.lifecycle),
+    updatedAt: Date.parse(entry.updatedAt),
+    bytes,
+  };
+}
+
+/**
+ * Checks the store's envelope (`version` and the `entries` collection) from
+ * its header row without assembling the entries. `false` when the store does
+ * not exist yet. A store held whole as a document (a legacy file whose
+ * entries were not a record, or one that was not JSON at all), or one with
+ * another version, is invalid: fail closed rather than read it as empty.
+ */
+function checkEnvelope(database: StorageDatabase): boolean {
+  const header = database.readStoreHeader(WORKFLOW_RESULTS_STORE);
+  if (!header) return false;
+  if (header.layout !== "envelope" || header.mode !== "rows" || header.document === null) {
+    throw invalidStore();
+  }
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(header.document) as unknown;
+  } catch {
+    throw invalidStore();
+  }
+  if (
+    !envelope ||
+    typeof envelope !== "object" ||
+    Array.isArray(envelope) ||
+    (envelope as Record<string, unknown>).version !== WORKFLOW_RESULT_STORE_VERSION ||
+    (envelope as Record<string, unknown>)[ENTRIES] !== STORAGE_COLLECTION_MARKER
+  ) {
+    throw invalidStore();
+  }
+  return true;
 }
 
 function validateEntryResult(
@@ -222,13 +301,20 @@ function validStoredEntry(key: string, value: unknown): value is StoredWorkflowR
   );
 }
 
-/** Durable result inbox shared by workflow controllers and the agent tool server. */
+/**
+ * Durable result inbox shared by workflow controllers and the agent tool server.
+ *
+ * Entries live in the backend database (`workflow-results`, one row per
+ * result key). Every mutation is one synchronous IMMEDIATE transaction, which
+ * SQLite serializes against every other connection and process sharing the
+ * data directory; a crash leaves the previous commit. Reads parse only the
+ * requested row.
+ */
 export class WorkflowResultService {
-  private readonly filePath: string;
-  private readonly capabilityIdentityPath: string;
+  private readonly dataDir: string;
+  private storage: StorageDatabase | null = null;
+  private index: EntryIndex | null = null;
   private capabilityIdentity: WorkflowResultCapabilityIdentity | null = null;
-  private cachedStore: { fingerprint: string; store: WorkflowResultStore } | null = null;
-  private mutation: Promise<unknown> = Promise.resolve();
   private pendingAuthentications = 0;
   private pendingCalls = 0;
   private pendingBytes = 0;
@@ -241,9 +327,28 @@ export class WorkflowResultService {
   readonly metrics: WorkflowResultMetrics;
 
   constructor(dataDir: string, metrics: WorkflowResultMetrics = new WorkflowResultMetrics()) {
-    this.filePath = path.join(dataDir, "workflow-results.json");
-    this.capabilityIdentityPath = path.join(dataDir, "workflow-result-tools.json");
+    this.dataDir = dataDir;
     this.metrics = metrics;
+  }
+
+  /** The data directory's database, opened on first use (and again after {@link closeStorage}). */
+  private get database(): StorageDatabase {
+    if (!this.storage || this.storage.isClosed()) {
+      this.storage = openBackendDatabase(this.dataDir);
+      this.index = null;
+    }
+    return this.storage;
+  }
+
+  /**
+   * Closes this service's database connection (backend shutdown, tests). A
+   * later call reopens it. In-memory delivery state and the capability
+   * identity are kept.
+   */
+  closeStorage(): void {
+    this.storage?.close();
+    this.storage = null;
+    this.index = null;
   }
 
   /** Counters exist only for slots the store knows, so a caller cannot grow them. */
@@ -345,29 +450,32 @@ export class WorkflowResultService {
     this.metrics.setGauge("pending_bytes", this.pendingBytes);
   }
 
+  /**
+   * Loads the signing identity, creating it when absent. One transaction:
+   * two backends starting together agree on one secret, and a valid stored
+   * identity is never replaced.
+   */
   async initializeCapabilityIdentity(): Promise<void> {
     if (this.capabilityIdentity) return;
-    await mkdir(path.dirname(this.capabilityIdentityPath), { recursive: true });
-    try {
-      const parsed = await this.readCapabilityIdentity();
-      if (validCapabilityIdentity(parsed)) {
-        this.capabilityIdentity = parsed;
-        return;
+    const database = this.database;
+    this.capabilityIdentity = database.transaction(() => {
+      // An unreadable value reads as absent. The identity contains no user
+      // data and is useful only while valid: regenerating it invalidates stale
+      // bearer capabilities but keeps the agent-tools server available.
+      const stored = database.readStoreValueInTransaction(WORKFLOW_RESULT_TOOLS_STORE)?.value;
+      if (
+        validCapabilityIdentity(stored) &&
+        Buffer.byteLength(JSON.stringify(stored), "utf8") <= MAX_CAPABILITY_IDENTITY_BYTES
+      ) {
+        return stored;
       }
-      await rm(this.capabilityIdentityPath, { force: true });
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== "ENOENT") {
-        // The identity contains no user data and is useful only while valid.
-        // Regenerating it invalidates stale bearer capabilities but keeps the
-        // rest of the agent-tools server available after a torn write.
-        await rm(this.capabilityIdentityPath, { force: true });
-      }
-    }
-    const identity: WorkflowResultCapabilityIdentity = {
-      version: CAPABILITY_IDENTITY_VERSION,
-      secret: randomBytes(32).toString("base64url"),
-    };
-    this.capabilityIdentity = await this.writeCapabilityIdentity(identity);
+      const identity: WorkflowResultCapabilityIdentity = {
+        version: CAPABILITY_IDENTITY_VERSION,
+        secret: randomBytes(32).toString("base64url"),
+      };
+      database.writeStoreInTransaction(WORKFLOW_RESULT_TOOLS_STORE, identity);
+      return identity;
+    });
   }
 
   capabilityPort(): number | undefined {
@@ -378,9 +486,7 @@ export class WorkflowResultService {
     if (!Number.isSafeInteger(port) || port < 1 || port > 65_535)
       throw new Error("Invalid workflow result tool port");
     const identity = { ...this.requireCapabilityIdentity(), port };
-    const temp = `${this.capabilityIdentityPath}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temp, `${JSON.stringify(identity)}\n`, { mode: 0o600 });
-    await rename(temp, this.capabilityIdentityPath);
+    this.database.writeStore(WORKFLOW_RESULT_TOOLS_STORE, identity);
     this.capabilityIdentity = identity;
   }
 
@@ -423,7 +529,7 @@ export class WorkflowResultService {
       return null;
     this.pendingAuthentications += 1;
     try {
-      const entry = (await this.load()).entries[resultKey];
+      const entry = this.readEntry(resultKey);
       if (!entry || entry.environmentId !== environmentId || entry.projectId !== projectId)
         return null;
       return { environmentId, projectId, workflowResultKey: resultKey };
@@ -452,8 +558,7 @@ export class WorkflowResultService {
   }
 
   async prepare(input: WorkflowResultSlotInput): Promise<void> {
-    await this.mutate(async (store) => {
-      const existing = store.entries[input.resultKey];
+    this.mutateEntry<void>(input.resultKey, (existing) => {
       if (existing) {
         if (
           existing.kind !== input.kind ||
@@ -465,11 +570,11 @@ export class WorkflowResultService {
         ) {
           throw new Error("Workflow result key is already bound to another attempt");
         }
-        return;
+        return { result: undefined };
       }
       const now = new Date().toISOString();
       const { schema: _schema, ...identity } = input;
-      store.entries[input.resultKey] = {
+      const entry: StoredWorkflowResult = {
         ...identity,
         schemaVersion: WORKFLOW_RESULT_SCHEMA_VERSION,
         lifecycle: "open",
@@ -477,13 +582,13 @@ export class WorkflowResultService {
         updatedAt: now,
         rejectedDigests: [],
       };
-      this.prune(store);
       this.metrics.recordAttempt({
         provider: input.provider,
         kind: input.kind,
         transport: "tool-v1",
         schemaVersion: WORKFLOW_RESULT_SCHEMA_VERSION,
       });
+      return { result: undefined, entry };
     });
   }
 
@@ -492,7 +597,7 @@ export class WorkflowResultService {
    * snapshot. Carries no receipt, digest, or diagnostic text.
    */
   async projection(resultKey: string): Promise<WorkflowResultSubmissionState | undefined> {
-    const entry = (await this.load()).entries[resultKey];
+    const entry = this.readEntry(resultKey);
     if (!entry) return undefined;
     if (entry.lifecycle === "accepted") return "received";
     if (entry.lifecycle === "exhausted") return "needs-attention";
@@ -548,68 +653,66 @@ export class WorkflowResultService {
     }
     let outcome: WorkflowResultPreflightOutcome = "invalid_result";
     try {
-      return await this.mutate<WorkflowResultValidation>(
-        (store) => {
-          const entry = store.entries[resultKey];
-          if (
-            !entry ||
-            entry.environmentId !== scope.environmentId ||
-            entry.projectId !== scope.projectId
-          ) {
-            outcome = "capability_denied";
-            return {
-              ok: false,
-              error: {
-                code: "capability_denied",
-                nextAction: "stop",
-                message: "This tool connection cannot validate that workflow result.",
-              },
-            };
-          }
-          if (entry.lifecycle !== "open") {
-            outcome =
-              entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed";
-            return {
-              ok: false,
-              error: {
-                code: outcome,
-                nextAction: "stop",
-                message:
-                  entry.lifecycle === "exhausted"
-                    ? "The correction budget for this workflow result is exhausted."
-                    : "This workflow result attempt is closed.",
-              },
-            };
-          }
-          const validationStartedAt = Date.now();
-          let issues: WorkflowResultValidationIssue[];
-          try {
-            issues = validateEntryResult(entry, result);
-          } finally {
-            this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
-          }
-          const delivery = this.counters(resultKey);
-          delivery.validationCalls += 1;
-          delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
-          if (issues.length > 0) {
-            return {
-              ok: false,
-              error: {
-                code: "invalid_result",
-                nextAction: "correct",
-                message:
-                  "The result is not valid. Correct the reported fields before submitting it.",
-                issues,
-              },
-            };
-          }
-          outcome = "valid";
-          const validatedDigest = createHash("sha256").update(serialized).digest("hex");
-          this.hold(resultKey, validatedDigest, result, validationBytes);
-          return { ok: true, valid: true, validatedDigest };
-        },
-        { readOnly: true },
-      );
+      // Read-only: the entry's row, never the whole store.
+      const evaluate = (): WorkflowResultValidation => {
+        const entry = this.readEntry(resultKey);
+        if (
+          !entry ||
+          entry.environmentId !== scope.environmentId ||
+          entry.projectId !== scope.projectId
+        ) {
+          outcome = "capability_denied";
+          return {
+            ok: false,
+            error: {
+              code: "capability_denied",
+              nextAction: "stop",
+              message: "This tool connection cannot validate that workflow result.",
+            },
+          };
+        }
+        if (entry.lifecycle !== "open") {
+          outcome =
+            entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed";
+          return {
+            ok: false,
+            error: {
+              code: outcome,
+              nextAction: "stop",
+              message:
+                entry.lifecycle === "exhausted"
+                  ? "The correction budget for this workflow result is exhausted."
+                  : "This workflow result attempt is closed.",
+            },
+          };
+        }
+        const validationStartedAt = Date.now();
+        let issues: WorkflowResultValidationIssue[];
+        try {
+          issues = validateEntryResult(entry, result);
+        } finally {
+          this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
+        }
+        const delivery = this.counters(resultKey);
+        delivery.validationCalls += 1;
+        delivery.lastValidation = issues.length > 0 ? "invalid" : "valid";
+        if (issues.length > 0) {
+          return {
+            ok: false,
+            error: {
+              code: "invalid_result",
+              nextAction: "correct",
+              message: "The result is not valid. Correct the reported fields before submitting it.",
+              issues,
+            },
+          };
+        }
+        outcome = "valid";
+        const validatedDigest = createHash("sha256").update(serialized).digest("hex");
+        this.hold(resultKey, validatedDigest, result, validationBytes);
+        return { ok: true, valid: true, validatedDigest };
+      };
+      return evaluate();
     } catch (error) {
       outcome = "storage_unavailable";
       throw error;
@@ -715,22 +818,24 @@ export class WorkflowResultService {
       };
     }
     try {
-      return await this.mutate<WorkflowResultSubmission>(
-        async (store) => {
-          const entry = store.entries[resultKey];
+      return this.mutateEntry<WorkflowResultSubmission>(
+        resultKey,
+        (entry) => {
           if (
             !entry ||
             entry.environmentId !== scope.environmentId ||
             entry.projectId !== scope.projectId
           ) {
             return {
-              ok: false,
-              error: {
-                code: "capability_denied",
-                nextAction: "stop",
-                message: "This tool connection cannot submit that workflow result.",
-              },
-            } satisfies WorkflowResultSubmission;
+              result: {
+                ok: false,
+                error: {
+                  code: "capability_denied",
+                  nextAction: "stop",
+                  message: "This tool connection cannot submit that workflow result.",
+                },
+              } satisfies WorkflowResultSubmission,
+            };
           }
           this.counters(resultKey).submissionCalls += 1;
           if (
@@ -746,15 +851,17 @@ export class WorkflowResultService {
               code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
             });
             return {
-              ok: false,
-              error: {
-                code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
-                nextAction: "stop",
-                message: exhausted
-                  ? "The correction budget for this workflow result is exhausted."
-                  : "This workflow result attempt is closed.",
-              },
-            } satisfies WorkflowResultSubmission;
+              result: {
+                ok: false,
+                error: {
+                  code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
+                  nextAction: "stop",
+                  message: exhausted
+                    ? "The correction budget for this workflow result is exhausted."
+                    : "This workflow result attempt is closed.",
+                },
+              } satisfies WorkflowResultSubmission,
+            };
           }
           if (entry.receipt) {
             if (entry.digest !== resultDigest) {
@@ -765,13 +872,15 @@ export class WorkflowResultService {
                 code: "submission_conflict",
               });
               return {
-                ok: false,
-                error: {
-                  code: "submission_conflict",
-                  nextAction: "stop",
-                  message: "A different result was already accepted for this key.",
-                },
-              } satisfies WorkflowResultSubmission;
+                result: {
+                  ok: false,
+                  error: {
+                    code: "submission_conflict",
+                    nextAction: "stop",
+                    message: "A different result was already accepted for this key.",
+                  },
+                } satisfies WorkflowResultSubmission,
+              };
             }
             this.metrics.recordSubmission({
               provider: entry.provider,
@@ -779,11 +888,13 @@ export class WorkflowResultService {
               outcome: "duplicate",
             });
             return {
-              ok: true,
-              receipt: entry.receipt,
-              lifecycle: entry.lifecycle,
-              duplicate: true,
-            } satisfies WorkflowResultSubmission;
+              result: {
+                ok: true,
+                receipt: entry.receipt,
+                lifecycle: entry.lifecycle,
+                duplicate: true,
+              } satisfies WorkflowResultSubmission,
+            };
           }
           if (entry.lifecycle !== "open") {
             this.metrics.recordSubmission({
@@ -793,33 +904,37 @@ export class WorkflowResultService {
               code: "attempt_closed",
             });
             return {
-              ok: false,
-              error: {
-                code: "attempt_closed",
-                nextAction: "stop",
-                message: "This workflow result attempt is closed.",
-              },
-            } satisfies WorkflowResultSubmission;
+              result: {
+                ok: false,
+                error: {
+                  code: "attempt_closed",
+                  nextAction: "stop",
+                  message: "This workflow result attempt is closed.",
+                },
+              } satisfies WorkflowResultSubmission,
+            };
           }
           if (validatedDigest !== undefined) {
             const held = this.held.get(resultKey);
             if (!held || held.digest !== validatedDigest || !this.heldValidation(resultKey)) {
               return {
-                ok: false,
-                error: {
-                  code: "invalid_result",
-                  nextAction: "correct",
-                  message:
-                    "No validated result with that digest is held. Validate the complete result again, or submit it in full.",
-                  issues: [
-                    {
-                      path: "$.validatedDigest",
-                      code: "unknown_validation",
-                      message: "The digest does not match a held validated result.",
-                    },
-                  ],
-                },
-              } satisfies WorkflowResultSubmission;
+                result: {
+                  ok: false,
+                  error: {
+                    code: "invalid_result",
+                    nextAction: "correct",
+                    message:
+                      "No validated result with that digest is held. Validate the complete result again, or submit it in full.",
+                    issues: [
+                      {
+                        path: "$.validatedDigest",
+                        code: "unknown_validation",
+                        message: "The digest does not match a held validated result.",
+                      },
+                    ],
+                  },
+                } satisfies WorkflowResultSubmission,
+              };
             }
             result = held.result;
           }
@@ -846,14 +961,17 @@ export class WorkflowResultService {
                 code: "correction_budget_exhausted",
               });
               return {
-                ok: false,
-                error: {
-                  code: "correction_budget_exhausted",
-                  nextAction: "stop",
-                  message: "The result is still invalid after the allowed correction attempts.",
-                  issues,
-                },
-              } satisfies WorkflowResultSubmission;
+                result: {
+                  ok: false,
+                  error: {
+                    code: "correction_budget_exhausted",
+                    nextAction: "stop",
+                    message: "The result is still invalid after the allowed correction attempts.",
+                    issues,
+                  },
+                } satisfies WorkflowResultSubmission,
+                entry,
+              };
             }
             this.metrics.recordSubmission({
               provider: entry.provider,
@@ -862,15 +980,18 @@ export class WorkflowResultService {
               code: "invalid_result",
             });
             return {
-              ok: false,
-              error: {
-                code: "invalid_result",
-                nextAction: "correct",
-                message:
-                  "The result was not accepted. Correct the reported fields and submit again.",
-                issues,
-              },
-            } satisfies WorkflowResultSubmission;
+              result: {
+                ok: false,
+                error: {
+                  code: "invalid_result",
+                  nextAction: "correct",
+                  message:
+                    "The result was not accepted. Correct the reported fields and submit again.",
+                  issues,
+                },
+              } satisfies WorkflowResultSubmission,
+              entry,
+            };
           }
           const acceptedAt = new Date().toISOString();
           const receipt: WorkflowResultReceipt = {
@@ -895,7 +1016,10 @@ export class WorkflowResultService {
             entry.kind,
             Date.parse(acceptedAt) - Date.parse(entry.firstSubmissionAt ?? acceptedAt),
           );
-          return { ok: true, receipt, lifecycle: entry.lifecycle, duplicate: false };
+          return {
+            result: { ok: true, receipt, lifecycle: entry.lifecycle, duplicate: false },
+            entry,
+          };
         },
         {
           afterCommit: (submission) => {
@@ -918,8 +1042,7 @@ export class WorkflowResultService {
     scope: WorkflowResultCallerScope,
     resultKey: string,
   ): Promise<WorkflowResultStatus | null> {
-    const store = await this.load();
-    const entry = store.entries[resultKey];
+    const entry = this.readEntry(resultKey);
     if (
       !entry ||
       entry.environmentId !== scope.environmentId ||
@@ -971,8 +1094,7 @@ export class WorkflowResultService {
   }
 
   async structured<T>(resultKey: string): Promise<StructuredOutputResult<T> | null> {
-    const store = await this.load();
-    const entry = store.entries[resultKey];
+    const entry = this.readEntry(resultKey);
     if (!entry?.receipt || entry.lifecycle !== "accepted" || entry.result === undefined)
       return null;
     return {
@@ -984,13 +1106,13 @@ export class WorkflowResultService {
   }
 
   async registered(resultKey: string): Promise<boolean> {
-    return (await this.load()).entries[resultKey] !== undefined;
+    return this.readEntry(resultKey) !== undefined;
   }
 
   async lookup<T>(
     resultKey: string,
   ): Promise<{ registered: boolean; result: StructuredOutputResult<T> | null }> {
-    const entry = (await this.load()).entries[resultKey];
+    const entry = this.readEntry(resultKey);
     return {
       registered: entry !== undefined,
       result:
@@ -1012,7 +1134,7 @@ export class WorkflowResultService {
     kind: StoredWorkflowResult["kind"];
     provider: StoredWorkflowResult["provider"];
   } | null> {
-    const entry = (await this.load()).entries[resultKey];
+    const entry = this.readEntry(resultKey);
     if (
       !entry ||
       entry.environmentId !== scope.environmentId ||
@@ -1024,10 +1146,10 @@ export class WorkflowResultService {
   }
 
   async consume(resultKey: string): Promise<void> {
-    await this.mutate(
-      async (store) => {
-        const entry = store.entries[resultKey];
-        if (!entry || entry.lifecycle === "consumed") return;
+    this.mutateEntry<void>(
+      resultKey,
+      (entry) => {
+        if (!entry || entry.lifecycle === "consumed") return { result: undefined };
         if (entry.lifecycle !== "accepted") throw new Error("Workflow result is not accepted");
         const consumedAt = new Date().toISOString();
         entry.lifecycle = "consumed";
@@ -1042,6 +1164,8 @@ export class WorkflowResultService {
           entry.kind,
           Date.parse(consumedAt) - Date.parse(entry.receipt?.acceptedAt ?? consumedAt),
         );
+        // The overwritten row held the payload.
+        return { result: undefined, entry, removesContent: true };
       },
       { afterCommit: () => this.forgetDelivery(resultKey) },
     );
@@ -1054,16 +1178,13 @@ export class WorkflowResultService {
    */
   async deleteByEnvironment(environmentId: string): Promise<number> {
     const removedKeys: string[] = [];
-    return this.mutate(
-      (store) => {
-        let removed = 0;
-        for (const [resultKey, entry] of Object.entries(store.entries)) {
-          if (entry.environmentId !== environmentId) continue;
-          removedKeys.push(resultKey);
-          delete store.entries[resultKey];
-          removed += 1;
+    return this.commit(
+      (database, index) => {
+        for (const [resultKey, entry] of index.entries) {
+          if (entry.environmentId === environmentId) removedKeys.push(resultKey);
         }
-        return removed;
+        for (const resultKey of removedKeys) this.removeEntry(database, index, resultKey);
+        return { result: removedKeys.length, removesContent: removedKeys.length > 0 };
       },
       {
         afterCommit: () => {
@@ -1074,10 +1195,10 @@ export class WorkflowResultService {
   }
 
   async close(resultKey: string, lifecycle: "cancelled" | "superseded"): Promise<void> {
-    await this.mutate(
-      async (store) => {
-        const entry = store.entries[resultKey];
-        if (!entry || entry.lifecycle === "consumed") return;
+    this.mutateEntry<void>(
+      resultKey,
+      (entry) => {
+        if (!entry || entry.lifecycle === "consumed") return { result: undefined };
         // A slot closed while still open was never submitted to. That is the
         // signal for a worker that finished without calling its tool, which is
         // what the missing-submission counter exists to surface.
@@ -1096,6 +1217,8 @@ export class WorkflowResultService {
         entry.rejectedDigests = [];
         entry.firstSubmissionAt = undefined;
         entry.updatedAt = new Date().toISOString();
+        // The overwritten row may have held an accepted payload or context.
+        return { result: undefined, entry, removesContent: true };
       },
       { afterCommit: () => this.forgetDelivery(resultKey) },
     );
@@ -1112,126 +1235,211 @@ export class WorkflowResultService {
     this.metrics.recordReportingOnlyContinuation({ provider, kind });
   }
 
-  private async load(): Promise<WorkflowResultStore> {
-    const startedAt = Date.now();
+  /**
+   * The entry stored under `resultKey`, read from its row alone (supervisors
+   * poll these reads). An invalid envelope or entry throws "invalid store", as
+   * the whole-file read did: corruption is never mistaken for an absent slot.
+   */
+  private readEntry(resultKey: string): StoredWorkflowResult | undefined {
+    const database = this.database;
     try {
-      const metadata = await stat(this.filePath, { bigint: true });
-      if (metadata.size > MAX_STORE_BYTES)
-        throw new Error("Workflow result store exceeds its size limit");
-      const fingerprint = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeNs}:${metadata.ctimeNs}`;
-      if (this.cachedStore?.fingerprint === fingerprint) return this.cachedStore.store;
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-        throw new Error("invalid store");
-      const candidate = parsed as Partial<WorkflowResultStore>;
-      if (candidate.version !== WORKFLOW_RESULT_STORE_VERSION || !candidate.entries)
-        throw new Error("invalid store");
-      if (
-        typeof candidate.entries !== "object" ||
-        candidate.entries === null ||
-        Array.isArray(candidate.entries)
-      ) {
-        throw new Error("invalid store");
-      }
-      const rawEntries = Object.entries(candidate.entries);
-      if (!rawEntries.every(([key, value]) => validStoredEntry(key, value))) {
-        throw new Error("invalid store");
-      }
-      const entries = Object.fromEntries(rawEntries) as Record<string, StoredWorkflowResult>;
-      this.metrics.recordStorageDuration("load", Date.now() - startedAt);
-      const store = { version: WORKFLOW_RESULT_STORE_VERSION, entries } as const;
-      this.cachedStore = { fingerprint, store };
-      return store;
+      if (!checkEnvelope(database)) return undefined;
+      const value = database.readStoreRow(WORKFLOW_RESULTS_STORE, resultKey, ENTRIES);
+      if (value === undefined) return undefined;
+      if (!validStoredEntry(resultKey, value)) throw invalidStore();
+      return value;
     } catch (error) {
-      if ((error as { code?: unknown }).code === "ENOENT") {
-        const store: WorkflowResultStore = {
-          version: WORKFLOW_RESULT_STORE_VERSION,
-          entries: {},
-        };
-        this.cachedStore = { fingerprint: "missing", store };
-        return store;
-      }
+      if (error instanceof StoreCorruptError || error instanceof SyntaxError) throw invalidStore();
       throw error;
     }
   }
 
-  private async save(store: WorkflowResultStore): Promise<void> {
+  /**
+   * The entry index at the committed revision, or `null` when the store does
+   * not exist. Rebuilt (parsing and revalidating every entry) only when the
+   * revision moved since this service last committed: on first use and after
+   * another backend's write.
+   */
+  private currentIndex(database: StorageDatabase): EntryIndex | null {
+    const revision = database.storeRevision(WORKFLOW_RESULTS_STORE);
+    if (revision === null) return null;
+    if (this.index?.revision === revision) return this.index;
+    this.index = null;
     const startedAt = Date.now();
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    this.prune(store);
-    const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
-    const serialized = `${JSON.stringify(store, null, 2)}\n`;
-    const bytes = Buffer.byteLength(serialized, "utf8");
-    if (bytes > MAX_STORE_BYTES) throw new Error("Workflow result store exceeds its size limit");
-    await writeFile(temp, serialized, { mode: 0o600 });
-    await rename(temp, this.filePath);
-    const metadata = await stat(this.filePath, { bigint: true });
-    this.cachedStore = {
-      fingerprint: `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeNs}:${metadata.ctimeNs}`,
-      store,
-    };
-    this.metrics.recordStorageDuration("save", Date.now() - startedAt);
-    this.metrics.setGauge("retained_bytes", bytes);
-    this.metrics.setGauge(
-      "active_slots",
-      Object.values(store.entries).filter(
-        (entry) => entry.lifecycle === "open" || entry.lifecycle === "accepted",
-      ).length,
+    let snapshot: { value: unknown; revision: number } | null;
+    try {
+      if (!checkEnvelope(database)) return null;
+      snapshot = database.readStore(WORKFLOW_RESULTS_STORE);
+    } catch (error) {
+      if (error instanceof StoreCorruptError) throw invalidStore();
+      throw error;
+    }
+    if (!snapshot) return null;
+    const entries = (snapshot.value as { entries?: unknown }).entries;
+    if (!entries || typeof entries !== "object" || Array.isArray(entries)) throw invalidStore();
+    const sizes = new Map(
+      (database.storeRowStats(WORKFLOW_RESULTS_STORE, ENTRIES) ?? []).map((row) => [
+        row.key,
+        row.bytes,
+      ]),
     );
+    const index: EntryIndex = { revision: snapshot.revision, entries: new Map(), bytes: 0 };
+    for (const [key, entry] of Object.entries(entries as Record<string, unknown>)) {
+      if (!validStoredEntry(key, entry)) throw invalidStore();
+      const bytes = sizes.get(key) ?? Buffer.byteLength(JSON.stringify(entry), "utf8");
+      index.entries.set(key, indexedEntry(entry, bytes));
+      index.bytes += bytes;
+    }
+    this.metrics.recordStorageDuration("load", Date.now() - startedAt);
+    this.index = index;
+    this.publishGauges(index);
+    return index;
   }
 
-  private prune(store: WorkflowResultStore): void {
-    const entries = Object.values(store.entries);
-    const removable = entries
-      .filter(
-        (entry) =>
-          entry.lifecycle === "consumed" ||
-          entry.lifecycle === "cancelled" ||
-          entry.lifecycle === "superseded" ||
-          entry.lifecycle === "exhausted",
-      )
-      .sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
-    let removableIndex = 0;
-    let entryCount = entries.length;
-    while (entryCount > WORKFLOW_RESULT_MAX_ENTRIES && removableIndex < removable.length) {
-      delete store.entries[removable[removableIndex++]!.resultKey];
-      entryCount -= 1;
-    }
-    const retainedByteLimit = MAX_STORE_BYTES - WORKFLOW_RESULT_MAX_BYTES;
-    let retainedBytes = Buffer.byteLength(JSON.stringify(store), "utf8");
-    while (retainedBytes > retainedByteLimit && removableIndex < removable.length) {
-      // Re-measure in bounded batches. Serializing after every tombstone makes
-      // byte pruning quadratic at the 4,096-entry limit.
-      const batchEnd = Math.min(removableIndex + 64, removable.length);
-      while (removableIndex < batchEnd) {
-        delete store.entries[removable[removableIndex++]!.resultKey];
-        entryCount -= 1;
-      }
-      retainedBytes = Buffer.byteLength(JSON.stringify(store), "utf8");
-    }
-    if (entryCount > WORKFLOW_RESULT_MAX_ENTRIES)
-      throw new Error("Workflow result store has too many active entries");
-  }
-
-  private async mutate<T>(
-    operation: (store: WorkflowResultStore) => Promise<T> | T,
-    options: { readOnly?: boolean; afterCommit?: (result: T) => void } = {},
-  ): Promise<T> {
-    const run = this.mutation.then(async () => {
-      const release = await this.acquireMutationLock();
-      try {
-        const store = await this.load();
-        if (!options.readOnly) this.cachedStore = null;
-        const result = await operation(store);
-        if (!options.readOnly) await this.save(store);
-        options.afterCommit?.(result);
-        return result;
-      } finally {
-        await release();
-      }
+  /** {@link currentIndex} inside the write transaction, creating the store when absent. */
+  private indexInTransaction(database: StorageDatabase): EntryIndex {
+    const index = this.currentIndex(database);
+    if (index) return index;
+    database.writeStoreInTransaction(WORKFLOW_RESULTS_STORE, {
+      version: WORKFLOW_RESULT_STORE_VERSION,
+      entries: {},
     });
-    this.mutation = run.catch(() => undefined);
-    return run;
+    const created: EntryIndex = {
+      revision: database.storeRevision(WORKFLOW_RESULTS_STORE)!,
+      entries: new Map(),
+      bytes: 0,
+    };
+    this.index = created;
+    return created;
+  }
+
+  /**
+   * Runs one mutation as one synchronous IMMEDIATE transaction, with the
+   * store's bounds enforced inside it. `afterCommit` runs only once the
+   * commit returned, so in-memory delivery state never reflects a write that
+   * rolled back. Content removed by the mutation is scrubbed from the
+   * database files after the commit.
+   */
+  private commit<T>(
+    operation: (
+      database: StorageDatabase,
+      index: EntryIndex,
+    ) => { result: T; removesContent?: boolean },
+    options: { afterCommit?: (result: T) => void } = {},
+  ): T {
+    const database = this.database;
+    // Revalidate, and after another backend's commit rebuild, before taking
+    // the write lock; the transaction rebuilds again only if it raced.
+    this.currentIndex(database);
+    const startedAt = Date.now();
+    let outcome: { result: T; removesContent: boolean };
+    try {
+      outcome = database.transaction(() => {
+        const index = this.indexInTransaction(database);
+        const { result, removesContent = false } = operation(database, index);
+        const pruned = this.enforceBounds(database, index);
+        index.revision = database.storeRevision(WORKFLOW_RESULTS_STORE)!;
+        return { result, removesContent: removesContent || pruned };
+      });
+    } catch (error) {
+      // The index may describe writes that rolled back.
+      this.index = null;
+      throw error;
+    }
+    this.metrics.recordStorageDuration("save", Date.now() - startedAt);
+    if (this.index) this.publishGauges(this.index);
+    if (outcome.removesContent) database.scrubDeletedContent();
+    options.afterCommit?.(outcome.result);
+    return outcome.result;
+  }
+
+  /**
+   * Reads, changes and writes ONE entry's row (O(entry), not O(store)).
+   * `operation` gets a private copy of the entry (`undefined` when absent)
+   * and returns the entry to persist, if any. A stored entry that fails
+   * validation throws "invalid store" instead of being replaced.
+   */
+  private mutateEntry<T>(
+    resultKey: string,
+    operation: (entry: StoredWorkflowResult | undefined) => {
+      result: T;
+      entry?: StoredWorkflowResult;
+      removesContent?: boolean;
+    },
+    options: { afterCommit?: (result: T) => void } = {},
+  ): T {
+    return this.commit((database, index) => {
+      const outcome = database.updateStoreRow(
+        WORKFLOW_RESULTS_STORE,
+        resultKey,
+        (current) => {
+          if (current !== undefined && !validStoredEntry(resultKey, current)) throw invalidStore();
+          const outcome = operation(current as StoredWorkflowResult | undefined);
+          return outcome.entry === undefined
+            ? { result: outcome }
+            : { result: outcome, value: outcome.entry };
+        },
+        { collection: ENTRIES, unreadable: "throw" },
+      );
+      if (outcome.entry !== undefined) {
+        const bytes = Buffer.byteLength(JSON.stringify(outcome.entry), "utf8");
+        index.bytes += bytes - (index.entries.get(resultKey)?.bytes ?? 0);
+        index.entries.set(resultKey, indexedEntry(outcome.entry, bytes));
+      }
+      return {
+        result: outcome.result,
+        removesContent: outcome.removesContent === true && outcome.entry !== undefined,
+      };
+    }, options);
+  }
+
+  private removeEntry(database: StorageDatabase, index: EntryIndex, resultKey: string): void {
+    database.updateStoreRow(
+      WORKFLOW_RESULTS_STORE,
+      resultKey,
+      () => ({ result: undefined, delete: true as const }),
+      { collection: ENTRIES, unreadable: "throw" },
+    );
+    const existing = index.entries.get(resultKey);
+    if (!existing) return;
+    index.bytes -= existing.bytes;
+    index.entries.delete(resultKey);
+  }
+
+  /**
+   * Keeps the store within its entry and byte bounds by deleting the oldest
+   * settled slots. Throws (rolling the mutation back) when only active slots
+   * remain over a bound. Returns whether anything was deleted.
+   */
+  private enforceBounds(database: StorageDatabase, index: EntryIndex): boolean {
+    const retainedByteLimit = MAX_STORE_BYTES - WORKFLOW_RESULT_MAX_BYTES;
+    if (index.entries.size <= WORKFLOW_RESULT_MAX_ENTRIES && index.bytes <= retainedByteLimit) {
+      return false;
+    }
+    const removable = Array.from(index.entries)
+      .filter(([, entry]) => entry.settled)
+      .sort((left, right) => left[1].updatedAt - right[1].updatedAt)
+      .map(([resultKey]) => resultKey);
+    let removed = 0;
+    while (
+      removed < removable.length &&
+      (index.entries.size > WORKFLOW_RESULT_MAX_ENTRIES || index.bytes > retainedByteLimit)
+    ) {
+      this.removeEntry(database, index, removable[removed++]!);
+    }
+    if (index.entries.size > WORKFLOW_RESULT_MAX_ENTRIES)
+      throw new Error("Workflow result store has too many active entries");
+    if (index.bytes > MAX_STORE_BYTES)
+      throw new Error("Workflow result store exceeds its size limit");
+    return removed > 0;
+  }
+
+  /** Gauges from the committed index: row bytes retained, and open or accepted slots. */
+  private publishGauges(index: EntryIndex): void {
+    let active = 0;
+    for (const entry of index.entries.values()) if (!entry.settled) active += 1;
+    this.metrics.setGauge("retained_bytes", index.bytes);
+    this.metrics.setGauge("active_slots", active);
   }
 
   private requireCapabilityIdentity(): WorkflowResultCapabilityIdentity {
@@ -1240,78 +1448,10 @@ export class WorkflowResultService {
     return this.capabilityIdentity;
   }
 
-  private async readCapabilityIdentity(): Promise<unknown> {
-    const metadata = await stat(this.capabilityIdentityPath);
-    if (metadata.size > MAX_CAPABILITY_IDENTITY_BYTES)
-      throw new Error("Workflow result capability identity exceeds its size limit");
-    return JSON.parse(await readFile(this.capabilityIdentityPath, "utf8")) as unknown;
-  }
-
-  private async writeCapabilityIdentity(
-    identity: WorkflowResultCapabilityIdentity,
-  ): Promise<WorkflowResultCapabilityIdentity> {
-    const temp = `${this.capabilityIdentityPath}.${process.pid}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(identity)}\n`, { mode: 0o600 });
-      try {
-        // Linking a complete same-directory temp file preserves `wx` creation
-        // semantics without ever exposing partially written JSON.
-        await link(temp, this.capabilityIdentityPath);
-        return identity;
-      } catch (error) {
-        if ((error as { code?: unknown }).code !== "EEXIST") throw error;
-        const existing = await this.readCapabilityIdentity();
-        if (!validCapabilityIdentity(existing)) throw new Error("invalid capability identity");
-        return existing;
-      }
-    } finally {
-      await rm(temp, { force: true }).catch(() => undefined);
-    }
-  }
-
   private signCapability(scope: WorkflowResultCallerScope, resultKey: string): string {
     return createHmac("sha256", this.requireCapabilityIdentity().secret)
       .update(`${resultKey}\0${scope.environmentId}\0${scope.projectId}`)
       .digest("base64url");
-  }
-
-  private async acquireMutationLock(): Promise<() => Promise<void>> {
-    const lockPath = `${this.filePath}.lock`;
-    const token = randomUUID();
-    const staleMs = 15_000;
-    const deadline = Date.now() + 20_000;
-    await mkdir(path.dirname(lockPath), { recursive: true });
-    while (true) {
-      try {
-        const handle = await open(lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(token, "utf8");
-        } catch (error) {
-          await handle.close();
-          await rm(lockPath, { force: true });
-          throw error;
-        }
-        const heartbeat = setInterval(() => {
-          void handle.utimes(new Date(), new Date()).catch(() => undefined);
-        }, 5_000);
-        heartbeat.unref();
-        return async () => {
-          clearInterval(heartbeat);
-          await handle.close();
-          const currentToken = await readFile(lockPath, "utf8").catch(() => null);
-          if (currentToken === token) await rm(lockPath, { force: true });
-        };
-      } catch (error) {
-        if ((error as { code?: unknown }).code !== "EEXIST") throw error;
-        const metadata = await stat(lockPath).catch(() => null);
-        if (metadata && Date.now() - metadata.mtimeMs > staleMs) {
-          await rm(lockPath, { force: true });
-          continue;
-        }
-        if (Date.now() >= deadline) throw new Error("Timed out waiting for workflow result lock");
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
   }
 }
 

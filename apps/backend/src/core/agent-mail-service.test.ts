@@ -9,7 +9,18 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
+import { openBackendDatabase } from "./storage-stores.js";
 import { StorageService } from "./storage.js";
+
+/** Committed revision of the agent-mail store: any rewrite of the mail bumps it. */
+function agentMailRevision(dataDir: string): number | null {
+  const database = openBackendDatabase(dataDir);
+  try {
+    return database.storeRevision("agent-mail");
+  } finally {
+    database.close();
+  }
+}
 
 async function fixture() {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-agent-mail-service-"));
@@ -829,14 +840,14 @@ describe("AgentMailService", () => {
       );
 
       await service.init();
-      const mailPath = path.join(dataDir, "agent-mail.json");
-      const before = await fs.stat(mailPath);
+      const before = agentMailRevision(dataDir);
       await service.drainInjects();
       await service.drainInjects();
-      const after = await fs.stat(mailPath);
+      const after = agentMailRevision(dataDir);
 
       expect(dispatches).toBe(0);
-      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect(before).toBeNumber();
+      expect(after).toBe(before);
       expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
         placement: "pending-inject",
       });
@@ -882,13 +893,14 @@ describe("AgentMailService", () => {
       const unsubscribe = storage.addResourceChangeListener((change) => {
         if (change.resource === "agent-mail") mailChanges.push(change.id);
       });
-      const before = await fs.stat(path.join(dataDir, "agent-mail.json"));
+      const before = agentMailRevision(dataDir);
       for (let sweep = 0; sweep < 30; sweep += 1) await service.drainInjects();
-      const after = await fs.stat(path.join(dataDir, "agent-mail.json"));
+      const after = agentMailRevision(dataDir);
       unsubscribe();
 
       expect(dispatches).toBe(0);
-      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect(before).toBeNumber();
+      expect(after).toBe(before);
       expect(mailChanges).toEqual([]);
       expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
         placement: "pending-inject",

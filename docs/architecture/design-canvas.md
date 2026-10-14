@@ -109,7 +109,28 @@ adapters with their original response shapes.
 
 Per-canvas commit lanes plus a small global guard (quota reservation,
 environment deletion). Lock order is global guard, then one lane; nothing
-waits for the renderer or the global guard while holding a lane. Admission:
+waits for the renderer or the global guard while holding a lane.
+
+Several backends may share one data directory. Records, pending files,
+checkpoints, exports and backups stay files, and the backend database
+coordinates them (`design-coordination.ts`): each lane holds the cross-process
+lease `design-canvases/<id>` and the global guard holds `design-canvases`, so
+the order holds across processes too. A cached record is used only while the
+record file's identity (device, inode, size, nanosecond mtime/ctime) is
+unchanged, so every lane verifies and commits against the latest record on
+disk. Each service instance holds a liveness lease
+(`design-owner/<instance>`) and stamps it on the pending entries, provisional
+reservations and export intents it creates; recovery interrupts (or expires)
+only work whose owner is gone, and a running peer reports a dead owner's
+token as `interrupted` and never runs it. Executing a live peer's token claims
+it; if two processes run one token, only the first commit counts and the
+other returns its receipt. Every record write or removal moves a change
+signal (the `design-canvases/changes` store); the library index, quotas,
+recycle bin, history budget and environment deletion rescan the directory
+when it moved and re-read only records whose identity changed, and
+`index.json` is just a startup cache. Orphaned checkpoints are collected under
+the canvas lease against the record on disk. A lease waiter gives up after
+60 s (120 s for the global guard) with a retryable `capacity` failure. Admission:
 32 operations, 8 per canvas, 8 MiB decoded payload; 8 prepared per canvas;
 6 MiB per record. Environment deletion fences the environment before removing
 records, so a late render can never resurrect a design.

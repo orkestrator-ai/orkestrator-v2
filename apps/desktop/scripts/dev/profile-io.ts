@@ -2,6 +2,10 @@ import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
 } from "@orkestrator/protocol/node/worktree-paths";
+import {
+  STORAGE_DATABASE_FILE,
+  readStorageDatabaseStore,
+} from "@orkestrator/protocol/node/storage-database";
 import { spawnSync } from "node:child_process";
 import { constants, type Stats } from "node:fs";
 import {
@@ -10,6 +14,7 @@ import {
   link,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   readdir,
@@ -19,6 +24,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
@@ -297,17 +303,22 @@ export async function seedInstalledModelCatalogCaches(
   const codexHome = env.CODEX_HOME?.trim() || path.join(roots.homeDir, ".codex");
   const isolatedCodexHome = path.join(profile.dataDir, "agent-credentials", "codex");
   const isolatedHome = path.join(profile.dataDir, "agent-credentials", "home");
+  // The backend keeps these catalogues in its database. A profile that already
+  // has one owns its catalogues; a new one imports the seeded JSON on first
+  // start, exactly like a data directory upgraded from the JSON stores.
+  const profileHasDatabase = await pathExists(path.join(profile.dataDir, STORAGE_DATABASE_FILE));
+  const exported = profileHasDatabase
+    ? null
+    : await exportDatabaseCatalogues(roots.productionDataDir);
+  const catalogues = profileHasDatabase
+    ? []
+    : ["agent-model-catalog.json", "opencode-model-catalog.json"].map((label) => ({
+        label,
+        source: exported?.files.get(label) ?? path.join(roots.productionDataDir, label),
+        destination: path.join(profile.dataDir, label),
+      }));
   const candidates = [
-    {
-      label: "agent-model-catalog.json",
-      source: path.join(roots.productionDataDir, "agent-model-catalog.json"),
-      destination: path.join(profile.dataDir, "agent-model-catalog.json"),
-    },
-    {
-      label: "opencode-model-catalog.json",
-      source: path.join(roots.productionDataDir, "opencode-model-catalog.json"),
-      destination: path.join(profile.dataDir, "opencode-model-catalog.json"),
-    },
+    ...catalogues,
     {
       label: "codex/models_cache.json",
       source: path.join(codexHome, "models_cache.json"),
@@ -324,7 +335,39 @@ export async function seedInstalledModelCatalogCaches(
       destination: path.join(isolatedHome, ".grok", "models_cache.json"),
     },
   ];
-  return seedBoundedFiles(candidates, options);
+  try {
+    return await seedBoundedFiles(candidates, options);
+  } finally {
+    if (exported) await rm(exported.directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Writes the production database's model catalogues to private temporary JSON
+ * files, read-only and without running the backend's migrations. A production
+ * directory the backend has not opened since the SQLite move has no database;
+ * its JSON files are then used directly.
+ */
+async function exportDatabaseCatalogues(
+  productionDataDir: string,
+): Promise<{ directory: string; files: Map<string, string> } | null> {
+  const stores = [
+    ["agent-model-catalog.json", "agent-model-catalog"],
+    ["opencode-model-catalog.json", "opencode-model-catalog"],
+  ] as const;
+  const values = stores
+    .map(([label, store]) => [label, readStorageDatabaseStore(productionDataDir, store)] as const)
+    .filter(([, value]) => value !== undefined);
+  if (values.length === 0) return null;
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ork-catalogue-seed-"));
+  await chmod(directory, 0o700);
+  const files = new Map<string, string>();
+  for (const [label, value] of values) {
+    const file = path.join(directory, label);
+    await writeFile(file, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+    files.set(label, file);
+  }
+  return { directory, files };
 }
 
 export type ToolchainSeedOptions = {

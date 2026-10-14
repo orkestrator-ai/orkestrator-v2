@@ -10,7 +10,9 @@ import {
   formatBytes,
   formatReport,
   legacyTurboArtifacts,
+  readEnvironments,
 } from "../../scripts/disk-report";
+import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
 
 let root: string;
 
@@ -61,6 +63,23 @@ describe("disk report", () => {
     expect(fixed.stdout).toContain("Removed 1 legacy Turbo artifacts");
     expect(existsSync(legacy)).toBe(false);
     expect(existsSync(active)).toBe(true);
+  });
+
+  test("reads environments from the backend database without migrating a JSON data dir", async () => {
+    const legacy = path.join(root, "legacy");
+    await mkdir(legacy);
+    await writeFile(path.join(legacy, "environments.json"), JSON.stringify([{ id: "json-env" }]));
+    expect(readEnvironments(legacy)).toEqual([{ id: "json-env" }]);
+    // A report must never create the database or move the JSON aside.
+    expect(existsSync(path.join(legacy, "orkestrator.sqlite"))).toBe(false);
+    expect(existsSync(path.join(legacy, "environments.json"))).toBe(true);
+
+    const migrated = path.join(root, "migrated");
+    await mkdir(migrated);
+    const database = openBackendDatabase(migrated);
+    database.writeStore("environments", [{ id: "db-env", worktreePath: "/w" }]);
+    database.close();
+    expect(readEnvironments(migrated)).toEqual([{ id: "db-env", worktreePath: "/w" }]);
   });
 
   test("names transcript directories the way Claude Code does", () => {

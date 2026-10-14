@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import { StoreCorruptError } from "./storage-database.js";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import {
   MAX_SESSIONS_PER_ENVIRONMENT,
@@ -8,8 +9,6 @@ import {
   assertPaneLayoutSelectionIntentWithinBounds,
   createSessionObject,
   environmentIsReadyForSetupHandoff,
-  exists,
-  fs,
   isNonNegativeInteger,
   isRecord,
   mergePersistedPaneLayouts,
@@ -156,24 +155,30 @@ export abstract class StorageSessions extends StorageConfig {
     tabId: string,
     sessionType: SessionType,
   ): Promise<Session> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
     const session = createSessionObject(environmentId, containerId, tabId, sessionType);
-    const envSessions = sessions.filter((candidate) => candidate.environmentId === environmentId);
-    session.order = Math.max(-1, ...envSessions.map((candidate) => candidate.order)) + 1;
-
-    if (envSessions.length >= MAX_SESSIONS_PER_ENVIRONMENT) {
-      const oldestDisconnected = envSessions
-        .filter((candidate) => candidate.status === "disconnected")
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-      if (oldestDisconnected) {
-        const index = sessions.findIndex((candidate) => candidate.id === oldestDisconnected.id);
-        if (index >= 0) sessions.splice(index, 1);
-        await this.deleteSessionBuffer(oldestDisconnected.id);
-      }
-    }
-
-    sessions.push(session);
-    await this.saveJson(this.sessionsFile(), sessions);
+    const evicted = this.updateStore(
+      this.sessionsFile(),
+      (): Session[] => [],
+      (sessions) => {
+        const envSessions = sessions.filter(
+          (candidate) => candidate.environmentId === environmentId,
+        );
+        session.order = Math.max(-1, ...envSessions.map((candidate) => candidate.order)) + 1;
+        let oldest: Session | undefined;
+        if (envSessions.length >= MAX_SESSIONS_PER_ENVIRONMENT) {
+          oldest = envSessions
+            .filter((candidate) => candidate.status === "disconnected")
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+          if (oldest) {
+            const index = sessions.findIndex((candidate) => candidate.id === oldest!.id);
+            if (index >= 0) sessions.splice(index, 1);
+          }
+        }
+        sessions.push(session);
+        return oldest;
+      },
+    );
+    if (evicted) await this.deleteSessionBuffer(evicted.id);
     this.announce("session", environmentId);
     return session;
   }
@@ -232,35 +237,26 @@ export abstract class StorageSessions extends StorageConfig {
   }
 
   /**
-   * Loads the layout store once for destructive reconciliation. An absent file
-   * is a valid empty store; a present file that cannot be parsed (including
-   * from a retained backup) is unavailable, never evidence that every tab was
-   * deleted.
+   * Loads the layout store once for destructive reconciliation. An absent
+   * store is a valid empty store; a present one that cannot be read (imported
+   * from a corrupt file no backup could repair) is unavailable, never evidence
+   * that every tab was deleted.
    */
   async loadPaneLayoutsForReconciliation(): Promise<{
     available: boolean;
     layouts: Record<string, PersistedPaneLayout>;
   }> {
-    const filePath = this.paneLayoutsFile();
-    if (!(await exists(filePath))) return { available: true, layouts: {} };
     try {
-      const raw = await fs.readFile(filePath, "utf8");
-      if (!raw.trim()) throw new Error("Pane layout store is empty");
-      const layouts = JSON.parse(raw) as unknown;
-      if (!isRecord(layouts)) throw new Error("Pane layout store is not a record");
+      const stored = this.loadStoreStrict<unknown>(this.paneLayoutsFile());
+      if (!stored) return { available: true, layouts: {} };
+      if (!isRecord(stored.value)) return { available: false, layouts: {} };
       return {
         available: true,
-        layouts: layouts as Record<string, PersistedPaneLayout>,
+        layouts: stored.value as Record<string, PersistedPaneLayout>,
       };
-    } catch {
-      const recovered = await this.recoverJsonFromBackups<unknown>(filePath);
-      if (!recovered || !isRecord(recovered.value)) {
-        return { available: false, layouts: {} };
-      }
-      return {
-        available: true,
-        layouts: recovered.value as Record<string, PersistedPaneLayout>,
-      };
+    } catch (error) {
+      if (error instanceof StoreCorruptError) return { available: false, layouts: {} };
+      throw error;
     }
   }
 

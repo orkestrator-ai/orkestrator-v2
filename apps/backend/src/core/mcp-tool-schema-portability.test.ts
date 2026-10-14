@@ -253,6 +253,7 @@ describe("published MCP tool schemas are provider-portable", () => {
     await control.stop();
     await agentTools.stop();
     await design.close();
+    workflowResults.closeStorage();
     await rm(dataDir, { recursive: true, force: true });
     await rm(worktree, { recursive: true, force: true });
   });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import {
+  closeEnvironmentCleanupStorage,
   environmentCleanupLedger,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
@@ -23,6 +24,7 @@ import { dockerOwnerNamespace } from "./docker-ownership.js";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  closeEnvironmentCleanupStorage();
   await Promise.all(
     tempDirectories
       .splice(0)

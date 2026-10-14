@@ -1,16 +1,50 @@
 /**
  * Build-pipeline transcripts stored apart from the workflow control record
- * (plan step 16): legacy migration, deletion, crash points, the size bound
- * that used to block control writes, and admission uniqueness.
+ * (plan step 16): legacy migration, deletion, crash points, the atomic
+ * control-plus-manifest commit, the size bound that used to block control
+ * writes, and admission uniqueness.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "./storage.js";
-import { BUILD_PIPELINE_TRANSCRIPT_DIRECTORY } from "./build-pipeline-transcript-store.js";
+import {
+  BUILD_PIPELINE_TRANSCRIPT_DIRECTORY,
+  transcriptPipelineTag,
+} from "./build-pipeline-transcript-store.js";
+import { BUILD_PIPELINE_TRANSCRIPT_MANIFEST_STORE } from "./build-pipeline-transcript-layout.js";
+import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
+import { writeLegacyTranscriptSession } from "./build-pipeline-transcript-test-fixtures.js";
 import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
+import type { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
+import {
+  readStoredValue,
+  seedStore,
+  seedUnreadableStore,
+  storageFilesContain,
+} from "./storage-test-support.js";
+
+function databaseOf(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
+}
+
+/** Manifest rows a pipeline owns, read through a separate connection. */
+function manifestRows(dataDir: string, pipelineId: string): unknown[] {
+  const database = openBackendDatabase(dataDir);
+  try {
+    return (
+      database.readStoreRowsByOwner(
+        BUILD_PIPELINE_TRANSCRIPT_MANIFEST_STORE,
+        transcriptPipelineTag(pipelineId),
+      ) ?? []
+    );
+  } finally {
+    database.close();
+  }
+}
 
 async function withStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -64,17 +98,9 @@ function pipelineSnapshot(id: string, sessions: PipelineSession[], phase = "buil
   return { id, phase, sessions, currentSessionIndex: sessions.length - 1 };
 }
 
+/** The committed control records, serialized the way the old control file was. */
 async function controlFile(dataDir: string): Promise<string> {
-  return fs.readFile(path.join(dataDir, "build-pipelines.json"), "utf8");
-}
-
-async function allControlCopies(dataDir: string): Promise<string> {
-  const names = (await fs.readdir(dataDir)).filter((name) =>
-    name.startsWith("build-pipelines.json"),
-  );
-  return (
-    await Promise.all(names.map((name) => fs.readFile(path.join(dataDir, name), "utf8")))
-  ).join("\n");
+  return JSON.stringify(readStoredValue(dataDir, "build-pipelines.json") ?? {});
 }
 
 async function chunkCount(dataDir: string): Promise<number> {
@@ -274,16 +300,19 @@ describe("build pipeline transcript migration", () => {
 });
 
 describe("build pipeline transcript deletion", () => {
-  test("deletion removes referenced chunks and scrubs legacy backups", async () => {
+  test("deletion removes referenced chunks and scrubs earlier inline revisions", async () => {
     await withStorage(async (storage, dataDir) => {
       await seedLegacy(storage);
       await storage.migrateBuildPipelineTranscripts();
-      expect(await allControlCopies(dataDir)).toContain("p1-build");
+      // The migrated record no longer carries the body, but the pre-migration
+      // revision may survive in the database's free pages or WAL frames.
+      expect(await controlFile(dataDir)).not.toContain("p1-build");
+      expect(storageFilesContain(dataDir, "p1-build")).toBe(true);
 
       await storage.deleteBuildPipeline("p1");
 
-      expect(await allControlCopies(dataDir)).not.toContain("p1-build");
-      expect(await allControlCopies(dataDir)).not.toContain("p1-verify");
+      expect(storageFilesContain(dataDir, "p1-build")).toBe(false);
+      expect(storageFilesContain(dataDir, "p1-verify")).toBe(false);
       const [other] = await sessionsOf(storage, "p2");
       expect(await transcriptOf(storage, "p2", other!)).toEqual(messages(60, "p2-build"));
       await storage.deleteBuildPipelinesByEnvironment("unused-env", "p2");
@@ -291,10 +320,11 @@ describe("build pipeline transcript deletion", () => {
     });
   });
 
-  test("a crash between the control delete and the transcript delete is swept on restart", async () => {
+  test("control and manifest rows are deleted in one commit; a crash before the unlinks only leaves chunks repair removes", async () => {
     await withStorage(async (storage, dataDir) => {
       await seedLegacy(storage);
       await storage.migrateBuildPipelineTranscripts();
+      expect(manifestRows(dataDir, "p1")).toHaveLength(2);
       const chunksBefore = await chunkCount(dataDir);
       storage.setBuildPipelineTranscriptFaults({
         at: (stage) => {
@@ -303,15 +333,270 @@ describe("build pipeline transcript deletion", () => {
       });
       await expect(storage.deleteBuildPipeline("p1")).rejects.toThrow("crash during deletion");
       expect(await storage.getBuildPipeline("p1")).toBeNull();
+      // The manifests went with the control record: nothing references the chunks.
+      expect(manifestRows(dataDir, "p1")).toEqual([]);
+      expect(storageFilesContain(dataDir, "sdk-p1:build")).toBe(false);
       expect(await chunkCount(dataDir)).toBe(chunksBefore);
 
       const restarted = new StorageService(dataDir);
       await restarted.init();
       const swept = await restarted.sweepBuildPipelineTranscripts({ graceMs: 0 });
-      expect(swept.orphans).toBe(2);
+      expect(swept).toMatchObject({ orphans: 0, complete: true });
+      expect(swept.removedChunks).toBeGreaterThan(0);
       expect(await chunkCount(dataDir)).toBeLessThan(chunksBefore);
       const [other] = await sessionsOf(restarted, "p2");
       expect(await transcriptOf(restarted, "p2", other!)).toEqual(messages(60, "p2-build"));
+    });
+  });
+
+  test("deletion leaves no manifest row, chunk file or session identity behind", async () => {
+    await withStorage(async (storage, dataDir) => {
+      await seedLegacy(storage);
+      await storage.migrateBuildPipelineTranscripts();
+      const chunks = path.join(dataDir, BUILD_PIPELINE_TRANSCRIPT_DIRECTORY, "chunks");
+      const before = new Set(await fs.readdir(chunks));
+      expect(storageFilesContain(dataDir, "sdk-p1:verify")).toBe(true);
+
+      await storage.deleteBuildPipeline("p1");
+
+      expect(manifestRows(dataDir, "p1")).toEqual([]);
+      expect(storageFilesContain(dataDir, "sdk-p1:verify")).toBe(false);
+      const after = new Set(await fs.readdir(chunks));
+      // Only p2's chunks remain on disk.
+      expect(after.size).toBeLessThan(before.size);
+      expect(manifestRows(dataDir, "p2")).toHaveLength(1);
+      const [other] = await sessionsOf(storage, "p2");
+      expect(await transcriptOf(storage, "p2", other!)).toEqual(messages(60, "p2-build"));
+    });
+  });
+});
+
+describe("build pipeline transcript commit", () => {
+  async function checkpointed(storage: StorageService, body: unknown[]) {
+    const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+    const session = legacySession("p1:build", "build", undefined, { messageRevision: 0 });
+    checkpoints.observe(session, body);
+    const pipeline = pipelineSnapshot("p1", [session]) as Parameters<typeof checkpoints.prepare>[0];
+    const checkpoint = await checkpoints.prepare(pipeline);
+    const saved = await storage.saveBuildPipeline("p1", "proj-1", "", 2, pipeline);
+    checkpoint.settle();
+    return { checkpoints, saved };
+  }
+
+  test("a failure between the chunk write and the commit leaves the old transcript and control record", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const first = messages(5, "first");
+      const { checkpoints, saved } = await checkpointed(storage, first);
+      const chunksAfterFirst = await chunkCount(dataDir);
+
+      const record = (await storage.getBuildPipeline("p1"))!;
+      const pipeline = record.snapshot as Parameters<typeof checkpoints.prepare>[0];
+      checkpoints.observe(pipeline.sessions[0]!, messages(9, "second"));
+      (pipeline as { phase: string }).phase = "reviewing";
+      await checkpoints.prepare(pipeline);
+      expect(await chunkCount(dataDir)).toBeGreaterThan(chunksAfterFirst);
+
+      // The control write's transaction fails after the manifest row was written.
+      const database = databaseOf(storage);
+      const failing = spyOn(database, "updateStoreRow").mockImplementation(() => {
+        throw new Error("disk I/O error");
+      });
+      try {
+        await expect(
+          storage.saveBuildPipeline("p1", "proj-1", "", 2, pipeline, saved.revision),
+        ).rejects.toThrow("disk I/O error");
+      } finally {
+        failing.mockRestore();
+      }
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      const stored = (await restarted.getBuildPipeline("p1"))!;
+      expect(stored.revision).toBe(saved.revision);
+      expect((stored.snapshot as { phase: string }).phase).toBe("building");
+      const [session] = await sessionsOf(restarted, "p1");
+      expect(session!.transcript?.manifestRevision).toBe(1);
+      const read = await restarted.readBuildPipelineTranscript("p1", session!);
+      expect(read).toMatchObject({ status: "found", substituted: false });
+      expect(read.status === "found" ? read.messages : []).toEqual(first);
+      // The staged chunks are orphans: repair collects them.
+      const swept = await restarted.sweepBuildPipelineTranscripts({ graceMs: 0 });
+      expect(swept.removedChunks).toBeGreaterThan(0);
+      expect(await chunkCount(dataDir)).toBe(chunksAfterFirst);
+      expect(await transcriptOf(restarted, "p1", session!)).toEqual(first);
+    });
+  });
+
+  test("a discarded same-base staged sibling cannot replace the committed transcript reference", async () => {
+    await withStorage(async (storage) => {
+      await checkpointed(storage, messages(5, "base"));
+      const prepared = [];
+      for (const index of [0, 1]) {
+        const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+        const record = (await storage.getBuildPipeline("p1"))!;
+        const pipeline = record.snapshot as Parameters<typeof checkpoints.prepare>[0];
+        checkpoints.observe(pipeline.sessions[0]!, messages(8 + index, `sibling-${index}`));
+        await checkpoints.prepare(pipeline);
+        prepared.push(pipeline);
+      }
+      expect(prepared[0]!.sessions[0]!.transcript!.manifestRevision).toBe(
+        prepared[1]!.sessions[0]!.transcript!.manifestRevision,
+      );
+      await storage.saveBuildPipeline("p1", "proj-1", "", 2, prepared[0]);
+      await storage.saveBuildPipeline("p1", "proj-1", "", 3, prepared[1]);
+      const [session] = await sessionsOf(storage, "p1");
+      expect(session!.transcriptCheckpointError).toBe("stage-expired");
+      expect(session!.transcript).toEqual(prepared[0]!.sessions[0]!.transcript);
+      expect(session!.messagesFingerprint).toBe(prepared[0]!.sessions[0]!.messagesFingerprint);
+      const read = await storage.readBuildPipelineTranscript("p1", session!);
+      expect(read.status === "found" ? read.messages : []).toEqual(messages(8, "sibling-0"));
+    });
+  });
+
+  test("two backends checkpointing one session cannot lose or tear each other's transcript", async () => {
+    await withStorage(async (storage, dataDir) => {
+      await checkpointed(storage, messages(5, "base"));
+      const other = new StorageService(dataDir);
+      await other.init();
+      const contenders = [storage, other].map((instance, index) => ({
+        instance,
+        checkpoints: new BuildPipelineTranscriptCheckpoints(instance),
+        body: messages(8 + index, `writer-${index}`),
+      }));
+      const prepared = [];
+      for (const contender of contenders) {
+        const record = (await contender.instance.getBuildPipeline("p1"))!;
+        const pipeline = record.snapshot as Parameters<typeof contender.checkpoints.prepare>[0];
+        contender.checkpoints.observe(pipeline.sessions[0]!, contender.body);
+        await contender.checkpoints.prepare(pipeline);
+        prepared.push({ ...contender, pipeline });
+      }
+      // Without a revision guard both control writes land, one after the other.
+      for (const { instance, pipeline } of prepared) {
+        await instance.saveBuildPipeline("p1", "proj-1", "", 2, pipeline);
+      }
+      // The second staged manifest was planned on the base the first replaced:
+      // it is refused inside the transaction, and that session keeps the
+      // committed reference instead of naming a manifest that never landed.
+      const [session] = await sessionsOf(other, "p1");
+      expect(session!.transcriptCheckpointError).toBe("conflict");
+      const read = await other.readBuildPipelineTranscript("p1", session!);
+      expect(read).toMatchObject({ status: "found", substituted: false });
+      expect(read.status === "found" ? read.messages : []).toEqual(prepared[0]!.body);
+      // The refused writer's in-memory session agrees, so it checkpoints again.
+      expect(prepared[1]!.pipeline.sessions[0]!.transcript).toEqual(session!.transcript);
+      expect(
+        prepared[1]!.checkpoints.observe(prepared[1]!.pipeline.sessions[0]!, prepared[1]!.body),
+      ).toBe(true);
+    });
+  });
+
+  test("a staged checkpoint the quota refuses keeps the previous reference and never blocks the control write", async () => {
+    await withStorage(async (storage) => {
+      const { checkpoints, saved } = await checkpointed(storage, messages(5, "first"));
+      const record = (await storage.getBuildPipeline("p1"))!;
+      const pipeline = record.snapshot as Parameters<typeof checkpoints.prepare>[0];
+      checkpoints.observe(pipeline.sessions[0]!, messages(9, "second"));
+      await checkpoints.prepare(pipeline);
+      (pipeline as { phase: string }).phase = "reviewing";
+      const store = (
+        storage as unknown as {
+          buildPipelineTranscriptStore(): {
+            commitStagedInTransaction(staged: unknown): unknown;
+          };
+        }
+      ).buildPipelineTranscriptStore();
+      const refused = spyOn(store, "commitStagedInTransaction").mockReturnValue({
+        ok: false,
+        reason: "quota-exceeded",
+      });
+      try {
+        await storage.saveBuildPipeline("p1", "proj-1", "", 2, pipeline, saved.revision);
+      } finally {
+        refused.mockRestore();
+      }
+      const stored = (await storage.getBuildPipeline("p1"))!;
+      expect((stored.snapshot as { phase: string }).phase).toBe("reviewing");
+      const [session] = await sessionsOf(storage, "p1");
+      expect(session!.transcriptCheckpointError).toBe("quota-exceeded");
+      expect(session!.transcript?.manifestRevision).toBe(1);
+      expect(await transcriptOf(storage, "p1", session!)).toEqual(messages(5, "first"));
+    });
+  });
+});
+
+describe("pre-database transcript manifests", () => {
+  test("a control write naming a not-yet-imported file manifest imports it instead of dropping it", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const directory = path.join(dataDir, BUILD_PIPELINE_TRANSCRIPT_DIRECTORY);
+      const body = messages(6, "file-era");
+      await writeLegacyTranscriptSession(directory, "p1", "p1:build", body, { revision: 2 });
+      const reference = {
+        version: 1 as const,
+        sdkSessionId: "sdk-p1:build",
+        manifestRevision: 2,
+        revision: 2,
+        messageCount: body.length,
+        bytes: body.reduce<number>(
+          (sum, message) => sum + Buffer.byteLength(JSON.stringify(message)) + 1,
+          0,
+        ),
+        complete: true,
+        committedAt: "2026-09-01T00:00:00.000Z",
+      };
+      await storage.saveBuildPipeline(
+        "p1",
+        "proj-1",
+        "",
+        2,
+        pipelineSnapshot("p1", [
+          legacySession("p1:build", "build", undefined, { transcript: reference }),
+        ]),
+      );
+      const [session] = await sessionsOf(storage, "p1");
+      expect(session!.transcript).toEqual(reference);
+      expect(session!.transcriptCheckpointError).toBeUndefined();
+      expect(await transcriptOf(storage, "p1", session!)).toEqual(body);
+    });
+  });
+
+  test("the background migration imports file manifests the control records reference", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const directory = path.join(dataDir, BUILD_PIPELINE_TRANSCRIPT_DIRECTORY);
+      const body = messages(12, "file-era");
+      await writeLegacyTranscriptSession(directory, "p1", "p1:build", body, { revision: 7 });
+      const reference = {
+        version: 1 as const,
+        sdkSessionId: "sdk-p1:build",
+        manifestRevision: 7,
+        revision: 7,
+        messageCount: body.length,
+        bytes: 1,
+        complete: true,
+        committedAt: "2026-09-01T00:00:00.000Z",
+      };
+      // The control record as an upgraded installation carries it.
+      seedStore(dataDir, "build-pipelines.json", {
+        p1: {
+          version: 2,
+          id: "p1",
+          projectId: "proj-1",
+          environmentId: "",
+          revision: 4,
+          updatedAt: "2026-09-01T00:00:00.000Z",
+          snapshot: pipelineSnapshot("p1", [
+            legacySession("p1:build", "build", undefined, { transcript: reference }),
+          ]),
+        },
+      });
+      const report = await storage.migrateBuildPipelineTranscripts();
+      expect(report.legacyManifests).toEqual({ imported: 1, complete: true });
+      await expect(fs.stat(path.join(directory, "manifests"))).rejects.toThrow();
+      const [session] = await sessionsOf(storage, "p1");
+      const read = await storage.readBuildPipelineTranscript("p1", session!);
+      expect(read).toMatchObject({ status: "found", substituted: false, messageCount: 12 });
+      expect(read.status === "found" ? read.messages : []).toEqual(body);
+      expect(manifestRows(dataDir, "p1")).toHaveLength(1);
     });
   });
 });
@@ -340,7 +625,7 @@ describe("build pipeline control records", () => {
           revision: 1,
           fingerprint: transcriptFingerprint(body),
         });
-        if (committed.status !== "committed") throw new Error("transcript commit failed");
+        if (committed.status !== "staged") throw new Error("transcript commit failed");
         sessions.push({ ...session, transcript: committed.reference, messageRevision: 1 });
       }
       // The old inline representation could not persist any control change.
@@ -450,6 +735,16 @@ describe("build pipeline control records", () => {
         other.saveBuildPipeline("d", "proj-1", "", 2, admission("d"), 0),
       ]);
       expect(new Set(admitted.map((record) => record.id)).size).toBe(1);
+    });
+  });
+
+  test("a control store imported unreadable reads as empty and the next write replaces it", async () => {
+    await withStorage(async (storage, dataDir) => {
+      seedUnreadableStore(dataDir, "build-pipelines.json");
+      expect(await storage.listAllBuildPipelines()).toEqual([]);
+      const saved = await storage.saveBuildPipeline("p1", "proj-1", "", 2, { id: "p1" });
+      expect(saved.revision).toBe(1);
+      expect((await storage.listAllBuildPipelines()).map((record) => record.id)).toEqual(["p1"]);
     });
   });
 

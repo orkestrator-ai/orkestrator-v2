@@ -19,8 +19,6 @@ const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
 export class StorageService extends StoragePublicOperations {
-  private agentAccountMutation: Promise<unknown> = Promise.resolve();
-
   override async init(): Promise<void> {
     await super.init();
     await this.migrateConfigSchema();
@@ -51,47 +49,42 @@ export class StorageService extends StoragePublicOperations {
       store: AgentAccountStore,
     ) => { store: AgentAccountStore; result: T } | Promise<{ store: AgentAccountStore; result: T }>,
   ): Promise<T> {
-    const run = async (): Promise<T> => {
-      const release = await this.acquireMutationLock(
-        this.agentAccountsFile(),
-        "agent account storage",
-      );
-      try {
-        const current = await this.loadAgentAccounts();
-        const { store, result } = await mutate(current);
-        if (store !== current) {
-          await this.saveSensitiveJson(this.agentAccountsFile(), parseAgentAccountStore(store));
-        }
-        return result;
-      } finally {
-        await release();
+    return this.serializeMutation(this.agentAccountsFile(), "agent account storage", async () => {
+      const current = await this.loadAgentAccounts();
+      const { store, result } = await mutate(current);
+      if (store !== current) {
+        await this.saveSensitiveJson(this.agentAccountsFile(), parseAgentAccountStore(store));
       }
-    };
-    const next = this.agentAccountMutation.then(run, run);
-    this.agentAccountMutation = next.catch(() => undefined);
-    return next;
+      return result;
+    });
   }
 
+  /**
+   * Gives every session whose environment exists an owner. Runs at each start
+   * because callers may still create sessions without one. Each key is written
+   * under its own lease, so this never waits on (or blocks) the whole store.
+   */
   private async migrateNativeAgentSessionOwners(): Promise<void> {
-    await this.enqueueNativeAgentSessionMutation(async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const environmentById = new Map(
-        (await this.loadEnvironments()).map((environment) => [environment.id, environment]),
-      );
-      let changed = loaded.migrated;
-      for (const session of Object.values(loaded.sessions)) {
-        if (session.owner) continue;
-        const environment = environmentById.get(session.environmentId);
-        if (!environment) continue;
-        session.owner = {
-          kind: "environment",
-          projectId: environment.projectId,
-          environmentId: environment.id,
-        };
-        changed = true;
-      }
-      if (changed) await this.saveNativeAgentSessions(loaded.sessions, loaded.opaque);
-    });
+    const loaded = await this.loadNativeAgentSessions();
+    const environmentById = new Map(
+      (await this.loadEnvironments()).map((environment) => [environment.id, environment]),
+    );
+    for (const [key, session] of Object.entries(loaded.sessions)) {
+      if (session.owner || !environmentById.has(session.environmentId)) continue;
+      await this.enqueueNativeAgentSessionMutation(key, async () => {
+        const current = (await this.loadNativeAgentSessions()).sessions[key];
+        const environment = current && environmentById.get(current.environmentId);
+        if (!current || current.owner || !environment) return;
+        await this.saveNativeAgentSession(key, {
+          ...current,
+          owner: {
+            kind: "environment",
+            projectId: environment.projectId,
+            environmentId: environment.id,
+          },
+        });
+      });
+    }
   }
 
   private async loadCoordinatorStore(): Promise<{
@@ -106,43 +99,6 @@ export class StorageService extends StoragePublicOperations {
       workspaces: {},
       workflows: [],
     }));
-    /**
-     * Coordinator bridges were Codex-only, so the persisted identity was named
-     * for it. Reading the old keys keeps a live bridge attached across the
-     * upgrade; without this the reaper would not see the running child and the
-     * next launch would allocate a second one against the same rollout.
-     */
-    const migrateCoordinatorBridgeFields = (workspace: unknown): unknown => {
-      if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return workspace;
-      const record = workspace as Record<string, unknown> & {
-        conversations?: unknown;
-      };
-      const rename = (item: Record<string, unknown>): Record<string, unknown> => {
-        const { codexBridgePort, codexBridgePid, ...rest } = item;
-        if (codexBridgePort === undefined && codexBridgePid === undefined) return item;
-        return {
-          ...rest,
-          ...(rest.bridgePort === undefined && typeof codexBridgePort === "number"
-            ? { bridgePort: codexBridgePort }
-            : {}),
-          ...(rest.bridgePid === undefined && typeof codexBridgePid === "number"
-            ? { bridgePid: codexBridgePid }
-            : {}),
-        };
-      };
-      return {
-        ...rename(record),
-        ...(Array.isArray(record.conversations)
-          ? {
-              conversations: record.conversations.map((conversation) =>
-                conversation && typeof conversation === "object" && !Array.isArray(conversation)
-                  ? rename(conversation as Record<string, unknown>)
-                  : conversation,
-              ),
-            }
-          : {}),
-      };
-    };
     const empty = () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       revision: 0,
@@ -170,12 +126,12 @@ export class StorageService extends StoragePublicOperations {
     }
     const workspaces: Record<string, CoordinatorWorkspace> = {};
     for (const [projectId, workspace] of Object.entries(store.workspaces)) {
-      const migrated = migrateCoordinatorBridgeFields(workspace);
-      if (!isCoordinatorWorkspace(migrated) || migrated.projectId !== projectId) {
+      // Codex-named bridge fields were upgraded once at import (storage-record-upgrades.ts).
+      if (!isCoordinatorWorkspace(workspace) || workspace.projectId !== projectId) {
         console.warn("[coordinator] Ignoring invalid coordinator workspace record");
         continue;
       }
-      workspaces[projectId] = migrated;
+      workspaces[projectId] = workspace;
     }
     const workflows = Array.isArray(store.workflows)
       ? store.workflows.filter(

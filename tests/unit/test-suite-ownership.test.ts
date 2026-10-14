@@ -212,6 +212,8 @@ describe("test suite ownership", () => {
     // the platform it ships on and is typechecked with that package.
     const crossPackageContracts = new Set([
       "tests/unit/codex-bridge-environment.test.ts",
+      // The disk report reads the database the backend writes, without migrating it.
+      "tests/unit/disk-report.test.ts",
       "tests/unit/components/GitHubCloneIntegration.test.tsx",
       "tests/unit/components/SettingsPage.test.tsx",
       "tests/unit/firewall-refresh.test.ts",

@@ -1,6 +1,7 @@
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
+import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
 
 /**
  * Host-side resources a deleted environment can leave behind. Each step is
@@ -69,12 +70,13 @@ interface EnvironmentCleanupLedgerFile {
   entries: Record<string, EnvironmentCleanupEntry>;
 }
 
-export const ENVIRONMENT_CLEANUP_LEDGER_FILE = "environment-cleanup-ledger.json";
+/** The backend database store that replaced `environment-cleanup-ledger.json`. */
+export const ENVIRONMENT_CLEANUP_LEDGER_STORE = "environment-cleanup-ledger";
 
 /**
  * An entry is bounded by what a single deletion can name, and the ledger by
  * how many deletions can fail without recovering. The cap keeps a pathological
- * host from growing the file without limit; the oldest entries go first.
+ * host from growing the store without limit; the oldest entries go first.
  */
 const MAX_LEDGER_ENTRIES = 1_000;
 
@@ -126,23 +128,128 @@ function parseEntry(value: unknown): EnvironmentCleanupEntry | null {
   };
 }
 
+function normalizeLedger(value: unknown): EnvironmentCleanupLedgerFile {
+  const ledger = emptyLedger();
+  if (!value || typeof value !== "object") return ledger;
+  const candidate = value as { version?: unknown; entries?: unknown };
+  if (candidate.version !== 1 || !candidate.entries || typeof candidate.entries !== "object") {
+    return ledger;
+  }
+  for (const raw of Object.values(candidate.entries as Record<string, unknown>)) {
+    const entry = parseEntry(raw);
+    if (entry) ledger.entries[entry.environmentId] = entry;
+  }
+  return ledger;
+}
+
+/**
+ * A stored value that is not valid JSON. The ledger and the sweep state are
+ * recovery metadata: an unreadable store loses retries for the entries it
+ * held, which the orphan sweeps partly cover, but must not stop deletion from
+ * recording new ones. Every other error (an I/O or locking failure) still
+ * throws, so a caller that must not act without the ledger fails safe.
+ */
+function isUnreadable(error: unknown): boolean {
+  return error instanceof StoreCorruptError || error instanceof SyntaxError;
+}
+
+interface LedgerConnection {
+  database: StorageDatabase;
+  dev: number;
+  ino: number;
+}
+
+const connections = new Map<string, LedgerConnection>();
+
+function sameDatabaseFile(connection: LedgerConnection): boolean {
+  try {
+    const stat = fs.statSync(connection.database.path);
+    return stat.dev === connection.dev && stat.ino === connection.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The data directory's database, opened on first use and shared by the
+ * ledger and the sweep state. A data directory deleted and recreated at the
+ * same path (tests, a reset profile) leaves the old connection writing to an
+ * unlinked file; the inode check reopens it against the current one.
+ */
+function cleanupDatabase(dataDir: string): StorageDatabase {
+  const key = path.resolve(dataDir);
+  const open = connections.get(key);
+  if (open && !open.database.isClosed() && sameDatabaseFile(open)) return open.database;
+  open?.database.close();
+  connections.delete(key);
+  const database = openBackendDatabase(key);
+  try {
+    const stat = fs.statSync(database.path);
+    connections.set(key, { database, dev: stat.dev, ino: stat.ino });
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+  return database;
+}
+
+/** Reads never create a data directory that does not exist; it holds nothing. */
+function readableCleanupDatabase(dataDir: string): StorageDatabase | null {
+  if (!fs.existsSync(path.resolve(dataDir))) return null;
+  return cleanupDatabase(dataDir);
+}
+
+/**
+ * Closes the connections the ledger and sweep state opened (all of them, or
+ * one data directory's). Call on backend shutdown and between tests; a later
+ * use reopens lazily.
+ */
+export function closeEnvironmentCleanupStorage(dataDir?: string): void {
+  for (const [key, connection] of Array.from(connections)) {
+    if (dataDir !== undefined && key !== path.resolve(dataDir)) continue;
+    connection.database.close();
+    connections.delete(key);
+  }
+}
+
+/**
+ * The ledger lives in the backend database as an envelope store (`version`
+ * plus one row per environment). Every mutation is one synchronous
+ * read-modify-write transaction, so two backends sharing the data directory
+ * cannot lose each other's records, and a crash leaves the previous commit.
+ */
 export class EnvironmentCleanupLedger {
-  private readonly filePath: string;
-  private mutation: Promise<unknown> = Promise.resolve();
+  private readonly dataDir: string;
 
   constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, ENVIRONMENT_CLEANUP_LEDGER_FILE);
+    this.dataDir = path.resolve(dataDir);
   }
 
   async list(): Promise<EnvironmentCleanupEntry[]> {
-    await this.mutation.catch(() => undefined);
-    const ledger = await this.load();
-    return Object.values(ledger.entries);
+    const database = readableCleanupDatabase(this.dataDir);
+    if (!database) return [];
+    let value: unknown;
+    try {
+      value = database.readStore(ENVIRONMENT_CLEANUP_LEDGER_STORE)?.value;
+    } catch (error) {
+      if (isUnreadable(error)) return [];
+      throw error;
+    }
+    return Object.values(normalizeLedger(value).entries);
   }
 
   async get(environmentId: string): Promise<EnvironmentCleanupEntry | null> {
-    await this.mutation.catch(() => undefined);
-    return (await this.load()).entries[environmentId] ?? null;
+    const database = readableCleanupDatabase(this.dataDir);
+    if (!database) return null;
+    let value: unknown;
+    try {
+      value = database.readStoreRow(ENVIRONMENT_CLEANUP_LEDGER_STORE, environmentId, "entries");
+    } catch (error) {
+      if (isUnreadable(error)) return null;
+      throw error;
+    }
+    const entry = parseEntry(value);
+    return entry?.environmentId === environmentId ? entry : null;
   }
 
   /**
@@ -151,7 +258,7 @@ export class EnvironmentCleanupLedger {
    * describe resources the environment no longer names.
    */
   async record(entry: EnvironmentCleanupEntry): Promise<void> {
-    await this.mutate((ledger) => {
+    this.mutate((ledger) => {
       const existing = ledger.entries[entry.environmentId];
       ledger.entries[entry.environmentId] = existing
         ? {
@@ -179,7 +286,7 @@ export class EnvironmentCleanupLedger {
 
   /** Marks one step done and drops the entry once nothing is pending. */
   async complete(environmentId: string, step: EnvironmentCleanupStep): Promise<void> {
-    await this.mutate((ledger) => {
+    this.mutate((ledger) => {
       const entry = ledger.entries[environmentId];
       if (!entry) return;
       entry.pending = entry.pending.filter((pending) => pending !== step);
@@ -188,7 +295,7 @@ export class EnvironmentCleanupLedger {
   }
 
   async fail(environmentId: string, step: EnvironmentCleanupStep, error: string): Promise<void> {
-    await this.mutate((ledger) => {
+    this.mutate((ledger) => {
       const entry = ledger.entries[environmentId];
       if (!entry) return;
       entry.lastError = `${step}: ${error}`;
@@ -197,7 +304,7 @@ export class EnvironmentCleanupLedger {
 
   /** Counts one reconciliation pass over the entry, successful or not. */
   async noteAttempt(environmentId: string, at: Date): Promise<void> {
-    await this.mutate((ledger) => {
+    this.mutate((ledger) => {
       const entry = ledger.entries[environmentId];
       if (!entry) return;
       entry.attempts += 1;
@@ -205,49 +312,20 @@ export class EnvironmentCleanupLedger {
     });
   }
 
-  private async load(): Promise<EnvironmentCleanupLedgerFile> {
-    let raw: string;
-    try {
-      raw = await readFile(this.filePath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyLedger();
-      throw error;
-    }
-    try {
-      const parsed = JSON.parse(raw) as { version?: unknown; entries?: unknown };
-      if (parsed.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
-        return emptyLedger();
-      }
-      const ledger = emptyLedger();
-      for (const value of Object.values(parsed.entries as Record<string, unknown>)) {
-        const entry = parseEntry(value);
-        if (entry) ledger.entries[entry.environmentId] = entry;
-      }
-      return ledger;
-    } catch {
-      // The ledger is recovery metadata. A torn file loses retries for the
-      // entries it held, which the orphan sweeps partly cover, but must not
-      // stop deletion from recording new ones.
-      return emptyLedger();
-    }
-  }
-
-  private async save(ledger: EnvironmentCleanupLedgerFile): Promise<void> {
-    if (Object.keys(ledger.entries).length === 0) {
-      await rm(this.filePath, { force: true });
-      return;
-    }
-    await writeJsonAtomically(this.filePath, ledger);
-  }
-
-  private mutate(operation: (ledger: EnvironmentCleanupLedgerFile) => void): Promise<void> {
-    const run = this.mutation.then(async () => {
-      const ledger = await this.load();
+  /**
+   * One IMMEDIATE transaction: read (an unreadable store reads as empty and is
+   * replaced), normalize, change, write. An empty ledger stays as an empty
+   * envelope rather than a deleted store, so its revision keeps moving forward.
+   */
+  private mutate(operation: (ledger: EnvironmentCleanupLedgerFile) => void): void {
+    const database = cleanupDatabase(this.dataDir);
+    database.transaction(() => {
+      const ledger = normalizeLedger(
+        database.readStoreValueInTransaction(ENVIRONMENT_CLEANUP_LEDGER_STORE)?.value,
+      );
       operation(ledger);
-      await this.save(ledger);
+      database.writeStoreInTransaction(ENVIRONMENT_CLEANUP_LEDGER_STORE, ledger);
     });
-    this.mutation = run.catch(() => undefined);
-    return run;
   }
 }
 
@@ -260,22 +338,9 @@ function trimLedger(ledger: EnvironmentCleanupLedgerFile): void {
   }
 }
 
-/** Writes beside the target and renames over it, so a crash leaves the old file. */
-async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  const temp = `${filePath}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    await rename(temp, filePath);
-  } catch (error) {
-    await rm(temp, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
 const ledgers = new Map<string, EnvironmentCleanupLedger>();
 
-/** One ledger per data directory so deletion and reconciliation share a queue. */
+/** One ledger per data directory, shared by deletion and reconciliation. */
 export function environmentCleanupLedger(dataDir: string): EnvironmentCleanupLedger {
   const key = path.resolve(dataDir);
   let ledger = ledgers.get(key);
@@ -294,33 +359,51 @@ interface EnvironmentCleanupSweepFile {
   branchCursors: Record<string, string>;
 }
 
-export const ENVIRONMENT_CLEANUP_SWEEPS_FILE = "environment-cleanup-sweeps.json";
+/** The backend database store that replaced `environment-cleanup-sweeps.json`. */
+export const ENVIRONMENT_CLEANUP_SWEEPS_STORE = "environment-cleanup-sweeps";
+
+function normalizeSweeps(value: unknown): EnvironmentCleanupSweepFile {
+  const state: EnvironmentCleanupSweepFile = { version: 1, branchSweeps: {}, branchCursors: {} };
+  if (!value || typeof value !== "object") return state;
+  const parsed = value as { version?: unknown; branchSweeps?: unknown; branchCursors?: unknown };
+  if (parsed.version !== 1 || !parsed.branchSweeps || typeof parsed.branchSweeps !== "object") {
+    return state;
+  }
+  for (const [id, at] of Object.entries(parsed.branchSweeps as Record<string, unknown>)) {
+    if (typeof at === "string" && Number.isFinite(Date.parse(at))) state.branchSweeps[id] = at;
+  }
+  if (parsed.branchCursors && typeof parsed.branchCursors === "object") {
+    for (const [id, cursor] of Object.entries(parsed.branchCursors as Record<string, unknown>)) {
+      if (typeof cursor === "string" && cursor.startsWith("refs/heads/")) {
+        state.branchCursors[id] = cursor;
+      }
+    }
+  }
+  return state;
+}
 
 /**
- * When the throttled orphan sweeps last ran. Losing this file only makes the
- * next sweep run early, so a torn or unreadable file reads as empty.
+ * When the throttled orphan sweeps last ran. Losing this state only makes the
+ * next sweep run early, so an unreadable store reads as empty.
  */
 export class EnvironmentCleanupSweepState {
-  private readonly filePath: string;
-  private mutation: Promise<unknown> = Promise.resolve();
+  private readonly dataDir: string;
 
   constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, ENVIRONMENT_CLEANUP_SWEEPS_FILE);
+    this.dataDir = path.resolve(dataDir);
   }
 
   async branchSweeps(): Promise<Record<string, string>> {
-    await this.mutation.catch(() => undefined);
-    return (await this.load()).branchSweeps;
+    return this.load().branchSweeps;
   }
 
   async branchCursors(): Promise<Record<string, string>> {
-    await this.mutation.catch(() => undefined);
-    return (await this.load()).branchCursors;
+    return this.load().branchCursors;
   }
 
   /**
    * Records a completed branch sweep. Projects outside `knownProjectIds` are
-   * dropped, which bounds the file by the number of projects.
+   * dropped, which bounds the state by the number of projects.
    */
   async recordBranchSweep(
     projectId: string,
@@ -329,8 +412,11 @@ export class EnvironmentCleanupSweepState {
     cursor: string | null = null,
   ): Promise<void> {
     const known = new Set([...knownProjectIds, projectId]);
-    const run = this.mutation.then(async () => {
-      const state = await this.load();
+    const database = cleanupDatabase(this.dataDir);
+    database.transaction(() => {
+      const state = normalizeSweeps(
+        database.readStoreValueInTransaction(ENVIRONMENT_CLEANUP_SWEEPS_STORE)?.value,
+      );
       state.branchSweeps[projectId] = at.toISOString();
       if (cursor) state.branchCursors[projectId] = cursor;
       else delete state.branchCursors[projectId];
@@ -340,34 +426,19 @@ export class EnvironmentCleanupSweepState {
       for (const id of Object.keys(state.branchCursors)) {
         if (!known.has(id)) delete state.branchCursors[id];
       }
-      await writeJsonAtomically(this.filePath, state);
+      database.writeStoreInTransaction(ENVIRONMENT_CLEANUP_SWEEPS_STORE, state);
     });
-    this.mutation = run.catch(() => undefined);
-    return run;
   }
 
-  private async load(): Promise<EnvironmentCleanupSweepFile> {
-    const empty: EnvironmentCleanupSweepFile = { version: 1, branchSweeps: {}, branchCursors: {} };
-    let parsed: { version?: unknown; branchSweeps?: unknown; branchCursors?: unknown };
+  private load(): EnvironmentCleanupSweepFile {
+    const database = readableCleanupDatabase(this.dataDir);
+    if (!database) return normalizeSweeps(undefined);
     try {
-      parsed = JSON.parse(await readFile(this.filePath, "utf8"));
-    } catch {
-      return empty;
+      return normalizeSweeps(database.readStore(ENVIRONMENT_CLEANUP_SWEEPS_STORE)?.value);
+    } catch (error) {
+      if (isUnreadable(error)) return normalizeSweeps(undefined);
+      throw error;
     }
-    if (parsed?.version !== 1 || !parsed.branchSweeps || typeof parsed.branchSweeps !== "object") {
-      return empty;
-    }
-    for (const [id, at] of Object.entries(parsed.branchSweeps as Record<string, unknown>)) {
-      if (typeof at === "string" && Number.isFinite(Date.parse(at))) empty.branchSweeps[id] = at;
-    }
-    if (parsed.branchCursors && typeof parsed.branchCursors === "object") {
-      for (const [id, cursor] of Object.entries(parsed.branchCursors as Record<string, unknown>)) {
-        if (typeof cursor === "string" && cursor.startsWith("refs/heads/")) {
-          empty.branchCursors[id] = cursor;
-        }
-      }
-    }
-    return empty;
   }
 }
 

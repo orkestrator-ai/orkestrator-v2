@@ -11,6 +11,7 @@ import {
 } from "./commands-environment.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { seedStore, writeLegacyStore } from "./storage-test-support.js";
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
@@ -344,46 +345,49 @@ describe("project coordinator", () => {
       createProject("https://example.invalid/repo.git", checkout),
     );
     const now = new Date().toISOString();
-    // Written exactly as a pre-rename installation left it. Dropping these on
-    // load would hide a running child from the reaper, and the next launch
-    // would start a second bridge against the same rollout.
-    await fs.writeFile(
-      path.join(root, "data", "coordinators.json"),
-      JSON.stringify({
-        version: 1,
-        revision: 3,
-        workflows: [],
-        workspaces: {
-          [project.id]: {
-            version: 1,
-            id: "workspace-legacy",
-            projectId: project.id,
-            executionPolicy: "coordinator-read-only",
-            lifecycleState: "ready",
-            selectedConversationId: "conversation-legacy",
-            repositoryContextRevision: 0,
-            createdAt: now,
-            updatedAt: now,
-            codexBridgePort: 4123,
-            codexBridgePid: 9911,
-            conversations: [
-              {
-                id: "conversation-legacy",
-                tabId: "coordinator-conversation-legacy",
-                logicalSessionKey: "coordinator-workspace-legacy:conversation-legacy",
-                agent: "codex",
-                title: "Coordinator",
-                createdAt: now,
-                mailboxIncarnationId: "incarnation-legacy",
-                codexBridgePort: 4123,
-                codexBridgePid: 9911,
-              },
-            ],
-          },
+    // Written exactly as a pre-rename installation left it, and imported the
+    // way an upgrade does. Dropping these would hide a running child from the
+    // reaper, and the next launch would start a second bridge against the
+    // same rollout.
+    const legacyDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-coordinator-legacy-"));
+    writeLegacyStore(legacyDir, "projects.json", [project]);
+    writeLegacyStore(legacyDir, "coordinators.json", {
+      version: 1,
+      revision: 3,
+      workflows: [],
+      workspaces: {
+        [project.id]: {
+          version: 1,
+          id: "workspace-legacy",
+          projectId: project.id,
+          executionPolicy: "coordinator-read-only",
+          lifecycleState: "ready",
+          selectedConversationId: "conversation-legacy",
+          repositoryContextRevision: 0,
+          createdAt: now,
+          updatedAt: now,
+          codexBridgePort: 4123,
+          codexBridgePid: 9911,
+          conversations: [
+            {
+              id: "conversation-legacy",
+              tabId: "coordinator-conversation-legacy",
+              logicalSessionKey: "coordinator-workspace-legacy:conversation-legacy",
+              agent: "codex",
+              title: "Coordinator",
+              createdAt: now,
+              mailboxIncarnationId: "incarnation-legacy",
+              codexBridgePort: 4123,
+              codexBridgePid: 9911,
+            },
+          ],
         },
-      }),
-    );
-    const workspace = (await storage.getCoordinatorWorkspace(project.id))!;
+      },
+    });
+    const upgraded = new StorageService(legacyDir);
+    const workspace = (await upgraded.getCoordinatorWorkspace(project.id))!;
+    upgraded.close();
+    await fs.rm(legacyDir, { recursive: true, force: true });
     expect(workspace).toMatchObject({ id: "workspace-legacy", bridgePort: 4123, bridgePid: 9911 });
     expect(workspace.conversations[0]).toMatchObject({
       id: "conversation-legacy",
@@ -872,23 +876,22 @@ describe("project coordinator", () => {
   });
 
   test("isolates invalid coordinator store records from mail and project reads", async () => {
-    await fs.writeFile(
-      path.join(storage.getDataDir(), "coordinators.json"),
-      JSON.stringify({ version: 999, revision: 1, workspaces: {}, workflows: [] }),
-    );
+    seedStore(storage.getDataDir(), "coordinators.json", {
+      version: 999,
+      revision: 1,
+      workspaces: {},
+      workflows: [],
+    });
     await expect(storage.synchronizeAgentMailboxes()).resolves.toBeUndefined();
     await expect(storage.listAgentMailboxes()).resolves.toBeDefined();
     await expect(storage.listCoordinatorWorkspaces()).resolves.toEqual([]);
 
-    await fs.writeFile(
-      path.join(storage.getDataDir(), "coordinators.json"),
-      JSON.stringify({
-        version: 1,
-        revision: 2,
-        workspaces: { wrong: { projectId: "wrong" } },
-        workflows: [],
-      }),
-    );
+    seedStore(storage.getDataDir(), "coordinators.json", {
+      version: 1,
+      revision: 2,
+      workspaces: { wrong: { projectId: "wrong" } },
+      workflows: [],
+    });
     await expect(storage.synchronizeAgentMailboxes()).resolves.toBeUndefined();
     await expect(storage.listCoordinatorWorkspaces()).resolves.toEqual([]);
   });
@@ -905,10 +908,12 @@ describe("project coordinator", () => {
       pending: index === 0,
       createdAt: new Date(index).toISOString(),
     }));
-    await fs.writeFile(
-      path.join(storage.getDataDir(), "coordinators.json"),
-      JSON.stringify({ version: 1, revision: 1, workspaces: {}, workflows: associations }),
-    );
+    seedStore(storage.getDataDir(), "coordinators.json", {
+      version: 1,
+      revision: 1,
+      workspaces: {},
+      workflows: associations,
+    });
 
     await expect(
       storage.completeCoordinatorWorkflowAssociation("association-0", "environment-old"),

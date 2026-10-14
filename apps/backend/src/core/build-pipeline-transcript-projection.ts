@@ -1,6 +1,6 @@
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { PersistedBuildPipeline } from "./models.js";
-import type { TranscriptRead } from "./build-pipeline-transcript-store.js";
+import type { TranscriptRead, TranscriptReadWindow } from "./build-pipeline-transcript-store.js";
 import {
   LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES,
   committedTranscriptCursor,
@@ -48,7 +48,8 @@ export interface TranscriptReader {
   readBuildPipelineTranscript(
     pipelineId: string,
     session: Pick<PipelineSession, "sessionKey" | "transcript" | "messages" | "messageRevision">,
-    window?: { fromIndex?: number; toIndex?: number },
+    /** `maxBytes` is a hint: a reader may return more, the projection still bounds the patch. */
+    window?: TranscriptReadWindow,
   ): Promise<TranscriptRead>;
 }
 
@@ -172,10 +173,13 @@ export async function conditionalBuildPipelineRead(
       continue;
     }
     // Overlap by one: the entry the client saw last may still have streamed.
+    // One budgeted read serves the whole patch: the store pins one manifest
+    // and reads each overlapping chunk once, stopping at the byte budget, so
+    // a stored 48 MiB body is materialized only when it is the next row due.
     const tailStart = mayHaveBase ? cursor.count - 1 : 0;
     let read = await reader.readBuildPipelineTranscript(record.id, session, {
       fromIndex: tailStart,
-      toIndex: tailStart + 1,
+      maxBytes: remaining,
     });
     // An unrelated generation cannot use the client's tail. A continuation
     // of the same substituted generation can keep paging from that base.
@@ -189,7 +193,7 @@ export async function conditionalBuildPipelineRead(
     if (read.status === "found" && !exactBase && tailStart > 0) {
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: 0,
-        toIndex: 1,
+        maxBytes: remaining,
       });
     }
     // Without per-row change history a different revision cannot retain any
@@ -220,56 +224,67 @@ export async function conditionalBuildPipelineRead(
       messages: [],
       ...(read.complete ? {} : { complete: false as const }),
     };
-    // Include the patch envelope and its comma in the response budget. Read
-    // one message at a time so no stored 48 MiB body is materialized here.
+    // Include the patch envelope and its comma in the response budget.
     const patchOverhead =
       Buffer.byteLength(JSON.stringify(patch), "utf8") + (messagePatches.length > 0 ? 1 : 0);
     let allowance = remaining - patchOverhead;
     let nextIndex = read.startIndex;
-    let candidate: TranscriptRead = read;
-    while (candidate.status === "found" && nextIndex < candidate.messageCount) {
-      const stored = candidate.messages[0];
-      if (stored === undefined) break;
-      // The store keeps what the provider returned; the renderer gets display
-      // messages. One in, one out, so `startIndex`/`baseCount` still address
-      // the client's copy. Measured after normalizing: that is what is sent.
-      let message = normalizeOpenCodeDisplayEntry(stored, nextIndex);
-      let bytes =
-        Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
-        (patch.messages.length > 0 ? 1 : 0);
-      // A row that cannot fit even in an otherwise empty response must not
-      // fence all later history forever. Keep one raw index and make the
-      // display limitation explicit; the persisted provider body stays intact.
-      if (bytes > responseAllowance - patchOverhead) {
-        const display = isRecord(message) ? message : {};
-        message = {
-          id:
-            typeof display.id === "string"
-              ? display.id.slice(0, 512)
-              : `pipeline-message-${nextIndex}`,
-          role: display.role === "user" || display.role === "system" ? display.role : "assistant",
-          content:
-            "[Transcript entry omitted from display: its normalized body exceeds the response byte limit. The complete entry remains in the persisted transcript.]",
-          ...(typeof display.createdAt === "string"
-            ? { createdAt: display.createdAt.slice(0, 64) }
-            : {}),
-        };
-        bytes =
-          Buffer.byteLength(JSON.stringify(message), "utf8") + (patch.messages.length > 0 ? 1 : 0);
+    let page: TranscriptRead = read;
+    pages: while (page.status === "found") {
+      for (const stored of page.messages) {
+        // The store keeps what the provider returned; the renderer gets display
+        // messages. One in, one out, so `startIndex`/`baseCount` still address
+        // the client's copy. Measured after normalizing: that is what is sent.
+        let message = normalizeOpenCodeDisplayEntry(stored, nextIndex);
+        let bytes =
+          Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
+          (patch.messages.length > 0 ? 1 : 0);
+        // A row that cannot fit even in an otherwise empty response must not
+        // fence all later history forever. Keep one raw index and make the
+        // display limitation explicit; the persisted provider body stays intact.
+        if (bytes > responseAllowance - patchOverhead) {
+          const display = isRecord(message) ? message : {};
+          message = {
+            id:
+              typeof display.id === "string"
+                ? display.id.slice(0, 512)
+                : `pipeline-message-${nextIndex}`,
+            role: display.role === "user" || display.role === "system" ? display.role : "assistant",
+            content:
+              "[Transcript entry omitted from display: its normalized body exceeds the response byte limit. The complete entry remains in the persisted transcript.]",
+            ...(typeof display.createdAt === "string"
+              ? { createdAt: display.createdAt.slice(0, 64) }
+              : {}),
+          };
+          bytes =
+            Buffer.byteLength(JSON.stringify(message), "utf8") +
+            (patch.messages.length > 0 ? 1 : 0);
+        }
+        if (bytes > allowance) break pages;
+        patch.messages.push(message);
+        allowance -= bytes;
+        nextIndex += 1;
       }
-      if (bytes > allowance) break;
-      patch.messages.push(message);
-      allowance -= bytes;
-      nextIndex += 1;
-      if (nextIndex >= candidate.messageCount) break;
-      candidate = await reader.readBuildPipelineTranscript(record.id, session, {
-        fromIndex: nextIndex,
-        toIndex: nextIndex + 1,
-      });
+      if (nextIndex >= page.messageCount) break;
+      // A reader that returned nothing without a budget stop is done.
+      if (page.messages.length === 0 && !page.truncated) break;
+      // The store budgets raw rows and stops before the row that would pass
+      // the allowance. Read that row alone: its display form may still fit,
+      // and one too large for any response becomes the placeholder above
+      // instead of fencing later history. A reader that pages on its own
+      // (fewer messages than asked, no budget stop) is asked for the rest.
+      page = await reader.readBuildPipelineTranscript(
+        record.id,
+        session,
+        page.truncated
+          ? { fromIndex: nextIndex, toIndex: nextIndex + 1 }
+          : { fromIndex: nextIndex, maxBytes: allowance },
+      );
       if (
-        candidate.status !== "found" ||
-        candidate.substituted !== read.substituted ||
-        candidate.revision !== read.revision
+        page.status !== "found" ||
+        page.substituted !== read.substituted ||
+        page.revision !== read.revision ||
+        page.startIndex !== nextIndex
       )
         break;
     }

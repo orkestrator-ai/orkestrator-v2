@@ -281,6 +281,7 @@ describe("workflow result contract validation", () => {
       ]);
       expect(stored.value.verdict).toEqual({ ready: "no", reasoning: "The suite did not run." });
       expect(safeParseStructuredReviewReport(stored.value).success).toBe(true);
+      service.closeStorage();
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }
@@ -298,6 +299,7 @@ describe("workflow result context fencing", () => {
   });
 
   afterEach(async () => {
+    service.closeStorage();
     await rm(dataDir, { recursive: true, force: true });
   });
 

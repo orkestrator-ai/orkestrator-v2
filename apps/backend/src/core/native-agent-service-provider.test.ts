@@ -29,6 +29,7 @@ import {
   type ProviderStatus,
 } from "./native-agent-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { seedUnreadableStore } from "./storage-test-support.js";
 import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 
 import type { Environment } from "./models.js";
@@ -361,8 +362,9 @@ function pendingInteractionSnapshot(
 describe("NativeAgentService", () => {
   test("falls through to provider structured output when the workflow result store is malformed", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-provider-result-fallback-"));
+    const workflowResults = new WorkflowResultService(dataDir);
     try {
-      await fs.writeFile(path.join(dataDir, "workflow-results.json"), "{malformed");
+      seedUnreadableStore(dataDir, "workflow-results.json", "{malformed");
       const bridgeResult = {
         ok: true as const,
         provider: "codex" as const,
@@ -378,13 +380,14 @@ describe("NativeAgentService", () => {
         },
         {
           fetch: bridgeFetch as unknown as typeof fetch,
-          workflowResults: new WorkflowResultService(dataDir),
+          workflowResults,
         },
       );
 
       await expect(provider.structured("session-1", "request-1")).resolves.toEqual(bridgeResult);
       expect(bridgeFetch).toHaveBeenCalledTimes(1);
     } finally {
+      workflowResults.closeStorage();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
@@ -702,7 +705,7 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("orders environment deletion intent after provider session creation already holds the lock", async () => {
+  test("refuses a provider session whose create overlapped the environment's deletion intent", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-create-delete-"));
     const storage = await createStorage(dataDir);
     await addEnvironment(storage);
@@ -743,23 +746,28 @@ describe("NativeAgentService", () => {
     };
     try {
       const ensure = service.ensureSession(input);
+      const ensureOutcome = ensure.then(
+        () => "created" as const,
+        (error: unknown) => error,
+      );
       await createEntered;
 
-      let deletionSettled = false;
-      const deletion = storage
-        .updateEnvironment("env-1", {
-          deletionRequestedAt: new Date().toISOString(),
-        })
-        .then(() => {
-          deletionSettled = true;
-        });
-      await Promise.resolve();
-      expect(deletionSettled).toBe(false);
-
-      releaseCreate?.();
-      await Promise.all([ensure, deletion]);
-      expect(createSession).toHaveBeenCalledTimes(1);
+      // The create holds only the native-agent lock, never the environments
+      // lock, so the deletion intent lands while the provider call is still in
+      // flight rather than queuing behind it.
+      await storage.updateEnvironment("env-1", {
+        deletionRequestedAt: new Date().toISOString(),
+      });
       expect((await storage.getEnvironment("env-1"))?.deletionRequestedAt).toBeDefined();
+
+      // The post-create fence then sees the intent: the mapping is refused and
+      // nothing is published for an environment that is being deleted.
+      releaseCreate?.();
+      const outcome = await ensureOutcome;
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain("environment is unavailable");
+      expect(createSession).toHaveBeenCalledTimes(1);
+      await expect(storage.listNativeAgentSessions()).resolves.toEqual([]);
     } finally {
       releaseCreate?.();
       await service.shutdown();

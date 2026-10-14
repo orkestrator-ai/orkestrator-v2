@@ -13,8 +13,18 @@ import {
   type PublicApiHarness,
 } from "./test-support.js";
 import { APP_VERSION } from "../constants.js";
+import { readStoredValue, seedStore, seedUnreadableStore } from "../storage-test-support.js";
 
 const harnesses: PublicApiHarness[] = [];
+
+/** Store names (`public-operations/ns-….json`) of every indexed operation namespace. */
+function namespaceStores(dataDir: string): string[] {
+  const index = readStoredValue<{ namespaces: Array<{ id: string }> }>(
+    dataDir,
+    "public-operations/index.json",
+  );
+  return (index?.namespaces ?? []).map((entry) => `public-operations/${entry.id}.json`);
+}
 
 async function harness(): Promise<PublicApiHarness> {
   const created = await createPublicApiHarness();
@@ -228,12 +238,9 @@ describe("request keys and receipts", () => {
   test("a corrupted operation store refuses admission rather than reopening keys", async () => {
     const h = await harness();
     await h.call("project.add", { remote: "https://example.invalid/c.git" }, { requestId: "c1" });
-    const directory = path.join(h.dataDir, "public-operations");
-    for (const name of await fs.readdir(directory)) {
-      if (name.startsWith("ns-") && name.endsWith(".json"))
-        await fs.writeFile(path.join(directory, name), "{corrupt");
-      if (name.startsWith("ns-") && name.includes(".bak")) await fs.rm(path.join(directory, name));
-    }
+    const stores = namespaceStores(h.dataDir);
+    expect(stores.length).toBeGreaterThan(0);
+    for (const store of stores) seedUnreadableStore(h.dataDir, store, "{corrupt");
     const response = await h.call(
       "project.add",
       { remote: "https://example.invalid/c.git" },
@@ -250,16 +257,13 @@ describe("request keys and receipts", () => {
       { remote: "https://example.invalid/valid.git" },
       { requestId: "valid" },
     );
-    const directory = path.join(h.dataDir, "public-operations");
-    const name = (await fs.readdir(directory)).find(
-      (entry) => entry.startsWith("ns-") && entry.endsWith(".json"),
+    const store = namespaceStores(h.dataDir)[0]!;
+    const namespace = readStoredValue<{ operations: Array<{ requestKey: string }> }>(
+      h.dataDir,
+      store,
     )!;
-    const file = path.join(directory, name);
-    const namespace = JSON.parse(await fs.readFile(file, "utf8")) as {
-      operations: Array<{ requestKey: string }>;
-    };
     namespace.operations[0]!.requestKey = "0".repeat(64);
-    await fs.writeFile(file, JSON.stringify(namespace));
+    seedStore(h.dataDir, store, namespace);
     const response = await h.call(
       "project.add",
       { remote: "https://example.invalid/valid.git" },

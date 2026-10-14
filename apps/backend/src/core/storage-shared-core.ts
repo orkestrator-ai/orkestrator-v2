@@ -623,10 +623,17 @@ export function readAgentActivitySources(
     if (!snapshot || !isOneOf(snapshot.state, AGENT_ACTIVITY_STATES)) continue;
     const snapshotTime = parseUsableAgentActivityTime(snapshot.updatedAt, referenceTime);
     if (!Number.isFinite(snapshotTime)) continue;
+    const observedTime =
+      snapshot.observedAt === undefined
+        ? Number.NaN
+        : parseUsableAgentActivityTime(snapshot.observedAt, referenceTime);
     sources[candidateSource] = {
       state: snapshot.state,
       updatedAt: new Date(snapshotTime).toISOString(),
       ...(snapshot.stale === true ? { stale: true } : {}),
+      ...(Number.isFinite(observedTime)
+        ? { observedAt: new Date(observedTime).toISOString() }
+        : {}),
     };
   }
   return sources;
@@ -1061,12 +1068,10 @@ export function migratePersistedNativeAgentSession(
 }
 
 export interface LoadedNativeAgentSessions {
-  /** Records this build can read, already migrated in memory. */
+  /** Records this build can read. */
   sessions: Record<string, PersistedNativeAgentSession>;
   /** Records this build cannot read, preserved verbatim and never reused. */
   opaque: Record<string, unknown>;
-  /** True when at least one readable record was upgraded and needs persisting. */
-  migrated: boolean;
 }
 
 export function resolveNativeAgentInteractionMetadata(input: {

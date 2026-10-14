@@ -652,8 +652,8 @@ export interface PersistedNativeAgentSession {
    * Content-free authoritative recovery outcome rehydrated by every tab.
    *
    * The field keeps the name it was first persisted under, when OpenCode was
-   * the only platform with turn recovery, so session files written by earlier
-   * versions read unchanged. Storage writes it; everything else reads it
+   * the only platform with turn recovery, so sessions earlier versions wrote
+   * (and the legacy JSON import carries over) read unchanged. Storage writes it; everything else reads it
    * through {@link sessionIncompleteTurnNotice}.
    */
   openCodeIncompleteTurnNotice?: IncompleteTurnNotice;

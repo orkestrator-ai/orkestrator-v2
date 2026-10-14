@@ -172,8 +172,8 @@ describe("reviewer idle-result grace under wakeups", () => {
     "a reminder supersedes a retained schema repair and consumes its fresh result (%s)",
     async (submission) => {
       const dataDir = await mkdtemp(join(tmpdir(), "ork-review-reminder-"));
+      const results = new WorkflowResultService(dataDir);
       try {
-        const results = new WorkflowResultService(dataDir);
         await results.prepare({
           resultKey: "review-request",
           kind: "review-report",
@@ -230,6 +230,7 @@ describe("reviewer idle-result grace under wakeups", () => {
         expect(consumed).toEqual([resultKey]);
         expect(await results.status(scope, resultKey)).toMatchObject({ lifecycle: "consumed" });
       } finally {
+        results.closeStorage();
         await rm(dataDir, { recursive: true, force: true });
       }
     },

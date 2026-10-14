@@ -1,8 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { STORAGE_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
+
+function storageDatabase(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
+}
 
 async function withStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -234,54 +240,46 @@ describe("StorageService drafts", () => {
 
   test("filters malformed and mismatched stored draft records", async () => {
     await withStorage(async (storage, dataDir) => {
-      const composePath = path.join(dataDir, "compose-drafts.json");
-      const filePath = path.join(dataDir, "file-drafts.json");
-      await fs.writeFile(
-        composePath,
-        JSON.stringify({
-          valid: {
-            draftKey: "valid",
-            ownerType: "environment",
-            ownerId: "e1",
-            value: "keep",
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-          mismatch: {
-            draftKey: "different",
-            ownerType: "environment",
-            ownerId: "e1",
-            value: "drop",
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-          malformed: { draftKey: "malformed" },
-        }),
-      );
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          valid: {
-            draftKey: "valid",
-            environmentId: "e1",
-            filePath: "a.ts",
-            content: "draft",
-            originalContent: "disk",
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-          mismatch: {
-            draftKey: "different",
-            environmentId: "e1",
-            filePath: "b.ts",
-            content: "drop",
-            originalContent: "disk",
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-          malformed: { draftKey: "malformed" },
-        }),
-      );
+      seedStore(dataDir, "compose-drafts.json", {
+        valid: {
+          draftKey: "valid",
+          ownerType: "environment",
+          ownerId: "e1",
+          value: "keep",
+          updatedAt: new Date(0).toISOString(),
+          revision: 1,
+        },
+        mismatch: {
+          draftKey: "different",
+          ownerType: "environment",
+          ownerId: "e1",
+          value: "drop",
+          updatedAt: new Date(0).toISOString(),
+          revision: 1,
+        },
+        malformed: { draftKey: "malformed" },
+      });
+      seedStore(dataDir, "file-drafts.json", {
+        valid: {
+          draftKey: "valid",
+          environmentId: "e1",
+          filePath: "a.ts",
+          content: "draft",
+          originalContent: "disk",
+          updatedAt: new Date(0).toISOString(),
+          revision: 1,
+        },
+        mismatch: {
+          draftKey: "different",
+          environmentId: "e1",
+          filePath: "b.ts",
+          content: "drop",
+          originalContent: "disk",
+          updatedAt: new Date(0).toISOString(),
+          revision: 1,
+        },
+        malformed: { draftKey: "malformed" },
+      });
 
       expect(
         (await storage.listComposeDrafts("environment", "e1")).map((draft) => draft.draftKey),
@@ -294,37 +292,26 @@ describe("StorageService drafts", () => {
 
   test("explicit deletion removes schema-invalid keyed primary records", async () => {
     await withStorage(async (storage, dataDir) => {
-      const composePath = path.join(dataDir, "compose-drafts.json");
-      const filePath = path.join(dataDir, "file-drafts.json");
-      await fs.writeFile(
-        composePath,
-        JSON.stringify({
-          malformed: {
-            draftKey: "malformed",
-            value: "compose malformed secret",
-          },
-        }),
-      );
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          malformed: {
-            draftKey: "malformed",
-            content: "file malformed secret",
-          },
-        }),
-      );
+      seedStore(dataDir, "compose-drafts.json", {
+        malformed: {
+          draftKey: "malformed",
+          value: "compose malformed secret",
+        },
+      });
+      seedStore(dataDir, "file-drafts.json", {
+        malformed: {
+          draftKey: "malformed",
+          content: "file malformed secret",
+        },
+      });
+      expect(storageFilesContain(dataDir, "malformed secret")).toBe(true);
 
       await storage.deleteComposeDraft("malformed");
       await storage.deleteFileDraft("malformed");
 
-      expect(JSON.parse(await fs.readFile(composePath, "utf8"))).toEqual({});
-      expect(JSON.parse(await fs.readFile(filePath, "utf8"))).toEqual({});
-      for (const filename of ["compose-drafts.json.bak.1", "file-drafts.json.bak.1"]) {
-        expect(await fs.readFile(path.join(dataDir, filename), "utf8")).not.toContain(
-          "malformed secret",
-        );
-      }
+      expect(readStoredValue(dataDir, "compose-drafts.json")).toEqual({});
+      expect(readStoredValue(dataDir, "file-drafts.json")).toEqual({});
+      expect(storageFilesContain(dataDir, "malformed secret")).toBe(false);
     });
   });
 
@@ -421,37 +408,39 @@ describe("StorageService drafts", () => {
     });
   });
 
-  test("bulk draft cleanup scrubs every backup and preserves restrictive permissions", async () => {
+  test("bulk draft cleanup scrubs superseded copies and preserves restrictive permissions", async () => {
     await withStorage(async (storage, dataDir) => {
       const composeSecret = "bulk compose secret";
       const fileSecret = "bulk file secret";
       await storage.saveComposeDraft("compose:bulk", "environment", "e1", composeSecret);
       await storage.saveComposeDraft("compose:project", "project", "p1", "project secret");
       await storage.saveFileDraft("file:bulk", "e1", "secret.ts", fileSecret, "disk");
-      // Rotate the sensitive snapshots into more than one retained copy.
+      // Supersede the sensitive snapshots more than once.
       await storage.saveComposeDraft("compose:other", "environment", "e1", "other");
       await storage.saveComposeDraft("compose:third", "environment", "e1", "third");
       await storage.saveFileDraft("file:other", "e1", "other.ts", "other", "disk");
       await storage.saveFileDraft("file:third", "e1", "third.ts", "third", "disk");
+      for (const secret of [composeSecret, fileSecret, "project secret"]) {
+        expect(storageFilesContain(dataDir, secret)).toBe(true);
+      }
 
       await storage.deleteComposeDraftsByEnvironment("e1");
       await storage.deleteComposeDraftsByProject("p1");
       await storage.deleteFileDraftsByEnvironment("e1");
 
-      for (const entry of (await fs.readdir(dataDir)).filter(
-        (name) => name.startsWith("compose-drafts.json") || name.startsWith("file-drafts.json"),
-      )) {
-        const target = path.join(dataDir, entry);
-        const contents = await fs.readFile(target, "utf8");
-        expect(contents).not.toContain(composeSecret);
-        expect(contents).not.toContain(fileSecret);
-        expect(contents).not.toContain("project secret");
-        expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+      for (const secret of [composeSecret, fileSecret, "project secret"]) {
+        expect(storageFilesContain(dataDir, secret)).toBe(false);
+      }
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const stat = await fs
+          .stat(path.join(dataDir, `${STORAGE_DATABASE_FILE}${suffix}`))
+          .catch(() => null);
+        if (stat) expect(stat.mode & 0o777).toBe(0o600);
       }
     });
   });
 
-  test("individual deletes scrub sensitive backups even when the primary is absent", async () => {
+  test("individual deletes scrub superseded copies even when the record is already absent", async () => {
     await withStorage(async (storage, dataDir) => {
       const changes: string[] = [];
       storage.setResourceChangeListener((change) => changes.push(change.resource));
@@ -464,61 +453,31 @@ describe("StorageService drafts", () => {
       const file = await storage.saveFileDraft(fileKey, "e1", "secret.ts", "file secret", "disk");
       await storage.saveFileDraft("file:other", "e1", "other.ts", "other", "disk");
 
+      // The deleting commits land but their scrub does not (a reader kept the
+      // WAL alive), so superseded frames still hold the sensitive records.
+      const scrub = spyOn(storageDatabase(storage), "scrubDeletedContent").mockImplementation(
+        () => {},
+      );
       await storage.deleteComposeDraft(composeKey, compose.revision);
       await storage.deleteFileDraft(fileKey, file.revision);
-
-      const composeBackup = path.join(dataDir, "compose-drafts.json.bak.1");
-      const fileBackup = path.join(dataDir, "file-drafts.json.bak.1");
-      expect(await fs.readFile(composeBackup, "utf8")).toContain("compose:other");
-      expect(await fs.readFile(fileBackup, "utf8")).toContain("file:other");
-      // Recreate the interrupted-delete shape: the primary is already clean,
-      // but a retained copy still contains the sensitive record.
-      await fs.writeFile(
-        composeBackup,
-        JSON.stringify({
-          [composeKey]: {
-            draftKey: composeKey,
-            ownerType: "environment",
-            ownerId: "e1",
-            value: { text: "compose secret" },
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-        }),
-        { mode: 0o600 },
-      );
-      await fs.writeFile(
-        fileBackup,
-        JSON.stringify({
-          [fileKey]: {
-            draftKey: fileKey,
-            environmentId: "e1",
-            filePath: "secret.ts",
-            content: "file secret",
-            originalContent: "disk",
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-        }),
-        { mode: 0o600 },
-      );
+      scrub.mockRestore();
+      expect(await storage.getComposeDraft(composeKey)).toBeNull();
+      expect(await storage.getFileDraft(fileKey)).toBeNull();
+      expect(storageFilesContain(dataDir, "compose secret")).toBe(true);
+      expect(storageFilesContain(dataDir, "file secret")).toBe(true);
 
       changes.length = 0;
       // A real caller still holds the formerly current positive revision when
       // retrying after the primary commit. Absence must be treated as an
-      // idempotent delete so the retained copies can still be scrubbed.
+      // idempotent delete so the superseded copies can still be scrubbed.
       await storage.deleteComposeDraft(composeKey, compose.revision);
       await storage.deleteFileDraft(fileKey, file.revision);
       expect(changes).toEqual([]);
 
-      for (const [filename, secret] of [
-        ["compose-drafts.json.bak.1", "compose secret"],
-        ["file-drafts.json.bak.1", "file secret"],
-      ] as const) {
-        const contents = await fs.readFile(path.join(dataDir, filename), "utf8");
-        expect(contents).not.toContain(secret);
-        expect(contents).not.toContain("secret");
-      }
+      expect(storageFilesContain(dataDir, "compose secret")).toBe(false);
+      expect(storageFilesContain(dataDir, "file secret")).toBe(false);
+      expect(await storage.getComposeDraft("compose:other")).toMatchObject({ value: "other" });
+      expect(await storage.getFileDraft("file:other")).toMatchObject({ content: "other" });
     });
   });
 });

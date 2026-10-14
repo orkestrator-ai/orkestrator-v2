@@ -420,6 +420,7 @@ async function harness(
     await run(service, storage, provider, invoke, workflowResults);
   } finally {
     await service.shutdown();
+    workflowResults?.closeStorage();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }

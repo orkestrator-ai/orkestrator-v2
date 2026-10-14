@@ -7,6 +7,7 @@ import process from "node:process";
 import { parseEnvironmentBranchNamespace } from "../apps/backend/src/core/commands-agent-support";
 import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
+import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
 
 /**
  * Read-only inventory of the disk state Orkestrator work leaves behind, with
@@ -96,7 +97,11 @@ export function legacyTurboArtifacts(turboDirectory: string): string[] {
 
 type Environment = { id?: unknown; worktreePath?: unknown };
 
-function readEnvironments(dataDir: string): Environment[] {
+export function readEnvironments(dataDir: string): Environment[] {
+  // Read-only: a report must never run the backend's migration. A data dir the
+  // backend has not opened since the SQLite move still has the JSON file.
+  const stored = readStorageDatabaseStore(dataDir, "environments");
+  if (stored !== undefined) return Array.isArray(stored) ? (stored as Environment[]) : [];
   try {
     const parsed = JSON.parse(readFileSync(path.join(dataDir, "environments.json"), "utf8"));
     return Array.isArray(parsed) ? (parsed as Environment[]) : [];

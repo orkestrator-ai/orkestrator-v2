@@ -18,6 +18,17 @@ import {
 } from "./storage.js";
 import { createNativeAgentDisplayTail } from "./native-agent-display-tails.js";
 import { sessionIncompleteTurnNotice } from "./models.js";
+import { STORAGE_DATABASE_FILE } from "./storage-database.js";
+import {
+  hasStore,
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  writeLegacyStore,
+} from "./storage-test-support.js";
+
+const SESSIONS_STORE = "native-agent-sessions.json";
+const JOURNAL_STORE = "agent-interaction-resolution-journal.json";
 
 async function withStorage(
   run: (first: StorageService, second: StorageService) => Promise<void>,
@@ -45,6 +56,47 @@ async function withStorage(
   try {
     await run(first, second);
   } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Two backends opening a data directory upgraded from the JSON stores, whose
+ * native sessions were written by an older build. The import upgrades them
+ * once (storage-record-upgrades.ts).
+ */
+async function withLegacySessions(
+  legacy: Record<string, unknown>,
+  run: (first: StorageService, second: StorageService, dataDir: string) => Promise<void>,
+): Promise<void> {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-legacy-"));
+  writeLegacyStore(dataDir, "environments.json", [
+    {
+      id: "env-1",
+      projectId: "project-1",
+      name: "Environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    },
+  ]);
+  writeLegacyStore(dataDir, SESSIONS_STORE, legacy);
+  const first = new StorageService(dataDir);
+  const second = new StorageService(dataDir);
+  await Promise.all([first.init(), second.init()]);
+  try {
+    await run(first, second, dataDir);
+  } finally {
+    first.close();
+    second.close();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
@@ -79,19 +131,16 @@ function terminalJournalEntry(index: number, resolvedAt = Date.now()) {
 
 describe("StorageService native agent sessions", () => {
   test("migrates legacy sessions to interactive without losing identity or dispatch history", async () => {
-    await withStorage(async (first) => {
-      const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
-      const legacy = {
-        [input.key]: {
-          ...input,
-          providerSessionId: "legacy-provider-session",
-          dispatchedRequestIds: ["legacy-request"],
-          createdAt: new Date(1).toISOString(),
-          updatedAt: new Date(2).toISOString(),
-        },
-      };
-      await fs.writeFile(path.join(dataDir, "native-agent-sessions.json"), JSON.stringify(legacy));
-
+    const legacy = {
+      [input.key]: {
+        ...input,
+        providerSessionId: "legacy-provider-session",
+        dispatchedRequestIds: ["legacy-request"],
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      },
+    };
+    await withLegacySessions(legacy, async (first) => {
       expect(await first.getNativeAgentSession(input.key)).toEqual({
         ...input,
         providerSessionId: "legacy-provider-session",
@@ -101,29 +150,26 @@ describe("StorageService native agent sessions", () => {
         version: 1,
         origin: "interactive-native",
         interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        // Start-up also backfills the owner of a session whose environment exists.
+        owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
       });
     });
   });
 
   test("migrates legacy looped-review sessions to unattended without replacing the provider", async () => {
-    await withStorage(async (first, second) => {
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      const legacyInput = {
-        ...input,
-        logicalSessionKey: "looped-review:workflow-1:discovery:round-1",
-      };
-      await fs.writeFile(
-        file,
-        JSON.stringify({
-          [input.key]: {
-            ...legacyInput,
-            providerSessionId: "legacy-provider-session",
-            createdAt: new Date(1).toISOString(),
-            updatedAt: new Date(2).toISOString(),
-          },
-        }),
-      );
-
+    const legacyInput = {
+      ...input,
+      logicalSessionKey: "looped-review:workflow-1:discovery:round-1",
+    };
+    const legacy = {
+      [input.key]: {
+        ...legacyInput,
+        providerSessionId: "legacy-provider-session",
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      },
+    };
+    await withLegacySessions(legacy, async (first, second, dataDir) => {
       const migrated = await first.getOrCreateNativeAgentSession(
         {
           ...legacyInput,
@@ -137,7 +183,9 @@ describe("StorageService native agent sessions", () => {
         origin: "looped-review",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       });
-      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toMatchObject({
+      expect(
+        readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)?.[input.key],
+      ).toMatchObject({
         version: 1,
         origin: "looped-review",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -189,20 +237,17 @@ describe("StorageService native agent sessions", () => {
   test("fails closed for malformed versioned metadata", async () => {
     await withStorage(async (first) => {
       const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
-      await fs.writeFile(
-        path.join(dataDir, "native-agent-sessions.json"),
-        JSON.stringify({
-          [input.key]: {
-            ...input,
-            version: 1,
-            providerSessionId: "provider-session",
-            origin: "looped-review",
-            interactionPolicy: { version: 1, mode: "unattended" },
-            createdAt: new Date(1).toISOString(),
-            updatedAt: new Date(2).toISOString(),
-          },
-        }),
-      );
+      seedStore(dataDir, SESSIONS_STORE, {
+        [input.key]: {
+          ...input,
+          version: 1,
+          providerSessionId: "provider-session",
+          origin: "looped-review",
+          interactionPolicy: { version: 1, mode: "unattended" },
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      });
       await expect(first.getNativeAgentSession(input.key)).rejects.toThrow(
         "invalid or uses an unsupported version",
       );
@@ -211,7 +256,7 @@ describe("StorageService native agent sessions", () => {
 
   test("does not overwrite an unknown future session version", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const dataDir = first.getDataDir();
       const future = {
         [input.key]: {
           ...input,
@@ -223,15 +268,14 @@ describe("StorageService native agent sessions", () => {
           updatedAt: new Date(2).toISOString(),
         },
       };
-      const original = JSON.stringify(future);
-      await fs.writeFile(file, original);
+      seedStore(dataDir, SESSIONS_STORE, future);
       const create = mock(async () => "replacement-provider-session");
 
       await expect(first.getOrCreateNativeAgentSession(input, create)).rejects.toThrow(
         "invalid or uses an unsupported version",
       );
       expect(create).not.toHaveBeenCalled();
-      expect(await fs.readFile(file, "utf8")).toBe(original);
+      expect(readStoredValue(dataDir, SESSIONS_STORE)).toEqual(future);
     });
   });
 
@@ -263,36 +307,34 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("persists a migration discovered on the read path", async () => {
-    await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      await fs.writeFile(
-        file,
-        JSON.stringify({
-          [input.key]: {
-            ...input,
-            providerSessionId: "legacy-provider-session",
-            createdAt: new Date(1).toISOString(),
-            updatedAt: new Date(2).toISOString(),
-          },
-        }),
-      );
-
-      // The read is lock-free until it finds something to migrate; then it must
-      // take the lock and write, so the next process does not repeat the work.
-      const migrated = await first.getNativeAgentSession(input.key);
-      expect(migrated).toMatchObject({
+  test("persists the legacy upgrade once at import, before any read", async () => {
+    const legacy = {
+      [input.key]: {
+        ...input,
+        providerSessionId: "legacy-provider-session",
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      },
+    };
+    await withLegacySessions(legacy, async (first, _second, dataDir) => {
+      // No read path upgrades or writes anymore: the stored record is already
+      // current, so a lock-free read never needs a lease.
+      expect(
+        readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)?.[input.key],
+      ).toMatchObject({
         version: 1,
         origin: "interactive-native",
         interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       });
-      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toEqual(migrated);
+      expect(await first.getNativeAgentSession(input.key)).toEqual(
+        readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)?.[input.key] as never,
+      );
     });
   });
 
   test("confines an unreadable record to its own key", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const dataDir = first.getDataDir();
       const readable = {
         ...input,
         key: "readable-key",
@@ -316,13 +358,10 @@ describe("StorageService native agent sessions", () => {
         createdAt: new Date(1).toISOString(),
         updatedAt: new Date(2).toISOString(),
       };
-      await fs.writeFile(
-        file,
-        JSON.stringify({
-          "readable-key": readable,
-          "poisoned-key": future,
-        }),
-      );
+      seedStore(dataDir, SESSIONS_STORE, {
+        "readable-key": readable,
+        "poisoned-key": future,
+      });
 
       expect(await first.getNativeAgentSession("readable-key")).toEqual(readable);
       expect(await first.getNativeAgentSession("absent-key")).toBeNull();
@@ -334,13 +373,15 @@ describe("StorageService native agent sessions", () => {
         { ...input, key: "new-key" },
         async () => "new-provider-session",
       );
-      expect(JSON.parse(await fs.readFile(file, "utf8"))["poisoned-key"]).toEqual(future);
+      expect(
+        readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)?.["poisoned-key"],
+      ).toEqual(future);
     });
   });
 
   test("deletes an environment while an unreadable record is present", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const dataDir = first.getDataDir();
       const future = {
         ...input,
         key: "poisoned-key",
@@ -356,18 +397,15 @@ describe("StorageService native agent sessions", () => {
         input,
         async () => "doomed-provider-session",
       );
-      await fs.writeFile(
-        file,
-        JSON.stringify({
-          [input.key]: doomed,
-          "poisoned-key": future,
-        }),
-      );
+      seedStore(dataDir, SESSIONS_STORE, {
+        [input.key]: doomed,
+        "poisoned-key": future,
+      });
 
       // Deleting an environment is how a user clears a poisoned store, so it
       // must never be the operation that the poisoned record blocks.
       await first.deleteNativeAgentSessionsByEnvironment("env-1");
-      const remaining = JSON.parse(await fs.readFile(file, "utf8"));
+      const remaining = readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)!;
       expect(remaining[input.key]).toBeUndefined();
       expect(remaining["poisoned-key"]).toEqual(future);
     });
@@ -375,7 +413,7 @@ describe("StorageService native agent sessions", () => {
 
   test("announces only a delete that removed something", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const dataDir = first.getDataDir();
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
       const announced: string[] = [];
       first.setResourceChangeListener((change) => {
@@ -386,7 +424,7 @@ describe("StorageService native agent sessions", () => {
       expect(announced).toEqual([]);
       await first.deleteNativeAgentSessionsByEnvironment("env-1");
       expect(announced).toEqual(["env-1"]);
-      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({});
+      expect(readStoredValue(dataDir, SESSIONS_STORE)).toEqual({});
     });
   });
 
@@ -510,24 +548,17 @@ describe("StorageService native agent sessions", () => {
 
   test("reclaims an abandoned claim rather than wedging the journal", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "agent-interaction-resolution-journal.json");
       const claimedAt = Date.now() - AGENT_INTERACTION_CLAIM_RETENTION_MS - 1;
-      await fs.writeFile(
-        file,
-        JSON.stringify({
-          version: AGENT_INTERACTION_JOURNAL_VERSION,
-          entries: [
-            {
-              ...terminalJournalEntry(1),
-              state: "claimed",
-              claim: { ...terminalJournalEntry(1).claim, claimedAt },
-              outcome: undefined,
-              providerResolvedAt: undefined,
-              workflowRecordedAt: undefined,
-            },
-          ],
-        }),
-      );
+      const {
+        outcome: _outcome,
+        providerResolvedAt: _resolved,
+        workflowRecordedAt: _recorded,
+        ...claimed
+      } = terminalJournalEntry(1);
+      seedStore(first.getDataDir(), JOURNAL_STORE, {
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{ ...claimed, state: "claimed", claim: { ...claimed.claim, claimedAt } }],
+      });
       const read = await first.getAgentInteractionResolutionJournal();
       expect(read.entries).toHaveLength(1);
       expect(read.entries[0]).toMatchObject({
@@ -562,12 +593,12 @@ describe("StorageService native agent sessions", () => {
 
   test("rejects malformed journals and invalid updater results", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "agent-interaction-resolution-journal.json");
-      await fs.writeFile(file, JSON.stringify({ version: 1, entries: [{}] }));
+      const dataDir = first.getDataDir();
+      seedStore(dataDir, JOURNAL_STORE, { version: 1, entries: [{}] });
       await expect(first.getAgentInteractionResolutionJournal()).rejects.toThrow(
         "journal is invalid",
       );
-      await fs.writeFile(file, JSON.stringify({ version: 1, entries: [] }));
+      seedStore(dataDir, JOURNAL_STORE, { version: 1, entries: [] });
       await expect(
         first.updateAgentInteractionResolutionJournal(
           () =>
@@ -582,21 +613,18 @@ describe("StorageService native agent sessions", () => {
 
   test("persists journal cleanup with restricted permissions", async () => {
     await withStorage(async (first) => {
-      const file = path.join(first.getDataDir(), "agent-interaction-resolution-journal.json");
+      const dataDir = first.getDataDir();
       const expiredAt = Date.now() - AGENT_INTERACTION_JOURNAL_RETENTION_MS - 1;
-      await fs.writeFile(
-        file,
-        JSON.stringify({
-          version: AGENT_INTERACTION_JOURNAL_VERSION,
-          entries: [terminalJournalEntry(1, expiredAt)],
-        }),
-      );
+      seedStore(dataDir, JOURNAL_STORE, {
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [terminalJournalEntry(1, expiredAt)],
+      });
       await first.updateAgentInteractionResolutionJournal((journal) => journal);
-      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+      expect(readStoredValue(dataDir, JOURNAL_STORE)).toEqual({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
         entries: [],
       });
-      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(path.join(dataDir, STORAGE_DATABASE_FILE))).mode & 0o777).toBe(0o600);
     });
   });
 
@@ -620,7 +648,7 @@ describe("StorageService native agent sessions", () => {
         await entered;
 
         // Move beyond the stale-lock threshold. The 5-second heartbeat must
-        // keep the lock's mtime fresh so another process cannot steal it.
+        // keep the lease fresh so another process cannot steal it.
         jest.advanceTimersByTime(16_000);
         await Promise.resolve();
         await Promise.resolve();
@@ -633,15 +661,10 @@ describe("StorageService native agent sessions", () => {
             contenderEntered = true;
           },
         );
+        // Real I/O round trips give the contender's lease polling a chance to
+        // run (and wrongly succeed) while the fake clock is past the threshold.
         for (let attempt = 0; attempt < 10; attempt += 1) {
-          await fs
-            .stat(
-              path.join(
-                (await first.getEnvironment("env-1"))?.worktreePath ?? "",
-                "environments.json.lock",
-              ),
-            )
-            .catch(() => undefined);
+          await fs.stat(first.getDataDir()).catch(() => undefined);
         }
         expect(contenderEntered).toBe(false);
 
@@ -735,12 +758,10 @@ describe("StorageService native agent sessions", () => {
   test("lists nothing before any native session has been persisted", async () => {
     await withStorage(async (first) => {
       // The activity sweep lists on every tick from the very first backend
-      // start, when no session file exists yet. A missing file has to read as
+      // start, when no session store exists yet. A missing store has to read as
       // "no sessions" rather than as the failure that would make the sweep
       // warn every two seconds on a fresh install.
-      await expect(
-        fs.access(path.join(first.getDataDir(), "native-agent-sessions.json")),
-      ).rejects.toThrow();
+      expect(hasStore(first.getDataDir(), SESSIONS_STORE)).toBe(false);
       await expect(first.listNativeAgentSessions()).resolves.toEqual([]);
     });
   });
@@ -785,8 +806,8 @@ describe("StorageService native agent sessions", () => {
         ),
       );
 
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
+      const dataDir = first.getDataDir();
+      const stored = readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)!;
       stored["mismatched-storage-key"] = {
         ...expected[0],
         key: "different-record-key",
@@ -797,7 +818,7 @@ describe("StorageService native agent sessions", () => {
         agent: "gemini",
       };
       stored["missing-required-fields"] = { key: "missing-required-fields" };
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(dataDir, SESSIONS_STORE, stored);
 
       const listed = await first.listNativeAgentSessions();
       expect(listed).toEqual(expect.arrayContaining(expected));
@@ -1054,31 +1075,38 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("scrubs resolved and invalidated dispatch and steer content from every retained backup", async () => {
+  test("leaves resolved and invalidated dispatch and steer content unrecoverable on disk", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      const allNativeSessionFiles = async () =>
-        Promise.all(
-          (await fs.readdir(first.getDataDir()))
-            .filter((name) => name.startsWith("native-agent-sessions.json"))
-            .map((name) => fs.readFile(path.join(first.getDataDir(), name), "utf8")),
-        );
+      const dataDir = first.getDataDir();
+      // Each secret is persisted while its request is in flight; the check
+      // inside the provider call proves the later absence is a real scrub.
+      const persisted = (secret: string) => () => {
+        expect(storageFilesContain(dataDir, secret)).toBe(true);
+      };
 
       const acceptedSecret = "ACCEPTED-PROMPT-AND-ATTACHMENT-CONTENT";
-      await first.dispatchNativeAgentPromptOnce(input.key, "accepted", async () => undefined, {
-        requestId: "accepted",
-        prompt: acceptedSecret,
-        attachments: [
-          {
-            type: "image",
-            path: "/workspace/accepted.png",
-            dataUrl: `data:image/png;base64,${acceptedSecret}`,
-          },
-        ],
-        createdAt: new Date(1).toISOString(),
-      });
-      expect((await allNativeSessionFiles()).join("\n")).not.toContain(acceptedSecret);
+      const acceptedInFlight = persisted(acceptedSecret);
+      await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "accepted",
+        async () => {
+          acceptedInFlight();
+        },
+        {
+          requestId: "accepted",
+          prompt: acceptedSecret,
+          attachments: [
+            {
+              type: "image",
+              path: "/workspace/accepted.png",
+              dataUrl: `data:image/png;base64,${acceptedSecret}`,
+            },
+          ],
+          createdAt: new Date(1).toISOString(),
+        },
+      );
+      expect(storageFilesContain(dataDir, acceptedSecret)).toBe(false);
 
       const clearedSecret = "CLEARED-PROMPT-CONTENT";
       await expect(
@@ -1086,6 +1114,7 @@ describe("StorageService native agent sessions", () => {
           input.key,
           "cleared",
           async () => {
+            persisted(clearedSecret)();
             throw new Error("ambiguous");
           },
           {
@@ -1096,7 +1125,7 @@ describe("StorageService native agent sessions", () => {
         ),
       ).rejects.toThrow("ambiguous");
       expect(await first.clearPendingNativeAgentDispatch(input.key, "cleared")).toBe(true);
-      expect((await allNativeSessionFiles()).join("\n")).not.toContain(clearedSecret);
+      expect(storageFilesContain(dataDir, clearedSecret)).toBe(false);
 
       const appliedSteerSecret = "APPLIED-STEER-CONTENT";
       const appliedSteer = {
@@ -1107,10 +1136,11 @@ describe("StorageService native agent sessions", () => {
         state: "prepared" as const,
         createdAt: new Date(3).toISOString(),
       };
-      await first.dispatchNativeAgentSteerOnce(input.key, appliedSteer, async () => ({
-        outcome: "applied",
-      }));
-      expect((await allNativeSessionFiles()).join("\n")).not.toContain(appliedSteerSecret);
+      await first.dispatchNativeAgentSteerOnce(input.key, appliedSteer, async () => {
+        persisted(appliedSteerSecret)();
+        return { outcome: "applied" };
+      });
+      expect(storageFilesContain(dataDir, appliedSteerSecret)).toBe(false);
 
       const discardedSteerSecret = "DISCARDED-STEER-CONTENT";
       const discardedSteer = {
@@ -1124,13 +1154,14 @@ describe("StorageService native agent sessions", () => {
         outcome: "unknown",
         requestId: discardedSteer.requestId,
       }));
+      expect(storageFilesContain(dataDir, discardedSteerSecret)).toBe(true);
       expect(await first.clearPendingNativeAgentSteer(input.key, discardedSteer.requestId)).toBe(
         true,
       );
       expect((await first.getNativeAgentSession(input.key))?.dispatchedRequestIds).not.toContain(
         discardedSteer.requestId,
       );
-      expect((await allNativeSessionFiles()).join("\n")).not.toContain(discardedSteerSecret);
+      expect(storageFilesContain(dataDir, discardedSteerSecret)).toBe(false);
 
       const invalidatedSecret = "INVALIDATED-PROMPT-CONTENT";
       await expect(
@@ -1138,6 +1169,7 @@ describe("StorageService native agent sessions", () => {
           input.key,
           "invalidated",
           async () => {
+            persisted(invalidatedSecret)();
             throw new Error("ambiguous");
           },
           {
@@ -1148,8 +1180,8 @@ describe("StorageService native agent sessions", () => {
         ),
       ).rejects.toThrow("ambiguous");
       expect(await first.invalidateNativeAgentSession(input.key, "provider-session")).toBe(true);
-      expect((await allNativeSessionFiles()).join("\n")).not.toContain(invalidatedSecret);
-      expect(await fs.readFile(file, "utf8")).not.toContain(input.key);
+      expect(storageFilesContain(dataDir, invalidatedSecret)).toBe(false);
+      expect(JSON.stringify(readStoredValue(dataDir, SESSIONS_STORE))).not.toContain(input.key);
     });
   });
 
@@ -1236,12 +1268,12 @@ describe("StorageService native agent sessions", () => {
       };
       expect(await first.setIncompleteTurnNotice(input.key, "provider-session", notice)).toBe(true);
 
-      // Older versions read and wrote this exact field; a rename would drop
-      // notices from existing session files and hide them from older builds.
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toMatchObject({
-        openCodeIncompleteTurnNotice: notice,
-      });
+      // Older versions wrote this exact field into native-agent-sessions.json,
+      // and the legacy import carries their records over unchanged; a rename
+      // would drop the notices those records hold.
+      expect(
+        readStoredValue<Record<string, unknown>>(first.getDataDir(), SESSIONS_STORE)?.[input.key],
+      ).toMatchObject({ openCodeIncompleteTurnNotice: notice });
       const restarted = new StorageService(first.getDataDir());
       await restarted.init();
       const session = await restarted.getNativeAgentSession(input.key);
@@ -1254,6 +1286,27 @@ describe("StorageService native agent sessions", () => {
       expect(
         (await restarted.getNativeAgentSession(input.key))?.openCodeIncompleteTurnNotice,
       ).toBeUndefined();
+    });
+  });
+
+  test("reads a recovery notice an older build wrote into the legacy session file", async () => {
+    const notice = {
+      kind: "exhausted" as const,
+      assistantMessageId: "assistant-legacy",
+      updatedAt: "2026-08-10T10:00:00.000Z",
+    };
+    const legacy = {
+      [input.key]: {
+        ...input,
+        providerSessionId: "legacy-provider-session",
+        openCodeIncompleteTurnNotice: notice,
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      },
+    };
+    await withLegacySessions(legacy, async (first) => {
+      const session = await first.getNativeAgentSession(input.key);
+      expect(session && sessionIncompleteTurnNotice(session)).toEqual(notice);
     });
   });
 
@@ -1517,18 +1570,18 @@ describe("StorageService native agent sessions", () => {
   test("bounds the dispatched request id history at one thousand entries", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
-      // Seeding the file is the only way to reach the bound without a thousand
+      // Seeding the store is the only way to reach the bound without a thousand
       // real cross-process writes; the persisted validator caps it at 1000 too.
-      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
-        string,
-        { dispatchedRequestIds?: string[] }
-      >;
+      const dataDir = first.getDataDir();
+      const stored = readStoredValue<Record<string, { dispatchedRequestIds?: string[] }>>(
+        dataDir,
+        SESSIONS_STORE,
+      )!;
       stored[input.key]!.dispatchedRequestIds = Array.from(
         { length: 1_000 },
         (_, index) => `request-${index}`,
       );
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(dataDir, SESSIONS_STORE, stored);
 
       const { session } = await first.dispatchNativeAgentPromptOnce(
         input.key,
@@ -1592,7 +1645,7 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("scrubs a deleted environment's sessions out of retained backups", async () => {
+  test("leaves a deleted environment's sessions unrecoverable on disk", async () => {
     await withStorage(async (first) => {
       await first.addEnvironment({
         ...(await first.getEnvironment("env-1"))!,
@@ -1602,55 +1655,52 @@ describe("StorageService native agent sessions", () => {
         { ...input, environmentId: "env-2", key: "keep-key", logicalSessionKey: "KEEP-ME" },
         async () => "provider-keep",
       );
-      // A second write rotates the primary file into a backup, so the deleted
-      // environment's logical key and provider session id survive there unless
-      // the delete scrubs them — every sibling delete-by-environment does.
+      // A deleted row survives in free pages and WAL frames unless the delete
+      // scrubs them, so the deleted environment's logical key and provider
+      // session id must not be readable anywhere in the database files.
       await first.getOrCreateNativeAgentSession(
         { ...input, logicalSessionKey: "DROP-ME" },
         async () => "provider-drop",
       );
+      const dataDir = first.getDataDir();
+      expect(storageFilesContain(dataDir, "DROP-ME")).toBe(true);
+      expect(storageFilesContain(dataDir, "provider-drop")).toBe(true);
 
       await first.deleteNativeAgentSessionsByEnvironment("env-1");
 
-      const dataDir = first.getDataDir();
-      const contents = await Promise.all(
-        (await fs.readdir(dataDir))
-          .filter((name) => name.startsWith("native-agent-sessions.json"))
-          .map((name) => fs.readFile(path.join(dataDir, name), "utf8")),
-      );
-      const all = contents.join("\n");
-      expect(all).toContain("KEEP-ME");
-      expect(all).not.toContain("DROP-ME");
-      expect(all).not.toContain("provider-drop");
+      expect(JSON.stringify(readStoredValue(dataDir, SESSIONS_STORE))).toContain("KEEP-ME");
+      expect(storageFilesContain(dataDir, "DROP-ME")).toBe(false);
+      expect(storageFilesContain(dataDir, "provider-drop")).toBe(false);
     });
   });
 
-  test("drops unrecognized session records from sensitive backups", async () => {
+  test("leaves superseded unrecognized session records unrecoverable after a delete", async () => {
     await withStorage(async (first) => {
+      const dataDir = first.getDataDir();
+      // An unknown-version record for env-1, since overwritten by another
+      // process: its old row content can linger in the database files the way
+      // it used to linger in a retained backup.
+      seedStore(dataDir, SESSIONS_STORE, {
+        future: {
+          ...input,
+          key: "future",
+          version: 2,
+          logicalSessionKey: "DROP-FUTURE-METADATA",
+          providerSessionId: "provider-future",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      });
+      seedStore(dataDir, SESSIONS_STORE, {});
       await first.getOrCreateNativeAgentSession(input, async () => "provider-current");
-      const backup = path.join(first.getDataDir(), "native-agent-sessions.json.bak.1");
-      await fs.writeFile(
-        backup,
-        JSON.stringify({
-          future: {
-            ...input,
-            key: "future",
-            version: 2,
-            logicalSessionKey: "DROP-FUTURE-METADATA",
-            providerSessionId: "provider-future",
-            origin: "interactive-native",
-            interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-            createdAt: new Date(1).toISOString(),
-            updatedAt: new Date(2).toISOString(),
-          },
-        }),
-      );
+      expect(storageFilesContain(dataDir, "DROP-FUTURE-METADATA")).toBe(true);
 
       await first.deleteNativeAgentSessionsByEnvironment("env-1");
-      const scrubbed = await fs.readFile(backup, "utf8");
-      expect(scrubbed).not.toContain("DROP-FUTURE-METADATA");
-      expect(scrubbed).not.toContain("provider-future");
-      expect(JSON.parse(scrubbed)).toEqual({});
+      expect(storageFilesContain(dataDir, "DROP-FUTURE-METADATA")).toBe(false);
+      expect(storageFilesContain(dataDir, "provider-future")).toBe(false);
+      expect(readStoredValue(dataDir, SESSIONS_STORE)).toEqual({});
     });
   });
 
@@ -1696,6 +1746,120 @@ describe("StorageService native agent sessions", () => {
           )
         ).startupAgentSession,
       ).toBeUndefined();
+    });
+  });
+});
+
+describe("StorageService native agent session leases are per key", () => {
+  const otherInput = { ...input, key: "other-session-key", logicalSessionKey: "env-env-1:other" };
+
+  function gate(): { opened: Promise<void>; open: () => void } {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { opened, open };
+  }
+
+  test("a provider dispatch held on one key does not block another key, in or across processes", async () => {
+    await withStorage(async (first, second) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-a");
+      await first.getOrCreateNativeAgentSession(otherInput, async () => "provider-b");
+      const providerAck = gate();
+      const entered = gate();
+      const slow = first.dispatchNativeAgentPromptOnce(input.key, "request-a", async () => {
+        entered.open();
+        await providerAck.opened;
+      });
+      await entered.opened;
+      // Both complete while key A's lease is still held across its provider call.
+      await expect(
+        first.dispatchNativeAgentPromptOnce(otherInput.key, "request-b", async () => undefined),
+      ).resolves.toMatchObject({ dispatched: true });
+      await expect(
+        second.dispatchNativeAgentPromptOnce(otherInput.key, "request-c", async () => undefined),
+      ).resolves.toMatchObject({ dispatched: true });
+      providerAck.open();
+      await expect(slow).resolves.toMatchObject({ dispatched: true });
+      expect((await second.getNativeAgentSession(input.key))?.dispatchedRequestIds).toEqual([
+        "request-a",
+      ]);
+      expect((await first.getNativeAgentSession(otherInput.key))?.dispatchedRequestIds).toEqual([
+        "request-b",
+        "request-c",
+      ]);
+    });
+  });
+
+  test("concurrent writers of different keys keep each other's rows and unreadable records", async () => {
+    await withStorage(async (first, second) => {
+      const dataDir = first.getDataDir();
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-a");
+      const stored = readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)!;
+      const opaque = { version: 99, key: "future", note: "written by a newer build" };
+      seedStore(dataDir, SESSIONS_STORE, { ...stored, future: opaque });
+      // Each instance cached the store before the other's commit.
+      await Promise.all([first.listNativeAgentSessions(), second.listNativeAgentSessions()]);
+      await Promise.all([
+        first.updateNativeAgentSessionControls(input.key, "provider-a", { modelId: "model-a" }),
+        second.getOrCreateNativeAgentSession(otherInput, async () => "provider-b"),
+      ]);
+      const after = readStoredValue<Record<string, Record<string, unknown>>>(
+        dataDir,
+        SESSIONS_STORE,
+      )!;
+      expect(after[input.key]).toMatchObject({ controls: { modelId: "model-a" } });
+      expect(after[otherInput.key]).toMatchObject({ providerSessionId: "provider-b" });
+      expect(after.future).toEqual(opaque);
+    });
+  });
+
+  test("a create that overlaps environment deletion leaves no session behind", async () => {
+    await withStorage(async (first, second) => {
+      const created = gate();
+      const entered = gate();
+      const create = first
+        .getOrCreateNativeAgentSession(input, async () => {
+          entered.open();
+          await created.opened;
+          return "provider-late";
+        })
+        .then(
+          () => "created",
+          (error: unknown) => (error as Error).message,
+        );
+      await entered.opened;
+      await second.updateEnvironment("env-1", { deletionRequestedAt: new Date().toISOString() });
+      // The sweep cannot see a key that is not committed yet; the create's own
+      // commit refuses it instead.
+      await second.deleteNativeAgentSessionsByEnvironment("env-1");
+      created.open();
+      expect(await create).toContain("being deleted");
+      expect(await first.listNativeAgentSessions()).toEqual([]);
+    });
+  });
+
+  test("environment deletion waits for an in-flight dispatch on each key, one key at a time", async () => {
+    await withStorage(async (first, second) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-a");
+      await first.getOrCreateNativeAgentSession(otherInput, async () => "provider-b");
+      const providerAck = gate();
+      const entered = gate();
+      const dispatch = first.dispatchNativeAgentPromptOnce(input.key, "request-a", async () => {
+        entered.open();
+        await providerAck.opened;
+      });
+      await entered.opened;
+      await second.updateEnvironment("env-1", { deletionRequestedAt: new Date().toISOString() });
+      let deleted = false;
+      const deletion = second.deleteNativeAgentSessionsByEnvironment("env-1").then(() => {
+        deleted = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(deleted).toBe(false);
+      providerAck.open();
+      await Promise.all([dispatch, deletion]);
+      expect(await second.listNativeAgentSessions()).toEqual([]);
     });
   });
 });

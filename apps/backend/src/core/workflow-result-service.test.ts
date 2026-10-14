@@ -1,10 +1,27 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
-import { WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY } from "@orkestrator/protocol/workflow-results";
+import {
+  WORKFLOW_RESULT_MAX_ENTRIES,
+  WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY,
+} from "@orkestrator/protocol/workflow-results";
+import { StorageDatabase } from "./storage-database.js";
+import {
+  readStoredValue,
+  seedStore,
+  seedUnreadableStore,
+  storageFilesContain,
+} from "./storage-test-support.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+
+const STORE = "workflow-results.json";
+
+type StoredValue = {
+  version: number;
+  entries: Record<string, Record<string, unknown> & { lifecycle: string }>;
+};
 
 const emptyReport: StructuredReviewReport = {
   reviewScope: {
@@ -38,14 +55,24 @@ const emptyReport: StructuredReviewReport = {
 describe("WorkflowResultService", () => {
   let dataDir: string;
   let service: WorkflowResultService;
+  let services: WorkflowResultService[] = [];
   const scope = { environmentId: "env-1", projectId: "project-1" };
+
+  /** Another service on the same data directory: its own connection, like another backend. */
+  function open(): WorkflowResultService {
+    const opened = new WorkflowResultService(dataDir);
+    services.push(opened);
+    return opened;
+  }
 
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "ork-workflow-results-"));
-    service = new WorkflowResultService(dataDir);
+    services = [];
+    service = open();
   });
 
   afterEach(async () => {
+    for (const opened of services) opened.closeStorage();
     await rm(dataDir, { recursive: true, force: true });
   });
 
@@ -87,9 +114,11 @@ describe("WorkflowResultService", () => {
     });
     const unsubscribe = service.onAccepted((event) => {
       // Fired after the durable commit: a fresh service already reads it.
-      void new WorkflowResultService(dataDir).structured(event.resultKey).then((result) => {
-        seen.push({ ...event, committed: result !== null });
-      });
+      void open()
+        .structured(event.resultKey)
+        .then((result) => {
+          seen.push({ ...event, committed: result !== null });
+        });
     });
     const value = { phase: "confirming", title: "Tool results", summary: "Use callbacks." };
     expect(await service.submit(scope, resultKey, value)).toMatchObject({ ok: true });
@@ -110,7 +139,7 @@ describe("WorkflowResultService", () => {
     const accepted = await service.submit(scope, resultKey, value);
 
     expect(accepted).toMatchObject({ ok: true, duplicate: false, lifecycle: "accepted" });
-    const restarted = new WorkflowResultService(dataDir);
+    const restarted = open();
     expect(await restarted.structured(resultKey)).toEqual({
       ok: true,
       provider: "codex",
@@ -213,7 +242,7 @@ describe("WorkflowResultService", () => {
       if (!accepted.ok) throw new Error("acceptance failed");
       for (const lifecycle of ["accepted", "consumed"] as const) {
         if (lifecycle === "consumed") await service.consume(resultKey);
-        for (const reader of [service, new WorkflowResultService(dataDir)]) {
+        for (const reader of [service, open()]) {
           expect(await reader.submitValidated(scope, resultKey, digest)).toEqual({
             ...accepted,
             lifecycle,
@@ -254,31 +283,30 @@ describe("WorkflowResultService", () => {
       expect(events).toHaveLength(1);
     });
 
-    test("retains the validated candidate when the acceptance rename fails", async () => {
+    test("retains the validated candidate when the acceptance commit fails", async () => {
       const { resultKey, digest } = await validated();
       const events: unknown[] = [];
       service.onAccepted((event) => events.push(event));
-      const filePath = join(dataDir, "workflow-results.json");
-      const backupPath = `${filePath}.backup`;
-      const writer = service as unknown as { save(store: unknown): Promise<void> };
-      const realSave = writer.save.bind(service);
-      const save = spyOn(writer, "save").mockImplementationOnce(async (store) => {
-        // The callback has staged acceptance. Fail the real atomic rename,
-        // then restore the original durable open slot for a digest-only retry.
-        await rename(filePath, backupPath);
-        await mkdir(filePath);
-        try {
-          await realSave(store);
-        } finally {
-          await rm(filePath, { recursive: true, force: true });
-          await rename(backupPath, filePath);
-        }
-      });
+      const database = (service as unknown as { database: StorageDatabase }).database;
+      const realUpdate = database.updateStoreRow.bind(database);
+      const update = spyOn(database, "updateStoreRow").mockImplementationOnce(
+        (...args: Parameters<StorageDatabase["updateStoreRow"]>) => {
+          // The acceptance row is written inside the transaction; failing
+          // after it must roll the accepted row back with the whole commit.
+          realUpdate(...args);
+          throw new Error("disk I/O error");
+        },
+      );
       try {
-        await expect(service.submitValidated(scope, resultKey, digest)).rejects.toThrow();
+        await expect(service.submitValidated(scope, resultKey, digest)).rejects.toThrow(
+          "disk I/O error",
+        );
       } finally {
-        save.mockRestore();
+        update.mockRestore();
       }
+      expect(readStoredValue<StoredValue>(dataDir, STORE)?.entries[resultKey]?.lifecycle).toBe(
+        "open",
+      );
       expect(events).toHaveLength(0);
       expect(service.heldValidation(resultKey)).toMatchObject({ digest });
       expect(await service.status(scope, resultKey)).toMatchObject({ lifecycle: "open" });
@@ -291,7 +319,7 @@ describe("WorkflowResultService", () => {
       });
       expect(events).toHaveLength(1);
       expect(service.heldValidation(resultKey)).toBeUndefined();
-      expect(await new WorkflowResultService(dataDir).structured(resultKey)).toMatchObject({
+      expect(await open().structured(resultKey)).toMatchObject({
         value: valid,
       });
     });
@@ -518,20 +546,27 @@ describe("WorkflowResultService", () => {
   test("preflight validation enforces per-key backpressure", async () => {
     const resultKey = await prepare();
     const payload = { phase: "collecting", title: "Final", summary: "Complete result." };
-    const outcomes = await Promise.all(
-      Array.from({ length: WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY + 1 }, () =>
-        service.validate(scope, resultKey, payload),
-      ),
-    );
-    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(
-      WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY,
-    );
-    expect(outcomes).toContainEqual(
-      expect.objectContaining({
+    // Validation commits synchronously, so calls no longer overlap on their
+    // own; occupy the key's admission as calls still in flight would.
+    const admission = service as unknown as {
+      beginPending(key: string, bytes: number): boolean;
+      endPending(key: string, bytes: number): void;
+    };
+    for (let i = 0; i < WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY - 1; i += 1)
+      expect(admission.beginPending(resultKey, 0)).toBe(true);
+    try {
+      expect(await service.validate(scope, resultKey, payload)).toMatchObject({ ok: true });
+      expect(admission.beginPending(resultKey, 0)).toBe(true);
+      expect(await service.validate(scope, resultKey, payload)).toMatchObject({
         ok: false,
-        error: expect.objectContaining({ code: "backpressure" }),
-      }),
-    );
+        error: { code: "backpressure" },
+      });
+      // Another key is admitted independently.
+      expect(await service.validate(scope, await prepare(), payload)).toMatchObject({ ok: true });
+    } finally {
+      for (let i = 0; i < WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY; i += 1)
+        admission.endPending(resultKey, 0);
+    }
     expect(service.metrics.snapshot().gauges).toMatchObject({ pending_calls: 0, pending_bytes: 0 });
   });
 
@@ -600,7 +635,7 @@ describe("WorkflowResultService", () => {
     );
     expect(denied).toMatchObject({ ok: false, error: { code: "capability_denied" } });
 
-    const secondService = new WorkflowResultService(dataDir);
+    const secondService = open();
     const candidates = [
       service.submit(scope, resultKey, { phase: "collecting", title: "First", summary: "" }),
       secondService.submit(scope, resultKey, {
@@ -615,9 +650,7 @@ describe("WorkflowResultService", () => {
       expect.objectContaining({ error: expect.objectContaining({ code: "submission_conflict" }) }),
     ]);
 
-    const stored = JSON.parse(await readFile(join(dataDir, "workflow-results.json"), "utf8")) as {
-      entries: Record<string, { lifecycle: string }>;
-    };
+    const stored = readStoredValue<StoredValue>(dataDir, STORE)!;
     expect(stored.entries[resultKey]?.lifecycle).toBe("accepted");
   });
 
@@ -665,14 +698,32 @@ describe("WorkflowResultService", () => {
 
   test("fails closed when the durable store contains an invalid entry", async () => {
     const resultKey = await prepare();
-    const filePath = join(dataDir, "workflow-results.json");
-    const stored = JSON.parse(await readFile(filePath, "utf8")) as {
-      entries: Record<string, { provider: string }>;
-    };
+    const other = await prepare();
+    const stored = readStoredValue<StoredValue>(dataDir, STORE)!;
     stored.entries[resultKey]!.provider = "unknown";
-    await writeFile(filePath, JSON.stringify(stored));
+    // Written by another connection, as another backend sharing the directory would.
+    seedStore(dataDir, STORE, stored);
 
     await expect(service.registered(resultKey)).rejects.toThrow("invalid store");
+    await expect(service.structured(resultKey)).rejects.toThrow("invalid store");
+    // A read of a valid row still works; every mutation revalidates the store.
+    expect(await service.registered(other)).toBe(true);
+    await expect(service.close(other, "cancelled")).rejects.toThrow("invalid store");
+    await expect(prepare()).rejects.toThrow("invalid store");
+    expect(readStoredValue<StoredValue>(dataDir, STORE)?.entries[other]?.lifecycle).toBe("open");
+  });
+
+  test.each([
+    ["an unreadable store", () => seedUnreadableStore(dataDir, STORE, "{not-json")],
+    ["another store version", () => seedStore(dataDir, STORE, { version: 2, entries: {} })],
+    ["entries that are not a record", () => seedStore(dataDir, STORE, { version: 1, entries: [] })],
+  ])("fails closed on %s instead of replacing it", async (_label, corrupt) => {
+    const resultKey = await prepare();
+    corrupt();
+    await expect(service.registered(resultKey)).rejects.toThrow("invalid store");
+    await expect(service.status(scope, resultKey)).rejects.toThrow("invalid store");
+    await expect(prepare()).rejects.toThrow("invalid store");
+    await expect(open().deleteByEnvironment(scope.environmentId)).rejects.toThrow("invalid store");
   });
 
   test("rejects reconciliation operations that do not match the pinned report and pool", async () => {
@@ -761,7 +812,7 @@ describe("WorkflowResultService", () => {
   test("two simultaneous identical valid calls produce one receipt", async () => {
     const resultKey = await prepare();
     const payload = { phase: "collecting", title: "Same", summary: "" };
-    const second = new WorkflowResultService(dataDir);
+    const second = open();
     const results = await Promise.all([
       service.submit(scope, resultKey, payload),
       second.submit(scope, resultKey, payload),
@@ -774,17 +825,18 @@ describe("WorkflowResultService", () => {
 
   test("a save failure before acceptance issues no receipt and leaves the slot open", async () => {
     const resultKey = await prepare();
-    const filePath = join(dataDir, "workflow-results.json");
-    // Replacing the store file with a directory makes the atomic rename fail at
-    // the real write boundary rather than at a mocked method.
-    await rm(filePath, { force: true });
-    await mkdir(filePath, { recursive: true });
-    await expect(
-      service.submit(scope, resultKey, { phase: "collecting", title: "A", summary: "" }),
-    ).rejects.toThrow();
-    await rm(filePath, { recursive: true, force: true });
+    const update = spyOn(StorageDatabase.prototype, "updateStoreRow").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    try {
+      await expect(
+        service.submit(scope, resultKey, { phase: "collecting", title: "A", summary: "" }),
+      ).rejects.toThrow("disk full");
+    } finally {
+      update.mockRestore();
+    }
 
-    const reopened = new WorkflowResultService(dataDir);
+    const reopened = open();
     await reopened.prepare({ resultKey, kind: "feature-plan-state", ...scope, provider: "codex" });
     expect(await reopened.status(scope, resultKey)).toMatchObject({
       lifecycle: "open",
@@ -860,12 +912,11 @@ describe("WorkflowResultService", () => {
       });
       await service.close(resultKey, "superseded");
     }
-    const filePath = join(dataDir, "workflow-results.json");
-    const raw = await readFile(filePath, "utf8");
-    const stored = JSON.parse(raw) as {
+    const stored = readStoredValue<{
       entries: Record<string, { context?: unknown; schema?: unknown; rejectedDigests: string[] }>;
-    };
-    expect(Buffer.byteLength(raw)).toBeLessThan(256 * 1024);
+    }>(dataDir, STORE)!;
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThan(256 * 1024);
+    expect(service.metrics.snapshot().gauges.retained_bytes).toBeLessThan(256 * 1024);
     expect(
       Object.values(stored.entries).every(
         (entry) =>
@@ -878,7 +929,7 @@ describe("WorkflowResultService", () => {
   });
 
   test("regenerates a truncated capability identity atomically", async () => {
-    await writeFile(join(dataDir, "workflow-result-tools.json"), '{"version":1');
+    seedUnreadableStore(dataDir, "workflow-result-tools.json", '{"version":1');
     await expect(service.initializeCapabilityIdentity()).resolves.toBeUndefined();
     const resultKey = await prepare();
     const token = service.capabilityToken(scope, resultKey);
@@ -886,8 +937,28 @@ describe("WorkflowResultService", () => {
       ...scope,
       workflowResultKey: resultKey,
     });
-    expect(JSON.parse(await readFile(join(dataDir, "workflow-result-tools.json"), "utf8"))).toEqual(
+    expect(readStoredValue(dataDir, "workflow-result-tools.json")).toEqual(
       expect.objectContaining({ version: 1, secret: expect.any(String) }),
+    );
+  });
+
+  test("two backends starting together agree on one capability identity, and keep the port", async () => {
+    const other = open();
+    await Promise.all([
+      service.initializeCapabilityIdentity(),
+      other.initializeCapabilityIdentity(),
+    ]);
+    const resultKey = await prepare();
+    expect(await other.authenticateCapability(service.capabilityToken(scope, resultKey))).toEqual({
+      ...scope,
+      workflowResultKey: resultKey,
+    });
+    await service.recordCapabilityPort(4321);
+    const restarted = open();
+    await restarted.initializeCapabilityIdentity();
+    expect(restarted.capabilityPort()).toBe(4321);
+    expect(restarted.capabilityToken(scope, resultKey)).toBe(
+      service.capabilityToken(scope, resultKey),
     );
   });
 
@@ -991,5 +1062,147 @@ describe("WorkflowResultService", () => {
         "missing_submissions|provider=codex|kind=feature-plan-state|reason=cancelled"
       ],
     ).toBe(1);
+  });
+  describe("database storage", () => {
+    const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
+
+    test("polled reads parse one row, never the whole store", async () => {
+      await service.initializeCapabilityIdentity();
+      const resultKey = await prepare();
+      await prepare();
+      await service.submit(scope, resultKey, valid);
+      const readStore = spyOn(StorageDatabase.prototype, "readStore");
+      const readWhole = spyOn(StorageDatabase.prototype, "readStoreValueInTransaction");
+      try {
+        for (const reader of [service, open()]) {
+          expect(await reader.projection(resultKey)).toBe("received");
+          expect(await reader.status(scope, resultKey)).toMatchObject({ lifecycle: "accepted" });
+          expect(await reader.structured(resultKey)).toMatchObject({ value: valid });
+          expect(await reader.registered(resultKey)).toBe(true);
+          expect(await reader.lookup(resultKey)).toMatchObject({ registered: true });
+          expect(await reader.binding(scope, resultKey)).toMatchObject({ provider: "codex" });
+          expect(await reader.validate(scope, resultKey, valid)).toMatchObject({
+            error: { code: "attempt_closed" },
+          });
+        }
+        expect(
+          await service.authenticateCapability(service.capabilityToken(scope, resultKey)),
+        ).toMatchObject({ workflowResultKey: resultKey });
+        expect(readStore).not.toHaveBeenCalled();
+        expect(readWhole).not.toHaveBeenCalled();
+      } finally {
+        readStore.mockRestore();
+        readWhole.mockRestore();
+      }
+    });
+
+    test("two backends' interleaved corrections share one budget", async () => {
+      const resultKey = await prepare();
+      const other = open();
+      // Each read-modify-write commits in one transaction, so neither backend
+      // overwrites the rejection the other just recorded.
+      const outcomes = [];
+      for (let title = 0; title < 4; title += 1) {
+        const writer = title % 2 === 0 ? service : other;
+        outcomes.push(await writer.submit(scope, resultKey, { ...valid, title }));
+      }
+      expect(outcomes.map((outcome) => !outcome.ok && outcome.error.code)).toEqual([
+        "invalid_result",
+        "invalid_result",
+        "invalid_result",
+        "correction_budget_exhausted",
+      ]);
+      const stored = readStoredValue<StoredValue>(dataDir, STORE)!;
+      expect(stored.entries[resultKey]).toMatchObject({ lifecycle: "exhausted" });
+      expect((stored.entries[resultKey]!.rejectedDigests as string[]).length).toBe(4);
+    });
+
+    test("slots prepared by two backends are both kept and counted", async () => {
+      const other = open();
+      const first = await prepare();
+      const second = crypto.randomUUID();
+      await other.prepare({
+        resultKey: second,
+        kind: "feature-plan-state",
+        ...scope,
+        provider: "codex",
+      });
+      const third = await prepare();
+      for (const reader of [service, other]) {
+        for (const key of [first, second, third]) expect(await reader.registered(key)).toBe(true);
+      }
+      // The gauges follow the other backend's commit, not only this one's.
+      expect(service.metrics.snapshot().gauges.active_slots).toBe(3);
+      await other.close(first, "cancelled");
+      await service.close(third, "cancelled");
+      expect(service.metrics.snapshot().gauges.active_slots).toBe(1);
+    });
+
+    test.each(["consume", "close", "deleteByEnvironment"] as const)(
+      "%s leaves the payload unrecoverable from the database files",
+      async (operation) => {
+        const resultKey = await prepare();
+        const marker = `private-payload-${crypto.randomUUID()}`;
+        await service.submit(scope, resultKey, { ...valid, summary: marker });
+        expect(storageFilesContain(dataDir, marker)).toBe(true);
+        if (operation === "consume") await service.consume(resultKey);
+        else if (operation === "close") await service.close(resultKey, "cancelled");
+        else await service.deleteByEnvironment(scope.environmentId);
+        expect(storageFilesContain(dataDir, marker)).toBe(false);
+      },
+    );
+
+    function settledEntry(resultKey: string, updatedAt: string) {
+      return {
+        resultKey,
+        kind: "feature-plan-state",
+        ...scope,
+        provider: "codex",
+        schemaVersion: 1,
+        lifecycle: "cancelled",
+        createdAt: updatedAt,
+        updatedAt,
+        rejectedDigests: [],
+      };
+    }
+
+    test("a full store prunes its oldest settled slot and keeps every active one", async () => {
+      const entries: Record<string, unknown> = {};
+      const keys = Array.from({ length: WORKFLOW_RESULT_MAX_ENTRIES }, () => crypto.randomUUID());
+      keys.forEach((key, index) => {
+        entries[key] = settledEntry(key, new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString());
+      });
+      seedStore(dataDir, STORE, { version: 1, entries });
+      const added = await prepare();
+      const stored = readStoredValue<StoredValue>(dataDir, STORE)!;
+      expect(Object.keys(stored.entries)).toHaveLength(WORKFLOW_RESULT_MAX_ENTRIES);
+      expect(stored.entries[keys[0]!]).toBeUndefined();
+      expect(stored.entries[keys[1]!]).toBeDefined();
+      expect(stored.entries[added]).toMatchObject({ lifecycle: "open" });
+      expect(service.metrics.snapshot().gauges.active_slots).toBe(1);
+    });
+
+    test("a store of only active slots refuses another and commits nothing", async () => {
+      const entries: Record<string, unknown> = {};
+      for (let index = 0; index < WORKFLOW_RESULT_MAX_ENTRIES; index += 1) {
+        const key = crypto.randomUUID();
+        entries[key] = { ...settledEntry(key, new Date(0).toISOString()), lifecycle: "open" };
+      }
+      seedStore(dataDir, STORE, { version: 1, entries });
+      const refused = crypto.randomUUID();
+      await expect(prepare(refused)).rejects.toThrow("too many active entries");
+      expect(await service.registered(refused)).toBe(false);
+      expect(Object.keys(readStoredValue<StoredValue>(dataDir, STORE)!.entries)).toHaveLength(
+        WORKFLOW_RESULT_MAX_ENTRIES,
+      );
+    });
+
+    test("reopens its connection after closeStorage", async () => {
+      const resultKey = await prepare();
+      service.closeStorage();
+      expect(await service.registered(resultKey)).toBe(true);
+      await service.close(resultKey, "cancelled");
+      expect(await open().status(scope, resultKey)).toMatchObject({ lifecycle: "cancelled" });
+    });
   });
 });

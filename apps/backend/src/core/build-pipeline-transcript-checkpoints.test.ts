@@ -1,16 +1,28 @@
 /**
  * The supervisor's save boundary for display transcripts (plan step 16):
- * transcripts commit ahead of the control record that references them, a
- * checkpoint failure never blocks control state, and every crash point leaves
- * committed workflow evidence intact.
+ * transcripts are staged ahead of the control record that references them and
+ * commit in its transaction, a checkpoint failure never blocks control state,
+ * and every crash point leaves committed workflow evidence intact.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "./storage.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
+import { readStoredValue } from "./storage-test-support.js";
+
+/**
+ * Serialized size of every committed control record. An upper bound on what a
+ * control write stores: the record layout rewrites only the changed rows.
+ */
+function controlRecordBytes(dataDir: string): number {
+  return Buffer.byteLength(
+    JSON.stringify(readStoredValue(dataDir, "build-pipelines.json") ?? {}),
+    "utf8",
+  );
+}
 
 async function withStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -78,7 +90,7 @@ async function body(storage: StorageService, id: string, value: PipelineSession)
 }
 
 describe("build pipeline transcript checkpoints", () => {
-  test("an active tail update writes one tail chunk, a manifest and the small control file", async () => {
+  test("an active tail update writes one tail chunk, a manifest and the small control record", async () => {
     await withStorage(async (storage, dataDir) => {
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       // Several long pipelines, each with completed stages.
@@ -98,8 +110,7 @@ describe("build pipeline transcript checkpoints", () => {
         (sum, history) => sum + JSON.stringify(history).length,
         0,
       );
-      const controlPath = path.join(dataDir, "build-pipelines.json");
-      const controlBytes = (await fs.stat(controlPath)).size;
+      const controlBytes = controlRecordBytes(dataDir);
       expect(controlBytes).toBeLessThan(historyBytes / 100);
 
       // One active session streams into its newest entry.
@@ -116,7 +127,7 @@ describe("build pipeline transcript checkpoints", () => {
         after.chunkBytesWritten -
         before.chunkBytesWritten +
         (after.manifestBytesWritten - before.manifestBytesWritten);
-      const controlWritten = (await fs.stat(controlPath)).size;
+      const controlWritten = controlRecordBytes(dataDir);
       expect(after.chunkWrites - before.chunkWrites).toBe(1);
       expect(after.chunkBytesWritten - before.chunkBytesWritten).toBeLessThanOrEqual(256 * 1024);
       // Bytes written per active tail update, measured: not proportional to
@@ -166,7 +177,7 @@ describe("build pipeline transcript checkpoints", () => {
     });
   });
 
-  test("a crash before the control CAS leaves the referenced revision exact; the retry reuses the commit", async () => {
+  test("a crash before the control write leaves the referenced revision exact; the retry reuses the staged chunks", async () => {
     await withStorage(async (storage, dataDir) => {
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       const value = session("p1:build");
@@ -174,7 +185,8 @@ describe("build pipeline transcript checkpoints", () => {
       checkpoints.observe(value, first);
       await save(storage, checkpoints, pipeline("p1", [value]));
 
-      // Checkpoint commits, then the process dies before the control write.
+      // The checkpoint stages its chunks, then the process dies before the
+      // control write that would have committed its manifest.
       const next = await stored(storage, "p1");
       const second = messages(8, "second");
       checkpoints.observe(next.sessions[0]!, second);
@@ -186,7 +198,7 @@ describe("build pipeline transcript checkpoints", () => {
       expect(await body(restarted, "p1", afterCrash.sessions[0]!)).toEqual(first);
       // On restart the provider still reports the newer transcript: the
       // committed fingerprint differs, so it is checkpointed again — reusing
-      // the chunks and manifest the crashed attempt already wrote.
+      // the chunk files the crashed attempt already wrote.
       const resumed = new BuildPipelineTranscriptCheckpoints(restarted);
       expect(resumed.observe(afterCrash.sessions[0]!, second)).toBe(true);
       const writes = restarted.buildPipelineTranscriptStats();
@@ -203,7 +215,7 @@ describe("build pipeline transcript checkpoints", () => {
     });
   });
 
-  test("after the control CAS a restart sees no transcript change and writes nothing", async () => {
+  test("after the control write a restart sees no transcript change and writes nothing", async () => {
     await withStorage(async (storage, dataDir) => {
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       const value = session("p1:build");
@@ -220,6 +232,46 @@ describe("build pipeline transcript checkpoints", () => {
       const afterCrash = (await stored(restarted, "p1")).sessions[0]!;
       expect(resumed.observe(afterCrash, body1)).toBe(false);
       expect(await body(restarted, "p1", afterCrash)).toEqual(body1);
+    });
+  });
+
+  test("a manifest the control transaction refuses is checkpointed again on the next save", async () => {
+    await withStorage(async (storage) => {
+      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+      const value = session("p1:build");
+      const first = messages(5, "first");
+      checkpoints.observe(value, first);
+      const snapshot = pipeline("p1", [value]);
+      let revision = await save(storage, checkpoints, snapshot);
+
+      const second = messages(9, "second");
+      expect(checkpoints.observe(snapshot.sessions[0]!, second)).toBe(true);
+      const store = (
+        storage as unknown as {
+          buildPipelineTranscriptStore(): { commitStagedInTransaction(staged: unknown): unknown };
+        }
+      ).buildPipelineTranscriptStore();
+      const refused = spyOn(store, "commitStagedInTransaction").mockReturnValueOnce({
+        ok: false,
+        reason: "conflict",
+      });
+      try {
+        revision = await save(storage, checkpoints, snapshot, revision);
+      } finally {
+        refused.mockRestore();
+      }
+      // Stored and in-memory sessions agree on the committed transcript.
+      const persisted = (await stored(storage, "p1")).sessions[0]!;
+      expect(persisted.transcriptCheckpointError).toBe("conflict");
+      expect(snapshot.sessions[0]!.transcript).toEqual(persisted.transcript);
+      expect(await body(storage, "p1", persisted)).toEqual(first);
+
+      // The provider still reports the newer body: it is detected and lands.
+      expect(checkpoints.observe(snapshot.sessions[0]!, second)).toBe(true);
+      await save(storage, checkpoints, snapshot, revision);
+      const recovered = (await stored(storage, "p1")).sessions[0]!;
+      expect(recovered.transcriptCheckpointError).toBeUndefined();
+      expect(await body(storage, "p1", recovered)).toEqual(second);
     });
   });
 

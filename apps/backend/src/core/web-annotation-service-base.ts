@@ -411,8 +411,8 @@ export abstract class WebAnnotationServiceBase {
   }
 
   // -------------------------------------------------------------------------
-  // Drafts: persisted in the draft index (`drafts.json`), never the listing
-  // index, so autosave writes stay small.
+  // Drafts: draft rows and draft text records only, so autosave writes stay
+  // small and never advance the environment revision.
 
   /** Remove drafts inside a manifest transaction (a note published from them). */
   protected removeDraftInTx(
@@ -596,8 +596,15 @@ export abstract class WebAnnotationServiceBase {
       Object.values(manifest.assets).find((asset) => asset.digest === png.digest);
     const quick = findExisting(store.manifest);
     if (quick) return { asset: this.publicAsset(environmentId, quick), deduplicated: true };
+    // File work happens before the commit: stage, then promote into assets/
+    // under a fresh id. The commit only adds the row; a commit that does not
+    // add it (deduplicated or failed) discards the promoted file, unless a
+    // committed row references it after all.
     const staging = await store.stageFile(png.bytes);
+    const assetId = newId("asset");
+    let keep = false;
     try {
+      await store.promoteStagedAsset(staging, assetId);
       const result = await store.mutate((tx) => {
         const existing = findExisting(tx.manifest);
         if (existing)
@@ -611,7 +618,7 @@ export abstract class WebAnnotationServiceBase {
           );
         }
         const asset: ManifestAsset = {
-          id: newId("asset"),
+          id: assetId,
           digest: png.digest,
           bytes: png.bytes.byteLength,
           width: png.width,
@@ -621,12 +628,20 @@ export abstract class WebAnnotationServiceBase {
           orphanedAt: tx.now,
         };
         tx.manifest.assets[asset.id] = asset;
-        tx.promoteStagedAsset(staging, asset.id);
+        tx.markDirty();
         return { asset: this.publicAsset(environmentId, asset), deduplicated: false };
       });
+      keep = !result.value.deduplicated;
       return result.value;
     } finally {
       await store.releaseStaged(staging);
+      if (!keep) {
+        try {
+          store.discardUncommittedAsset(assetId);
+        } catch {
+          // Collected as an orphan after the grace period.
+        }
+      }
     }
   }
 
@@ -664,7 +679,7 @@ export abstract class WebAnnotationServiceBase {
 
   /**
    * One bounded GC pass for an environment: orphan marks, asset removals,
-   * settled materialized evidence, and uncommitted staging/record leftovers.
+   * settled materialized evidence, and uncommitted staging and asset files.
    */
   async collectGarbage(
     environmentId: string,

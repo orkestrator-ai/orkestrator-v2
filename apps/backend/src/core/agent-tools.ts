@@ -749,6 +749,12 @@ export class AgentToolsServer {
     }
 
     if (url.pathname === "/design-mcp") {
+      // The in-memory library can lag a canvas another backend sharing the
+      // data directory just created; refresh (cheap when nothing changed)
+      // before refusing.
+      if (this.design && !this.design.hasCanvases(scope.environmentId)) {
+        await this.design.refreshLibrary().catch(() => undefined);
+      }
       if (!this.design?.hasCanvases(scope.environmentId)) {
         jsonResponse(response, 404, { error: "Design tools are not enabled for this environment" });
         return;

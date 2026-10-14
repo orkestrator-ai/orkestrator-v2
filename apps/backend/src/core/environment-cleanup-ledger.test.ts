@@ -1,16 +1,22 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  ENVIRONMENT_CLEANUP_LEDGER_FILE,
+  closeEnvironmentCleanupStorage,
   EnvironmentCleanupLedger,
+  environmentCleanupSweepState,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
+import { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
+import { readStoredValue, seedStore, seedUnreadableStore } from "./storage-test-support.js";
 
+const LEDGER = "environment-cleanup-ledger.json";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  closeEnvironmentCleanupStorage();
   await Promise.all(
     tempDirectories
       .splice(0)
@@ -48,7 +54,7 @@ function entry(overrides: Partial<EnvironmentCleanupEntry> = {}): EnvironmentCle
 }
 
 describe("environment cleanup ledger", () => {
-  test("drops an entry, and then the file, once every step completes", async () => {
+  test("drops an entry, leaving an empty ledger, once every step completes", async () => {
     const { ledger, dataDir } = await ledgerInTempDir();
     await ledger.record(entry());
     await ledger.complete("e1", "worktree");
@@ -57,7 +63,8 @@ describe("environment cleanup ledger", () => {
 
     await ledger.complete("e1", "state-dirs");
     expect(await ledger.get("e1")).toBeNull();
-    await expect(fs.stat(path.join(dataDir, ENVIRONMENT_CLEANUP_LEDGER_FILE))).rejects.toThrow();
+    expect(await ledger.list()).toEqual([]);
+    expect(readStoredValue(dataDir, LEDGER)).toEqual({ version: 1, entries: {} });
   });
 
   test("keeps a failed step pending with its redacted error", async () => {
@@ -86,28 +93,119 @@ describe("environment cleanup ledger", () => {
     });
   });
 
-  test("tolerates a torn ledger file instead of blocking new records", async () => {
+  test("tolerates an unreadable ledger instead of blocking new records", async () => {
     const { ledger, dataDir } = await ledgerInTempDir();
-    await fs.writeFile(path.join(dataDir, ENVIRONMENT_CLEANUP_LEDGER_FILE), "{ torn");
+    seedUnreadableStore(dataDir, LEDGER, "{ torn");
     expect(await ledger.list()).toEqual([]);
+    expect(await ledger.get("e1")).toBeNull();
     await ledger.record(entry());
     expect((await ledger.list()).map((item) => item.environmentId)).toEqual(["e1"]);
   });
 
   test("ignores malformed entries and unknown steps", async () => {
     const { ledger, dataDir } = await ledgerInTempDir();
-    await fs.writeFile(
-      path.join(dataDir, ENVIRONMENT_CLEANUP_LEDGER_FILE),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          bad: { version: 2, environmentId: "bad" },
-          e1: { ...entry(), pending: ["worktree", "format-disk"] },
-        },
-      }),
-    );
+    seedStore(dataDir, LEDGER, {
+      version: 1,
+      entries: {
+        bad: { version: 2, environmentId: "bad" },
+        e1: { ...entry(), pending: ["worktree", "format-disk"] },
+      },
+    });
     const entries = await ledger.list();
     expect(entries.map((item) => item.environmentId)).toEqual(["e1"]);
     expect(entries[0]?.pending).toEqual(["worktree"]);
+    expect(await ledger.get("bad")).toBeNull();
+    expect((await ledger.get("e1"))?.pending).toEqual(["worktree"]);
+  });
+
+  test("keeps a record another backend committed between two of its writes", async () => {
+    const { ledger, dataDir } = await ledgerInTempDir();
+    await ledger.record(entry());
+    // A second backend sharing the data directory has its own connection.
+    const other = openBackendDatabase(dataDir);
+    try {
+      other.updateStore(
+        "environment-cleanup-ledger",
+        () => ({ version: 1, entries: {} }),
+        (ledger: { entries: Record<string, EnvironmentCleanupEntry> }) => {
+          ledger.entries.e2 = entry({ environmentId: "e2" });
+        },
+      );
+    } finally {
+      other.close();
+    }
+    await ledger.complete("e1", "worktree");
+    expect((await ledger.list()).map((item) => item.environmentId).sort()).toEqual(["e1", "e2"]);
+    expect((await ledger.get("e1"))?.pending).toEqual(["branch", "state-dirs"]);
+  });
+
+  test("a failed write commits nothing and leaves the previous ledger", async () => {
+    const { ledger } = await ledgerInTempDir();
+    await ledger.record(entry());
+    const write = spyOn(StorageDatabase.prototype, "writeStoreInTransaction").mockImplementation(
+      () => {
+        throw new Error("disk full");
+      },
+    );
+    try {
+      await expect(ledger.complete("e1", "worktree")).rejects.toThrow("disk full");
+      await expect(ledger.record(entry({ environmentId: "e2" }))).rejects.toThrow("disk full");
+    } finally {
+      write.mockRestore();
+    }
+    expect((await ledger.list()).map((item) => item.pending)).toEqual([
+      ["worktree", "branch", "state-dirs"],
+    ]);
+  });
+
+  test("a storage failure other than an unreadable value is not read as an empty ledger", async () => {
+    const { ledger } = await ledgerInTempDir();
+    await ledger.record(entry());
+    const read = spyOn(StorageDatabase.prototype, "readStore").mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+    try {
+      await expect(ledger.list()).rejects.toThrow("database is locked");
+    } finally {
+      read.mockRestore();
+    }
+    expect(await ledger.list()).toHaveLength(1);
+  });
+
+  test("follows a data directory deleted and recreated at the same path", async () => {
+    const { ledger, dataDir } = await ledgerInTempDir();
+    await ledger.record(entry());
+    await fs.rm(dataDir, { recursive: true, force: true });
+    expect(await ledger.list()).toEqual([]);
+    await fs.mkdir(dataDir, { recursive: true });
+    await ledger.record(entry({ environmentId: "e2" }));
+    expect(
+      Object.keys(readStoredValue<{ entries: Record<string, unknown> }>(dataDir, LEDGER)!.entries),
+    ).toEqual(["e2"]);
+  });
+});
+
+describe("environment cleanup sweep state", () => {
+  test("records sweeps and cursors, dropping unknown projects", async () => {
+    const { dataDir } = await ledgerInTempDir();
+    const state = environmentCleanupSweepState(dataDir);
+    await state.recordBranchSweep("p1", new Date("2026-09-26T00:00:00.000Z"), ["p1"]);
+    await state.recordBranchSweep(
+      "p2",
+      new Date("2026-09-26T01:00:00.000Z"),
+      ["p2"],
+      "refs/heads/feature",
+    );
+    expect(await state.branchSweeps()).toEqual({ p2: "2026-09-26T01:00:00.000Z" });
+    expect(await state.branchCursors()).toEqual({ p2: "refs/heads/feature" });
+  });
+
+  test("an unreadable sweep state reads as empty and is replaced", async () => {
+    const { dataDir } = await ledgerInTempDir();
+    seedUnreadableStore(dataDir, "environment-cleanup-sweeps.json");
+    const state = environmentCleanupSweepState(dataDir);
+    expect(await state.branchSweeps()).toEqual({});
+    await state.recordBranchSweep("p1", new Date("2026-09-26T00:00:00.000Z"), []);
+    expect(await state.branchSweeps()).toEqual({ p1: "2026-09-26T00:00:00.000Z" });
   });
 });

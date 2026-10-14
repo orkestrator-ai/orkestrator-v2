@@ -11,6 +11,7 @@ import {
 } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import {
+  closeEnvironmentCleanupStorage,
   environmentCleanupLedger,
   environmentCleanupSweepState,
   type EnvironmentCleanupEntry,
@@ -38,6 +39,7 @@ import { StorageService } from "./storage.js";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  closeEnvironmentCleanupStorage();
   for (const directory of tempDirectories) cancelScheduledEnvironmentCleanup(directory);
   await Promise.all(
     tempDirectories

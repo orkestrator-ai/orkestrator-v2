@@ -29,6 +29,7 @@ import {
 import { cachedLaunchModels } from "./control-shared-actions.js";
 import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
+import { seedUnreadableStore } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -2615,7 +2616,7 @@ describe("durable tab teardown commands", () => {
 
   test("skips every destructive orphan path when the layout store is unreadable", async () => {
     await withCommands(async (invoke, _storage, dataDir) => {
-      await fs.writeFile(path.join(dataDir, "pane-layouts.json"), "{truncated", "utf8");
+      seedUnreadableStore(dataDir, "pane-layouts.json", "{truncated");
       await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
         terminals: 0,
         nativeSessions: 0,

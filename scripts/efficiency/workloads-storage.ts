@@ -50,7 +50,12 @@ interface StorageLike {
   init(): Promise<void>;
   getNativeAgentDisplayTail(key: string): Promise<unknown>;
   putNativeAgentDisplayTail(key: string, tail: unknown): Promise<boolean>;
-  nativeAgentDisplayTailStore?: () => { records: { stats(): Record<string, number> } };
+  nativeAgentDisplayTailStore?: () => {
+    /** Keyed-record engine (before the database move). */
+    records?: { stats(): Record<string, number> };
+    /** Database rows: `rowReads`/`rowWrites` instead of payload reads/writes. */
+    stats?(): Record<string, number>;
+  };
 }
 
 export async function displayTailWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
@@ -80,8 +85,20 @@ export async function displayTailWorkload(context: WorkloadContext): Promise<Wor
       historyComplete: true,
       updatedAt: FIXTURE_CREATED_AT,
     });
-  const recordStats = (storage: StorageLike): Record<string, number> | undefined =>
-    storage.nativeAgentDisplayTailStore?.().records.stats();
+  const recordStats = (storage: StorageLike): Record<string, number> | undefined => {
+    const store = storage.nativeAgentDisplayTailStore?.();
+    if (store?.records) return store.records.stats();
+    const stats = store?.stats?.();
+    if (!stats) return undefined;
+    // One database row is one record payload; there are no headers or index.
+    return {
+      payloadReads: stats.rowReads ?? 0,
+      headerReads: 0,
+      payloadWrites: stats.rowWrites ?? 0,
+      bytesWritten: stats.bytesWritten ?? 0,
+      indexWrites: 0,
+    };
+  };
   const statDelta = (before?: Record<string, number>, after?: Record<string, number>) => {
     const delta: Record<string, number> = {};
     for (const name of [
@@ -123,7 +140,11 @@ export async function displayTailWorkload(context: WorkloadContext): Promise<Wor
         if (!read.result) throw new Error("cold read missed the persisted tail");
         return {
           counters: {
-            store: recordStore ? "keyed-records" : "shared-file",
+            store: !recordStore
+              ? "shared-file"
+              : storage.nativeAgentDisplayTailStore?.().records
+                ? "keyed-records"
+                : "database-rows",
             updateKiBRead: kib(update.io?.readBytes),
             updateKiBWritten: kib(update.io?.writeBytes),
             // The shared file is parsed and rewritten whole: every record is a
@@ -145,7 +166,7 @@ export async function displayTailWorkload(context: WorkloadContext): Promise<Wor
     findings: ["E04"],
     fixture: { records: "1,32,128", messagesPerTail: 20, messageBytes: 2 * 1024 },
     method:
-      "Real StorageService on a temp data dir. KiB are /proc/self/io rchar/wchar deltas around the awaited call, rounded (Linux; -1 elsewhere), and include backups and index files. HEAD payload counts come from KeyedRecordStore.stats(); the baseline shared file is parsed whole, so its payload counts equal the record count (derived).",
+      "Real StorageService on a temp data dir. KiB are /proc/self/io rchar/wchar deltas around the awaited call, rounded (Linux; -1 elsewhere), and include backups and index files. HEAD payload counts come from the display-tail store's stats (database rows read/written; KeyedRecordStore.stats() on older roots); the baseline shared file is parsed whole, so its payload counts equal the record count (derived).",
     cases: [1, 32, 128].map(caseFor),
   };
 }

@@ -182,8 +182,6 @@ function sanitizeSettings(value: unknown): PreviewSettings {
  * grants, cookies, or connectivity assumptions.
  */
 export class StoragePreviewServices extends StorageKanban {
-  protected previewServiceMutation: Promise<unknown> = Promise.resolve();
-  protected previewSettingsMutation: Promise<unknown> = Promise.resolve();
   private previewIdentityPromise: Promise<PreviewBackendIdentity> | null = null;
 
   protected previewServicesFile(): string {
@@ -199,25 +197,11 @@ export class StoragePreviewServices extends StorageKanban {
   }
 
   private enqueuePreview<T>(
-    field: "previewServiceMutation" | "previewSettingsMutation",
     file: string,
     description: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(file, description);
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this[field].then(run, run);
-    this[field] = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(file, description, operation);
   }
 
   async loadPreviewServiceStore(): Promise<LoadedPreviewServiceStore> {
@@ -249,29 +233,24 @@ export class StoragePreviewServices extends StorageKanban {
   async mutatePreviewServiceStore<T>(
     mutate: (store: PreviewServiceStore) => { changed: boolean; result: T },
   ): Promise<T> {
-    return this.enqueuePreview(
-      "previewServiceMutation",
-      this.previewServicesFile(),
-      "preview service storage",
-      async () => {
-        const raw = await this.loadJson<unknown>(this.previewServicesFile(), () => ({}));
-        const opaque = isRecord(raw) && isRecord(raw.definitions) ? raw.definitions : {};
-        const { store } = await this.loadPreviewServiceStore();
-        const { changed, result } = mutate(store);
-        if (!changed) return result;
-        const preserved: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(opaque)) {
-          if (previewDefinitionProblem(key, value)) preserved[key] = value;
-        }
-        store.operations = store.operations.slice(-MAX_OPERATIONS);
-        await this.saveJson(this.previewServicesFile(), {
-          version: 1,
-          definitions: { ...preserved, ...store.definitions },
-          operations: store.operations,
-        });
-        return result;
-      },
-    );
+    return this.enqueuePreview(this.previewServicesFile(), "preview service storage", async () => {
+      const raw = await this.loadJson<unknown>(this.previewServicesFile(), () => ({}));
+      const opaque = isRecord(raw) && isRecord(raw.definitions) ? raw.definitions : {};
+      const { store } = await this.loadPreviewServiceStore();
+      const { changed, result } = mutate(store);
+      if (!changed) return result;
+      const preserved: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(opaque)) {
+        if (previewDefinitionProblem(key, value)) preserved[key] = value;
+      }
+      store.operations = store.operations.slice(-MAX_OPERATIONS);
+      await this.saveJson(this.previewServicesFile(), {
+        version: 1,
+        definitions: { ...preserved, ...store.definitions },
+        operations: store.operations,
+      });
+      return result;
+    });
   }
 
   /**
@@ -289,34 +268,29 @@ export class StoragePreviewServices extends StorageKanban {
 
   private async loadOrCreatePreviewIdentity(): Promise<PreviewBackendIdentity> {
     const fingerprint = createHash("sha256").update(path.resolve(this.dataDir)).digest("hex");
-    return this.enqueuePreview(
-      "previewSettingsMutation",
-      this.backendIdentityFile(),
-      "backend identity",
-      async () => {
-        const stored = await this.loadJson<unknown>(this.backendIdentityFile(), () => null);
-        if (
-          isRecord(stored) &&
-          isOpaquePreviewId(stored.instanceId) &&
-          stored.dataDirFingerprint === fingerprint
-        ) {
-          return { instanceId: stored.instanceId, created: false };
-        }
-        if (isRecord(stored) && isOpaquePreviewId(stored.instanceId)) {
-          console.warn(
-            "[backend] Data directory moved or copied; minting a new backend identity for previews",
-          );
-        }
-        const instanceId = `bk_${randomBytes(16).toString("base64url")}`;
-        await this.saveJson(this.backendIdentityFile(), {
-          version: 1,
-          instanceId,
-          dataDirFingerprint: fingerprint,
-          createdAt: new Date().toISOString(),
-        });
-        return { instanceId, created: true };
-      },
-    );
+    return this.enqueuePreview(this.backendIdentityFile(), "backend identity", async () => {
+      const stored = await this.loadJson<unknown>(this.backendIdentityFile(), () => null);
+      if (
+        isRecord(stored) &&
+        isOpaquePreviewId(stored.instanceId) &&
+        stored.dataDirFingerprint === fingerprint
+      ) {
+        return { instanceId: stored.instanceId, created: false };
+      }
+      if (isRecord(stored) && isOpaquePreviewId(stored.instanceId)) {
+        console.warn(
+          "[backend] Data directory moved or copied; minting a new backend identity for previews",
+        );
+      }
+      const instanceId = `bk_${randomBytes(16).toString("base64url")}`;
+      await this.saveJson(this.backendIdentityFile(), {
+        version: 1,
+        instanceId,
+        dataDirFingerprint: fingerprint,
+        createdAt: new Date().toISOString(),
+      });
+      return { instanceId, created: true };
+    });
   }
 
   async loadPreviewSettings(): Promise<PreviewSettings> {
@@ -328,15 +302,10 @@ export class StoragePreviewServices extends StorageKanban {
   async updatePreviewSettings(
     update: (current: PreviewSettings) => PreviewSettings,
   ): Promise<PreviewSettings> {
-    return this.enqueuePreview(
-      "previewSettingsMutation",
-      this.previewSettingsFile(),
-      "preview settings",
-      async () => {
-        const next = sanitizeSettings(update(await this.loadPreviewSettings()));
-        await this.saveJson(this.previewSettingsFile(), next);
-        return next;
-      },
-    );
+    return this.enqueuePreview(this.previewSettingsFile(), "preview settings", async () => {
+      const next = sanitizeSettings(update(await this.loadPreviewSettings()));
+      await this.saveJson(this.previewSettingsFile(), next);
+      return next;
+    });
   }
 }

@@ -9,6 +9,25 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 
+/** The account registry lives in the backend database; stage it through Bun. */
+function accountRegistry(
+  dataDir: string,
+  action: "read" | "write" | "delete",
+  value?: unknown,
+): { value: unknown } | null {
+  const result = spawnSync(
+    "bun",
+    [path.join(import.meta.dirname, "backend-store.ts"), dataDir, "agent-accounts.json", action],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      input: value === undefined ? undefined : JSON.stringify(value),
+    },
+  );
+  if (result.status !== 0) throw new Error(result.stderr || `backend-store ${action} failed`);
+  return action === "read" ? (JSON.parse(result.stdout) as { value: unknown } | null) : null;
+}
+
 async function login(page: Page, testInfo: TestInfo): Promise<void> {
   const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
@@ -44,8 +63,7 @@ test("account switching and errors rehydrate from the real backend", async ({ pa
   };
   expect(status.status).toBe("ready");
   expect(status.flavor).toBe("agent-test");
-  const registry = path.join(status.dataDir, "agent-accounts.json");
-  const original = await fs.readFile(registry).catch(() => undefined);
+  const original = accountRegistry(status.dataDir, "read");
   const accountId = randomUUID();
   const home = path.join(status.dataDir, "agent-accounts", "codex", accountId);
   await fs.mkdir(home, { recursive: true });
@@ -56,21 +74,18 @@ test("account switching and errors rehydrate from the real backend", async ({ pa
       tokens: { refresh_token: "fixture-only", account_id: "fixture" },
     }),
   );
-  await fs.writeFile(
-    registry,
-    JSON.stringify({
-      version: 1,
-      active: {},
-      accounts: [
-        {
-          id: accountId,
-          platform: "codex",
-          label: "Fixture account",
-          createdAt: "2026-09-28T00:00:00Z",
-        },
-      ],
-    }),
-  );
+  accountRegistry(status.dataDir, "write", {
+    version: 1,
+    active: {},
+    accounts: [
+      {
+        id: accountId,
+        platform: "codex",
+        label: "Fixture account",
+        createdAt: "2026-09-28T00:00:00Z",
+      },
+    ],
+  });
   try {
     await login(page, testInfo);
     await openCodexAccounts(page);
@@ -92,26 +107,23 @@ test("account switching and errors rehydrate from the real backend", async ({ pa
       page.getByRole("listitem", { name: "Host login" }).getByText("Active"),
     ).toBeVisible();
 
-    await fs.writeFile(registry, JSON.stringify({ version: 1, active: {}, accounts: [] }));
+    accountRegistry(status.dataDir, "write", { version: 1, active: {}, accounts: [] });
     await added.getByRole("button", { name: "Use" }).click();
     await expect(page.getByText("Unknown agent account", { exact: true })).toBeVisible();
     await page.reload();
     await openCodexAccounts(page);
     await expect(page.getByRole("listitem", { name: "Fixture account" })).toHaveCount(0);
 
-    await fs.writeFile(
-      registry,
-      JSON.stringify({
-        version: 1,
-        active: {},
-        accounts: Array.from({ length: MAX_AGENT_ACCOUNTS_PER_PLATFORM }, (_, index) => ({
-          id: randomUUID(),
-          platform: "codex",
-          label: `Limit fixture ${index}`,
-          createdAt: "2026-09-28T00:00:00Z",
-        })),
-      }),
-    );
+    accountRegistry(status.dataDir, "write", {
+      version: 1,
+      active: {},
+      accounts: Array.from({ length: MAX_AGENT_ACCOUNTS_PER_PLATFORM }, (_, index) => ({
+        id: randomUUID(),
+        platform: "codex",
+        label: `Limit fixture ${index}`,
+        createdAt: "2026-09-28T00:00:00Z",
+      })),
+    });
     await page.reload();
     await openCodexAccounts(page);
     await page
@@ -122,8 +134,8 @@ test("account switching and errors rehydrate from the real backend", async ({ pa
       page.getByText("No more accounts can be added for this platform.", { exact: true }),
     ).toBeVisible();
   } finally {
-    if (original === undefined) await fs.rm(registry, { force: true });
-    else await fs.writeFile(registry, original);
+    if (original === null) accountRegistry(status.dataDir, "delete");
+    else accountRegistry(status.dataDir, "write", original.value);
     await fs.rm(home, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,5 @@
 import * as shared from "./storage-shared.js";
 import {
-  MAX_JSON_BACKUPS,
   exists,
   fs,
   isNonBlankString,
@@ -299,20 +298,7 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   }
 
   protected enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(this.fileDraftsFile(), "file draft storage");
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.fileDraftMutation.then(run, run);
-    this.fileDraftMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.fileDraftsFile(), "file draft storage", operation);
   }
 
   protected validFileDrafts(stored: unknown): Record<string, PersistedFileDraft> {
@@ -430,23 +416,7 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   }
 
   protected enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.agentHandoffsFile(),
-        "agent handoff storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.agentHandoffMutation.then(run, run);
-    this.agentHandoffMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.agentHandoffsFile(), "agent handoff storage", operation);
   }
 
   protected async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
@@ -524,33 +494,6 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     });
   }
 
-  protected async assertAgentHandoffBackupOwnership(
-    handoffId: string,
-    environmentId: string,
-  ): Promise<void> {
-    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
-      const backup = this.backupPath(this.agentHandoffsFile(), index);
-      if (!(await exists(backup))) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(await fs.readFile(backup, "utf8"));
-      } catch {
-        // The scrub that follows removes corrupt backups because their content
-        // cannot be proven free of the targeted handoff.
-        continue;
-      }
-      if (!isRecord(parsed)) continue;
-      const candidate = parsed[handoffId];
-      if (
-        isRecord(candidate) &&
-        isNonBlankString(candidate.environmentId) &&
-        candidate.environmentId !== environmentId
-      ) {
-        throw new Error("Agent handoff belongs to another environment");
-      }
-    }
-  }
-
   /**
    * Deletes one handoff after its destination tab no longer references it.
    *
@@ -577,15 +520,13 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       ) {
         throw new Error("Agent handoff belongs to another environment");
       }
-      await this.assertAgentHandoffBackupOwnership(handoffId, environmentId);
       const existed = Object.prototype.hasOwnProperty.call(handoffs, handoffId);
       delete handoffs[handoffId];
-      // Always rewrite an existing file: a corrupt primary may have fallen back
-      // to a backup, and an idempotent retry still needs to replace that
-      // unreadable primary. Do not *create* one — a client deleting a stale
-      // reference on an installation that never used the feature should leave no
-      // trace, and there is nothing to recover when no file exists.
-      if (await exists(this.agentHandoffsFile())) {
+      // Always rewrite an existing store: an unreadable one reads as empty, and
+      // an idempotent retry still needs to replace it. Do not *create* one — a
+      // client deleting a stale reference on an installation that never used
+      // the feature should leave no trace.
+      if (await this.storeExists(this.agentHandoffsFile())) {
         await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
       }
       await this.scrubSensitiveJsonBackups(
@@ -649,9 +590,9 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
             isPersistedAgentHandoff(handoff, storedId) && handoff.environmentId !== environmentId,
         ),
       );
-      // Rewrite even if no valid record matched. Invalid primary entries cannot
-      // be proven free of content from the environment being deleted.
-      if (await exists(this.agentHandoffsFile())) {
+      // Rewrite even if no valid record matched. Invalid entries cannot be
+      // proven free of content from the environment being deleted.
+      if (await this.storeExists(this.agentHandoffsFile())) {
         await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
       }
       await this.scrubSensitiveJsonBackups(
@@ -689,40 +630,57 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   }
 
   async getSessionsByEnvironment(environmentId: string): Promise<Session[]> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
+    const sessions = this.loadStoreRowsByOwner<Session>(this.sessionsFile(), environmentId);
     return sessions
       .filter((session) => session.environmentId === environmentId)
       .sort((a, b) => a.order - b.order);
   }
 
+  // Every sessions-store mutation below is one synchronous SQLite transaction
+  // (`updateStore`), so concurrent tab creates, renames and reorders — in this
+  // or another backend — cannot overwrite each other's read-modify-write.
   async updateSession(sessionId: string, updates: Partial<Session>): Promise<Session> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const session = sessions.find((candidate) => candidate.id === sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
-    Object.assign(session, updates);
-    await this.saveJson(this.sessionsFile(), sessions);
+    const session = this.updateStore(
+      this.sessionsFile(),
+      (): Session[] => [],
+      (sessions) => {
+        const found = sessions.find((candidate) => candidate.id === sessionId);
+        if (!found) throw new Error(`Session not found: ${sessionId}`);
+        Object.assign(found, updates);
+        return found;
+      },
+    );
     this.announce("session", session.environmentId);
     return session;
   }
 
   async removeSession(sessionId: string): Promise<void> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const removed = sessions.find((session) => session.id === sessionId);
-    const filtered = sessions.filter((session) => session.id !== sessionId);
-    if (filtered.length === sessions.length) throw new Error(`Session not found: ${sessionId}`);
-    await this.saveJson(this.sessionsFile(), filtered);
+    const removed = this.updateStore(
+      this.sessionsFile(),
+      (): Session[] => [],
+      (sessions) => {
+        const index = sessions.findIndex((session) => session.id === sessionId);
+        if (index < 0) throw new Error(`Session not found: ${sessionId}`);
+        return sessions.splice(index, 1)[0];
+      },
+    );
     await this.deleteSessionBuffer(sessionId);
     if (removed) this.announce("session", removed.environmentId);
   }
 
   async removeSessionsByEnvironment(environmentId: string): Promise<string[]> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const removed = sessions
-      .filter((session) => session.environmentId === environmentId)
-      .map((session) => session.id);
-    await this.saveJson(
+    const removed = this.updateStore(
       this.sessionsFile(),
-      sessions.filter((session) => session.environmentId !== environmentId),
+      (): Session[] => [],
+      (sessions) => {
+        const ids = sessions
+          .filter((session) => session.environmentId === environmentId)
+          .map((session) => session.id);
+        for (let index = sessions.length - 1; index >= 0; index -= 1) {
+          if (sessions[index]!.environmentId === environmentId) sessions.splice(index, 1);
+        }
+        return ids;
+      },
     );
     await Promise.all(removed.map((sessionId) => this.deleteSessionBuffer(sessionId)));
     if (removed.length > 0) this.announce("session", environmentId);
@@ -730,34 +688,43 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   }
 
   async disconnectEnvironmentSessions(environmentId: string): Promise<Session[]> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const updated: Session[] = [];
-    for (const session of sessions) {
-      if (session.environmentId === environmentId && session.status === "connected") {
-        session.status = "disconnected";
-        updated.push(session);
-      }
-    }
-    await this.saveJson(this.sessionsFile(), sessions);
+    const updated = this.updateStore(
+      this.sessionsFile(),
+      (): Session[] => [],
+      (sessions) => {
+        const changed: Session[] = [];
+        for (const session of sessions) {
+          if (session.environmentId === environmentId && session.status === "connected") {
+            session.status = "disconnected";
+            changed.push(session);
+          }
+        }
+        return changed;
+      },
+    );
     if (updated.length > 0) this.announce("session", environmentId);
     return updated;
   }
 
   async reorderSessions(environmentId: string, sessionIds: string[]): Promise<Session[]> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const provided = new Set(sessionIds);
-    for (const [index, id] of sessionIds.entries()) {
-      const session = sessions.find(
-        (candidate) => candidate.id === id && candidate.environmentId === environmentId,
-      );
-      if (session) session.order = index;
-    }
-    let order = sessionIds.length;
-    for (const session of sessions) {
-      if (session.environmentId === environmentId && !provided.has(session.id))
-        session.order = order++;
-    }
-    await this.saveJson(this.sessionsFile(), sessions);
+    this.updateStore(
+      this.sessionsFile(),
+      (): Session[] => [],
+      (sessions) => {
+        const provided = new Set(sessionIds);
+        for (const [index, id] of sessionIds.entries()) {
+          const session = sessions.find(
+            (candidate) => candidate.id === id && candidate.environmentId === environmentId,
+          );
+          if (session) session.order = index;
+        }
+        let order = sessionIds.length;
+        for (const session of sessions) {
+          if (session.environmentId === environmentId && !provided.has(session.id))
+            session.order = order++;
+        }
+      },
+    );
     this.announce("session", environmentId);
     return this.getSessionsByEnvironment(environmentId);
   }

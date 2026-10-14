@@ -211,7 +211,7 @@ export abstract class StorageConfig extends StorageProjects {
       const current = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
       const normalized = normalizePersistedConfig(current);
       if (normalized === current) return;
-      await this.saveJson(this.configFile(), normalized);
+      await this.saveSensitiveJson(this.configFile(), normalized);
     });
   }
 
@@ -238,7 +238,7 @@ export abstract class StorageConfig extends StorageProjects {
             },
           }
         : validated;
-      await this.saveJson(this.configFile(), next);
+      await this.saveSensitiveJson(this.configFile(), next);
     });
     this.announce("config", "app");
   }
@@ -274,12 +274,10 @@ export abstract class StorageConfig extends StorageProjects {
       throw new Error(`${agent} model catalogue must contain at least one valid model.`);
     }
 
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.agentModelCatalogFile(),
-        "Agent model catalogue storage",
-      );
-      try {
+    return this.serializeMutation(
+      this.agentModelCatalogFile(),
+      "Agent model catalogue storage",
+      async () => {
         const current = await this.getAgentModelCatalogCache();
         const existing = current[agent];
         if (existing && JSON.stringify(existing.models) === JSON.stringify(normalizedModels)) {
@@ -294,17 +292,8 @@ export abstract class StorageConfig extends StorageProjects {
         };
         await this.saveJson(this.agentModelCatalogFile(), next);
         return next;
-      } finally {
-        await release();
-      }
-    };
-
-    const next = this.agentModelCatalogMutationQueue.then(run, run);
-    this.agentModelCatalogMutationQueue = next.then(
-      () => undefined,
-      () => undefined,
+      },
     );
-    return next;
   }
 
   async getOpenCodeModelCatalog(projectId: string): Promise<OpenCodeModelCatalogSnapshot | null> {
@@ -327,12 +316,10 @@ export abstract class StorageConfig extends StorageProjects {
       .update(JSON.stringify(normalizedModels))
       .digest("hex");
 
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.openCodeModelCatalogFile(),
-        "OpenCode model catalogue storage",
-      );
-      try {
+    return this.serializeMutation(
+      this.openCodeModelCatalogFile(),
+      "OpenCode model catalogue storage",
+      async () => {
         const persisted = await this.loadJson<unknown>(this.openCodeModelCatalogFile(), () => null);
         const catalogs = parseOpenCodeModelCatalogStore(persisted);
         const current = catalogs[normalizedProjectId];
@@ -354,17 +341,8 @@ export abstract class StorageConfig extends StorageProjects {
         };
         await this.saveJson(this.openCodeModelCatalogFile(), store);
         return snapshot;
-      } finally {
-        await release();
-      }
-    };
-
-    const next = this.openCodeModelCatalogMutationQueue.then(run, run);
-    this.openCodeModelCatalogMutationQueue = next.then(
-      () => undefined,
-      () => undefined,
+      },
     );
-    return next;
   }
 
   async getDesktopConnections(): Promise<StoredDesktopConnections> {
@@ -384,7 +362,7 @@ export abstract class StorageConfig extends StorageProjects {
     await this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.desktopConnections = validated;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
     });
     this.announce("config", "app");
   }
@@ -401,7 +379,7 @@ export abstract class StorageConfig extends StorageProjects {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -433,7 +411,7 @@ export abstract class StorageConfig extends StorageProjects {
             }
           : {}),
       };
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -452,7 +430,7 @@ export abstract class StorageConfig extends StorageProjects {
         ...current,
         ...updates,
       };
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -554,7 +532,7 @@ export abstract class StorageConfig extends StorageProjects {
               : {}),
           }
         : validated;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -572,7 +550,7 @@ export abstract class StorageConfig extends StorageProjects {
       };
       if (Object.keys(next).length > 0) config.global.worktreeLocations = next;
       else delete config.global.worktreeLocations;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -585,7 +563,7 @@ export abstract class StorageConfig extends StorageProjects {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global = { ...config.global, mcpManagement: settings };
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -600,7 +578,7 @@ export abstract class StorageConfig extends StorageProjects {
         ...config.global,
         notificationSounds,
       };
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -611,7 +589,7 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadConfig();
       if (token === null) delete config.global.githubToken;
       else config.global.githubToken = token;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -622,7 +600,7 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadConfig();
       if (apiKey === null) delete config.global.cursorApiKey;
       else config.global.cursorApiKey = apiKey;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -633,7 +611,7 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadConfig();
       if (apiKey === null) delete config.global.anthropicApiKey;
       else config.global.anthropicApiKey = apiKey;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });
@@ -644,7 +622,7 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadConfig();
       if (apiKey === null) delete config.global.openCodeZenApiKey;
       else config.global.openCodeZenApiKey = apiKey;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;
     });

@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import type { StorageDatabase } from "./storage-database.js";
+import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
 
 async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-build-pipelines-"));
@@ -137,15 +139,15 @@ describe("StorageService build pipelines", () => {
       await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot());
       await storage.saveBuildPipeline("p2", "proj-2", "e2", 1, { id: "p2" });
 
-      const file = path.join(storage.getDataDir(), "build-pipelines.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
-        string,
-        Record<string, unknown>
-      >;
+      const dataDir = storage.getDataDir();
+      const stored = readStoredValue<Record<string, Record<string, unknown>>>(
+        dataDir,
+        "build-pipelines.json",
+      )!;
       stored.p1!.updatedAt = "2026-07-29T10:00:00.000Z";
       stored.p2!.updatedAt = "2026-07-29T09:00:00.000Z";
       stored.corrupt = { id: "corrupt", revision: "bad" };
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(dataDir, "build-pipelines.json", stored);
 
       const listed = await storage.listAllBuildPipelines();
       expect(listed.map((entry) => [entry.id, entry.projectId])).toEqual([
@@ -211,10 +213,10 @@ describe("StorageService build pipelines", () => {
   test("ignores a corrupt record instead of failing every read", async () => {
     await withStorage(async (storage) => {
       await storage.saveBuildPipeline("good", "proj-1", "e1", 1, snapshot());
-      const file = path.join(storage.getDataDir(), "build-pipelines.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
+      const dataDir = storage.getDataDir();
+      const stored = readStoredValue<Record<string, unknown>>(dataDir, "build-pipelines.json")!;
       stored.corrupt = { id: "corrupt", revision: "not-a-number" };
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(dataDir, "build-pipelines.json", stored);
 
       expect((await storage.listBuildPipelines("proj-1")).map((entry) => entry.id)).toEqual([
         "good",
@@ -301,20 +303,16 @@ describe("StorageService build pipelines", () => {
     });
   });
 
-  describe("backup scrubbing", () => {
-    /** Every retained copy of the pipeline file, primary and backups. */
-    async function readAllCopies(storage: StorageService): Promise<string> {
-      const dir = storage.getDataDir();
-      const names = (await fs.readdir(dir)).filter((name) =>
-        name.startsWith("build-pipelines.json"),
-      );
-      const contents = await Promise.all(
-        names.map((name) => fs.readFile(path.join(dir, name), "utf8")),
-      );
-      return contents.join("\n");
+  describe("deletion scrubbing", () => {
+    /**
+     * Whether `needle` survives anywhere in the database files: live rows,
+     * free pages or retained WAL frames of earlier revisions.
+     */
+    function storedAnywhere(storage: StorageService, needle: string): boolean {
+      return storageFilesContain(storage.getDataDir(), needle);
     }
 
-    test("removes a deleted environment's task snapshots from every retained backup", async () => {
+    test("removes a deleted environment's task snapshots from every earlier revision", async () => {
       await withStorage(async (storage) => {
         // Task snapshots embed attachment data and full review findings, so an
         // early revision surviving in a backup is a real disclosure.
@@ -325,15 +323,15 @@ describe("StorageService build pipelines", () => {
         });
         await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("reviewing"), 1);
         await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("complete"), 2);
-        expect(await readAllCopies(storage)).toContain("EMBEDDED-ATTACHMENT");
+        expect(storedAnywhere(storage, "EMBEDDED-ATTACHMENT")).toBe(true);
 
         await storage.deleteBuildPipelinesByEnvironment("e1");
 
-        expect(await readAllCopies(storage)).not.toContain("EMBEDDED-ATTACHMENT");
+        expect(storedAnywhere(storage, "EMBEDDED-ATTACHMENT")).toBe(false);
       });
     });
 
-    test("single-pipeline deletion removes its snapshots from every retained backup", async () => {
+    test("single-pipeline deletion removes its snapshots from every earlier revision", async () => {
       await withStorage(async (storage) => {
         await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
           id: "p1",
@@ -341,15 +339,15 @@ describe("StorageService build pipelines", () => {
           notes: "SINGLE-DELETE-SECRET",
         });
         await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("reviewing"), 1);
-        expect(await readAllCopies(storage)).toContain("SINGLE-DELETE-SECRET");
+        expect(storedAnywhere(storage, "SINGLE-DELETE-SECRET")).toBe(true);
 
         await storage.deleteBuildPipeline("p1");
 
-        expect(await readAllCopies(storage)).not.toContain("SINGLE-DELETE-SECRET");
+        expect(storedAnywhere(storage, "SINGLE-DELETE-SECRET")).toBe(false);
       });
     });
 
-    test("leaves another environment's pipelines intact in the backups", async () => {
+    test("leaves another environment's pipelines intact", async () => {
       await withStorage(async (storage) => {
         await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, {
           id: "p2",
@@ -363,44 +361,34 @@ describe("StorageService build pipelines", () => {
         });
         await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("complete"), 1);
 
+        expect(storedAnywhere(storage, "DROP-ME")).toBe(true);
+
         await storage.deleteBuildPipelinesByEnvironment("e1");
 
-        const all = await readAllCopies(storage);
-        expect(all).toContain("KEEP-ME");
-        expect(all).not.toContain("DROP-ME");
+        expect(storedAnywhere(storage, "KEEP-ME")).toBe(true);
+        expect(storedAnywhere(storage, "DROP-ME")).toBe(false);
         expect(await storage.getBuildPipeline("p2")).not.toBeNull();
       });
     });
 
-    test("discards a corrupt backup that cannot be proven scrubbed", async () => {
-      await withStorage(async (storage) => {
-        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
-          id: "p1",
-          phase: "building",
-          notes: "SENSITIVE",
-        });
-        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("complete"), 1);
-        const backup = path.join(storage.getDataDir(), "build-pipelines.json.bak.1");
-        await fs.writeFile(backup, "{ not json SENSITIVE");
-
-        await storage.deleteBuildPipelinesByEnvironment("e1");
-
-        expect(await readAllCopies(storage)).not.toContain("SENSITIVE");
-      });
-    });
-
-    test("does not touch backups when the environment owned no pipelines", async () => {
+    test("does not rewrite the store when the environment owned no pipelines", async () => {
       await withStorage(async (storage) => {
         await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, {
           id: "p2",
           phase: "building",
           notes: "KEEP-ME",
         });
-        await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, snapshot("complete"), 1);
+        const database = (storage as unknown as { database: StorageDatabase }).database;
+        const revision = database.storeRevision("build-pipelines");
 
         expect(await storage.deleteBuildPipelinesByEnvironment("e1")).toEqual([]);
 
-        expect(await readAllCopies(storage)).toContain("KEEP-ME");
+        expect(database.storeRevision("build-pipelines")).toBe(revision);
+        expect(storedAnywhere(storage, "KEEP-ME")).toBe(true);
+        expect(await storage.getBuildPipeline("p2")).toMatchObject({
+          revision: 1,
+          snapshot: { notes: "KEEP-ME" },
+        });
       });
     });
   });

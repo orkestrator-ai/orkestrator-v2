@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
 
 async function withWorkflowStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-review-lease-guard-"));
@@ -131,10 +132,12 @@ describe("StorageService looped-review controller lease", () => {
       expect(
         await storage.validateLoopedReviewController("workflow-1", "desktop", first.token),
       ).toBe(true);
-      const file = path.join(dataDir, "looped-reviews.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8"));
-      stored["workflow-1"].controllerLease.expiresAt = new Date(Date.now() - 1).toISOString();
-      await fs.writeFile(file, JSON.stringify(stored));
+      const stored = readStoredValue<Record<string, { controllerLease: { expiresAt: string } }>>(
+        dataDir,
+        "looped-reviews.json",
+      )!;
+      stored["workflow-1"]!.controllerLease.expiresAt = new Date(Date.now() - 1).toISOString();
+      seedStore(dataDir, "looped-reviews.json", stored);
 
       expect(
         await storage.validateLoopedReviewController("workflow-1", "desktop", first.token),
@@ -256,16 +259,18 @@ describe("StorageService looped-review controller lease", () => {
         id: "workflow-3",
       });
 
-      const file = path.join(dataDir, "looped-reviews.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8"));
-      stored["workflow-1"].updatedAt = new Date(3_000).toISOString();
-      stored["workflow-2"].updatedAt = new Date(1_000).toISOString();
-      stored["workflow-3"].updatedAt = new Date(2_000).toISOString();
+      const stored = readStoredValue<Record<string, Record<string, unknown>>>(
+        dataDir,
+        "looped-reviews.json",
+      )!;
+      stored["workflow-1"]!.updatedAt = new Date(3_000).toISOString();
+      stored["workflow-2"]!.updatedAt = new Date(1_000).toISOString();
+      stored["workflow-3"]!.updatedAt = new Date(2_000).toISOString();
       stored["workflow-malformed"] = {
         ...stored["workflow-2"],
         id: "different-key",
       };
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(dataDir, "looped-reviews.json", stored);
 
       expect((await storage.listAllLoopedReviewWorkflows()).map(({ id }) => id)).toEqual([
         "workflow-2",

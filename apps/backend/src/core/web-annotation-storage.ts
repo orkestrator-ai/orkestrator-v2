@@ -1,39 +1,36 @@
+import { deletionMarker, markDeletion } from "./storage-deletion-fences.js";
 /**
  * Durable per-environment storage for web annotations.
  *
- * Layout under `<dataDir>/web-annotations/<environment-id>/`:
+ * Metadata lives in the backend database, one envelope store per environment
+ * (`web-annotations/<environment-id>`, layout and collections in
+ * `web-annotation-store-layout.ts`, row codec in `web-annotation-store-rows.ts`):
+ * the listing index, drafts, operation receipts, and the immutable records
+ * (captures, entries, request briefs, results, draft text). Files stay files
+ * under `<dataDir>/web-annotations/<environment-id>/`:
  *
- *   manifest.json            bounded listing index + mutable state (the commit point)
- *   manifest.prev.json       previous committed manifest, kept for recovery
- *   drafts.json              editor draft index (autosave commits touch only this)
- *   drafts.prev.json         previous committed draft index
- *   records/<opaque>/<rev>.json   immutable records: captures, entries, briefs,
- *                            request text, results, draft text
- *   assets/<asset-id>.png    validated images
- *   staging/                 uncommitted uploads
+ *   assets/<asset-id>.png    validated images (rows hold their metadata)
+ *   staging/                 uploads not yet promoted into assets/
+ *   migration-backups/       private copies of migrated legacy chat drafts
  *
- * Every mutation runs through one bounded serialized queue per environment.
- * Expected revisions are validated inside that queue, new record files are
- * written and fsynced first, and the index replacement (temp + fsync + rename
- * + directory fsync) is the commit point. The previous index generation is
- * preserved with a hard link (a durable copy where links are unsupported),
- * and records it references are deleted only after the following commit.
- * Nothing external (agents, Docker, file materialization) ever runs while the
- * queue is held. See `web-annotation-storage-format.ts` for the formats.
+ * A mutation is: asynchronous preparation outside (image staging and
+ * promotion into `assets/`), then ONE synchronous IMMEDIATE transaction that
+ * revalidates the in-memory model against the store revision (reloading what
+ * another backend committed), runs the caller's synchronous `work`, and writes
+ * only the rows that changed plus the environment revision. SQLite's write
+ * lock serializes that transaction against every connection and process, so
+ * two backends sharing a data directory never lose each other's updates. The
+ * per-environment FIFO only orders this process's writes and bounds them.
+ * Change hints, metrics and file removals happen only after the commit.
+ *
+ * Every read revalidates against the committed store revision (one indexed
+ * lookup), so another process's commits are visible before they are used.
+ * The old file layout (`manifest.json`, `drafts.json`, `records/`) is imported
+ * lazily on first access by `web-annotation-legacy-import.ts`.
  */
 import { randomUUID } from "node:crypto";
-import {
-  copyFile,
-  link,
-  mkdir,
-  open,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  unlink,
-} from "node:fs/promises";
+import { unlinkSync } from "node:fs";
+import { mkdir, open, readdir, readFile, rename, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   WEB_ANNOTATION_CAPACITY,
@@ -44,26 +41,45 @@ import {
   webAnnotationUtf8Bytes,
   type WebAnnotationCapacityResource,
   type WebAnnotationErrorDetail,
-  type WebAnnotationRequest,
   type WebAnnotationStorageStatus,
 } from "@orkestrator/protocol/web-annotations";
+import type { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
 import {
-  CONSUMED_DRAFT_IDS,
-  WEB_ANNOTATION_DRAFTS_FORMAT,
-  WEB_ANNOTATION_DRAFTS_VERSION,
+  WEB_ANNOTATION_MAX_RECORD_BYTES,
+  archiveLegacyEnvironment,
+  hasLegacyFiles,
+  readLegacyEnvironment,
+  removeArchivedLegacyEnvironment,
+} from "./web-annotation-legacy-import.js";
+import {
+  WEB_ANNOTATION_STORE_PREFIX,
+  webAnnotationStoreName,
+} from "./web-annotation-store-layout.js";
+import {
+  WEB_ANNOTATION_STORE_FORMAT,
+  WEB_ANNOTATION_STORE_VERSION,
+  assembleSnapshot,
+  committedStoreRevision,
+  defaultMeta,
+  deleteAllRows,
+  deleteRecordRows,
+  emptySnapshot,
+  hasAssetRow,
+  planRows,
+  readIndexSnapshot,
+  readMetaRow,
+  readRecordRow,
+  recordKey,
+  writeIndexRows,
+  writeRecordRows,
+  type StoreSnapshot,
+  type WebAnnotationStoreMeta,
+} from "./web-annotation-store-rows.js";
+import {
   WebAnnotationStorageError,
-  emptyManifest,
   isRecord,
-  parseDrafts,
-  parseManifest,
-  persistManifest,
-  recordDirectoryName,
-  requestTextRecordId,
-  sameRequestText,
   type ManifestDraft,
-  type RequestTextRef,
-  type RequestTextValue,
-  type StorageErrorCode,
   type WebAnnotationManifest,
   type WebAnnotationRecordKind,
 } from "./web-annotation-storage-format.js";
@@ -90,22 +106,20 @@ export {
   type WebAnnotationManifest,
   type WebAnnotationRecordKind,
 } from "./web-annotation-storage-format.js";
+export { WEB_ANNOTATION_MAX_RECORD_BYTES } from "./web-annotation-legacy-import.js";
 
-/** Upper bound for any single immutable record file. */
-export const WEB_ANNOTATION_MAX_RECORD_BYTES = 1024 * 1024;
-/** Upper bound for the manifest itself; the metadata quota is the real limit. */
-const MAX_MANIFEST_BYTES = WEB_ANNOTATION_LIMITS.environmentMetadataBytes + 1024 * 1024;
-const MAX_DRAFTS_BYTES = 4 * 1024 * 1024;
-const LOAD_CONCURRENCY = 16;
-/** Startup parses referenced records up to this many bytes; beyond it, existence only. */
-const LOAD_VERIFY_BYTES = 64 * 1024 * 1024;
-
+/**
+ * Failure-injection points. All but cleanup, after-commit and legacy batch hooks run
+ * synchronously inside the commit transaction (a returned promise is not
+ * awaited); throwing there rolls the whole commit back.
+ */
 export type WebAnnotationFaultStage =
   | "before-record-write"
   | "before-manifest-replace"
   | "after-commit"
   | "before-drafts-replace"
-  | "during-cleanup";
+  | "during-cleanup"
+  | "after-legacy-record-batch";
 
 export type WebAnnotationFaultHook = (
   stage: WebAnnotationFaultStage,
@@ -124,6 +138,7 @@ export interface WebAnnotationCommitObservation {
   environmentId: string;
   scope: "manifest" | "drafts";
   durationMs: number;
+  /** Serialized bytes of the environment's index rows after the commit. */
   indexBytes: number;
   records: number;
   requestIds: readonly string[];
@@ -135,11 +150,17 @@ export interface WebAnnotationStorageOptions {
   dataDir: string;
   clock?: () => number;
   faults?: WebAnnotationFaultHook;
+  /**
+   * Called after every commit by this process, and when a read observes that
+   * another process advanced the environment revision.
+   */
   onCommit?: (hint: WebAnnotationCommitHint) => void;
   /** Synchronous, must not throw; failures are swallowed. */
   observeCommit?: (observation: WebAnnotationCommitObservation) => void;
-  /** Directory fsync is best-effort; tests may disable it. */
+  /** Directory fsync of staged uploads is best-effort; tests may disable it. */
   syncDirectories?: boolean;
+  /** A connection to use instead of opening (and owning) one. */
+  database?: StorageDatabase;
 }
 
 export function storageCapacityError(
@@ -184,42 +205,13 @@ export async function writeDurable(path: string, data: string | Buffer): Promise
   }
 }
 
-/**
- * Keep the committed index as its `.prev` generation. The committed file is
- * never modified in place (every write renames a new inode over it), so a
- * hard link preserves the old bytes without rewriting them. Filesystems that
- * refuse hard links get a synced copy.
- */
-async function preservePrevious(path: string, previousPath: string): Promise<void> {
-  const temp = `${previousPath}.${randomUUID()}.tmp`;
-  try {
-    try {
-      await link(path, temp);
-    } catch (error) {
-      if (errorCode(error) === "ENOENT") return;
-      await copyFile(path, temp);
-      const handle = await open(temp, "r+");
-      try {
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-    }
-    await rename(temp, previousPath);
-  } finally {
-    await unlink(temp).catch(() => undefined);
-  }
-}
-
 async function syncDirectory(path: string): Promise<void> {
-  // Directory fsync is unsupported on some platforms; the rename remains the
-  // commit point and this only narrows the power-loss window where supported.
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, "r");
     await handle.sync();
   } catch {
-    // Best-effort.
+    // Best-effort: unsupported on some platforms.
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -229,28 +221,21 @@ function errorCode(error: unknown): string | undefined {
   return isRecord(error) && typeof error.code === "string" ? error.code : undefined;
 }
 
-function storageCode(error: unknown): StorageErrorCode {
-  if (error instanceof WebAnnotationStorageError && error.code) return error.code;
-  return errorCode(error) === "ENOENT" ? "manifest-missing" : "manifest-unreadable";
-}
-
-async function mapBounded<T>(
-  items: readonly T[],
-  limit: number,
-  work: (item: T) => Promise<void>,
-): Promise<void> {
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < items.length) await work(items[cursor++]!);
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+function isThenable(value: unknown): boolean {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
 }
 
 interface PendingRecordWrite {
   kind: WebAnnotationRecordKind;
   id: string;
   revision: number;
+  key: string;
   json: string;
+  bytes: number;
 }
 
 function encodeRecord(
@@ -259,23 +244,24 @@ function encodeRecord(
   revision: number,
   value: unknown,
 ): PendingRecordWrite {
-  const json = JSON.stringify({ kind, id, revision, value });
-  const bytes = Buffer.byteLength(json);
+  const json = JSON.stringify({ kind, value });
+  const bytes = Buffer.byteLength(json, "utf8");
   if (bytes > WEB_ANNOTATION_MAX_RECORD_BYTES) {
     throw storageCapacityError("record exceeds 1 MiB", "record-bytes", {
       used: bytes,
       limit: WEB_ANNOTATION_MAX_RECORD_BYTES,
     });
   }
-  return { kind, id, revision, json };
+  return { kind, id, revision, key: recordKey(id, revision), json, bytes };
 }
+
+type RecordReader = (kind: WebAnnotationRecordKind, id: string, revision: number) => unknown;
 
 /** One mutation's working set. The manifest is a private clone until commit. */
 export class WebAnnotationTransaction {
   readonly records: PendingRecordWrite[] = [];
   readonly dropRecords: Array<{ id: string; revision: number }> = [];
   readonly dropDraftRecords: Array<{ id: string; revision: number; bytes: number }> = [];
-  readonly promotions: Array<{ stagingPath: string; assetId: string }> = [];
   readonly dropAssets: string[] = [];
   readonly annotationIds = new Set<string>();
   readonly requestIds = new Set<string>();
@@ -286,6 +272,7 @@ export class WebAnnotationTransaction {
     readonly manifest: WebAnnotationManifest,
     readonly now: string,
     readonly nowMs: number,
+    private readonly reader: RecordReader,
   ) {}
 
   get dirty(): boolean {
@@ -307,27 +294,38 @@ export class WebAnnotationTransaction {
     for (const id of ids.annotationIds ?? []) this.annotationIds.add(id);
     for (const id of ids.requestIds ?? []) this.requestIds.add(id);
   }
+  /** Stage an immutable record row; returns its serialized size. */
   writeRecord(kind: WebAnnotationRecordKind, id: string, revision: number, value: unknown): number {
     const record = encodeRecord(kind, id, revision, value);
-    const bytes = Buffer.byteLength(record.json);
     this.records.push(record);
-    this.manifest.usage.recordBytes += bytes;
     this.changed = true;
-    return bytes;
+    return record.bytes;
   }
-  /** A record referenced by the listing index that this commit supersedes. */
-  dropRecordAfterCommit(id: string, revision: number, bytes: number): void {
+  /**
+   * Read a committed (or this transaction's) record synchronously, inside the
+   * commit. Throws `WebAnnotationStorageError` when it is missing or damaged.
+   */
+  readRecord<T>(kind: WebAnnotationRecordKind, id: string, revision: number): T {
+    const pending = this.records.find((record) => record.id === id && record.revision === revision);
+    if (pending) {
+      if (pending.kind !== kind) {
+        throw new WebAnnotationStorageError(
+          "record does not match its reference",
+          "record-invalid",
+        );
+      }
+      return (JSON.parse(pending.json) as { value: T }).value;
+    }
+    return this.reader(kind, id, revision) as T;
+  }
+  /** A record the listing index stops referencing; removed in the same commit. */
+  dropRecordAfterCommit(id: string, revision: number, _bytes?: number): void {
     this.dropRecords.push({ id, revision });
-    this.manifest.usage.recordBytes = Math.max(0, this.manifest.usage.recordBytes - bytes);
     this.changed = true;
   }
-  /** A draft text record whose draft this commit removes from the draft index. */
+  /** A draft text record whose draft this commit removes. */
   dropDraftRecordAfterCommit(id: string, revision: number, bytes: number): void {
     this.dropDraftRecords.push({ id, revision, bytes });
-    this.changed = true;
-  }
-  promoteStagedAsset(stagingPath: string, assetId: string): void {
-    this.promotions.push({ stagingPath, assetId });
     this.changed = true;
   }
   dropAssetAfterCommit(assetId: string): void {
@@ -336,14 +334,10 @@ export class WebAnnotationTransaction {
   }
 }
 
-/**
- * A draft-index-only mutation: reads the committed manifest, edits a private
- * copy of the draft index, and commits `drafts.json` alone.
- */
+/** A draft-only mutation: edits a private copy of the draft index. */
 export class WebAnnotationDraftTransaction {
   readonly records: PendingRecordWrite[] = [];
   readonly dropRecords: Array<{ id: string; revision: number; bytes: number }> = [];
-  addedBytes = 0;
   private changed = false;
 
   constructor(
@@ -361,11 +355,9 @@ export class WebAnnotationDraftTransaction {
   }
   writeRecord(id: string, revision: number, value: unknown): number {
     const record = encodeRecord("draft", id, revision, value);
-    const bytes = Buffer.byteLength(record.json);
     this.records.push(record);
-    this.addedBytes += bytes;
     this.changed = true;
-    return bytes;
+    return record.bytes;
   }
   dropRecordAfterCommit(id: string, revision: number, bytes: number): void {
     this.dropRecords.push({ id, revision, bytes });
@@ -379,97 +371,173 @@ export interface WebAnnotationCommitResult<T> {
   committed: boolean;
 }
 
-interface PersistedText extends RequestTextValue {
-  revision: number;
-  bytes: number;
-  damaged?: boolean;
+/**
+ * Mutation body. It runs inside the commit transaction, so it must be
+ * synchronous: a returned promise is refused and nothing commits.
+ */
+export type WebAnnotationWork<Tx, T> = (tx: Tx) => T;
+
+const DRAFT_SCOPE: ReadonlySet<string> = new Set(["drafts", "meta"]);
+/** Bytes of record rows written per transaction while importing legacy files. */
+const IMPORT_BATCH_BYTES = 4 * 1024 * 1024;
+
+interface CommitOutcome<T> {
+  value: T;
+  committed: boolean;
+  next?: StoreSnapshot;
+  previous?: StoreSnapshot;
+  records?: number;
+  dropAssets?: readonly string[];
+  annotationIds?: readonly string[];
+  requestIds?: readonly string[];
+}
+
+interface EnvironmentHost {
+  database(): StorageDatabase;
+  /** Another process deleted the environment's store. */
+  deletedElsewhere(environmentId: string): void;
 }
 
 /** Storage for one environment. Created and owned by `WebAnnotationStorage`. */
 export class WebAnnotationEnvironmentStore {
   readonly dir: string;
-  private current: WebAnnotationManifest;
-  private committedManifestBytes = 0;
-  private committedDraftsBytes = 0;
-  private draftsSequence = 0;
-  private draftRecordBytes = 0;
-  /** The draft index must be written by the next commit (v1 import or repair). */
-  private draftsDirty = false;
-  private draftsStatus: WebAnnotationStorageStatus = "ready";
-  private readonly persistedText = new Map<string, PersistedText>();
-  /** Superseded record paths, removed after the next commit of the same index. */
-  private manifestDeferred: string[] = [];
-  private draftsDeferred: string[] = [];
+  readonly storeName: string;
+  private snapshot: StoreSnapshot;
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
   private closed = false;
+  private deleted = false;
   private storageStatus: WebAnnotationStorageStatus = "ready";
+  private draftsStatus: WebAnnotationStorageStatus = "ready";
   private reason: string | undefined;
   private reasonDetail: WebAnnotationErrorDetail | undefined;
-  private readonly unavailable = new Map<string, string>();
+  /** Unavailable without a store: the legacy files could not be imported. */
+  private loadFailure: { reason: string; detail?: WebAnnotationErrorDetail } | null = null;
+  private readonly runtimeUnavailable = new Map<string, string>();
+  private derived: { snapshot: StoreSnapshot; unavailable: Map<string, string> } | null = null;
+  private active: { snapshot: StoreSnapshot; ids: string[] } | null = null;
   private readonly activeStaging = new Set<string>();
-  private readonly inFlightRecords = new Set<string>();
-  private readonly active = new Set<string>();
+  private pendingHints: WebAnnotationCommitHint[] = [];
+  private hintFlushScheduled = false;
+  /** Hints for foreign commits start after the first load (the ring's base). */
+  private loaded = false;
 
   constructor(
     readonly environmentId: string,
     root: string,
     private readonly options: WebAnnotationStorageOptions,
+    private readonly host: EnvironmentHost,
   ) {
     this.dir = join(root, environmentId);
-    this.current = emptyManifest(environmentId, new Date(this.nowMs()).toISOString());
+    this.storeName = webAnnotationStoreName(environmentId);
+    this.snapshot = emptySnapshot(environmentId, new Date(this.nowMs()).toISOString());
   }
 
   private nowMs(): number {
     return this.options.clock?.() ?? Date.now();
   }
+  private db(): StorageDatabase {
+    return this.host.database();
+  }
 
+  /** The committed manifest, revalidated against other processes' commits. */
   get manifest(): Readonly<WebAnnotationManifest> {
+    this.refresh();
     this.assertReadable();
-    return this.current;
+    return this.snapshot.manifest;
   }
   get status(): WebAnnotationStorageStatus {
+    this.refreshQuietly();
     return this.storageStatus;
   }
   get degradedReason(): string | undefined {
+    this.refreshQuietly();
     return this.reason;
   }
   get draftStatus(): WebAnnotationStorageStatus {
+    this.refreshQuietly();
     return this.storageStatus === "ready" ? this.draftsStatus : this.storageStatus;
   }
   get revision(): number {
-    return this.current.revision;
+    this.refresh();
+    return this.snapshot.manifest.revision;
   }
-  /** Committed metadata bytes: listing index, draft index, and their records. */
+  /** Committed metadata bytes: index rows plus record rows (row JSON length). */
   get metadataBytes(): number {
-    return (
-      this.committedManifestBytes +
-      this.current.usage.recordBytes +
-      this.committedDraftsBytes +
-      this.draftRecordBytes
-    );
+    this.refresh();
+    return this.snapshot.indexBytes + this.snapshot.manifest.usage.recordBytes;
   }
   /** Ids of requests that are still active (may execute or are unsettled). */
   activeRequestIds(): string[] {
-    return Array.from(this.active);
+    this.refreshQuietly();
+    const snapshot = this.snapshot;
+    if (this.active?.snapshot !== snapshot) {
+      const ids = Object.values(snapshot.manifest.requests)
+        .filter((request) => isWebAnnotationRequestActive(request.state))
+        .map((request) => request.id);
+      this.active = { snapshot, ids };
+    }
+    return [...this.active.ids];
   }
   unavailableReason(annotationId: string): string | undefined {
-    return this.unavailable.get(annotationId);
+    this.refreshQuietly();
+    return this.runtimeUnavailable.get(annotationId) ?? this.derivedUnavailable().get(annotationId);
   }
   /** In-memory only: an unreadable referenced record degrades that item. */
   markUnavailable(annotationId: string, reason: string): void {
-    if (!this.unavailable.has(annotationId)) {
+    if (!this.runtimeUnavailable.has(annotationId)) {
       console.warn(`[web-annotations] Record unavailable (${reason})`);
     }
-    this.unavailable.set(annotationId, reason);
+    this.runtimeUnavailable.set(annotationId, reason);
+  }
+
+  /** Items whose records the legacy import found missing or damaged. */
+  private derivedUnavailable(): Map<string, string> {
+    const snapshot = this.snapshot;
+    if (this.derived?.snapshot === snapshot) return this.derived.unavailable;
+    const unavailable = new Map<string, string>();
+    const mark = (annotationIds: Iterable<string>, reason: string) => {
+      for (const id of annotationIds) if (!unavailable.has(id)) unavailable.set(id, reason);
+    };
+    const { manifest, unreadable } = snapshot;
+    if (unreadable.size > 0) {
+      for (const marker of unreadable.values()) {
+        const request = marker.requestId ? manifest.requests[marker.requestId] : undefined;
+        if (marker.kind === "request-text" && request) {
+          mark(
+            request.selections.map((selection) => selection.annotationId),
+            "request record unreadable",
+          );
+        }
+      }
+      for (const annotation of Object.values(manifest.annotations)) {
+        if (annotation.state === "deleted") continue;
+        const marker = unreadable.get(recordKey(annotation.currentCaptureId, 1));
+        if (marker?.kind === "capture") mark([annotation.id], `capture record ${marker.state}`);
+      }
+      for (const request of Object.values(manifest.requests)) {
+        if (!isWebAnnotationRequestActive(request.state)) continue;
+        const marker = unreadable.get(recordKey(request.id, 1));
+        if (marker?.kind === "brief") {
+          mark(
+            request.selections.map((selection) => selection.annotationId),
+            `request record ${marker.state}`,
+          );
+        }
+      }
+    }
+    this.derived = { snapshot, unavailable };
+    return unavailable;
   }
 
   private assertReadable(): void {
+    if (this.deleted) throw new WebAnnotationStorageError("Environment was deleted");
     if (this.storageStatus === "unavailable") {
       throw degradedError(this.reason ?? "environment storage is unreadable", this.reasonDetail);
     }
   }
   private assertWritable(): void {
+    if (this.deleted) throw new WebAnnotationStorageError("Environment was deleted");
     if (this.closed)
       throw new WebAnnotationStorageError("Environment annotation storage is closed");
     if (this.storageStatus !== "ready") {
@@ -487,25 +555,11 @@ export class WebAnnotationEnvironmentStore {
     }
   }
   assertDraftsReadable(): void {
+    this.refresh();
     this.assertReadable();
     if (this.draftsStatus === "unavailable") throw degradedError("the draft index is unreadable");
   }
 
-  private manifestPath() {
-    return join(this.dir, "manifest.json");
-  }
-  private previousPath() {
-    return join(this.dir, "manifest.prev.json");
-  }
-  private draftsPath() {
-    return join(this.dir, "drafts.json");
-  }
-  private draftsPreviousPath() {
-    return join(this.dir, "drafts.prev.json");
-  }
-  recordPath(id: string, revision: number): string {
-    return join(this.dir, "records", recordDirectoryName(id), `${revision}.json`);
-  }
   assetPath(assetId: string): string {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(assetId) || assetId.includes("..")) {
       throw new WebAnnotationStorageError("Asset id is invalid");
@@ -513,295 +567,410 @@ export class WebAnnotationEnvironmentStore {
     return join(this.dir, "assets", `${assetId}.png`);
   }
 
-  private async readJson(
-    path: string,
-    maxBytes: number,
-  ): Promise<{ value: unknown; bytes: number }> {
-    const info = await stat(path);
-    if (info.size > maxBytes) {
-      throw new WebAnnotationStorageError("index is too large", "manifest-too-large");
-    }
-    const json = await readFile(path, "utf8");
-    try {
-      return { value: JSON.parse(json), bytes: Buffer.byteLength(json) };
-    } catch {
-      throw new WebAnnotationStorageError("manifest is not valid JSON", "manifest-invalid-json");
-    }
-  }
-
-  private async readManifestFile(path: string) {
-    const { value, bytes } = await this.readJson(path, MAX_MANIFEST_BYTES);
-    return { parsed: parseManifest(value, this.environmentId), bytes };
-  }
-
-  private setUnavailable(error: unknown, fallbackReason: string): void {
-    this.storageStatus = "unavailable";
-    this.reason = error instanceof WebAnnotationStorageError ? error.message : fallbackReason;
-    this.reasonDetail = error instanceof WebAnnotationStorageError ? error.detail : undefined;
-  }
+  // -------------------------------------------------------------------------
+  // Loading and revalidation
 
   /**
-   * Load the committed manifest. Unreadable storage becomes a degraded or
-   * unavailable state — never an empty collection that could lose data or
-   * drop a request reservation. A manifest written by a newer version is
-   * refused outright (never replaced by the previous copy and overwritten).
+   * First access in this process: import the legacy files if this
+   * environment has no store yet, then load the committed rows.
    */
   async load(): Promise<void> {
-    let loaded: Awaited<ReturnType<WebAnnotationEnvironmentStore["readManifestFile"]>> | null =
-      null;
+    const database = this.db();
+    const meta = readMetaRow(database, this.storeName);
+    if (meta === null) {
+      await this.importLegacy();
+    } else {
+      await this.repairRetainedLegacy(meta);
+      await this.archiveLeftovers(readMetaRow(database, this.storeName) ?? meta);
+    }
+    this.refresh();
+    this.applyLoadFailure();
+    this.loaded = true;
+  }
+
+  private async importLegacy(): Promise<void> {
+    if (!(await hasLegacyFiles(this.dir))) return;
+    const database = this.db();
+    // One importer at a time across processes; the meta row is the marker.
+    const release = await database.acquireLease(
+      `${this.storeName}/import`,
+      "web annotation import",
+      { staleMs: 60_000, acquireTimeoutMs: 120_000 },
+    );
+    let archive = false;
     try {
-      loaded = await this.readManifestFile(this.manifestPath());
-      this.storageStatus = "ready";
-    } catch (error) {
-      const code = storageCode(error);
-      if (code === "unsupported-version") {
-        this.setUnavailable(error, "manifest uses an unsupported version");
-        console.warn(`[web-annotations] Storage unavailable (code=${code})`);
+      this.assertNotDeleted();
+      if (readMetaRow(database, this.storeName) !== null) return;
+      const now = new Date(this.nowMs()).toISOString();
+      let result: Awaited<ReturnType<typeof readLegacyEnvironment>>;
+      try {
+        result = await readLegacyEnvironment(this.dir, this.environmentId, now);
+      } catch (error) {
+        console.warn(
+          `[web-annotations] Legacy storage unreadable (code=${errorCode(error) ?? "error"})`,
+        );
+        this.loadFailure = { reason: "environment storage is unreadable" };
         return;
       }
-      const previous = await this.readManifestFile(this.previousPath()).catch(
-        (previousError: unknown) => previousError,
-      );
-      if (previous instanceof Error || !isRecord(previous)) {
-        if (code === "manifest-missing" && errorCode(previous) === "ENOENT") {
-          // A fresh environment: nothing was ever committed.
-          this.current = emptyManifest(this.environmentId, new Date(this.nowMs()).toISOString());
-          this.storageStatus = "ready";
-        } else if (storageCode(previous) === "unsupported-version") {
-          this.setUnavailable(previous, "manifest uses an unsupported version");
-        } else {
-          this.setUnavailable(error, "manifest is unreadable");
+      if (result.kind === "absent") return;
+      if (result.kind === "unavailable") {
+        this.loadFailure = {
+          reason: result.reason,
+          ...(result.detail ? { detail: result.detail } : {}),
+        };
+        return;
+      }
+      const legacy = result.legacy;
+      // A crashed earlier attempt may have left record rows without a header.
+      database.transaction(() => {
+        this.assertNotDeleted();
+        if (readMetaRow(database, this.storeName) === null) {
+          deleteAllRows(database, this.storeName);
         }
-      } else {
-        loaded = previous as Awaited<ReturnType<WebAnnotationEnvironmentStore["readManifestFile"]>>;
-        this.storageStatus = "degraded";
-        this.reason =
-          code === "manifest-missing"
-            ? "manifest is missing; serving the previous committed copy read-only"
-            : `${error instanceof WebAnnotationStorageError ? error.message : "manifest is unreadable"}; serving the previous committed copy read-only`;
-      }
-      if (code !== "manifest-missing" || this.storageStatus !== "ready") {
-        console.warn(
-          `[web-annotations] Storage ${this.storageStatus} (code=${code === "manifest-missing" ? "manifest-missing" : code})`,
-        );
-      }
-    }
-    if (this.storageStatus === "unavailable") return;
-    if (loaded) {
-      this.current = loaded.parsed.manifest;
-      this.committedManifestBytes = loaded.bytes;
-      await this.hydrateRequestText(loaded.parsed.textRefs);
-      await this.loadDrafts(loaded.parsed.sourceVersion);
-    } else {
-      await this.loadDrafts(2);
-    }
-    this.refreshActive(Object.keys(this.current.requests));
-    await this.verifyReferencedRecords();
-  }
-
-  /** Instructions and response excerpts live in per-request text records. */
-  private async hydrateRequestText(
-    refs: ReadonlyMap<string, RequestTextRef | null>,
-  ): Promise<void> {
-    await mapBounded(Array.from(refs), LOAD_CONCURRENCY, async ([requestId, ref]) => {
-      const request = this.current.requests[requestId];
-      if (!request) return;
-      const damage = () => {
-        this.persistedText.set(requestId, {
-          revision: ref?.revision ?? 0,
-          bytes: ref?.bytes ?? 0,
-          instruction: "",
-          response: null,
-          damaged: true,
+      });
+      let batch: typeof legacy.records = [];
+      let batchBytes = 0;
+      const flush = () => {
+        const rows = batch;
+        batch = [];
+        batchBytes = 0;
+        return database.transaction(() => {
+          this.assertNotDeleted();
+          if (readMetaRow(database, this.storeName) !== null) return false;
+          writeRecordRows(database, this.storeName, rows);
+          return true;
         });
-        for (const selection of request.selections) {
-          this.markUnavailable(selection.annotationId, "request record unreadable");
-        }
       };
-      if (!ref) return damage();
-      try {
-        const value = await this.readRecord<unknown>(
-          "request-text",
-          requestTextRecordId(requestId),
-          ref.revision,
-        );
-        if (
-          !isRecord(value) ||
-          typeof value.instruction !== "string" ||
-          (value.response !== null && !isRecord(value.response))
-        ) {
-          return damage();
+      for (const record of legacy.records) {
+        batch.push(record);
+        batchBytes += record.bytes;
+        if (batchBytes >= IMPORT_BATCH_BYTES) {
+          if (!flush()) return;
+          await this.options.faults?.("after-legacy-record-batch", this.environmentId);
+          await new Promise((resolve) => setImmediate(resolve));
         }
-        request.instruction = value.instruction;
-        request.response = value.response as WebAnnotationRequest["response"];
-        this.persistedText.set(requestId, {
-          revision: ref.revision,
-          bytes: ref.bytes,
-          instruction: request.instruction,
-          response: request.response,
-        });
-      } catch {
-        damage();
       }
-    });
+      const imported = database.transaction(() => {
+        this.assertNotDeleted();
+        if (readMetaRow(database, this.storeName) !== null) return false;
+        if (batch.length > 0) writeRecordRows(database, this.storeName, batch);
+        const manifest = legacy.manifest;
+        const recordBytes = legacy.records.reduce((sum, record) => sum + record.bytes, 0);
+        manifest.usage = { recordBytes };
+        const meta: WebAnnotationStoreMeta = {
+          ...defaultMeta(this.environmentId, manifest.createdAt),
+          updatedAt: manifest.updatedAt,
+          revision: manifest.revision,
+          recordBytes,
+          status: legacy.status,
+          ...(legacy.reason ? { reason: legacy.reason } : {}),
+          draftsStatus: legacy.draftsStatus,
+          source: legacy.sourceVersion === 1 ? "legacy-v1" : "legacy-v2",
+          importedAt: now,
+          ...(legacy.clean ? {} : { legacyRetained: true }),
+        };
+        const plan = planRows(
+          emptySnapshot(this.environmentId, now),
+          manifest,
+          meta,
+          legacy.unreadable,
+        );
+        writeIndexRows(database, this.storeName, plan.upserts, []);
+        return true;
+      });
+      archive = imported && legacy.clean;
+    } finally {
+      await release();
+    }
+    if (archive) {
+      await archiveLegacyEnvironment(this.options.dataDir, this.environmentId).catch(
+        (error: unknown) => {
+          console.warn(
+            `[web-annotations] Could not archive imported legacy files (code=${errorCode(error) ?? "error"})`,
+          );
+        },
+      );
+    }
   }
 
-  private async loadDrafts(sourceVersion: 1 | 2): Promise<void> {
-    if (sourceVersion === 1) {
-      // Version 1 kept drafts inline; move their accounting to the draft index.
-      let bytes = 0;
-      for (const draft of Object.values(this.current.drafts)) bytes += draft.bytes;
-      this.draftRecordBytes = bytes;
-      this.current.usage.recordBytes = Math.max(0, this.current.usage.recordBytes - bytes);
-      this.draftsDirty = true;
+  private assertNotDeleted(): void {
+    if (deletionMarker(this.db(), "annotations", this.environmentId)) {
+      this.markDeletedElsewhere();
+      throw new WebAnnotationStorageError("Environment was deleted");
+    }
+  }
+
+  /** Retry retained recovery data on reopen, without replacing newer database edits. */
+  private async repairRetainedLegacy(metaJson: string): Promise<void> {
+    let meta: WebAnnotationStoreMeta;
+    try {
+      meta = JSON.parse(metaJson) as WebAnnotationStoreMeta;
+    } catch {
       return;
     }
-    const read = async (path: string) => {
-      const { value, bytes } = await this.readJson(path, MAX_DRAFTS_BYTES);
-      return { drafts: parseDrafts(value, this.environmentId), bytes };
-    };
-    let loaded: Awaited<ReturnType<typeof read>> | null = null;
-    try {
-      loaded = await read(this.draftsPath());
-    } catch (error) {
-      const previous = await read(this.draftsPreviousPath()).catch((previousError: unknown) =>
-        previousError instanceof Error ? previousError : new Error("unreadable"),
-      );
-      const missing = errorCode(error) === "ENOENT";
-      if (!(previous instanceof Error)) {
-        loaded = previous;
-        // A missing or damaged current index: serve the previous one read-only.
-        this.draftsStatus = "degraded";
-      } else if (!(missing && errorCode(previous) === "ENOENT")) {
-        this.draftsStatus = "unavailable";
-      }
-      if (this.draftsStatus !== "ready") {
-        console.warn(
-          `[web-annotations] Draft index ${this.draftsStatus} (code=${storageCode(error)})`,
-        );
-      }
-    }
-    if (loaded) {
-      this.current.drafts = loaded.drafts.drafts;
-      this.draftsSequence = loaded.drafts.sequence;
-      this.draftRecordBytes = loaded.drafts.recordBytes;
-      this.committedDraftsBytes = loaded.bytes;
-    }
-    // Repair a crash between a manifest commit and its draft index write.
-    const consumed = new Set(this.current.consumedDrafts ?? []);
-    for (const [editorId, draft] of Object.entries(this.current.drafts)) {
-      if (!consumed.has(draft.id)) continue;
-      delete this.current.drafts[editorId];
-      this.draftRecordBytes = Math.max(0, this.draftRecordBytes - draft.bytes);
-      this.draftsDirty = true;
-    }
-  }
-
-  /**
-   * Parse and validate the records current state depends on: every live
-   * annotation's current capture and every active request's frozen brief. A
-   * missing or malformed record marks only its annotation unavailable
-   * (read-only); it never clears a reservation or fabricates a record.
-   * Parsing is bounded by a byte budget; past it, only existence is checked.
-   */
-  private async verifyReferencedRecords(): Promise<void> {
-    interface Check {
-      annotationIds: string[];
-      kind: WebAnnotationRecordKind;
-      id: string;
-      label: "capture" | "request";
-      valid: (value: unknown) => boolean;
-    }
-    const checks: Check[] = [];
-    for (const annotation of Object.values(this.current.annotations)) {
-      if (annotation.state === "deleted") continue;
-      checks.push({
-        annotationIds: [annotation.id],
-        kind: "capture",
-        id: annotation.currentCaptureId,
-        label: "capture",
-        valid: (value) =>
-          isRecord(value) &&
-          value.id === annotation.currentCaptureId &&
-          value.annotationId === annotation.id &&
-          value.schemaVersion === 1 &&
-          isRecord(value.target) &&
-          isRecord(value.page),
-      });
-    }
-    for (const requestId of this.active) {
-      const request = this.current.requests[requestId];
-      if (!request) continue;
-      checks.push({
-        annotationIds: request.selections.map((selection) => selection.annotationId),
-        kind: "brief",
-        id: request.id,
-        label: "request",
-        valid: (value) =>
-          isRecord(value) && typeof value.body === "string" && value.bodyHash === request.bodyHash,
-      });
-    }
-    let budget = LOAD_VERIFY_BYTES;
-    await mapBounded(checks, LOAD_CONCURRENCY, async (check) => {
-      const mark = (state: "missing" | "unreadable") => {
-        for (const id of check.annotationIds)
-          this.markUnavailable(id, `${check.label} record ${state}`);
-      };
-      let size: number;
-      try {
-        size = (await stat(this.recordPath(check.id, 1))).size;
-      } catch {
-        return mark("missing");
-      }
-      if (size > WEB_ANNOTATION_MAX_RECORD_BYTES) return mark("unreadable");
-      if (size > budget) return;
-      budget -= size;
-      try {
-        const value = await this.readRecord<unknown>(check.kind, check.id, 1);
-        if (!check.valid(value)) mark("unreadable");
-      } catch {
-        mark("unreadable");
-      }
+    if (!meta.legacyRetained) return;
+    const database = this.db();
+    const release = await database.acquireLease(`${this.storeName}/import`, "annotation repair", {
+      staleMs: 60_000,
+      acquireTimeoutMs: 120_000,
     });
+    let archive = false;
+    try {
+      this.assertNotDeleted();
+      const now = new Date(this.nowMs()).toISOString();
+      const result = await readLegacyEnvironment(this.dir, this.environmentId, now);
+      if (result.kind !== "import" || !result.legacy.clean) return;
+      const legacy = result.legacy;
+      database.transaction(() => {
+        this.assertNotDeleted();
+        const fetched = readIndexSnapshot(database, this.storeName);
+        if (!fetched) return;
+        const base = assembleSnapshot(
+          this.environmentId,
+          fetched.revision,
+          fetched.rows,
+          this.snapshot,
+          now,
+        );
+        if (!base.meta.legacyRetained) return;
+        // A degraded manifest admitted no mutations. A ready manifest may have
+        // newer edits; only repair its damaged drafts and referenced records.
+        const manifest =
+          base.meta.status === "degraded" ? legacy.manifest : structuredClone(base.manifest);
+        if (base.meta.draftsStatus !== "ready") manifest.drafts = legacy.manifest.drafts;
+        const unreadable = new Map(base.unreadable);
+        const repairedDraftKeys = new Set(
+          Object.values(manifest.drafts).map((draft) => recordKey(draft.id, draft.revision)),
+        );
+        for (const [key, marker] of Array.from(unreadable)) {
+          if (marker.kind !== "request-text" || !marker.requestId) continue;
+          const current = manifest.requests[marker.requestId];
+          const recovered = legacy.manifest.requests[marker.requestId];
+          if (current && recovered && !legacy.unreadable.has(key)) {
+            current.instruction = recovered.instruction;
+            current.response = recovered.response;
+            unreadable.delete(key);
+          }
+        }
+        let recordBytes = base.meta.recordBytes;
+        for (const record of legacy.records) {
+          if (
+            base.meta.status !== "degraded" &&
+            !unreadable.has(record.key) &&
+            !repairedDraftKeys.has(record.key)
+          )
+            continue;
+          const existing = readRecordRow(database, this.storeName, record.key);
+          if (existing !== null && !unreadable.has(record.key)) continue;
+          recordBytes +=
+            record.bytes - (existing === null ? 0 : Buffer.byteLength(existing, "utf8"));
+          writeRecordRows(database, this.storeName, [record]);
+          unreadable.delete(record.key);
+        }
+        manifest.usage = { recordBytes };
+        const repaired: WebAnnotationStoreMeta = {
+          ...base.meta,
+          status: "ready",
+          reason: undefined,
+          draftsStatus: "ready",
+          legacyRetained: unreadable.size > 0 ? true : undefined,
+          revision: manifest.revision,
+          recordBytes,
+          createdAt: manifest.createdAt,
+          updatedAt: manifest.updatedAt,
+        };
+        const plan = planRows(base, manifest, repaired, unreadable);
+        writeIndexRows(database, this.storeName, plan.upserts, plan.deletes);
+        archive = unreadable.size === 0;
+      });
+    } finally {
+      await release();
+    }
+    if (archive) await archiveLegacyEnvironment(this.options.dataDir, this.environmentId);
   }
 
-  private refreshActive(requestIds: Iterable<string>): void {
-    for (const id of requestIds) {
-      const request = this.current.requests[id];
-      if (request && isWebAnnotationRequestActive(request.state)) this.active.add(id);
-      else this.active.delete(id);
+  /** Legacy files beside an imported store: a crash before archiving, or an older backend. */
+  private async archiveLeftovers(metaJson: string): Promise<void> {
+    let meta: Partial<WebAnnotationStoreMeta> = {};
+    try {
+      meta = JSON.parse(metaJson) as Partial<WebAnnotationStoreMeta>;
+    } catch {
+      return;
+    }
+    if (meta.legacyRetained || !(await hasLegacyFiles(this.dir))) return;
+    const moved = await archiveLegacyEnvironment(this.options.dataDir, this.environmentId).catch(
+      () => 0,
+    );
+    if (moved > 0) {
+      console.warn(
+        `[web-annotations] Archived ${moved} legacy file(s) beside an imported environment; they were not imported`,
+      );
     }
   }
 
-  /** Read an immutable record; malformed content is reported, never guessed. */
+  /** Revalidate the in-memory model against the committed store revision. */
+  private refresh(): void {
+    if (this.deleted) return;
+    const database = this.db();
+    if (deletionMarker(database, "annotations", this.environmentId)) {
+      this.markDeletedElsewhere();
+      return;
+    }
+    const revision = database.storeRevision(this.storeName);
+    if (revision === this.snapshot.storeRevision) return;
+    if (revision === null) {
+      this.markDeletedElsewhere();
+      return;
+    }
+    const nowIso = new Date(this.nowMs()).toISOString();
+    let next: StoreSnapshot;
+    try {
+      // Revision and rows of one committed state (see readIndexSnapshot).
+      const fetched = readIndexSnapshot(database, this.storeName);
+      if (fetched === null) {
+        this.markDeletedElsewhere();
+        return;
+      }
+      next = assembleSnapshot(
+        this.environmentId,
+        fetched.revision,
+        fetched.rows,
+        this.snapshot,
+        nowIso,
+      );
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      this.storageStatus = "unavailable";
+      this.reason = "environment storage is unreadable";
+      this.reasonDetail = undefined;
+      console.warn("[web-annotations] Storage unavailable (code=store-unreadable)");
+      return;
+    }
+    this.adopt(next, true);
+  }
+
+  /** Stores are removed only by environment deletion. */
+  private markDeletedElsewhere(): void {
+    this.deleted = true;
+    this.closed = true;
+    this.host.deletedElsewhere(this.environmentId);
+  }
+
+  /** Status getters must not throw for a store that vanished or is unreadable. */
+  private refreshQuietly(): void {
+    try {
+      this.refresh();
+    } catch {
+      // The next read reports the error.
+    }
+  }
+
+  private adopt(next: StoreSnapshot, external: boolean): void {
+    const previous = this.snapshot;
+    this.snapshot = next;
+    this.loadFailure = null;
+    const meta = next.meta;
+    if (
+      meta.format !== WEB_ANNOTATION_STORE_FORMAT ||
+      !(meta.version <= WEB_ANNOTATION_STORE_VERSION)
+    ) {
+      this.storageStatus = "unavailable";
+      this.reason =
+        "annotation storage was written by a newer version of Orkestrator; upgrade to read it";
+      this.reasonDetail = { code: "unsupported-version", format: "manifest" };
+    } else if (meta.status === "degraded") {
+      this.storageStatus = "degraded";
+      this.reason = meta.reason ?? "environment storage is read-only";
+      this.reasonDetail = undefined;
+    } else {
+      this.storageStatus = "ready";
+      this.reason = undefined;
+      this.reasonDetail = undefined;
+    }
+    this.draftsStatus = meta.draftsStatus ?? "ready";
+    if (!external || !this.loaded || next.manifest.revision <= previous.manifest.revision) return;
+    // Another process committed: hint the ids whose rows changed since this
+    // process last looked (a superset of the last revision's changes).
+    const annotationIds = new Set<string>();
+    const requestIds = new Set<string>();
+    for (const [id, row] of next.rows) {
+      if (previous.rows.get(id) === row) continue;
+      if (row.collection === "annotations" || row.collection === "changed") {
+        annotationIds.add(row.key);
+      } else if (row.collection === "requests") requestIds.add(row.key);
+    }
+    this.pendingHints.push({
+      environmentId: this.environmentId,
+      revision: next.manifest.revision,
+      annotationIds: Array.from(annotationIds),
+      requestIds: Array.from(requestIds),
+    });
+    if (!this.hintFlushScheduled) {
+      this.hintFlushScheduled = true;
+      queueMicrotask(() => this.flushHints());
+    }
+  }
+
+  private flushHints(): void {
+    this.hintFlushScheduled = false;
+    const hints = this.pendingHints;
+    this.pendingHints = [];
+    for (const hint of hints) this.emitHint(hint);
+  }
+
+  private emitHint(hint: WebAnnotationCommitHint): void {
+    try {
+      this.options.onCommit?.(hint);
+    } catch (error) {
+      console.warn(
+        "[web-annotations] Change hint listener failed:",
+        error instanceof Error ? error.name : "unknown",
+      );
+    }
+  }
+
+  /** Applies the import outcome when there is no store yet. */
+  private applyLoadFailure(): void {
+    if (this.snapshot.storeRevision !== null || !this.loadFailure) return;
+    this.storageStatus = "unavailable";
+    this.reason = this.loadFailure.reason;
+    this.reasonDetail = this.loadFailure.detail;
+  }
+
+  // -------------------------------------------------------------------------
+  // Records and assets
+
+  /** Read an immutable record row; malformed content is reported, never guessed. */
   async readRecord<T>(kind: WebAnnotationRecordKind, id: string, revision: number): Promise<T> {
+    this.refresh();
     this.assertReadable();
-    const path = this.recordPath(id, revision);
-    const info = await stat(path);
-    if (info.size > WEB_ANNOTATION_MAX_RECORD_BYTES) {
-      throw new WebAnnotationStorageError("record exceeds its size bound", "record-too-large");
+    return this.readRecordNow(kind, id, revision) as T;
+  }
+
+  private readRecordNow(kind: WebAnnotationRecordKind, id: string, revision: number): unknown {
+    const key = recordKey(id, revision);
+    const json = readRecordRow(this.db(), this.storeName, key);
+    if (json === null) {
+      const marker = this.snapshot.unreadable.get(key);
+      if (marker?.state === "unreadable") {
+        throw new WebAnnotationStorageError("record is not valid JSON", "record-invalid");
+      }
+      throw new WebAnnotationStorageError("record is missing", "record-unreadable");
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(path, "utf8"));
+      parsed = JSON.parse(json);
     } catch {
       throw new WebAnnotationStorageError("record is not valid JSON", "record-invalid");
     }
-    if (
-      !isRecord(parsed) ||
-      parsed.kind !== kind ||
-      parsed.id !== id ||
-      parsed.revision !== revision ||
-      !Object.hasOwn(parsed, "value")
-    ) {
+    if (!isRecord(parsed) || parsed.kind !== kind || !Object.hasOwn(parsed, "value")) {
       throw new WebAnnotationStorageError("record does not match its reference", "record-invalid");
     }
-    return parsed.value as T;
+    return parsed.value;
   }
 
   async readAsset(assetId: string): Promise<Buffer> {
-    this.assertReadable();
-    const asset = this.current.assets[assetId];
+    const asset = this.manifest.assets[assetId];
     if (!asset) throw new WebAnnotationStorageError("Asset not found in this environment");
     const path = this.assetPath(assetId);
     const info = await stat(path);
@@ -811,8 +980,9 @@ export class WebAnnotationEnvironmentStore {
     return readFile(path);
   }
 
-  /** Write validated bytes outside the queue; promote them inside a commit. */
+  /** Write validated bytes to staging, outside any transaction. */
   async stageFile(bytes: Buffer): Promise<string> {
+    this.refresh();
     this.assertWritable();
     const staging = join(this.dir, "staging");
     await mkdir(staging, { recursive: true, mode: 0o700 });
@@ -820,6 +990,7 @@ export class WebAnnotationEnvironmentStore {
     this.activeStaging.add(path);
     try {
       await writeDurable(path, bytes);
+      if (this.options.syncDirectories !== false) await syncDirectory(staging);
     } catch (error) {
       this.activeStaging.delete(path);
       await unlink(path).catch(() => undefined);
@@ -831,6 +1002,38 @@ export class WebAnnotationEnvironmentStore {
     this.activeStaging.delete(path);
     await unlink(path).catch(() => undefined);
   }
+
+  /**
+   * Promote a staged upload to `assets/<assetId>.png` before the commit that
+   * adds its row. Until that commit it is an uncommitted file: its mtime is
+   * the staging time, so garbage collection leaves it alone for the grace
+   * period, and `discardUncommittedAsset` removes it if the commit does not
+   * happen.
+   */
+  async promoteStagedAsset(stagingPath: string, assetId: string): Promise<void> {
+    const target = this.assetPath(assetId);
+    await mkdir(join(this.dir, "assets"), { recursive: true, mode: 0o700 });
+    await rename(stagingPath, target);
+    this.activeStaging.delete(stagingPath);
+    if (this.options.syncDirectories !== false) await syncDirectory(join(this.dir, "assets"));
+  }
+
+  /** Remove a promoted asset file unless a committed row (any process) references it. */
+  discardUncommittedAsset(assetId: string): void {
+    const path = this.assetPath(assetId);
+    const database = this.db();
+    database.transaction(() => {
+      if (hasAssetRow(database, this.storeName, assetId)) return;
+      try {
+        unlinkSync(path);
+      } catch {
+        // Already gone.
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Commits
 
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
     if (this.pending >= WEB_ANNOTATION_LIMITS.queuedMutations) {
@@ -849,273 +1052,12 @@ export class WebAnnotationEnvironmentStore {
     });
   }
 
-  /**
-   * Run one serialized mutation. `work` edits a private clone of the manifest;
-   * if it marks the transaction dirty the clone becomes the committed state.
-   */
-  async mutate<T>(
-    work: (tx: WebAnnotationTransaction) => T | Promise<T>,
-  ): Promise<WebAnnotationCommitResult<T>> {
-    this.assertWritable();
-    return this.enqueue(() => this.run(work));
+  private fault(stage: WebAnnotationFaultStage): void {
+    const outcome = this.options.faults?.(stage, this.environmentId);
+    if (isThenable(outcome)) (outcome as Promise<void>).catch(() => undefined);
   }
 
-  /**
-   * Run one serialized draft-index mutation. Only `drafts.json` and new draft
-   * text records are written; the listing index is not rewritten and the
-   * environment revision does not change (drafts emit no change hints).
-   */
-  async mutateDrafts<T>(
-    work: (tx: WebAnnotationDraftTransaction) => T | Promise<T>,
-  ): Promise<WebAnnotationCommitResult<T>> {
-    this.assertDraftsWritable();
-    return this.enqueue(() => this.runDrafts(work));
-  }
-
-  private async writeRecords(records: readonly PendingRecordWrite[]): Promise<void> {
-    for (const record of records) {
-      const directory = join(this.dir, "records", recordDirectoryName(record.id));
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      await writeDurable(this.recordPath(record.id, record.revision), record.json);
-    }
-    if (this.options.syncDirectories !== false && records.length > 0) {
-      await syncDirectory(join(this.dir, "records"));
-    }
-  }
-
-  private async flushDeferred(paths: string[]): Promise<void> {
-    for (const path of paths) await unlink(path).catch(() => undefined);
-  }
-
-  private observe(observation: Omit<WebAnnotationCommitObservation, "environmentId">): void {
-    try {
-      this.options.observeCommit?.({ environmentId: this.environmentId, ...observation });
-    } catch {
-      // Metrics never affect storage.
-    }
-  }
-
-  private draftIndexJson(drafts: Record<string, ManifestDraft>, recordBytes: number): string {
-    return JSON.stringify({
-      format: WEB_ANNOTATION_DRAFTS_FORMAT,
-      version: WEB_ANNOTATION_DRAFTS_VERSION,
-      environmentId: this.environmentId,
-      sequence: this.draftsSequence + 1,
-      drafts,
-      recordBytes,
-    });
-  }
-
-  private async replaceDraftIndex(json: string): Promise<void> {
-    await this.options.faults?.("before-drafts-replace", this.environmentId);
-    await preservePrevious(this.draftsPath(), this.draftsPreviousPath());
-    await writeDurable(this.draftsPath(), json);
-    if (this.options.syncDirectories !== false) await syncDirectory(this.dir);
-  }
-
-  /** Request text records to write for `next`; returns the listing-index references. */
-  private planRequestText(tx: WebAnnotationTransaction): {
-    refs: Map<string, RequestTextRef | null>;
-    written: Map<string, PersistedText>;
-  } {
-    const refs = new Map<string, RequestTextRef | null>();
-    const written = new Map<string, PersistedText>();
-    for (const [id, request] of Object.entries(tx.manifest.requests)) {
-      const persisted = this.persistedText.get(id);
-      if (persisted && (persisted.damaged || sameRequestText(persisted, request))) {
-        refs.set(
-          id,
-          persisted.revision > 0 ? { revision: persisted.revision, bytes: persisted.bytes } : null,
-        );
-        continue;
-      }
-      const revision = (persisted?.revision ?? 0) + 1;
-      const value: RequestTextValue = {
-        instruction: request.instruction,
-        response: request.response,
-      };
-      const bytes = tx.writeRecord("request-text", requestTextRecordId(id), revision, value);
-      if (persisted)
-        tx.dropRecordAfterCommit(requestTextRecordId(id), persisted.revision, persisted.bytes);
-      refs.set(id, { revision, bytes });
-      written.set(id, { ...value, revision, bytes });
-    }
-    return { refs, written };
-  }
-
-  private async run<T>(
-    work: (tx: WebAnnotationTransaction) => T | Promise<T>,
-  ): Promise<WebAnnotationCommitResult<T>> {
-    this.assertWritable();
-    const startedAt = Date.now();
-    const nowMs = this.nowMs();
-    const tx = new WebAnnotationTransaction(
-      structuredClone(this.current),
-      new Date(nowMs).toISOString(),
-      nowMs,
-    );
-    const value = await work(tx);
-    if (!tx.dirty) return { value, revision: this.current.revision, committed: false };
-    const previous = this.current;
-    const next = tx.manifest;
-    next.revision = previous.revision + 1;
-    next.updatedAt = tx.now;
-    for (const id of tx.annotationIds) next.changedAt[id] = next.revision;
-
-    // Draft index changes made by this commit (removals when a note is
-    // published from its draft). The listing index records the removed ids
-    // first so a crash before `drafts.json` is written is repaired on load.
-    let draftRecordBytes = this.draftRecordBytes;
-    for (const drop of tx.dropDraftRecords)
-      draftRecordBytes = Math.max(0, draftRecordBytes - drop.bytes);
-    const removedDraftIds = Object.values(previous.drafts)
-      .filter((draft) => next.drafts[draft.editorId]?.id !== draft.id)
-      .map((draft) => draft.id);
-    const draftsChanged =
-      this.draftsDirty ||
-      removedDraftIds.length > 0 ||
-      Object.values(next.drafts).some((draft) =>
-        previous.drafts[draft.editorId] !== undefined
-          ? previous.drafts[draft.editorId]!.revision !== draft.revision
-          : true,
-      );
-    if (removedDraftIds.length > 0) {
-      next.consumedDrafts = [...(previous.consumedDrafts ?? []), ...removedDraftIds].slice(
-        -CONSUMED_DRAFT_IDS,
-      );
-    }
-    const writeDrafts = draftsChanged && this.draftsStatus === "ready";
-
-    const text = this.planRequestText(tx);
-    const json = JSON.stringify(persistManifest(next, text.refs));
-    const bytes = Buffer.byteLength(json);
-    const draftsJson = writeDrafts ? this.draftIndexJson(next.drafts, draftRecordBytes) : null;
-    const draftsBytes = draftsJson ? Buffer.byteLength(draftsJson) : this.committedDraftsBytes;
-    const total = bytes + next.usage.recordBytes + draftsBytes + draftRecordBytes;
-    const previousTotal = this.metadataBytes;
-    if (
-      !tx.essential &&
-      total > WEB_ANNOTATION_LIMITS.environmentMetadataBytes &&
-      total > previousTotal
-    ) {
-      throw storageCapacityError(
-        `environment metadata would use ${total} of ${WEB_ANNOTATION_LIMITS.environmentMetadataBytes} bytes`,
-        "metadata-bytes",
-        {
-          used: previousTotal,
-          limit: WEB_ANNOTATION_LIMITS.environmentMetadataBytes,
-          requested: Math.max(0, total - previousTotal),
-        },
-      );
-    }
-    const recordKeys = tx.records.map((record) => this.recordPath(record.id, record.revision));
-    for (const key of recordKeys) this.inFlightRecords.add(key);
-    try {
-      await mkdir(this.dir, { recursive: true, mode: 0o700 });
-      await this.options.faults?.("before-record-write", this.environmentId);
-      await this.writeRecords(tx.records);
-      if (tx.promotions.length > 0) {
-        await mkdir(join(this.dir, "assets"), { recursive: true, mode: 0o700 });
-        for (const promotion of tx.promotions) {
-          await rename(promotion.stagingPath, this.assetPath(promotion.assetId));
-          this.activeStaging.delete(promotion.stagingPath);
-        }
-      }
-      await this.options.faults?.("before-manifest-replace", this.environmentId);
-      await preservePrevious(this.manifestPath(), this.previousPath());
-      await writeDurable(this.manifestPath(), json);
-      if (this.options.syncDirectories !== false) await syncDirectory(this.dir);
-    } finally {
-      for (const key of recordKeys) this.inFlightRecords.delete(key);
-    }
-    // Commit point passed: publish in-memory state synchronously.
-    this.current = next;
-    this.committedManifestBytes = bytes;
-    for (const [id, entry] of text.written) this.persistedText.set(id, entry);
-    for (const id of Array.from(this.persistedText.keys())) {
-      if (!next.requests[id]) this.persistedText.delete(id);
-    }
-    this.draftRecordBytes = draftRecordBytes;
-    this.refreshActive(tx.requestIds);
-    for (const id of tx.annotationIds) {
-      if (!next.annotations[id]) this.unavailable.delete(id);
-    }
-    // Records the previous listing index referenced survive one more commit.
-    const manifestDeferred = this.manifestDeferred;
-    this.manifestDeferred = tx.dropRecords.map((drop) => this.recordPath(drop.id, drop.revision));
-    await this.flushDeferred(manifestDeferred);
-    for (const assetId of tx.dropAssets) {
-      await unlink(this.assetPath(assetId)).catch(() => undefined);
-    }
-    if (draftsJson) {
-      try {
-        await this.replaceDraftIndex(draftsJson);
-        this.committedDraftsBytes = Buffer.byteLength(draftsJson);
-        this.draftsSequence++;
-        this.draftsDirty = false;
-        const draftsDeferred = this.draftsDeferred;
-        this.draftsDeferred = tx.dropDraftRecords.map((drop) =>
-          this.recordPath(drop.id, drop.revision),
-        );
-        await this.flushDeferred(draftsDeferred);
-      } catch (error) {
-        // The listing index is committed; `consumedDrafts` repairs the draft
-        // index on the next load or draft commit.
-        this.draftsDirty = true;
-        console.warn(
-          `[web-annotations] Draft index write deferred: ${error instanceof Error ? error.name : "unknown"}`,
-        );
-      }
-    }
-    this.observe({
-      scope: "manifest",
-      durationMs: Math.max(0, Date.now() - startedAt),
-      indexBytes: bytes,
-      records: tx.records.length,
-      requestIds: Array.from(tx.requestIds),
-      previous,
-      next,
-    });
-    try {
-      this.options.onCommit?.({
-        environmentId: this.environmentId,
-        revision: next.revision,
-        annotationIds: Array.from(tx.annotationIds),
-        requestIds: Array.from(tx.requestIds),
-      });
-    } catch (error) {
-      console.warn(
-        "[web-annotations] Change hint listener failed:",
-        error instanceof Error ? error.name : "unknown",
-      );
-    }
-    await this.options.faults?.("after-commit", this.environmentId);
-    return { value, revision: next.revision, committed: true };
-  }
-
-  private async runDrafts<T>(
-    work: (tx: WebAnnotationDraftTransaction) => T | Promise<T>,
-  ): Promise<WebAnnotationCommitResult<T>> {
-    this.assertDraftsWritable();
-    const startedAt = Date.now();
-    const nowMs = this.nowMs();
-    const tx = new WebAnnotationDraftTransaction(
-      this.current,
-      structuredClone(this.current.drafts),
-      new Date(nowMs).toISOString(),
-      nowMs,
-    );
-    const value = await work(tx);
-    if (!tx.dirty && !this.draftsDirty) {
-      return { value, revision: this.current.revision, committed: false };
-    }
-    let recordBytes = this.draftRecordBytes + tx.addedBytes;
-    for (const drop of tx.dropRecords) recordBytes = Math.max(0, recordBytes - drop.bytes);
-    const json = this.draftIndexJson(tx.drafts, recordBytes);
-    const bytes = Buffer.byteLength(json);
-    const previousTotal = this.metadataBytes;
-    const total =
-      this.committedManifestBytes + this.current.usage.recordBytes + bytes + recordBytes;
+  private assertQuota(total: number, previousTotal: number): void {
     if (total > WEB_ANNOTATION_LIMITS.environmentMetadataBytes && total > previousTotal) {
       throw storageCapacityError(
         `environment metadata would use ${total} of ${WEB_ANNOTATION_LIMITS.environmentMetadataBytes} bytes`,
@@ -1127,45 +1069,254 @@ export class WebAnnotationEnvironmentStore {
         },
       );
     }
-    const recordKeys = tx.records.map((record) => this.recordPath(record.id, record.revision));
-    for (const key of recordKeys) this.inFlightRecords.add(key);
-    try {
-      await mkdir(this.dir, { recursive: true, mode: 0o700 });
-      await this.options.faults?.("before-record-write", this.environmentId);
-      await this.writeRecords(tx.records);
-      await this.replaceDraftIndex(json);
-    } finally {
-      for (const key of recordKeys) this.inFlightRecords.delete(key);
+  }
+
+  /** Writes record rows (replacing any with the same key); returns bytes freed. */
+  private writeRecords(records: readonly PendingRecordWrite[]): number {
+    const database = this.db();
+    const freed = deleteRecordRows(
+      database,
+      this.storeName,
+      records.map((record) => record.key),
+    );
+    writeRecordRows(database, this.storeName, records);
+    return freed;
+  }
+
+  /**
+   * Run one mutation. `work` edits a private clone of the manifest inside the
+   * commit transaction and must be synchronous; if it marks the transaction
+   * dirty, the changed rows commit atomically with the new revision.
+   */
+  async mutate<T>(
+    work: WebAnnotationWork<WebAnnotationTransaction, T>,
+  ): Promise<WebAnnotationCommitResult<T>> {
+    this.refresh();
+    this.assertWritable();
+    return this.enqueue(() => this.run(work));
+  }
+
+  /**
+   * Run one draft mutation. Only draft rows, draft text records and the
+   * record byte count are written; the environment revision does not change
+   * (drafts emit no change hints).
+   */
+  async mutateDrafts<T>(
+    work: WebAnnotationWork<WebAnnotationDraftTransaction, T>,
+  ): Promise<WebAnnotationCommitResult<T>> {
+    this.refresh();
+    this.assertDraftsWritable();
+    return this.enqueue(() => this.runDrafts(work));
+  }
+
+  private async run<T>(
+    work: WebAnnotationWork<WebAnnotationTransaction, T>,
+  ): Promise<WebAnnotationCommitResult<T>> {
+    const startedAt = Date.now();
+    const outcome = this.db().transaction(() => this.commitManifest(work));
+    this.flushHints();
+    if (!outcome.committed || !outcome.next) {
+      return { value: outcome.value, revision: this.snapshot.manifest.revision, committed: false };
     }
-    const previous = this.current;
-    this.current = { ...this.current, drafts: tx.drafts };
-    this.committedDraftsBytes = bytes;
-    this.draftsSequence++;
-    this.draftRecordBytes = recordBytes;
-    this.draftsDirty = false;
-    const deferred = this.draftsDeferred;
-    this.draftsDeferred = tx.dropRecords.map((drop) => this.recordPath(drop.id, drop.revision));
-    await this.flushDeferred(deferred);
+    const previous = outcome.previous!;
+    const next = outcome.next;
+    this.adopt(next, false);
+    for (const assetId of outcome.dropAssets ?? []) {
+      await unlink(this.assetPath(assetId)).catch(() => undefined);
+    }
+    this.observe({
+      scope: "manifest",
+      durationMs: Math.max(0, Date.now() - startedAt),
+      indexBytes: next.indexBytes,
+      records: outcome.records ?? 0,
+      requestIds: outcome.requestIds ?? [],
+      previous: previous.manifest,
+      next: next.manifest,
+    });
+    this.emitHint({
+      environmentId: this.environmentId,
+      revision: next.manifest.revision,
+      annotationIds: [...(outcome.annotationIds ?? [])],
+      requestIds: [...(outcome.requestIds ?? [])],
+    });
+    await this.options.faults?.("after-commit", this.environmentId);
+    return { value: outcome.value, revision: next.manifest.revision, committed: true };
+  }
+
+  /** Inside the commit transaction. */
+  private commitManifest<T>(
+    work: WebAnnotationWork<WebAnnotationTransaction, T>,
+  ): CommitOutcome<T> {
+    this.refresh();
+    this.assertWritable();
+    const base = this.snapshot;
+    const nowMs = this.nowMs();
+    const tx = new WebAnnotationTransaction(
+      structuredClone(base.manifest),
+      new Date(nowMs).toISOString(),
+      nowMs,
+      (kind, id, revision) => this.readRecordNow(kind, id, revision),
+    );
+    const value = work(tx) as T;
+    if (isThenable(value)) {
+      throw new WebAnnotationStorageError("Web annotation mutations must be synchronous");
+    }
+    if (!tx.dirty) return { value, committed: false };
+    const next = tx.manifest;
+    next.revision = base.manifest.revision + 1;
+    next.updatedAt = tx.now;
+    next.consumedDrafts = [];
+    for (const id of tx.annotationIds) next.changedAt[id] = next.revision;
+
+    const database = this.db();
+    this.fault("before-record-write");
+    let freed = this.writeRecords(tx.records);
+    freed += deleteRecordRows(database, this.storeName, [
+      ...tx.dropRecords.map((drop) => recordKey(drop.id, drop.revision)),
+      ...tx.dropDraftRecords.map((drop) => recordKey(drop.id, drop.revision)),
+    ]);
+    const written = tx.records.reduce((sum, record) => sum + record.bytes, 0);
+    const recordBytes = Math.max(0, next.usage.recordBytes + written - freed);
+    next.usage = { recordBytes };
+    const meta: WebAnnotationStoreMeta = {
+      ...base.meta,
+      createdAt: next.createdAt,
+      updatedAt: tx.now,
+      revision: next.revision,
+      recordBytes,
+    };
+    const plan = planRows(base, next, meta, base.unreadable);
+    if (!tx.essential) {
+      this.assertQuota(
+        plan.indexBytes + recordBytes,
+        base.indexBytes + base.manifest.usage.recordBytes,
+      );
+    }
+    writeIndexRows(database, this.storeName, plan.upserts, plan.deletes);
+    this.fault("before-manifest-replace");
+    if (plan.changedKeys.has("drafts")) this.fault("before-drafts-replace");
+    const storeRevision = committedStoreRevision(database, this.storeName);
+    return {
+      value,
+      committed: true,
+      previous: base,
+      next: {
+        storeRevision,
+        manifest: next,
+        meta,
+        unreadable: base.unreadable,
+        rows: plan.rows,
+        values: plan.values,
+        indexBytes: plan.indexBytes,
+        maxPosition: plan.maxPosition,
+      },
+      records: tx.records.length,
+      dropAssets: tx.dropAssets,
+      annotationIds: Array.from(tx.annotationIds),
+      requestIds: Array.from(tx.requestIds),
+    };
+  }
+
+  private async runDrafts<T>(
+    work: WebAnnotationWork<WebAnnotationDraftTransaction, T>,
+  ): Promise<WebAnnotationCommitResult<T>> {
+    const startedAt = Date.now();
+    const outcome = this.db().transaction(() => this.commitDrafts(work));
+    this.flushHints();
+    if (!outcome.committed || !outcome.next) {
+      return { value: outcome.value, revision: this.snapshot.manifest.revision, committed: false };
+    }
+    this.adopt(outcome.next, false);
     this.observe({
       scope: "drafts",
       durationMs: Math.max(0, Date.now() - startedAt),
-      indexBytes: bytes,
-      records: tx.records.length,
+      indexBytes: outcome.next.indexBytes,
+      records: outcome.records ?? 0,
       requestIds: [],
-      previous,
-      next: this.current,
+      previous: outcome.previous!.manifest,
+      next: outcome.next.manifest,
     });
-    return { value, revision: this.current.revision, committed: true };
+    return { value: outcome.value, revision: outcome.next.manifest.revision, committed: true };
+  }
+
+  /** Inside the commit transaction. */
+  private commitDrafts<T>(
+    work: WebAnnotationWork<WebAnnotationDraftTransaction, T>,
+  ): CommitOutcome<T> {
+    this.refresh();
+    this.assertDraftsWritable();
+    const base = this.snapshot;
+    const nowMs = this.nowMs();
+    const tx = new WebAnnotationDraftTransaction(
+      base.manifest,
+      structuredClone(base.manifest.drafts),
+      new Date(nowMs).toISOString(),
+      nowMs,
+    );
+    const value = work(tx) as T;
+    if (isThenable(value)) {
+      throw new WebAnnotationStorageError("Web annotation mutations must be synchronous");
+    }
+    if (!tx.dirty) return { value, committed: false };
+    const database = this.db();
+    this.fault("before-record-write");
+    let freed = this.writeRecords(tx.records);
+    freed += deleteRecordRows(
+      database,
+      this.storeName,
+      tx.dropRecords.map((drop) => recordKey(drop.id, drop.revision)),
+    );
+    const written = tx.records.reduce((sum, record) => sum + record.bytes, 0);
+    const recordBytes = Math.max(0, base.manifest.usage.recordBytes + written - freed);
+    const next: WebAnnotationManifest = {
+      ...base.manifest,
+      drafts: tx.drafts,
+      usage: { recordBytes },
+    };
+    const meta: WebAnnotationStoreMeta = { ...base.meta, recordBytes };
+    const plan = planRows(base, next, meta, base.unreadable, DRAFT_SCOPE);
+    this.assertQuota(
+      plan.indexBytes + recordBytes,
+      base.indexBytes + base.manifest.usage.recordBytes,
+    );
+    writeIndexRows(database, this.storeName, plan.upserts, plan.deletes);
+    this.fault("before-drafts-replace");
+    const storeRevision = committedStoreRevision(database, this.storeName);
+    return {
+      value,
+      committed: true,
+      previous: base,
+      next: {
+        storeRevision,
+        manifest: next,
+        meta,
+        unreadable: base.unreadable,
+        rows: plan.rows,
+        values: plan.values,
+        indexBytes: plan.indexBytes,
+        maxPosition: plan.maxPosition,
+      },
+      records: tx.records.length,
+    };
+  }
+
+  private observe(observation: Omit<WebAnnotationCommitObservation, "environmentId">): void {
+    try {
+      this.options.observeCommit?.({ environmentId: this.environmentId, ...observation });
+    } catch {
+      // Metrics never affect storage.
+    }
   }
 
   /**
    * Remove uncommitted leftovers older than the staging grace period: staging
-   * uploads, record directories and asset files the manifest never referenced,
-   * superseded text/draft revisions no index generation references, and
-   * abandoned temp files. Bounded per call by `batch` and `deadline`.
+   * uploads, promoted asset files no committed row references, and abandoned
+   * temp files. Asset rows are re-read inside the transaction that unlinks
+   * them, so an asset another backend committed is never removed. Bounded per
+   * call by `batch` and `deadline`.
    */
   async cleanup(options: { batch?: number; deadline?: number } = {}): Promise<number> {
-    if (this.storageStatus !== "ready" || this.closed) return 0;
+    if (this.status !== "ready" || this.closed) return 0;
     const batch = options.batch ?? 50;
     const deadline = options.deadline ?? Number.POSITIVE_INFINITY;
     const cutoff = this.nowMs() - WEB_ANNOTATION_LIMITS.stagingGraceMs;
@@ -1188,66 +1339,43 @@ export class WebAnnotationEnvironmentStore {
       await rm(path, { recursive: true, force: true }).catch(() => undefined);
       removed++;
     }
-    const referenced = new Set<string>();
-    const manifest = this.current;
-    const add = (id: string) => referenced.add(recordDirectoryName(id));
-    for (const id of Object.keys(manifest.captures)) add(id);
-    for (const entries of Object.values(manifest.entries))
-      for (const entry of entries) add(entry.id);
-    for (const id of Object.keys(manifest.requests)) {
-      add(id);
-      add(requestTextRecordId(id));
-    }
-    for (const id of Object.keys(manifest.results)) add(id);
-    for (const draft of Object.values(manifest.drafts)) add(draft.id);
-    const inFlightDirs = new Set(
-      Array.from(this.inFlightRecords).map((path) => path.split(/[\\/]/).at(-2)),
-    );
-    for (const name of await list(join(this.dir, "records"))) {
-      if (!budgetLeft()) return removed;
-      if (referenced.has(name) || inFlightDirs.has(name)) continue;
-      const path = join(this.dir, "records", name);
-      if (!(await expired(path))) continue;
-      await rm(path, { recursive: true, force: true }).catch(() => undefined);
-      removed++;
-    }
-    // Revisions older than current-1 are referenced by neither index
-    // generation (a crash can leave them behind before deferred removal).
-    const revisioned: Array<{ id: string; revision: number }> = [];
-    for (const [id, text] of this.persistedText) {
-      if (text.revision >= 3)
-        revisioned.push({ id: requestTextRecordId(id), revision: text.revision });
-    }
-    for (const draft of Object.values(manifest.drafts)) {
-      if (draft.revision >= 3) revisioned.push({ id: draft.id, revision: draft.revision });
-    }
-    for (const item of revisioned) {
-      if (!budgetLeft()) return removed;
-      const directory = join(this.dir, "records", recordDirectoryName(item.id));
-      for (const name of await list(directory)) {
-        const match = /^(\d+)\.json$/.exec(name);
-        if (!match || Number(match[1]) >= item.revision - 1) continue;
-        await rm(join(directory, name), { force: true }).catch(() => undefined);
-        removed++;
-        if (!budgetLeft()) return removed;
-      }
-    }
+    const candidates: Array<{ path: string; assetId: string | null }> = [];
     for (const name of await list(join(this.dir, "assets"))) {
-      if (!budgetLeft()) return removed;
-      const id = name.endsWith(".png") ? name.slice(0, -4) : null;
-      if (id && manifest.assets[id]) continue;
+      if (removed + candidates.length >= batch || Date.now() >= deadline) break;
+      const assetId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.png$/.test(name)
+        ? name.slice(0, -4)
+        : null;
+      if (assetId && this.manifest.assets[assetId]) continue;
       const path = join(this.dir, "assets", name);
       if (!(await expired(path))) continue;
-      await rm(path, { force: true }).catch(() => undefined);
-      removed++;
+      candidates.push({ path, assetId });
     }
-    for (const name of await list(this.dir)) {
-      if (!budgetLeft()) return removed;
-      if (!name.endsWith(".tmp")) continue;
-      const path = join(this.dir, name);
-      if (!(await expired(path))) continue;
-      await rm(path, { force: true }).catch(() => undefined);
-      removed++;
+    if (candidates.length > 0) {
+      const database = this.db();
+      removed += database.transaction(() => {
+        let count = 0;
+        for (const candidate of candidates) {
+          if (candidate.assetId && hasAssetRow(database, this.storeName, candidate.assetId))
+            continue;
+          try {
+            unlinkSync(candidate.path);
+            count++;
+          } catch {
+            // Already gone.
+          }
+        }
+        return count;
+      });
+    }
+    for (const directory of [this.dir, join(this.dir, "assets")]) {
+      for (const name of await list(directory)) {
+        if (!budgetLeft()) return removed;
+        if (!name.endsWith(".tmp")) continue;
+        const path = join(directory, name);
+        if (!(await expired(path))) continue;
+        await rm(path, { force: true }).catch(() => undefined);
+        removed++;
+      }
     }
     return removed;
   }
@@ -1271,9 +1399,27 @@ export class WebAnnotationStorage {
   private readonly stores = new Map<string, WebAnnotationEnvironmentStore>();
   private readonly loading = new Map<string, Promise<WebAnnotationEnvironmentStore>>();
   private readonly deleted = new Set<string>();
+  private connection: StorageDatabase | null = null;
+  private readonly host: EnvironmentHost;
 
   constructor(private readonly options: WebAnnotationStorageOptions) {
     this.root = join(options.dataDir, "web-annotations");
+    this.host = {
+      database: () => this.database(),
+      deletedElsewhere: (environmentId) => {
+        this.deleted.add(environmentId);
+        this.stores.delete(environmentId);
+      },
+    };
+  }
+
+  /** The database connection (opened lazily; reopened after `close`). */
+  database(): StorageDatabase {
+    if (this.options.database) return this.options.database;
+    if (!this.connection || this.connection.isClosed()) {
+      this.connection = openBackendDatabase(this.options.dataDir);
+    }
+    return this.connection;
   }
 
   /**
@@ -1289,8 +1435,12 @@ export class WebAnnotationStorage {
     options: { environmentExists?: (environmentId: string) => Promise<boolean> } = {},
   ): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const names = await readdir(this.root).catch(() => [] as string[]);
-    for (const name of names) {
+    const names = new Set<string>();
+    for (const store of this.database().listStores(WEB_ANNOTATION_STORE_PREFIX)) {
+      names.add(store.slice(WEB_ANNOTATION_STORE_PREFIX.length));
+    }
+    for (const name of await readdir(this.root).catch(() => [] as string[])) names.add(name);
+    for (const name of Array.from(names).sort()) {
       if (!isEnvironmentDirectoryName(name)) continue;
       if (options.environmentExists && !(await options.environmentExists(name))) {
         await this.deleteEnvironment(name).catch((error: unknown) => {
@@ -1315,14 +1465,17 @@ export class WebAnnotationStorage {
   }
 
   isDeleted(environmentId: string): boolean {
-    return this.deleted.has(environmentId);
+    return (
+      this.deleted.has(environmentId) ||
+      !!deletionMarker(this.database(), "annotations", environmentId)
+    );
   }
 
   async environment(environmentId: string): Promise<WebAnnotationEnvironmentStore> {
     if (!isEnvironmentDirectoryName(environmentId)) {
       throw new WebAnnotationStorageError("Environment id is invalid");
     }
-    if (this.deleted.has(environmentId)) {
+    if (this.isDeleted(environmentId)) {
       throw new WebAnnotationStorageError("Environment was deleted");
     }
     const existing = this.stores.get(environmentId);
@@ -1330,8 +1483,16 @@ export class WebAnnotationStorage {
     let loading = this.loading.get(environmentId);
     if (!loading) {
       loading = (async () => {
-        const store = new WebAnnotationEnvironmentStore(environmentId, this.root, this.options);
+        const store = new WebAnnotationEnvironmentStore(
+          environmentId,
+          this.root,
+          this.options,
+          this.host,
+        );
         await store.load();
+        if (this.isDeleted(environmentId)) {
+          throw new WebAnnotationStorageError("Environment was deleted");
+        }
         this.stores.set(environmentId, store);
         return store;
       })().finally(() => this.loading.delete(environmentId));
@@ -1342,7 +1503,8 @@ export class WebAnnotationStorage {
 
   /**
    * Environment deletion: reject further writes, let the in-flight commit
-   * finish, then remove the directory. Idempotent.
+   * finish, then delete the store (scrubbing freed pages and the WAL), the
+   * files and any archived legacy copy. Idempotent.
    */
   async deleteEnvironment(environmentId: string): Promise<void> {
     if (!isEnvironmentDirectoryName(environmentId)) return;
@@ -1352,11 +1514,22 @@ export class WebAnnotationStorage {
       (await this.loading.get(environmentId)?.catch(() => undefined));
     await store?.close();
     this.stores.delete(environmentId);
+    const database = this.database();
+    database.transaction(() => {
+      markDeletion(database, "annotations", environmentId);
+      database.deleteStoreInTransaction(webAnnotationStoreName(environmentId));
+    });
+    database.scrubDeletedContent();
     await rm(join(this.root, environmentId), { recursive: true, force: true });
+    await removeArchivedLegacyEnvironment(this.options.dataDir, environmentId);
   }
 
   async close(): Promise<void> {
     await Promise.all(Array.from(this.stores.values()).map((store) => store.drain()));
+    if (!this.options.database) {
+      this.connection?.close();
+      this.connection = null;
+    }
   }
 }
 

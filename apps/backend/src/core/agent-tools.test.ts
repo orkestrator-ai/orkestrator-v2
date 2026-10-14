@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import {
 } from "@orkestrator/protocol/workflow-results";
 import { AgentToolsServer, consumeAgentMailRateLimit } from "./agent-tools.js";
 import { StorageService } from "./storage.js";
+import { seedUnreadableStore } from "./storage-test-support.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 
 type RpcResponse = {
@@ -51,8 +52,16 @@ describe("agent Kanban tools", () => {
   let dataDir: string;
   let storage: StorageService;
   let server: AgentToolsServer;
+  let resultServices: WorkflowResultService[] = [];
+
+  function workflowResultService(): WorkflowResultService {
+    const service = new WorkflowResultService(dataDir);
+    resultServices.push(service);
+    return service;
+  }
 
   beforeEach(async () => {
+    resultServices = [];
     dataDir = await mkdtemp(join(tmpdir(), "ork-agent-tools-"));
     storage = new StorageService(dataDir);
     await storage.init();
@@ -62,6 +71,7 @@ describe("agent Kanban tools", () => {
 
   afterEach(async () => {
     await server.stop();
+    for (const service of resultServices) service.closeStorage();
     await rm(dataDir, { recursive: true, force: true });
   });
 
@@ -211,7 +221,7 @@ describe("agent Kanban tools", () => {
 
   test("exposes scoped workflow submission and status tools when configured", async () => {
     await server.stop();
-    const workflowResults = new WorkflowResultService(dataDir);
+    const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
     const resultKey = crypto.randomUUID();
@@ -286,7 +296,7 @@ describe("agent Kanban tools", () => {
     });
 
     await server.stop();
-    const restartedResults = new WorkflowResultService(dataDir);
+    const restartedResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", restartedResults);
     await server.start();
     const renewed = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
@@ -321,7 +331,7 @@ describe("agent Kanban tools", () => {
 
   test("exposes a stable OpenCode broker while requiring a signed capability per attempt", async () => {
     await server.stop();
-    const workflowResults = new WorkflowResultService(dataDir);
+    const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
     const firstKey = crypto.randomUUID();
@@ -461,7 +471,7 @@ describe("agent Kanban tools", () => {
 
   test("reports storage failure from the OpenCode broker status tool", async () => {
     await server.stop();
-    const workflowResults = new WorkflowResultService(dataDir);
+    const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
     const resultKey = crypto.randomUUID();
@@ -479,7 +489,7 @@ describe("agent Kanban tools", () => {
       resultKey,
       "opencode",
     );
-    await writeFile(join(dataDir, "workflow-results.json"), "{not-json");
+    seedUnreadableStore(dataDir, "workflow-results.json", "{not-json");
     const failed = await rpc(connection.url, connection.token, "tools/call", {
       name: "get_workflow_result_status",
       arguments: {
@@ -495,8 +505,8 @@ describe("agent Kanban tools", () => {
 
   test("starts ordinary tools after regenerating a truncated workflow capability identity", async () => {
     await server.stop();
-    await writeFile(join(dataDir, "workflow-result-tools.json"), "");
-    const workflowResults = new WorkflowResultService(dataDir);
+    seedUnreadableStore(dataDir, "workflow-result-tools.json", "");
+    const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await expect(server.start()).resolves.toBeUndefined();
     await addMessagingEnvironment("env-identity", "project-identity", ["agent-identity"]);
@@ -513,7 +523,7 @@ describe("agent Kanban tools", () => {
 
   test("rejects a forged workflow token without parsing a corrupt result store", async () => {
     await server.stop();
-    const workflowResults = new WorkflowResultService(dataDir);
+    const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
     const resultKey = crypto.randomUUID();
@@ -527,7 +537,7 @@ describe("agent Kanban tools", () => {
     const connection = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
     const final = connection.token.at(-1);
     const forged = `${connection.token.slice(0, -1)}${final === "A" ? "B" : "A"}`;
-    await writeFile(join(dataDir, "workflow-results.json"), "{not-json");
+    seedUnreadableStore(dataDir, "workflow-results.json", "{not-json");
 
     const rejected = await rpc(connection.url, forged, "tools/list");
     expect(rejected.response.status).toBe(401);
@@ -535,7 +545,7 @@ describe("agent Kanban tools", () => {
 
   test("advertises one typed submission tool for every workflow result kind", async () => {
     await server.stop();
-    const workflowResults = new WorkflowResultService(dataDir);
+    const workflowResults = workflowResultService();
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
 

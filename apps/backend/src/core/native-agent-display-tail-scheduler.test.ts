@@ -11,6 +11,8 @@ import {
   createNativeAgentDisplayTail,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
+import type { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
 
 /** Deterministic timers: `advance` fires due callbacks in order and drains microtasks. */
 class FakeTimers {
@@ -275,9 +277,11 @@ describe("NativeAgentDisplayTailScheduler", () => {
   });
 });
 
-describe("display-tail scheduler with keyed storage", () => {
+describe("display-tail scheduler with database storage", () => {
   const directories: string[] = [];
+  const databases: StorageDatabase[] = [];
   afterEach(async () => {
+    for (const database of databases.splice(0)) database.close();
     await Promise.all(
       directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
     );
@@ -286,9 +290,11 @@ describe("display-tail scheduler with keyed storage", () => {
   async function wired() {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-display-tail-scheduler-"));
     directories.push(dataDir);
+    const database = openBackendDatabase(dataDir);
+    databases.push(database);
     const store = new NativeAgentDisplayTailStore({
-      directory: path.join(dataDir, "records"),
-      legacyFile: path.join(dataDir, "native-agent-display-tails.json"),
+      database: () => database,
+      legacyRoot: dataDir,
     });
     const timers = new FakeTimers();
     let gate: Promise<void> | null = null;

@@ -362,6 +362,7 @@ async function withService(
     await run(service, storage, provider, invocations, controls);
   } finally {
     await service.shutdown();
+    controls.workflowResults?.closeStorage();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }

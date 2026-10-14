@@ -1,5 +1,7 @@
 # 06 — Add bounded keyed-record and manifest storage primitives
 
+> **Superseded (2026-10-14).** The keyed-record engine this step built was removed when the backend stores moved to SQLite. Display tails and build-pipeline transcript manifests are now rows in `orkestrator.sqlite`; see [`docs/architecture/storage.md`](../../../architecture/storage.md).
+
 Status: Complete. Prerequisite: 01. Findings: E04/E14 infrastructure.
 
 ## Outcome and decision

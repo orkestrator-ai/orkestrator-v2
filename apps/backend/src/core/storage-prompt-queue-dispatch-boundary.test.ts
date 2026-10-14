@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { seedStore } from "./storage-test-support.js";
 
 const dataDirs: string[] = [];
 
@@ -90,35 +91,29 @@ describe("prompt queue dispatch boundary", () => {
     await storage.savePromptQueue("queue-1", "environment-1", [{ id: "message-1" }]);
     await storage.reservePromptQueueHeadForDispatch("queue-1");
     const queue = await storage.getPromptQueue("queue-1");
-    const file = path.join(storage.getDataDir(), "prompt-queues.json");
+    const dataDir = storage.getDataDir();
 
-    await fs.writeFile(
-      file,
-      JSON.stringify({
-        "queue-1": {
-          ...queue,
-          inFlight: {
-            ...queue!.inFlight,
-            submittedAt: "2026-01-01T00:00:00.000Z",
-          },
+    seedStore(dataDir, "prompt-queues.json", {
+      "queue-1": {
+        ...queue,
+        inFlight: {
+          ...queue!.inFlight,
+          submittedAt: "2026-01-01T00:00:00.000Z",
         },
-      }),
-    );
+      },
+    });
     await expect(storage.getPromptQueue("queue-1")).resolves.toBeNull();
 
-    await fs.writeFile(
-      file,
-      JSON.stringify({
-        "queue-1": {
-          ...queue,
-          inFlight: {
-            ...queue!.inFlight,
-            submittingAt: "2026-01-02T00:00:00.000Z",
-            submittedAt: "2026-01-01T00:00:00.000Z",
-          },
+    seedStore(dataDir, "prompt-queues.json", {
+      "queue-1": {
+        ...queue,
+        inFlight: {
+          ...queue!.inFlight,
+          submittingAt: "2026-01-02T00:00:00.000Z",
+          submittedAt: "2026-01-01T00:00:00.000Z",
         },
-      }),
-    );
+      },
+    });
     await expect(storage.getPromptQueue("queue-1")).resolves.toBeNull();
   });
 

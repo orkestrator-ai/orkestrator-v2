@@ -10,6 +10,7 @@ const PROVIDER_SOURCE_FILES = [
   "http-bridge-transport.ts",
   "native-agent-provider.ts",
   "opencode-commands.ts",
+  "opencode-display-transcript.ts",
   "opencode-events.ts",
   "opencode-execution-profiles.ts",
   "opencode-interactions.ts",

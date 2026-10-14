@@ -6,6 +6,7 @@ import {
   committedTranscriptCursor,
   snapshotWithoutInlineTranscripts,
 } from "./build-pipeline-transcripts.js";
+import { normalizeOpenCodeDisplayEntry } from "./opencode-display-transcript.js";
 
 /**
  * Transcript-aware projections for the build-pipeline read commands.
@@ -14,6 +15,10 @@ import {
  * bodies names the revision/count it already holds per session and receives
  * only the referenced window each stale session needs, read straight from the
  * transcript store (or the legacy inline array of an unmigrated record).
+ *
+ * Stored bodies are the provider's raw messages. OpenCode entries are
+ * normalized to display messages here, on the way out, so a pipeline persisted
+ * by any version renders through the renderer's one generic transcript path.
  */
 
 /**
@@ -219,8 +224,12 @@ export async function conditionalBuildPipelineRead(
     let nextIndex = read.startIndex;
     let candidate: TranscriptRead = read;
     while (candidate.status === "found" && nextIndex < candidate.messageCount) {
-      const message = candidate.messages[0];
-      if (message === undefined) break;
+      const stored = candidate.messages[0];
+      if (stored === undefined) break;
+      // The store keeps what the provider returned; the renderer gets display
+      // messages. One in, one out, so `startIndex`/`baseCount` still address
+      // the client's copy. Measured after normalizing: that is what is sent.
+      const message = normalizeOpenCodeDisplayEntry(stored, nextIndex);
       const bytes =
         Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
         (patch.messages.length > 0 ? 1 : 0);

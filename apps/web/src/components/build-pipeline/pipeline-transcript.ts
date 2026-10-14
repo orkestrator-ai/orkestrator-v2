@@ -3,11 +3,13 @@
  * message model, so a build stage renders through exactly the components the
  * Claude, Codex and OpenCode tabs use.
  *
- * The snapshot field is `unknown[]` by contract: the backend copies whatever the
- * provider returned and never reshapes it, and a pipeline persisted by an older
- * build can hold a shape this client no longer expects. Everything here is
- * therefore validated rather than cast — an entry that cannot be understood is
- * dropped, not rendered as raw JSON.
+ * The snapshot field is `unknown[]` by contract. Bridge providers already store
+ * the flat native shape; OpenCode's `{ info, parts }` envelopes are normalized
+ * by the backend when it serves the transcript (`opencode-display-transcript`),
+ * so every entry arrives flat. A pipeline persisted by an older build can still
+ * hold a shape this client no longer expects, so everything here is validated
+ * rather than cast — an entry that cannot be understood is dropped, not
+ * rendered as raw JSON.
  */
 
 import type {
@@ -23,7 +25,6 @@ import {
   normalizeClaudeMessagesForDisplay,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
-import { normalizeOpenCodeMessage } from "@/lib/opencode-messages";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
   NativeAgentActivityPart,
@@ -166,6 +167,11 @@ const PART_TYPES = new Set([
   "text",
   "thinking",
   "file",
+  // OpenCode's normalizer turns an image attachment into an image row and
+  // reports compaction and retry boundaries as their own rows.
+  "image",
+  "compaction",
+  "retry",
   "tool-invocation",
   "tool-result",
   "subagent",
@@ -173,6 +179,14 @@ const PART_TYPES = new Set([
   "agent-group",
   "task-group",
 ]);
+
+const IMAGE_SOURCES = new Set(["attachment", "generated", "viewed"]);
+
+function asImageSource(value: unknown): "attachment" | "generated" | "viewed" | undefined {
+  return typeof value === "string" && IMAGE_SOURCES.has(value)
+    ? (value as "attachment" | "generated" | "viewed")
+    : undefined;
+}
 
 function isAgentActivityPart(part: NativeMessagePart): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
@@ -241,6 +255,28 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     case "tool-invocation":
     case "tool-result":
       return { ...base, type };
+    case "image": {
+      const imageSource = asImageSource(raw.imageSource);
+      const filename = asString(raw.filename);
+      return {
+        ...base,
+        type,
+        ...(imageSource ? { imageSource } : {}),
+        ...(filename ? { filename } : {}),
+      };
+    }
+    case "compaction": {
+      const compactedTokensBefore = asNumber(raw.compactedTokensBefore);
+      return {
+        ...base,
+        type,
+        ...(compactedTokensBefore !== undefined ? { compactedTokensBefore } : {}),
+      };
+    }
+    case "retry": {
+      const retryAttempt = asNumber(raw.retryAttempt);
+      return { ...base, type, ...(retryAttempt !== undefined ? { retryAttempt } : {}) };
+    }
     case "subagent":
       return {
         ...base,
@@ -311,18 +347,10 @@ function toClaudeParts(value: unknown): ClaudeMessagePart[] {
 /** `new Date(value).toISOString()` throws beyond the ECMA-262 time clip. */
 const MAX_EPOCH_MS = 8.64e15;
 
-function isRenderableEpoch(value: unknown): boolean {
-  if (typeof value === "number") {
-    return isRenderableEpochNumber(value);
-  }
-  return asString(value) !== undefined;
-}
-
 /**
- * Numeric-only variant for a call site that feeds `new Date(...).toISOString()`
- * directly. {@link isRenderableEpoch} accepts any non-empty string because its
- * own call site only uses the answer to keep or drop a value; passing a string
- * through to `toISOString` would throw `RangeError` from inside a render.
+ * True for an epoch `new Date(...).toISOString()` can format. Numbers only:
+ * passing a string through to `toISOString` could throw `RangeError` from
+ * inside a render.
  */
 function isRenderableEpochNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= MAX_EPOCH_MS;
@@ -345,72 +373,12 @@ function clip(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 1))}…`;
 }
 
-/** The entry with `info.time.created` removed, so the normalizer skips it. */
-function withoutCreatedTime(
-  raw: Record<string, unknown>,
-  info: Record<string, unknown>,
-): Record<string, unknown> {
-  const time = asRecord(info.time);
-  if (!time) return { ...raw, info: { ...info } };
-  const { created: _created, ...restTime } = time;
-  return { ...raw, info: { ...info, time: restTime } };
-}
-
-/**
- * OpenCode's own normalizer is not total and not deterministic, and both matter
- * here.
- *
- * It builds a `Date` from an unvalidated epoch, which throws a `RangeError` out
- * of the render-time memo for an out-of-range value — one bad entry would
- * replace the whole tab with the error boundary instead of being dropped. It
- * also mints a fresh UUID for a message with no `info.id` and stamps "now" for
- * one with no timestamp; this runs again on every backend push, so the id
- * Virtuoso keys on would churn and the row would remount mid-stream. Both are
- * anchored to the entry's position instead.
- */
-function toOpenCodeMessage(
-  raw: Record<string, unknown>,
-  // Never null: `openCodeInfo` is what routed this entry here, and returning a
-  // record is exactly what that routing decision means.
-  info: Record<string, unknown>,
-  index: number,
-  fallbackCreatedAt: string,
-): NativeMessage | null {
-  const timestamped = isRenderableEpoch(asRecord(info.time)?.created);
-  const entry = timestamped ? raw : withoutCreatedTime(raw, info);
-
-  let message: NativeMessage | null;
-  try {
-    message = normalizeOpenCodeMessage(entry);
-  } catch {
-    return null;
-  }
-  if (!message || !hasRenderableContent(message)) return null;
-
-  return {
-    ...message,
-    id: asString(info.id) ?? `pipeline-message-${index}`,
-    ...(timestamped ? {} : { createdAt: fallbackCreatedAt }),
-  };
-}
-
 function hasRenderableContent(message: NativeMessage): boolean {
   return message.parts.length > 0 || message.content.trim().length > 0;
 }
 
 function messageId(raw: Record<string, unknown>, index: number): string {
   return asString(raw.id) ?? `pipeline-message-${index}`;
-}
-
-/**
- * The OpenCode envelope's `info`, or null for a flat message.
- *
- * OpenCode returns `{ info, parts }`; the Claude and Codex bridges return the
- * flat message shape. Detected per entry rather than from the pipeline's agent
- * type so a snapshot whose agent was recorded differently still renders.
- */
-function openCodeInfo(raw: Record<string, unknown>): Record<string, unknown> | null {
-  return asRecord(raw.info);
 }
 
 const PIPELINE_HANDOFF_OPEN = '<orkestrator-handoff format="json-v2">';
@@ -424,12 +392,11 @@ const PIPELINE_HANDOFF_CLOSE = "</orkestrator-handoff>";
  * Only the first provider entry is eligible for suppression. That is the sole
  * position where the backend can dispatch this carrier, and keeping the check
  * there prevents a later model/user message that quotes the marker from being
- * hidden. Both flat bridge messages and OpenCode's `{ info, parts }` envelope
- * are recognized before provider-specific normalization.
+ * hidden. Every provider's entry arrives in the flat shape (OpenCode's is
+ * normalized by the backend), so the carrier is in `content` or a part's.
  */
 function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
-  const role = raw.role ?? openCodeInfo(raw)?.role;
-  if (role !== "user") return false;
+  if (raw.role !== "user") return false;
 
   const carriesHandoff = (value: unknown): boolean =>
     typeof value === "string" &&
@@ -438,12 +405,7 @@ function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
 
   if (carriesHandoff(raw.content)) return true;
   if (!Array.isArray(raw.parts)) return false;
-  return raw.parts.some((part) => {
-    const candidate = asRecord(part);
-    return (
-      candidate !== null && (carriesHandoff(candidate.content) || carriesHandoff(candidate.text))
-    );
-  });
+  return raw.parts.some((part) => carriesHandoff(asRecord(part)?.content));
 }
 
 export function toPipelineTranscript(
@@ -461,15 +423,6 @@ export function toPipelineTranscript(
     const isFirstProviderEntry = !hasSeenProviderEntry;
     hasSeenProviderEntry = true;
     if (isFirstProviderEntry && isInitialPipelineHandoff(raw)) return;
-
-    const info = openCodeInfo(raw);
-    if (info) {
-      const message = toOpenCodeMessage(raw, info, index, fallbackCreatedAt);
-      if (message) {
-        transcript.push(...normalizeNativeMessages([message]).filter(hasRenderableContent));
-      }
-      return;
-    }
 
     const role = asRole(raw.role) ?? "assistant";
     const content = asString(raw.content) ?? "";

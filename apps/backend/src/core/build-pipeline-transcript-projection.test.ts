@@ -296,4 +296,68 @@ describe("build pipeline transcript projection", () => {
       expect((read.record.snapshot as { phase: string }).phase).toBe("verifying");
     });
   });
+
+  test("serves stored OpenCode envelopes as display messages, one for one", async () => {
+    await withStorage(async (storage) => {
+      // Stored exactly as the provider returned them; other backend readers
+      // (structured output, result evidence) parse this raw shape.
+      const openCode = (index: number) => ({
+        info: { id: `oc-${index}`, role: "assistant", time: { created: 1_800_000_000_000 } },
+        parts: [{ id: `part-${index}`, type: "text", text: `opencode:${index}` }],
+      });
+      const raw = [
+        openCode(0),
+        { info: { role: "assistant", time: { created: 1e18 } }, parts: [] },
+        { id: "flat", role: "assistant", content: "bridge row" },
+        openCode(3),
+      ];
+      const session = await referencedSession(storage, "oc", raw, 2);
+      const legacy = {
+        ...session,
+        sessionKey: "legacy-oc",
+        transcript: undefined,
+        messagesFingerprint: undefined,
+        messages: [openCode(9)],
+      };
+      const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+        id: "p1",
+        phase: "building",
+        sessions: [session, legacy],
+        currentSessionIndex: 0,
+      });
+
+      const whole = await conditionalBuildPipelineRead(storage, record, { knownSessions: {} });
+      if (whole.unchanged) throw new Error("expected patches");
+      const bySession = new Map(whole.messagePatches.map((patch) => [patch.sessionKey, patch]));
+      expect(bySession.get("oc")!.messages).toEqual([
+        {
+          id: "oc-0",
+          role: "assistant",
+          content: "opencode:0",
+          parts: [{ type: "text", content: "opencode:0", sourcePartId: "part-0" }],
+          createdAt: "2027-01-15T08:00:00.000Z",
+        },
+        // Out-of-range clock: no throw, no timestamp, a position-derived id.
+        { id: "opencode-message-1", role: "assistant", content: "", parts: [] },
+        raw[2],
+        expect.objectContaining({ id: "oc-3", content: "opencode:3" }),
+      ]);
+      expect(bySession.get("legacy-oc")!.messages).toEqual([
+        expect.objectContaining({ id: "oc-9", content: "opencode:9" }),
+      ]);
+
+      // A tail patch addresses the client's copy by raw index and count.
+      const tail = await conditionalBuildPipelineRead(storage, record, {
+        knownSessions: { oc: { revision: 1, count: 3 }, "legacy-oc": { revision: 2, count: 1 } },
+      });
+      if (tail.unchanged) throw new Error("expected a patch");
+      const patch = tail.messagePatches.find((candidate) => candidate.sessionKey === "oc")!;
+      expect(patch).toMatchObject({ baseCount: 3, startIndex: 2 });
+      expect(patch.messages).toEqual([raw[2], expect.objectContaining({ id: "oc-3" })]);
+
+      // The store itself still holds the provider's raw envelopes.
+      const stored = await storage.readBuildPipelineTranscript("p1", session);
+      expect(stored.status === "found" && stored.messages).toEqual(raw);
+    });
+  });
 });

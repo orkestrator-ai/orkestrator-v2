@@ -20,6 +20,11 @@
  * resolved through `readReviewerToolDetails` only when a row is expanded. A
  * provider that answers raw bodies keeps rendering them inline as before.
  *
+ * Every read leaves here as display messages: raw OpenCode `{ info, parts }`
+ * rows from the count-bounded fallback and history pages are normalized by
+ * the same normalizer the interactive tab uses (`opencode-display-transcript`),
+ * so the renderer carries no OpenCode normalizer of its own.
+ *
  * Source tokens are opaque to the renderer and scoped to the reviewer's
  * provider session: a replaced session never matches an old token, so the
  * renderer always receives a complete bounded snapshot for the new session.
@@ -43,6 +48,7 @@ import {
   MULTI_REVIEW_HISTORY_PAGE_MAX_MESSAGES,
   MULTI_REVIEW_HISTORY_PAGE_MAX_TARGET_BYTES,
 } from "@orkestrator/protocol/multi-review";
+import { normalizeOpenCodeDisplayEntries } from "./opencode-display-transcript.js";
 
 /** Messages returned to the reviewer tab at most. */
 export const MAX_REVIEWER_TRANSCRIPT_MESSAGES = 500;
@@ -222,11 +228,12 @@ export async function readReviewerTranscript(
     // The provider aims for the target; the backend enforces it. The token
     // still describes the provider's source, so an unchanged answer later
     // correctly means "keep the bounded tail you already have".
-    const bounded = boundReviewerTranscript(
+    const source =
       snapshot.representation === "summary"
         ? snapshot.messages.map(displayMessage)
-        : snapshot.messages,
-    );
+        : snapshot.messages;
+    const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(source));
+    const firstShown = source[source.length - bounded.messages.length];
     const sourceToken = snapshot.sourceToken
       ? wrapToken(providerSessionId, snapshot.sourceToken)
       : undefined;
@@ -257,7 +264,7 @@ export async function readReviewerTranscript(
           : undefined;
       historyCursor =
         direct ??
-        joinedCursor(owner, historyEpoch, bounded.messages[0], {
+        joinedCursor(owner, historyEpoch, firstShown, {
           // Nothing dropped here: only the provider knows older history exists.
           providerIncomplete: !bounded.truncated,
         });
@@ -280,7 +287,10 @@ export async function readReviewerTranscript(
   const messages = await provider.messages(providerSessionId, {
     limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
   });
-  const bounded = boundReviewerTranscript(messages);
+  // Provider reads are raw (an OpenCode `{ info, parts }` envelope); the tab
+  // renders display messages. Bounded after normalizing, which is what ships;
+  // the cursor still names the raw message the next page searches for.
+  const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(messages));
   // A full window may have had older history the limited read left behind.
   const truncated = bounded.truncated || messages.length >= MAX_REVIEWER_TRANSCRIPT_MESSAGES;
   const historyCursor =
@@ -288,7 +298,7 @@ export async function readReviewerTranscript(
       ? joinedCursor(
           { sessionKey: history.key, providerSessionId },
           LEGACY_HISTORY_EPOCH,
-          bounded.messages[0],
+          messages[messages.length - bounded.messages.length],
         )
       : undefined;
   return {
@@ -526,7 +536,7 @@ export async function readReviewerHistoryPage(
     if (!page || page.status !== "page" || page.historyEpoch !== classified.epoch) {
       return EXPIRED_HISTORY;
     }
-    const messages = page.messages.map(displayMessage);
+    const messages = normalizeOpenCodeDisplayEntries(page.messages.map(displayMessage));
     const bytes = encodedBytes(messages);
     // The provider bounds its page; one that ignored the bound is refused
     // rather than trimmed, which would lose rows between two cursors.
@@ -594,7 +604,14 @@ export async function readReviewerHistoryPage(
       bytes: encodedBytes([]),
     };
   }
-  const candidates = window.slice(Math.max(0, end - limit), end);
+  const firstCandidate = Math.max(0, end - limit);
+  // Raw provider rows (OpenCode's `{ info, parts }`) become display messages
+  // before they are bounded, so the bound measures what ships. Cursors keep
+  // naming raw rows: that is what the next page's window search compares.
+  const candidates = normalizeOpenCodeDisplayEntries(
+    window.slice(firstCandidate, end),
+    firstCandidate,
+  );
   let bounded = boundReviewerTranscript(candidates, { maxMessages: limit, maxBytes: targetBytes });
   if (bounded.messages.length === 0 && candidates.length > 0) {
     // One message larger than the caller's target: ship it alone if it fits
@@ -609,7 +626,7 @@ export async function readReviewerHistoryPage(
   const windowFull = window.length >= windowLimit;
   const nextCursor =
     start > 0 && bounded.messages.length > 0
-      ? joinedCursor(owner, classified.epoch, bounded.messages[0])
+      ? joinedCursor(owner, classified.epoch, window[start])
       : undefined;
   const complete = reachedWindowStart && !windowFull;
   return {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -45,6 +46,13 @@ export interface DesignPendingOperation {
   expiresAt: string;
   bytes: number;
   state: "prepared" | "executing";
+  /**
+   * The design service instance that prepared (or last claimed) this entry.
+   * Startup recovery interrupts an entry only when this owner is no longer
+   * alive, so a live backend sharing the data directory keeps its work.
+   * Absent on entries written before owners were recorded (treated as dead).
+   */
+  owner?: string;
 }
 
 export interface DesignHistoryEntryRecord {
@@ -93,9 +101,11 @@ export interface DesignPrivateRecord {
   history: DesignHistoryManifest;
   export?: DesignExportAssociation;
   pendingExport?: DesignPendingExport;
+  /** Service instance writing `pendingExport` (see {@link DesignPendingOperation.owner}). */
+  pendingExportOwner?: string;
   sessions: DesignSessionLink[];
   deleted?: { deletedAt: string; revision: number; token?: string };
-  provisional?: { expiresAt: string; token: string };
+  provisional?: { expiresAt: string; token: string; owner?: string };
   migratedFromLegacy?: boolean;
 }
 
@@ -132,7 +142,7 @@ const recordSchema = z
   .passthrough();
 
 export type DesignRecordRead =
-  | { kind: "record"; record: DesignPrivateRecord; bytes: number }
+  | { kind: "record"; record: DesignPrivateRecord; bytes: number; key: string }
   | { kind: "legacy"; canvas: DesignCanvas; bytes: number; mtime: Date }
   | { kind: "missing" }
   | {
@@ -191,15 +201,37 @@ export async function syncDirectory(directory: string): Promise<void> {
 }
 
 export async function readBounded(file: string, limit: number): Promise<Buffer> {
+  return (await readBoundedWithKey(file, limit)).bytes;
+}
+
+/**
+ * Identity of one published version of a file. Every record commit is a
+ * rename of a fresh temporary file, so the inode (and the nanosecond change
+ * time) moves on every commit by any process; size and mtime guard against
+ * inode reuse.
+ */
+export function fileKey(info: BigIntStats): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+}
+
+/** {@link readBounded} plus the {@link fileKey} of exactly the bytes read. */
+export async function readBoundedWithKey(
+  file: string,
+  limit: number,
+): Promise<{ bytes: Buffer; key: string; mtimeMs: number }> {
   const handle = await open(file, "r");
   try {
-    const info = await handle.stat();
-    if (info.size > limit) throw new DesignError("storage", "Design record exceeds its size limit");
-    const buffer = Buffer.alloc(info.size + 1);
+    const info = await handle.stat({ bigint: true });
+    const size = Number(info.size);
+    if (size > limit) throw new DesignError("storage", "Design record exceeds its size limit");
+    const buffer = Buffer.alloc(size + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > info.size)
-      throw new DesignError("storage", "Design record changed during read");
-    return buffer.subarray(0, bytesRead);
+    if (bytesRead > size) throw new DesignError("storage", "Design record changed during read");
+    return {
+      bytes: buffer.subarray(0, bytesRead),
+      key: fileKey(info),
+      mtimeMs: Number(info.mtimeMs),
+    };
   } finally {
     await handle.close();
   }
@@ -380,23 +412,42 @@ export class DesignRecordStore {
       .filter((id): id is string => Boolean(id) && files.has(`${id}${RECORD_EXTENSION}`));
   }
   async fileStat(id: string) {
+    const record = await this.recordStat(id);
+    if (record) return record;
     try {
-      const info = await stat(this.recordFile(id));
-      return { kind: "record" as const, size: info.size, mtimeMs: info.mtimeMs };
+      const info = await stat(this.legacyFile(id), { bigint: true });
+      return {
+        kind: "legacy" as const,
+        size: Number(info.size),
+        mtimeMs: Number(info.mtimeMs),
+        key: fileKey(info),
+      };
     } catch {
-      try {
-        const info = await stat(this.legacyFile(id));
-        return { kind: "legacy" as const, size: info.size, mtimeMs: info.mtimeMs };
-      } catch {
-        return undefined;
-      }
+      return undefined;
+    }
+  }
+  /** The private record file's identity, or undefined when it does not exist. */
+  async recordStat(id: string) {
+    try {
+      const info = await stat(this.recordFile(id), { bigint: true });
+      return {
+        kind: "record" as const,
+        size: Number(info.size),
+        mtimeMs: Number(info.mtimeMs),
+        key: fileKey(info),
+      };
+    } catch {
+      return undefined;
     }
   }
   /** New private record first; a legacy document only when no record exists. */
   async read(id: string): Promise<DesignRecordRead> {
     let raw: Buffer | undefined;
+    let key = "";
     try {
-      raw = await readBounded(this.recordFile(id), DESIGN_LIMITS.privateRecordBytes);
+      const read = await readBoundedWithKey(this.recordFile(id), DESIGN_LIMITS.privateRecordBytes);
+      raw = read.bytes;
+      key = read.key;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         return {
@@ -440,6 +491,7 @@ export class DesignRecordStore {
         kind: "record",
         record: { ...(record.data as unknown as DesignPrivateRecord), document: document.data },
         bytes: raw.byteLength,
+        key,
       };
     }
     try {

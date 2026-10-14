@@ -1,121 +1,130 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { readBoundedFile } from "./keyed-record-format.js";
-import {
-  markMigrationComplete,
-  readMigrationProgress,
-  runKeyedRecordMigration,
-  type KeyedRecordMigrationEntry,
-  type KeyedRecordMigrationOptions,
-} from "./keyed-record-migration.js";
-import {
-  KeyedRecordStore,
-  type KeyedRecordFaults,
-  type KeyedRecordLock,
-  type KeyedRecordObserver,
-} from "./keyed-record-store.js";
+import { NATIVE_AGENT_DISPLAY_TAIL_STORE } from "./native-agent-display-tail-layout.js";
 import {
   NATIVE_DISPLAY_TAIL_MAX_BYTES,
   NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
   NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES,
-  NATIVE_DISPLAY_TAIL_SCHEMA,
   isNativeAgentDisplayTail,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
+import type { StorageDatabase } from "./storage-database.js";
 
 /**
- * Display tails as independent keyed records (plan step 07, finding E04).
+ * Display tails (restart previews) as rows of the backend database: store
+ * `native-agent-display-tail-records`, one row per session key, the row owner
+ * being the tail's environment. Tails are a regenerable cache; the provider
+ * stays authoritative and a missing or invalid row is simply a miss.
  *
- * Layout under the backend data directory:
+ * The rows are read and written through the database's uncached row access
+ * (`StorageDatabase.rows`) rather than its whole-store row cache: that cache
+ * would hold every tail (up to 64 MiB) in memory and reload all of them
+ * whenever another process commits, while a cold read here touches exactly
+ * one row. Every committing write moves the store's revision, so
+ * `storeRevision` and the database's own readers stay correct for this store.
  *
- *   native-agent-display-tail-records/
- *     <sha256(namespace, session key)>.rec   one compact tail per session
- *     _meta/index.json                        eviction/quota metadata only
- *     _meta/tombstones.json                   deletions pending legacy retirement
- *     _meta/migration-<id>.json               legacy import progress/completion
+ * - put: one IMMEDIATE transaction evicts the oldest rows while the store
+ *   would exceed the session or byte bound, then upserts the row with
+ *   `position` set past every stored position (a write sequence, so position
+ *   order is least-recently-written first). A failure rolls everything back.
+ * - get: the store revision, then one keyed read, validated (size, schema,
+ *   checksum). The row owner (the tail's environment, which
+ *   `deleteByEnvironment` deletes by) is derived from the value by the store
+ *   layout on every write, so it always matches the tail served. Decoded
+ *   tails are cached in memory, bounded, and trusted only while the store
+ *   revision is unchanged, so any process's later commit is observed. Store
+ *   revisions never repeat, even across a deleted and recreated store.
+ * - delete: row deletes, then a scrub: tails hold conversation text, and a
+ *   deleted session's or environment's preview must not stay readable in free
+ *   pages or old WAL frames. Evictions and overwrites are not scrubbed: that
+ *   content is still live at the provider and the next checkpoint reclaims it.
  *
- * Reading or writing one tail touches that tail's file plus the small index.
- * Tails remain a regenerable cache: no backups, no fsync, and a corrupt or
- * missing record is simply a miss. The provider stays authoritative.
- *
- * The legacy shared `native-agent-display-tails.json` is imported once by a
- * shared bounded background pass, then retired with its backups.
+ * The legacy shared `native-agent-display-tails.json` and the keyed-record
+ * directory are disposable cache: they are removed (best effort) instead of
+ * imported, and the provider repopulates the previews.
  */
-export const NATIVE_DISPLAY_TAIL_RECORD_DIRECTORY = "native-agent-display-tail-records";
-export const NATIVE_DISPLAY_TAIL_RECORD_NAMESPACE = "native-agent-display-tail/v1";
-export const NATIVE_DISPLAY_TAIL_LEGACY_MIGRATION_ID = "legacy-native-agent-display-tails-json";
-/** The legacy file is pretty-printed; allow its indentation over the 64 MiB compact budget. */
-export const NATIVE_DISPLAY_TAIL_LEGACY_MAX_BYTES = 192 * 1024 * 1024;
+export const NATIVE_DISPLAY_TAIL_LEGACY_FILE = "native-agent-display-tails.json";
+export const NATIVE_DISPLAY_TAIL_LEGACY_RECORD_DIRECTORY = "native-agent-display-tail-records";
 export const NATIVE_DISPLAY_TAIL_DECODED_CACHE_MAX_ENTRIES = 16;
 export const NATIVE_DISPLAY_TAIL_DECODED_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-/** How long a cold read waits for the one-time import before letting the provider answer. */
-export const NATIVE_DISPLAY_TAIL_IMPORT_WAIT_MS = 1_000;
 const MAX_FENCE_MEMORY = 4_096;
 const MAX_LEGACY_BACKUPS = 5;
 const MAX_LEGACY_TEMP_SCAN = 4_096;
+const STORE = NATIVE_AGENT_DISPLAY_TAIL_STORE;
 
 export type NativeAgentDisplayTailDeletion =
   | { kind: "key"; key: string }
   | { kind: "environment"; environmentId: string };
 
 export interface NativeAgentDisplayTailStoreOptions {
-  directory: string;
-  legacyFile: string;
-  lock?: KeyedRecordLock;
-  now?: () => number;
-  importWaitMs?: number;
-  legacyMaxBytes?: number;
-  observer?: KeyedRecordObserver;
-  faults?: KeyedRecordFaults;
-  migrationFaults?: KeyedRecordMigrationOptions["faults"];
+  /** The backend database; called per operation so a reopened connection is used. */
+  database: () => StorageDatabase;
+  /** Data directory holding the legacy file-based tails to remove. */
+  legacyRoot: string;
+  /** Bounds override (tests); defaults are the native display-tail bounds. */
+  limits?: { maxSessions?: number; maxTotalBytes?: number };
 }
 
 export interface NativeAgentDisplayTailStoreStats {
+  /** Rows parsed and validated. */
   decodes: number;
+  /** Reads answered by the decoded cache after revalidation. */
   decodedCacheHits: number;
-  importedLegacy: number;
-  skippedLegacy: number;
+  /** Row values read from the database. */
+  rowReads: number;
+  /** Rows written. */
+  rowWrites: number;
+  /** Serialized bytes written. */
+  bytesWritten: number;
+  /** Rows removed by the session or byte bound. */
+  evictions: number;
+  /** Rows removed by deletes. */
+  deletedRows: number;
 }
 
 interface DecodedEntry {
-  fingerprint: string;
+  /** Store revision the entry was read or written at. */
   revision: number;
   tail: NativeAgentDisplayTail;
   bytes: number;
 }
 
+type RowLookup =
+  /** The store does not exist. */
+  | { kind: "absent" }
+  /** The store exists without this key. */
+  | { kind: "missing" }
+  /** The decoded entry passed in is still current at `revision`. */
+  | { kind: "current"; revision: number }
+  | { kind: "row"; revision: number; value: string };
+
 export class NativeAgentDisplayTailStore {
-  readonly records: KeyedRecordStore;
   private readonly decoded = new Map<string, DecodedEntry>();
   private decodedBytes = 0;
-  private migration: Promise<void> | null = null;
-  private migrated = false;
+  private legacyCleanup: Promise<void> | null = null;
   private deletionSequence = 0;
   private fenceFloor = 0;
   private readonly keyDeletions = new Map<string, number>();
   private readonly environmentDeletions = new Map<string, number>();
   private readonly deletionListeners = new Set<(event: NativeAgentDisplayTailDeletion) => void>();
+  private readonly maxSessions: number;
+  private readonly maxTotalBytes: number;
   private readonly counters: NativeAgentDisplayTailStoreStats = {
     decodes: 0,
     decodedCacheHits: 0,
-    importedLegacy: 0,
-    skippedLegacy: 0,
+    rowReads: 0,
+    rowWrites: 0,
+    bytesWritten: 0,
+    evictions: 0,
+    deletedRows: 0,
   };
 
   constructor(private readonly options: NativeAgentDisplayTailStoreOptions) {
-    this.records = new KeyedRecordStore({
-      directory: options.directory,
-      namespace: NATIVE_DISPLAY_TAIL_RECORD_NAMESPACE,
-      schema: NATIVE_DISPLAY_TAIL_SCHEMA,
-      retentionClass: "cache",
-      maxPayloadBytes: NATIVE_DISPLAY_TAIL_MAX_BYTES,
-      maxRecords: NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
-      maxTotalPayloadBytes: NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES,
-      ...(options.lock ? { lock: options.lock } : {}),
-      ...(options.now ? { now: options.now } : {}),
-      ...(options.observer ? { observer: options.observer } : {}),
-      ...(options.faults ? { faults: options.faults } : {}),
-    });
+    this.maxSessions = Math.max(1, options.limits?.maxSessions ?? NATIVE_DISPLAY_TAIL_MAX_SESSIONS);
+    this.maxTotalBytes = Math.max(
+      1,
+      options.limits?.maxTotalBytes ?? NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES,
+    );
   }
 
   stats(): NativeAgentDisplayTailStoreStats {
@@ -125,8 +134,9 @@ export class NativeAgentDisplayTailStore {
   /**
    * Deletion fence: an opaque sequence captured when a tail is produced. A
    * write carrying a fence older than a later deletion of its key or
-   * environment is refused inside the key's critical section, so a late
-   * checkpoint cannot resurrect a deleted session's preview. The memory is
+   * environment is refused, so a late checkpoint cannot resurrect a deleted
+   * session's preview. The check and the commit run in one synchronous step,
+   * so no deletion in this process can land between them. The memory is
    * bounded; a fence older than forgotten deletions is refused conservatively.
    */
   captureFence(): number {
@@ -175,6 +185,11 @@ export class NativeAgentDisplayTailStore {
     this.decodedBytes -= entry.bytes;
   }
 
+  private forgetAllDecoded(): void {
+    this.decoded.clear();
+    this.decodedBytes = 0;
+  }
+
   private rememberDecoded(key: string, entry: DecodedEntry): void {
     this.forgetDecoded(key);
     if (entry.bytes > NATIVE_DISPLAY_TAIL_DECODED_CACHE_MAX_BYTES) return;
@@ -191,43 +206,36 @@ export class NativeAgentDisplayTailStore {
   }
 
   async get(key: string): Promise<NativeAgentDisplayTail | null> {
-    await this.waitForMigration(this.options.importWaitMs ?? NATIVE_DISPLAY_TAIL_IMPORT_WAIT_MS);
+    void this.cleanupLegacy();
+    const database = this.options.database();
     const cached = this.decoded.get(key);
-    const read = await this.records.get(
-      key,
-      cached ? { knownFingerprint: cached.fingerprint } : {},
-    );
-    if (read.status === "unchanged" && cached) {
+    const lookup = lookupRow(database, key, cached);
+    if (lookup.kind === "absent") {
+      // No store at all: nothing decoded earlier can still be current.
+      this.forgetAllDecoded();
+      return null;
+    }
+    if (lookup.kind === "current" && cached) {
       this.counters.decodedCacheHits += 1;
       // Refresh recency, and hand out a copy: callers own what they receive.
       this.decoded.delete(key);
       this.decoded.set(key, cached);
       return structuredClone(cached.tail);
     }
-    if (read.status !== "found") {
-      this.forgetDecoded(key);
-      return null;
-    }
+    this.forgetDecoded(key);
+    if (lookup.kind !== "row") return null;
+    this.counters.rowReads += 1;
+    const bytes = Buffer.byteLength(lookup.value, "utf8");
+    if (bytes > NATIVE_DISPLAY_TAIL_MAX_BYTES) return null;
     this.counters.decodes += 1;
     let tail: unknown;
     try {
-      tail = JSON.parse(read.payload.toString("utf8"));
+      tail = JSON.parse(lookup.value);
     } catch {
       return null;
     }
-    if (
-      !isNativeAgentDisplayTail(tail) ||
-      read.header.owner.environmentId !== tail.environmentId ||
-      read.header.owner.agent !== tail.agent
-    ) {
-      return null;
-    }
-    this.rememberDecoded(key, {
-      fingerprint: read.fingerprint,
-      revision: read.header.revision,
-      tail,
-      bytes: read.payload.length,
-    });
+    if (!isNativeAgentDisplayTail(tail)) return null;
+    this.rememberDecoded(key, { revision: lookup.revision, tail, bytes });
     return structuredClone(tail);
   }
 
@@ -236,36 +244,46 @@ export class NativeAgentDisplayTailStore {
     tail: NativeAgentDisplayTail,
     options: { fence?: number } = {},
   ): Promise<boolean> {
-    // Start (never await) the one-time import: its create-only writes can
-    // never overwrite this newer live checkpoint.
-    void this.ensureMigration();
+    void this.cleanupLegacy();
     const fence = options.fence ?? this.captureFence();
     const payload = JSON.stringify(tail);
+    const bytes = Buffer.byteLength(payload, "utf8");
+    if (bytes > NATIVE_DISPLAY_TAIL_MAX_BYTES) return false;
+    // Synchronous from here to the commit: a deletion in this process cannot
+    // interleave between the fence check and the write.
+    if (!this.isFenceCurrent(key, tail.environmentId, fence)) return false;
+    let committed: { revision: number; evicted: string[] };
     try {
-      const result = await this.records.put(key, payload, {
-        owner: { environmentId: tail.environmentId, agent: tail.agent },
-        fence: () => this.isFenceCurrent(key, tail.environmentId, fence),
-      });
-      if (result.status !== "written") return false;
-      if (result.fingerprint) {
-        this.rememberDecoded(key, {
-          fingerprint: result.fingerprint,
-          revision: result.revision,
-          tail: structuredClone(tail),
-          bytes: Buffer.byteLength(payload),
-        });
-      }
-      return true;
+      const database = this.options.database();
+      committed = database.transaction(() =>
+        writeRowInTransaction(database, key, payload, {
+          maxSessions: this.maxSessions,
+          maxTotalBytes: this.maxTotalBytes,
+        }),
+      );
     } catch {
       return false;
     }
+    this.counters.rowWrites += 1;
+    this.counters.bytesWritten += bytes;
+    this.counters.evictions += committed.evicted.length;
+    for (const evicted of committed.evicted) this.forgetDecoded(evicted);
+    this.rememberDecoded(key, {
+      revision: committed.revision,
+      tail: structuredClone(tail),
+      bytes,
+    });
+    return true;
   }
 
   async delete(key: string): Promise<void> {
     this.recordDeletion(this.keyDeletions, key);
     this.forgetDecoded(key);
     this.notifyDeleted({ kind: "key", key });
-    await this.records.delete(key, { tombstone: !(await this.isMigrationComplete()) });
+    void this.cleanupLegacy();
+    const database = this.options.database();
+    const removed = database.transaction(() => (database.rows(STORE).delete(key) ? 1 : 0));
+    this.afterDelete(database, removed);
   }
 
   async deleteByEnvironment(environmentId: string): Promise<void> {
@@ -274,182 +292,117 @@ export class NativeAgentDisplayTailStore {
       if (entry.tail.environmentId === environmentId) this.forgetDecoded(key);
     }
     this.notifyDeleted({ kind: "environment", environmentId });
-    if (!(await this.isMigrationComplete())) {
-      await this.records.tombstones.addOwner("environmentId", environmentId);
-    }
-    await this.records.deleteWhere((metadata) => metadata.owner.environmentId === environmentId);
+    void this.cleanupLegacy();
+    const database = this.options.database();
+    const removed = database.transaction(() =>
+      database.rows(STORE).deleteWhere({ owner: environmentId }),
+    );
+    this.afterDelete(database, removed);
   }
 
-  private async isMigrationComplete(): Promise<boolean> {
-    if (this.migrated) return true;
-    const progress = await readMigrationProgress(
-      this.records,
-      NATIVE_DISPLAY_TAIL_LEGACY_MIGRATION_ID,
-    ).catch(() => null);
-    return progress?.completedAt !== undefined;
-  }
-
-  /** Waits for the shared import at most `waitMs`; the provider covers the rest. */
-  async waitForMigration(waitMs: number): Promise<void> {
-    if (this.migrated) return;
-    const migration = this.ensureMigration();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      migration,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, waitMs);
-        timer.unref?.();
-      }),
-    ]);
-    if (timer) clearTimeout(timer);
-  }
-
-  /** One shared import per store; failures are retried on a later call. */
-  ensureMigration(): Promise<void> {
-    if (this.migrated) return Promise.resolve();
-    this.migration ??= this.migrateLegacy()
-      .then(() => {
-        this.migrated = true;
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        this.migration = null;
-      });
-    return this.migration;
-  }
-
-  private async migrateLegacy(): Promise<void> {
-    const id = NATIVE_DISPLAY_TAIL_LEGACY_MIGRATION_ID;
-    if ((await readMigrationProgress(this.records, id))?.completedAt !== undefined) {
-      // An older binary may have recreated the legacy file after migration.
-      // It is never read again, so retire it rather than retain stale content.
-      await this.retireLegacy();
-      return;
-    }
-    // Serialize with any legacy writer and with other backends importing.
-    const release = this.options.lock ? await this.options.lock(this.options.legacyFile) : null;
-    try {
-      if ((await readMigrationProgress(this.records, id))?.completedAt !== undefined) {
-        await this.retireLegacy();
-        return;
-      }
-      const source = await this.readLegacySource();
-      const tombstones = await this.records.tombstones.read();
-      if (source && !tombstones.overflowed) {
-        const result = await runKeyedRecordMigration(this.records, {
-          id,
-          sourceFingerprint: source.fingerprint,
-          entries: () => source.entries,
-          maxEntries: NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
-          ...(this.options.now ? { now: this.options.now } : {}),
-          ...(this.options.migrationFaults ? { faults: this.options.migrationFaults } : {}),
-        });
-        this.counters.importedLegacy += result.imported;
-        this.counters.skippedLegacy +=
-          result.invalid + result.truncated + result.rejected + result.tombstoned;
-      } else {
-        // Absent, oversized, unreadable, or tombstone protection overflowed:
-        // the preview cache is dropped rather than imported unsafely.
-        await markMigrationComplete(
-          this.records,
-          id,
-          source?.fingerprint ?? "absent",
-          this.options.now?.() ?? Date.now(),
-        );
-      }
-      await this.retireLegacy();
-    } finally {
-      await release?.();
-    }
+  private afterDelete(database: StorageDatabase, removed: number): void {
+    if (removed === 0) return;
+    this.counters.deletedRows += removed;
+    database.scrubDeletedContent();
   }
 
   /**
-   * Bounded read of the legacy shared file. Entries are validated with the
-   * existing v1/v2 validators, re-checked against the per-record size limit,
-   * and ordered newest first so the aggregate record bound keeps the most
-   * useful previews. Invalid or oversized entries are yielded as `null`.
+   * Removes the pre-database tail files once per store instance: the legacy
+   * shared file with its backups, lock and crashed temp copies, and the
+   * keyed-record directory. Best effort; never rejects.
    */
-  private async readLegacySource(): Promise<{
-    fingerprint: string;
-    entries: Array<KeyedRecordMigrationEntry | null>;
-  } | null> {
-    const read = await readBoundedFile(
-      this.options.legacyFile,
-      this.options.legacyMaxBytes ?? NATIVE_DISPLAY_TAIL_LEGACY_MAX_BYTES,
+  cleanupLegacy(): Promise<void> {
+    this.legacyCleanup ??= removeLegacyDisplayTailFiles(this.options.legacyRoot).catch(
+      () => undefined,
     );
-    if (read.status !== "ok") return null;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(read.bytes.toString("utf8"));
-    } catch {
-      return null;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const valid: Array<{ entry: KeyedRecordMigrationEntry; updatedAt: number }> = [];
-    let invalid = 0;
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (key.length === 0 || !isNativeAgentDisplayTail(value)) {
-        invalid += 1;
-        continue;
-      }
-      const payload = JSON.stringify(value);
-      if (Buffer.byteLength(payload) > NATIVE_DISPLAY_TAIL_MAX_BYTES) {
-        invalid += 1;
-        continue;
-      }
-      const updatedAt = Date.parse(value.updatedAt);
-      valid.push({
-        entry: {
-          key,
-          payload,
-          owner: { environmentId: value.environmentId, agent: value.agent },
-          updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
-        },
-        updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
-      });
-    }
-    valid.sort(
-      (left, right) =>
-        right.updatedAt - left.updatedAt || left.entry.key.localeCompare(right.entry.key),
-    );
-    return {
-      fingerprint: read.fingerprint,
-      entries: [...valid.map((item) => item.entry), ...Array.from({ length: invalid }, () => null)],
-    };
+    return this.legacyCleanup;
   }
+}
 
-  /**
-   * Removes the legacy file, its rotated sensitive backups and any crashed
-   * temporary copies, then retires tombstones: with no legacy source left,
-   * nothing can resurrect a deleted record.
-   */
-  private async retireLegacy(): Promise<void> {
-    const legacy = this.options.legacyFile;
-    await fs.rm(legacy, { force: true });
-    for (let index = 1; index <= MAX_LEGACY_BACKUPS; index += 1) {
-      await fs.rm(`${legacy}.bak.${index}`, { force: true });
-    }
-    const directory = path.dirname(legacy);
-    const tempPrefix = `.${path.basename(legacy)}.`;
-    let scanned = 0;
-    try {
-      const entries = await fs.opendir(directory, { bufferSize: 64 });
-      for await (const dirent of entries) {
-        if ((scanned += 1) > MAX_LEGACY_TEMP_SCAN) break;
-        if (dirent.name.startsWith(tempPrefix) && dirent.name.endsWith(".tmp")) {
-          await fs.rm(path.join(directory, dirent.name), { force: true });
-        }
+/**
+ * Reads the store revision and, unless `cached` is still current (the store
+ * did not move since it was read or written), the row. The revision is read
+ * first: the row then reflects that revision or a later one, so tagging it
+ * with the revision read can only make a later lookup re-read, never trust a
+ * stale row.
+ */
+function lookupRow(
+  database: StorageDatabase,
+  key: string,
+  cached: DecodedEntry | undefined,
+): RowLookup {
+  const revision = database.storeRevision(STORE);
+  if (revision === null) return { kind: "absent" };
+  if (cached && cached.revision === revision) return { kind: "current", revision };
+  const value = database.rows(STORE).get(key);
+  return value === undefined ? { kind: "missing" } : { kind: "row", revision, value };
+}
+
+function writeRowInTransaction(
+  database: StorageDatabase,
+  key: string,
+  payload: string,
+  limits: { maxSessions: number; maxTotalBytes: number },
+): { revision: number; evicted: string[] } {
+  let rows = database.rows(STORE);
+  let existing = rows.list({ collection: "", values: false });
+  if (existing.length === 0 && database.storeRevision(STORE) !== null) {
+    // An existing store without rows: empty, or held whole as a document,
+    // which is not something this module writes (row writes refuse it). The
+    // cache is dropped, not merged; the revision sequence continues.
+    database.deleteStoreInTransaction(STORE);
+    rows = database.rows(STORE);
+    existing = [];
+  }
+  // Least-recently-written first: `position` is a write sequence, and the
+  // written row takes the next one. Evict before the write so the last step
+  // of the transaction is the upsert.
+  let count = 1;
+  let total = Buffer.byteLength(payload, "utf8");
+  let next = 0;
+  for (const row of existing) {
+    next = Math.max(next, row.position + 1);
+    if (row.key === key) continue;
+    count += 1;
+    total += row.bytes;
+  }
+  const evicted: string[] = [];
+  for (const row of existing) {
+    if (count <= limits.maxSessions && total <= limits.maxTotalBytes) break;
+    if (row.key === key) continue;
+    rows.delete(row.key);
+    evicted.push(row.key);
+    count -= 1;
+    total -= row.bytes;
+  }
+  // The owner column comes from the layout's extractor (the tail's
+  // environment), so it always matches the value `get` validates.
+  rows.put(key, payload, { position: next });
+  return { revision: database.storeRevision(STORE)!, evicted };
+}
+
+async function removeLegacyDisplayTailFiles(root: string): Promise<void> {
+  const legacy = path.join(root, NATIVE_DISPLAY_TAIL_LEGACY_FILE);
+  await fs.rm(path.join(root, NATIVE_DISPLAY_TAIL_LEGACY_RECORD_DIRECTORY), {
+    recursive: true,
+    force: true,
+  });
+  await fs.rm(legacy, { force: true });
+  await fs.rm(`${legacy}.lock`, { recursive: true, force: true });
+  for (let index = 1; index <= MAX_LEGACY_BACKUPS; index += 1) {
+    await fs.rm(`${legacy}.bak.${index}`, { force: true });
+  }
+  const tempPrefix = `.${NATIVE_DISPLAY_TAIL_LEGACY_FILE}.`;
+  let scanned = 0;
+  try {
+    const entries = await fs.opendir(root, { bufferSize: 64 });
+    for await (const dirent of entries) {
+      if ((scanned += 1) > MAX_LEGACY_TEMP_SCAN) break;
+      if (dirent.name.startsWith(tempPrefix) && dirent.name.endsWith(".tmp")) {
+        await fs.rm(path.join(root, dirent.name), { force: true });
       }
-    } catch {
-      // Best effort: a missing data directory has nothing to retire.
     }
-    const tombstones = await this.records.tombstones.read();
-    if (
-      Object.keys(tombstones.keys).length > 0 ||
-      Object.keys(tombstones.owners).length > 0 ||
-      tombstones.overflowed
-    ) {
-      await this.records.tombstones.retireAll();
-    }
+  } catch {
+    // Best effort: a missing data directory has nothing to remove.
   }
 }

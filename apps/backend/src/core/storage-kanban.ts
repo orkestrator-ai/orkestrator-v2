@@ -148,7 +148,8 @@ export type StorageLayerTypes = [
 
 export class StorageKanban extends StorageAgentMail {
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+    // Indexed by project: reads one board without parsing every project's.
+    const tasks = this.loadStoreRowsByOwner<KanbanTask>(this.kanbanFile(), projectId);
     return tasks.filter((task) => task.projectId === projectId);
   }
 
@@ -164,20 +165,7 @@ export class StorageKanban extends StorageAgentMail {
    * risk saving independent stale snapshots over each other.
    */
   protected enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(this.kanbanFile(), "Kanban storage");
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.kanbanMutation.then(run, run);
-    this.kanbanMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.kanbanFile(), "Kanban storage", operation);
   }
 
   protected async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
@@ -474,16 +462,21 @@ export class StorageKanban extends StorageAgentMail {
   }
 
   async saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
-    const notes = await this.loadJson<ProjectNotes[]>(this.projectNotesFile(), () => []);
-    let note = notes.find((candidate) => candidate.projectId === projectId);
-    if (!note) {
-      note = { projectId, content, updatedAt: nowIso() };
-      notes.push(note);
-    } else {
-      note.content = content;
-      note.updatedAt = nowIso();
-    }
-    await this.saveJson(this.projectNotesFile(), notes);
+    const note = this.updateStore(
+      this.projectNotesFile(),
+      (): ProjectNotes[] => [],
+      (notes) => {
+        let existing = notes.find((candidate) => candidate.projectId === projectId);
+        if (!existing) {
+          existing = { projectId, content, updatedAt: nowIso() };
+          notes.push(existing);
+        } else {
+          existing.content = content;
+          existing.updatedAt = nowIso();
+        }
+        return existing;
+      },
+    );
     this.announce("project-notes", projectId);
     return note;
   }
@@ -493,27 +486,18 @@ export class StorageKanban extends StorageAgentMail {
     return plans.filter((plan) => plan.projectId === projectId).sort((a, b) => a.order - b.order);
   }
 
-  // Serializes the entire load -> mutate -> save cycle for feature plans so that
-  // concurrent flows (e.g. a feature-chat poll and a story refinement happening at
-  // the same time) cannot clobber each other via stale read-modify-write races.
-  // The mutator runs against the freshly loaded array; if it throws, nothing is
-  // saved and the next queued mutation still proceeds.
-  protected mutateFeaturePlans<T>(
+  // The entire load -> mutate -> save cycle for feature plans is one SQLite
+  // transaction, so concurrent flows (e.g. a feature-chat poll and a story
+  // refinement happening at the same time, possibly in two backends) cannot
+  // clobber each other via stale read-modify-write races. The mutator runs
+  // against the freshly loaded array; if it throws, nothing is saved.
+  protected async mutateFeaturePlans<T>(
     mutator: (plans: FeaturePlan[]) => T,
     affectedProjectId: (result: T) => string,
   ): Promise<T> {
-    const run = this.featurePlanMutation.then(async () => {
-      const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-      const result = mutator(plans);
-      await this.saveJson(this.featurePlansFile(), plans);
-      this.announce("feature-plan", affectedProjectId(result));
-      return result;
-    });
-    this.featurePlanMutation = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    const result = this.updateStore(this.featurePlansFile(), (): FeaturePlan[] => [], mutator);
+    this.announce("feature-plan", affectedProjectId(result));
+    return result;
   }
 
   async createFeaturePlan(projectId: string): Promise<FeaturePlan> {
@@ -788,17 +772,12 @@ export class StorageKanban extends StorageAgentMail {
       connectedAt: nowIso(),
       viewer,
     };
-    await this.writeAtomic(
-      this.linearAuthFile(),
-      `${JSON.stringify(auth, null, 2)}\n`,
-      false,
-      0o600,
-    );
+    await this.saveSensitiveJson(this.linearAuthFile(), auth);
     return auth;
   }
 
   async clearLinearAuth(): Promise<void> {
-    await fs.rm(this.linearAuthFile(), { force: true });
+    await this.deleteStore(this.linearAuthFile());
   }
 
   async getLinearCompletionComment(pipelineId: string): Promise<LinearCompletionComment | null> {
@@ -812,18 +791,19 @@ export class StorageKanban extends StorageAgentMail {
   async saveLinearCompletionComment(
     record: Omit<LinearCompletionComment, "updatedAt"> & { updatedAt?: string },
   ): Promise<LinearCompletionComment> {
-    const comments = await this.loadJson<LinearCompletionComment[]>(
-      this.linearCompletionCommentsFile(),
-      () => [],
-    );
     const nextRecord: LinearCompletionComment = {
       ...record,
       updatedAt: record.updatedAt ?? nowIso(),
     };
-    const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
-    if (index >= 0) comments[index] = nextRecord;
-    else comments.push(nextRecord);
-    await this.saveJson(this.linearCompletionCommentsFile(), comments);
+    this.updateStore(
+      this.linearCompletionCommentsFile(),
+      (): LinearCompletionComment[] => [],
+      (comments) => {
+        const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
+        if (index >= 0) comments[index] = nextRecord;
+        else comments.push(nextRecord);
+      },
+    );
     return nextRecord;
   }
 
@@ -858,21 +838,20 @@ export class StorageKanban extends StorageAgentMail {
   async saveGitHubCompletionComment(
     record: Omit<GitHubCompletionComment, "updatedAt"> & { updatedAt?: string },
   ): Promise<GitHubCompletionComment> {
-    return this.enqueueGitHubCompletionCommentMutation(async () => {
-      const comments = await this.loadJson<GitHubCompletionComment[]>(
-        this.githubCompletionCommentsFile(),
-        () => [],
-      );
-      const nextRecord: GitHubCompletionComment = {
-        ...record,
-        updatedAt: record.updatedAt ?? nowIso(),
-      };
-      const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
-      if (index >= 0) comments[index] = nextRecord;
-      else comments.push(nextRecord);
-      await this.saveJson(this.githubCompletionCommentsFile(), comments);
-      return nextRecord;
-    });
+    const nextRecord: GitHubCompletionComment = {
+      ...record,
+      updatedAt: record.updatedAt ?? nowIso(),
+    };
+    this.updateStore(
+      this.githubCompletionCommentsFile(),
+      (): GitHubCompletionComment[] => [],
+      (comments) => {
+        const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
+        if (index >= 0) comments[index] = nextRecord;
+        else comments.push(nextRecord);
+      },
+    );
+    return nextRecord;
   }
 
   async setAllEnvironmentStatusesForContainer(

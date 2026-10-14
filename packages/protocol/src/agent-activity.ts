@@ -21,9 +21,12 @@ export type AgentActivitySource =
 
 export interface AgentActivitySourceSnapshot {
   state: AgentActivityState;
+  /** Ordering token: a backend source's is monotonic, so it can run ahead of `observedAt`. */
   updatedAt: string;
   /** The observer is still retrying, but its last read did not answer. */
   stale?: boolean;
+  /** Backend sources: when the stored observation was actually made. */
+  observedAt?: string;
 }
 
 /**

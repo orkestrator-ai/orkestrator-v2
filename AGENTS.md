@@ -828,7 +828,7 @@ names at all. Two invariants keep it honest:
 | -------------------------------------- | -------------------------------------------------------- |
 | `apps/backend/src/core/commands.ts`    | Backend command registry and Docker/local env management |
 | `apps/backend/src/core/tmux.ts`        | Claude tmux mode backend                                 |
-| `apps/backend/src/core/storage.ts`     | JSON file persistence                                    |
+| `apps/backend/src/core/storage.ts`     | `StorageService` (SQLite-backed; see `docs/architecture/storage.md`) |
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
 | `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |
 
@@ -1037,10 +1037,22 @@ Application data is stored in:
 - **Linux**: `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
 
 Files:
-- `config.json` - Global and per-repo settings
-- `projects.json` - Repository metadata
-- `environments.json` - Environment metadata and container IDs
+- `orkestrator.sqlite` - Every backend store (projects, environments, sessions,
+  Kanban, agent mail, queues, drafts, reviews, pipelines, …). Living reference:
+  [`docs/architecture/storage.md`](docs/architecture/storage.md)
+- `config.json` - Global and per-repo settings (stays a file: Electron reads it)
 - `toolchains/` - Versioned, hash-verified Codex, OpenCode, and Claude Code executables shared by local environments
+
+Storage rules:
+- Never hold a SQLite transaction across an `await`; `bun:sqlite` blocks the
+  event loop while it waits for a lock. Use `updateStore` (or `updateStoreRow`
+  for one row) for a synchronous read-modify-write, `serializeMutation` (a
+  lease) for one that awaits, and `atomically` to commit several stores
+  together. Under a per-key lease, write only that key's row.
+- An older record shape is upgraded once by a migration
+  (`storage-record-upgrades.ts`), not by a reader on every load.
+- Tests seed and inspect stores through `storage-test-support.ts`, never by
+  writing JSON into a data directory.
 
 ## Testing
 

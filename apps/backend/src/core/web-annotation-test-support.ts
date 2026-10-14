@@ -317,13 +317,19 @@ export interface ServiceHarness {
   events: Array<{ event: string; payload: unknown }>;
   service: WebAnnotationService;
   restart(overrides?: Partial<WebAnnotationServiceOptions>): Promise<WebAnnotationService>;
+  /**
+   * Another backend sharing the data directory: its own service and database
+   * connection, the same clock, host and dispatch doubles.
+   */
+  peer(overrides?: Partial<WebAnnotationServiceOptions>): Promise<WebAnnotationService>;
   cleanup(): Promise<void>;
 }
 
 export async function createHarness(
   overrides: Partial<WebAnnotationServiceOptions> = {},
+  options: { dir?: string } = {},
 ): Promise<ServiceHarness> {
-  const dir = await mkdtemp(join(tmpdir(), "ork-web-annotations-"));
+  const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "ork-web-annotations-")));
   const clock = new ManualClock();
   const dispatch = new FakeDispatch();
   const host = new FakeHostStorage();
@@ -357,6 +363,11 @@ export async function createHarness(
       harness.service = make(extra);
       await harness.service.initialize();
       return harness.service;
+    },
+    async peer(extra = {}) {
+      const peer = make(extra);
+      await peer.initialize();
+      return peer;
     },
     async cleanup() {
       for (const service of services) await service.close().catch(() => undefined);

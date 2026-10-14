@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   WEB_ANNOTATION_CONFLICT,
@@ -8,7 +7,6 @@ import {
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureDestination } from "@orkestrator/protocol/web-annotations-fixtures";
-import { recordDirectoryName } from "./web-annotation-storage.js";
 import type { WebAnnotationService } from "./web-annotation-service.js";
 import {
   ENV_A,
@@ -18,6 +16,7 @@ import {
   makePng,
   type ServiceHarness,
 } from "./web-annotation-test-support.js";
+import { damageStoredRow, readStoredEnvironment } from "./web-annotation-test-helpers.js";
 
 let harness: ServiceHarness;
 afterEach(async () => {
@@ -360,15 +359,7 @@ describe("web annotation request recovery", () => {
     harness = await createHarness();
     const note = await createAnnotation(harness.service);
     await send(harness.service, [note.annotationId], "req-1");
-    const record = join(
-      harness.dir,
-      "web-annotations",
-      ENV_A,
-      "records",
-      recordDirectoryName(note.captureId!),
-      "1.json",
-    );
-    await writeFile(record, "corrupt");
+    damageStoredRow(harness.dir, "records", `${note.captureId}/1`, "corrupt");
     const restarted = await harness.restart();
     const got = await restarted.get(ENV_A, note.annotationId);
     expect(got.annotation.unavailable).toBeDefined();
@@ -684,9 +675,10 @@ describe("web annotation environment deletion", () => {
     harness = await createHarness();
     await createAnnotation(harness.service);
     const dir = join(harness.dir, "web-annotations", ENV_A);
-    expect(existsSync(dir)).toBe(true);
+    expect(readStoredEnvironment(harness.dir)).toBeDefined();
     await harness.service.deleteEnvironment(ENV_A);
     expect(existsSync(dir)).toBe(false);
+    expect(readStoredEnvironment(harness.dir)).toBeUndefined();
     await expect(createAnnotation(harness.service)).rejects.toThrow("deleted");
     await createAnnotation(harness.service, ENV_B);
   });

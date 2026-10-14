@@ -98,6 +98,8 @@ ignored files. The project home cannot be moved.
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
 | Per-environment bridge state, worktrees, local branches | Environment deletion and its reconciler | See [environment-deletion-cleanup.md](../plans/environment-deletion-cleanup.md) |
 | Empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend start-up sweep | At start-up; branches at most daily per project |
+| `<data dir>/legacy-json/<timestamp>/` (JSON stores archived by the one-time SQLite import) | Backend database open | 14 days after the import |
+| `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 3 daily and 2 pre-migration kept; none older than 7 days |
 | Test temporary directories in the system temp dir | The next test run | Once the creating process has exited and the directory is over an hour old |
 | Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
 

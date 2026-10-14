@@ -10,7 +10,6 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureAnnotation } from "@orkestrator/protocol/web-annotations-fixtures";
 import { MATERIALIZED_EVIDENCE_RETENTION_MS } from "./web-annotation-materialization.js";
-import { recordDirectoryName, requestTextRecordId } from "./web-annotation-storage.js";
 import type { WebAnnotationFaultStage } from "./web-annotation-storage.js";
 import {
   ENV_A,
@@ -21,7 +20,7 @@ import {
 } from "./web-annotation-test-support.js";
 import {
   environmentDir,
-  readJsonFile,
+  readStoredEnvironment,
   rejectionDetail,
   sendRequest,
 } from "./web-annotation-test-helpers.js";
@@ -175,23 +174,15 @@ describe("environment quotas through the service", () => {
     harness = await createHarness();
     const first = await createAnnotation(harness.service, ENV_A, "first", "op-1");
     await sendRequest(harness.service, first.annotationId, "req-0");
-    const dir = environmentDir(harness.dir);
     const store = await harness.service.storage.environment(ENV_A);
-    const snapshot = structuredClone(store.manifest) as Record<string, any>;
-    await harness.service.close();
-    // A version 1 manifest carries requests inline, so a large fixture needs
-    // no per-request text records.
-    snapshot.version = 1;
-    delete snapshot.consumedDrafts;
-    const template = snapshot.requests["req-0"];
-    for (let index = 1; index < WEB_ANNOTATION_LIMITS.environmentRequests; index++) {
-      const id = `req-${index}`;
-      snapshot.requests[id] = { ...template, id, state: "completed", reservation: false };
-    }
-    await writeFile(join(dir, "manifest.json"), JSON.stringify(snapshot));
-    await rm(join(dir, "records", recordDirectoryName(requestTextRecordId("req-0"))), {
-      recursive: true,
-      force: true,
+    await store.mutate((tx) => {
+      tx.markEssential();
+      const template = tx.manifest.requests["req-0"]!;
+      for (let index = 1; index < WEB_ANNOTATION_LIMITS.environmentRequests; index++) {
+        const id = `req-${index}`;
+        tx.manifest.requests[id] = { ...template, id, state: "completed", reservation: false };
+      }
+      tx.markDirty();
     });
     const restarted = await harness.restart();
     const second = await createAnnotation(restarted, ENV_A, "second", "op-2");
@@ -253,20 +244,31 @@ describe("interrupted uploads", () => {
     await expect(stage(harness.service, 7)).rejects.toThrow("injected");
     const dir = environmentDir(harness.dir);
     expect(await readdir(join(dir, "staging"))).toEqual([]);
+    // The file promoted before the failed commit is discarded at once.
+    expect(await readdir(join(dir, "assets"))).toEqual([]);
     const restarted = await harness.restart({ faults: fault.hook });
     const store = await restarted.storage.environment(ENV_A);
     expect(Object.keys(store.manifest.assets)).toEqual([]);
-    // The file promoted before the crash is an orphan until the grace period.
-    const orphans = await readdir(join(dir, "assets"));
-    expect(orphans).toHaveLength(1);
     const retried = await stage(restarted, 7);
     expect(retried.deduplicated).toBe(false);
     expect(Object.keys(store.manifest.assets)).toEqual([retried.asset.id]);
-    harness.clock.advance(WEB_ANNOTATION_LIMITS.stagingGraceMs + 60_000);
-    const old = new Date(harness.clock.value - WEB_ANNOTATION_LIMITS.stagingGraceMs - 60_000);
-    await utimes(join(dir, "assets", orphans[0]!), old, old);
-    await restarted.collectGarbage(ENV_A);
     expect(await readdir(join(dir, "assets"))).toEqual([`${retried.asset.id}.png`]);
+  });
+
+  test("a promoted file left by a crash before its commit is collected after the grace period", async () => {
+    harness = await createHarness();
+    const kept = await stage(harness.service, 8);
+    const dir = environmentDir(harness.dir);
+    // A backend died between promoting an upload and committing its row.
+    const orphan = join(dir, "assets", "asset-crashed.png");
+    await writeFile(orphan, makePng(4, 3, 9));
+    await harness.service.collectGarbage(ENV_A);
+    expect(existsSync(orphan)).toBe(true);
+    const old = new Date(Date.now() - WEB_ANNOTATION_LIMITS.stagingGraceMs - 60_000);
+    await utimes(orphan, old, old);
+    await utimes(join(dir, "assets", `${kept.asset.id}.png`), old, old);
+    await harness.service.collectGarbage(ENV_A);
+    expect(await readdir(join(dir, "assets"))).toEqual([`${kept.asset.id}.png`]);
   });
 
   test("a truncated or malformed upload is refused before anything is staged", async () => {
@@ -428,8 +430,8 @@ describe("materialized evidence ownership and cleanup", () => {
       stateReason: "The legacy screenshot could not be imported",
       assetIds: [],
     });
-    const manifest = await readJsonFile(join(environmentDir(harness.dir), "manifest.json"));
-    const record = manifest.migration.drafts[key];
+    const stored = readStoredEnvironment(harness.dir)!;
+    const record = stored.meta.migration.drafts[key];
     expect(record.screenshots).toEqual([
       {
         legacyId: "legacy-1",
@@ -438,15 +440,17 @@ describe("materialized evidence ownership and cleanup", () => {
         outcome: "missing",
       },
     ]);
-    expect(JSON.stringify(manifest)).not.toContain("legacy-1.png");
+    expect(JSON.stringify(stored)).not.toContain("legacy-1.png");
   });
 });
 
 describe("storage sizes", () => {
-  test("image bytes stay within one MiB-bounded index regardless of image size", async () => {
+  test("image bytes never enter the database; only bounded metadata does", async () => {
     harness = await createHarness();
-    await stage(harness.service, 9);
-    const manifest = await readJsonFile(join(environmentDir(harness.dir), "manifest.json"));
-    expect(JSON.stringify(manifest).length).toBeLessThan(MiB);
+    const staged = await stage(harness.service, 9);
+    const stored = readStoredEnvironment(harness.dir)!;
+    expect(JSON.stringify(stored).length).toBeLessThan(MiB);
+    expect(stored.assets[staged.asset.id]).toMatchObject({ bytes: staged.asset.bytes });
+    expect(stored.records).toEqual({});
   });
 });

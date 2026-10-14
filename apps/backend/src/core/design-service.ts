@@ -35,6 +35,7 @@ import {
   type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 import { applyComputed, verifyComputed } from "./design-apply.js";
+import { CANVAS_LEASE, DesignCoordination, GLOBAL_LEASE } from "./design-coordination.js";
 import { DesignError, designConflict, toDesignFailure } from "./design-errors.js";
 import { computeOperation, type ComputedOperation, type RenderPriority } from "./design-execute.js";
 import {
@@ -113,6 +114,13 @@ export interface DesignMetrics {
   conflicts: number;
 }
 
+const INTERRUPTED_FAILURE: DesignFailure = {
+  code: "unknown-outcome",
+  message:
+    "The backend restarted before this edit committed. It was not applied; review and submit it again.",
+  retry: "review",
+};
+
 /**
  * Backend-owned design documents. Every document change and its terminal
  * operation receipt become authoritative together in one atomic record
@@ -120,7 +128,11 @@ export interface DesignMetrics {
  * guard is held.
  *
  * Lock order: global guard, then one canvas lane. Never wait for the renderer
- * or for the global guard while holding a lane.
+ * or for the global guard while holding a lane. Both are cross-process: a lane
+ * holds the canvas's database lease and the global guard holds the library
+ * lease (see `design-coordination.ts`), so another backend sharing the data
+ * directory is serialized too. Every cached record is revalidated against
+ * the file's identity before use, so a lane always works on the latest record.
  */
 export class DesignService {
   readonly generation = randomUUID();
@@ -143,7 +155,14 @@ export class DesignService {
   private readonly admittedByCanvas = new Map<string, number>();
   private readonly running = new Map<string, Promise<DesignOperationStatus>>();
   private readonly runningOwner = new Map<string, string>();
-  private readonly cache = new Map<string, { record: DesignPrivateRecord; bytes: number }>();
+  private readonly cache = new Map<
+    string,
+    { record: DesignPrivateRecord; bytes: number; key: string }
+  >();
+  readonly coordination: DesignCoordination;
+  /** Change-signal revision the library index reflects; undefined before the first scan. */
+  private libraryRevision: number | undefined;
+  private libraryScan: Promise<void> | undefined;
   private cacheBytes = 0;
   /** Environments being deleted: no work may commit into them. */
   readonly fences = new Set<string>();
@@ -162,6 +181,7 @@ export class DesignService {
   ) {
     this.store = new DesignRecordStore(dataDir, options.faults);
     this.library = new DesignLibraryIndex(this.store.root);
+    this.coordination = new DesignCoordination(dataDir, this.generation);
     this.now = options.now ?? (() => new Date());
     this.recordCacheBytes = options.recordCacheBytes ?? 48 * 1024 * 1024;
     this.executeWaitMs = options.executeWaitMs ?? 50_000;
@@ -211,7 +231,14 @@ export class DesignService {
     }
     const current = lane;
     current.depth++;
-    const run = current.tail.then(work);
+    const run = current.tail.then(() =>
+      this.coordination.exclusive(
+        `design-canvases/${canvasId}`,
+        "design canvas",
+        CANVAS_LEASE,
+        work,
+      ),
+    );
     current.tail = run.catch(() => undefined);
     return run.finally(() => {
       current.depth--;
@@ -220,7 +247,9 @@ export class DesignService {
   }
 
   global<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.globalTail.then(work);
+    const run = this.globalTail.then(() =>
+      this.coordination.exclusive("design-canvases", "design library", GLOBAL_LEASE, work),
+    );
     this.globalTail = run.catch(() => undefined);
     return run;
   }
@@ -229,16 +258,11 @@ export class DesignService {
     if (this.initialized) return;
     this.initialization ??= (async () => {
       await this.store.ensure();
+      await this.coordination.start();
       const persisted = await this.library.load();
-      const ids = (await this.store.ids()).slice(0, 4096);
-      let index = 0;
-      const worker = async () => {
-        while (index < ids.length) {
-          const id = ids[index++]!;
-          await this.indexCanvas(id, persisted.get(id));
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(8, ids.length) }, worker));
+      const revision = this.coordination.libraryRevision();
+      await this.rescanLibrary(persisted);
+      this.libraryRevision = revision;
       // Each recovery step degrades independently: one bad file must not make
       // every design unavailable.
       await this.startupStep("pending recovery", () => this.recoverPending());
@@ -257,13 +281,64 @@ export class DesignService {
     await this.initialization;
   }
 
+  /**
+   * Brings the library index up to date with every process's changes. Cheap
+   * when nothing changed (one database read); otherwise a directory scan that
+   * re-reads only records whose file identity moved.
+   */
+  async refreshLibrary(): Promise<void> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (this.libraryScan) {
+        await this.libraryScan;
+        continue;
+      }
+      const revision = this.coordination.libraryRevision();
+      if (revision === this.libraryRevision) return;
+      const scan = this.rescanLibrary()
+        .then(() => {
+          // A change signalled during the scan leaves the signal ahead: the
+          // next refresh scans again.
+          this.libraryRevision = revision;
+        })
+        .catch((error: unknown) => {
+          console.warn("[backend] Design library refresh failed:", toDesignFailure(error).code);
+        })
+        .finally(() => {
+          if (this.libraryScan === scan) this.libraryScan = undefined;
+        });
+      this.libraryScan = scan;
+      await scan;
+      return;
+    }
+  }
+
+  private async rescanLibrary(persisted?: Map<string, DesignSummary>): Promise<void> {
+    const ids = (await this.store.ids()).slice(0, 4096);
+    const present = new Set(ids);
+    for (const id of Array.from(this.library.entries.keys())) {
+      // A canvas committed after the directory listing is still on disk.
+      if (!present.has(id) && !(await this.store.fileStat(id))) this.library.entries.delete(id);
+    }
+    let index = 0;
+    const worker = async () => {
+      while (index < ids.length) {
+        const id = ids[index++]!;
+        await this.indexCanvas(id, this.library.entries.get(id) ?? persisted?.get(id));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, ids.length) }, worker));
+    this.library.persistSoon();
+  }
+
   private async indexCanvas(id: string, cached: DesignSummary | undefined): Promise<void> {
     const file = await this.store.fileStat(id);
-    if (!file) return;
+    if (!file) {
+      this.library.entries.delete(id);
+      return;
+    }
     if (
       cached &&
-      cached.fileSize === file.size &&
-      cached.fileMtimeMs === file.mtimeMs &&
+      cached.fileKey === file.key &&
       Boolean(cached.legacy) === (file.kind === "legacy")
     ) {
       this.library.entries.set(id, cached);
@@ -271,7 +346,12 @@ export class DesignService {
     }
     const read = await this.store.read(id);
     if (read.kind === "record") {
-      this.library.entries.set(id, summarizeRecord(read.record, file));
+      this.library.entries.set(
+        id,
+        summarizeRecord(read.record, { size: read.bytes, mtimeMs: file.mtimeMs, key: read.key }),
+      );
+    } else if (read.kind === "missing") {
+      this.library.entries.delete(id);
     } else if (read.kind === "legacy") {
       this.library.entries.set(
         id,
@@ -296,6 +376,7 @@ export class DesignService {
         recordBytes: file.size,
         fileSize: file.size,
         fileMtimeMs: file.mtimeMs,
+        fileKey: file.key,
       });
     }
   }
@@ -304,8 +385,9 @@ export class DesignService {
    * Finishes work a previous process may have left half done:
    * - an interrupted migration (record committed, legacy file still in place)
    *   retires the verified legacy copy to the bounded backup directory;
-   * - an export still marked "writing" belongs to a dead process, so its
-   *   outcome is unknown until reconciled against the destination.
+   * - an export still marked "writing" by a process that is no longer alive
+   *   has an unknown outcome until reconciled against the destination (a live
+   *   backend sharing the data directory may still be writing its own).
    */
   private async recoverStartupState(): Promise<void> {
     for (const id of await this.store.legacyAlongsideRecords()) {
@@ -317,7 +399,7 @@ export class DesignService {
         const loaded = await this.load(summary.id);
         if (loaded.kind !== "record" || loaded.legacy) return;
         const pending = loaded.record.pendingExport;
-        if (pending?.state !== "writing") return;
+        if (pending?.state !== "writing" || this.exportWriterAlive(loaded.record)) return;
         const next = cloneRecord(loaded.record);
         next.pendingExport = {
           ...pending,
@@ -343,45 +425,57 @@ export class DesignService {
     }
   }
 
-  /** Admitted work that has no terminal receipt did not commit: report it interrupted. */
+  /**
+   * Admitted work that has no terminal receipt and whose owning process is no
+   * longer alive did not commit: report it interrupted. Entries owned by a
+   * live backend sharing the data directory are left alone.
+   */
   private async recoverPending(): Promise<void> {
     for (const id of await this.store.pendingIds()) {
       await this.startupStep("pending recovery for one design", () => this.recoverPendingFor(id));
     }
   }
 
+  /** Whether another live service instance owns this pending entry. */
+  ownedElsewhere(entry: Pick<DesignPendingOperation, "owner">): boolean {
+    return entry.owner !== this.generation && this.coordination.isAlive(entry.owner);
+  }
+
+  /** Whether another live process may still be writing the record's pending export. */
+  exportWriterAlive(record: DesignPrivateRecord): boolean {
+    return (
+      record.pendingExportOwner !== undefined &&
+      record.pendingExportOwner !== this.generation &&
+      this.coordination.isAlive(record.pendingExportOwner)
+    );
+  }
+
   private async recoverPendingFor(id: string): Promise<void> {
-    {
+    await this.lane(id, async () => {
       const entries = await this.store.readPending(id);
       if (!entries.length) return;
+      const kept = entries.filter((entry) => this.ownedElsewhere(entry));
       const loaded = await this.load(id);
       if (loaded.kind !== "record" || loaded.legacy) {
-        await this.store.writePending(id, []);
+        if (kept.length !== entries.length) await this.store.writePending(id, kept);
         return;
       }
       const record = cloneRecord(loaded.record);
       const settled = new Set(record.receipts.map((receipt) => receipt.token));
       let changed = false;
       for (const entry of entries) {
-        if (settled.has(entry.token)) continue;
-        record.receipts.push(
-          this.receipt(entry, "interrupted", {
-            failure: {
-              code: "unknown-outcome",
-              message:
-                "The backend restarted before this edit committed. It was not applied; review and submit it again.",
-              retry: "review",
-            },
-          }),
-        );
+        if (settled.has(entry.token) || kept.includes(entry)) continue;
+        record.receipts.push(this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE }));
         changed = true;
       }
       if (changed && record.state !== "provisional") {
+        pruneReceipts(record);
         record.statusVersion++;
         await this.commit(record, false);
       }
-      await this.store.writePending(id, []);
-    }
+      const remaining = kept.filter((entry) => !settled.has(entry.token));
+      if (remaining.length !== entries.length) await this.store.writePending(id, remaining);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -393,13 +487,19 @@ export class DesignService {
     designId.parse(id);
     const cached = this.cache.get(id);
     if (cached) {
-      this.cache.delete(id);
-      this.cache.set(id, cached);
-      return { kind: "record", record: cached.record, legacy: false };
+      // Another process may have committed (or removed) the record: the cache
+      // is trusted only while the file is exactly the one it was read from.
+      const file = await this.store.recordStat(id);
+      if (file?.key === cached.key && this.cache.get(id) === cached) {
+        this.cache.delete(id);
+        this.cache.set(id, cached);
+        return { kind: "record", record: cached.record, legacy: false };
+      }
+      if (this.cache.get(id) === cached) this.forget(id);
     }
     const read = await this.store.read(id);
     if (read.kind === "record") {
-      this.remember(read.record, read.bytes);
+      this.remember(read.record, read.bytes, read.key);
       return { kind: "record", record: read.record, legacy: false };
     }
     if (read.kind === "legacy")
@@ -420,7 +520,7 @@ export class DesignService {
     if (loaded.kind === "missing")
       throw new DesignError("not-found", "Canvas not found in this environment");
     // A record from another environment is "not found", even when unreadable.
-    if (loaded.kind === "problem" && this.library.entries.get(id)?.environmentId !== environmentId)
+    if (loaded.kind === "problem" && (await this.problemOwner(id)) !== environmentId)
       throw new DesignError("not-found", "Canvas not found in this environment");
     if (loaded.kind === "problem")
       throw new DesignError("storage", loaded.message, {
@@ -439,11 +539,18 @@ export class DesignService {
     return { record: loaded.record, legacy: loaded.legacy };
   }
 
-  private remember(record: DesignPrivateRecord, bytes: number) {
+  /** Environment of an unreadable record, also when another process created it. */
+  private async problemOwner(id: string): Promise<string | undefined> {
+    const summary = this.library.entries.get(id);
+    if (summary?.environmentId) return summary.environmentId;
+    return lifecycle.problemEnvironment(this, id);
+  }
+
+  private remember(record: DesignPrivateRecord, bytes: number, key: string) {
     const previous = this.cache.get(record.canvasId);
     if (previous) this.cacheBytes -= previous.bytes;
     this.cache.delete(record.canvasId);
-    this.cache.set(record.canvasId, { record, bytes });
+    this.cache.set(record.canvasId, { record, bytes, key });
     this.cacheBytes += bytes;
     for (const [id, entry] of this.cache) {
       if (this.cacheBytes <= this.recordCacheBytes || this.cache.size <= 1) break;
@@ -483,7 +590,10 @@ export class DesignService {
     this.metrics.commits++;
     this.metrics.commitBytes += bytes;
     this.metrics.commitMs += performance.now() - started;
-    this.remember(record, bytes);
+    // The lane's lease is held, so the file is still exactly what we wrote.
+    const written = await this.store.recordStat(record.canvasId);
+    if (written) this.remember(record, bytes, written.key);
+    else this.forget(record.canvasId);
     if (legacy) {
       await this.store.retireLegacy(record.canvasId).catch((error: unknown) => {
         console.warn(
@@ -492,9 +602,24 @@ export class DesignService {
         );
       });
     }
-    const file = await this.store.fileStat(record.canvasId);
-    this.library.upsert(summarizeRecord(record, file ?? { size: bytes, mtimeMs: Date.now() }));
+    this.library.upsert(summarizeRecord(record, written ?? { size: bytes, mtimeMs: Date.now() }));
+    this.libraryChanged();
     if (hint) this.publish({ canvasId: record.canvasId, ...hint });
+  }
+
+  /** Removes a canvas from the index after its files were removed. */
+  libraryRemoved(id: string) {
+    this.library.remove(id);
+    this.libraryChanged();
+  }
+
+  /** Tells every process sharing the data directory that the canvases changed. */
+  private libraryChanged() {
+    const signal = this.coordination.signalLibraryChange();
+    // Our index already holds our own change; it stays current only if no
+    // other process moved the signal since our last scan.
+    if (signal && !this.libraryScan && signal.before === this.libraryRevision)
+      this.libraryRevision = signal.after;
   }
 
   publish(change: DesignChange) {
@@ -617,6 +742,7 @@ export class DesignService {
         expiresAt: new Date(now.getTime() + DESIGN_LIMITS.preparedTtlMs).toISOString(),
         bytes,
         state: "prepared",
+        owner: this.generation,
       };
       await this.store.writePending(canvasId, [...pending, entry]);
       return { token: entry.token, canvasId, state: "prepared", expiresAt: entry.expiresAt };
@@ -690,6 +816,9 @@ export class DesignService {
       (candidate) => candidate.token === token,
     );
     if (entry && entry.environmentId === environmentId) {
+      // Side-effect free: the receipt is written when the token is next executed.
+      if (!this.running.has(token) && this.ownerDead(entry))
+        return this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE });
       const executing = this.running.has(token) || entry.state === "executing";
       return this.receipt(entry, executing ? "executing" : "prepared", {
         expiresAt: entry.expiresAt,
@@ -776,10 +905,22 @@ export class DesignService {
       const receipt = record.receipts.find((candidate) => candidate.token === token);
       if (receipt) return { done: receipt } as const;
       const pending = await this.store.readPending(canvasId);
-      const entry = pending.find((candidate) => candidate.token === token);
+      let entry = pending.find((candidate) => candidate.token === token);
       if (!entry || entry.environmentId !== environmentId || entry.canvasId !== canvasId)
         return { done: await this.status(environmentId, canvasId, token) } as const;
       if (entry.state === "executing") return { done: this.receipt(entry, "executing") } as const;
+      // Work admitted by a process that died never runs (as after a restart).
+      if (this.ownerDead(entry))
+        return {
+          done: await this.settle(
+            record,
+            legacy,
+            pending,
+            entry,
+            "interrupted",
+            INTERRUPTED_FAILURE,
+          ),
+        } as const;
       if (
         entry.incarnation !== record.incarnation ||
         entry.digest !== descriptorDigest({ environmentId, canvasId, descriptor: entry.descriptor })
@@ -802,9 +943,25 @@ export class DesignService {
           }),
         } as const;
       // No durable "executing" marker: a restart turns every uncommitted
-      // pending entry into an `interrupted` receipt, so admission is tracked
-      // in memory (`running`) and costs no extra write.
+      // pending entry of a dead owner into an `interrupted` receipt, so
+      // admission is tracked in memory (`running`) and costs no extra write.
+      // Executing another live process's token claims it, so it becomes
+      // interruptible if this process dies. Should both run it, the receipt
+      // check under the lane lets only the first commit.
       this.admit(canvasId, entry.bytes);
+      if (entry.owner !== this.generation) {
+        const claimed: DesignPendingOperation = { ...entry, owner: this.generation };
+        try {
+          await this.store.writePending(
+            canvasId,
+            pending.map((candidate) => (candidate.token === token ? claimed : candidate)),
+          );
+        } catch (error) {
+          this.release(canvasId, entry.bytes);
+          throw error;
+        }
+        entry = claimed;
+      }
       return { entry, record, legacy } as const;
     });
     if ("done" in started) return started.done!;
@@ -835,6 +992,8 @@ export class DesignService {
           failure = toDesignFailure(error);
         }
       }
+      // The global history budget counts every process's canvases.
+      if (computed?.history) await this.refreshLibrary();
       // Phase C: re-verify against the latest state and commit atomically.
       return await this.lane(canvasId, () =>
         this.finish(environmentId, canvasId, entry, computed, failure),
@@ -916,6 +1075,12 @@ export class DesignService {
       allowDeleted: true,
     });
     const pending = await this.store.readPending(canvasId);
+    // Settled meanwhile (canceled, interrupted or run by another process): one outcome only.
+    const settled = latest.receipts.find((receipt) => receipt.token === entry.token);
+    if (settled) {
+      await this.dropPending(canvasId, pending, entry.token);
+      return settled;
+    }
     if (!computed || failure) {
       if (failure?.code === "conflict") this.metrics.conflicts++;
       return this.settle(latest, legacy, pending, entry, "rejected", failure!);
@@ -1069,7 +1234,7 @@ export class DesignService {
     legacy: boolean,
     pending: DesignPendingOperation[],
     entry: DesignPendingOperation,
-    state: "rejected" | "expired",
+    state: "rejected" | "expired" | "interrupted",
     failure: DesignFailure,
   ): Promise<DesignOperationStatus> {
     const receipt = this.receipt(entry, state, { failure });
@@ -1099,6 +1264,14 @@ export class DesignService {
         pending.filter((candidate) => candidate.token !== token),
       )
       .catch(() => undefined);
+  }
+
+  /**
+   * Whether the entry's owner is gone: another process that is no longer
+   * alive, or an entry written before owners were recorded.
+   */
+  ownerDead(entry: Pick<DesignPendingOperation, "owner">): boolean {
+    return entry.owner !== this.generation && !this.coordination.isAlive(entry.owner);
   }
 
   /** Entries that are neither settled by a receipt nor expired (unless still running). */
@@ -1178,11 +1351,9 @@ export class DesignService {
 
   /** Background pruning of the oldest unprotected entries across canvases. */
   private async enforceGlobalHistory(): Promise<void> {
-    for (
-      let attempts = 0;
-      attempts < 64 && this.historyTotal() > DESIGN_LIMITS.historyBytesGlobal;
-      attempts++
-    ) {
+    for (let attempts = 0; attempts < 64; attempts++) {
+      await this.refreshLibrary();
+      if (this.historyTotal() <= DESIGN_LIMITS.historyBytesGlobal) return;
       const candidates = Array.from(this.library.entries.values())
         .filter((entry) => entry.historyBytes > 0 && entry.state !== "provisional")
         .sort((a, b) => a.modifiedAt.localeCompare(b.modifiedAt));
@@ -1246,8 +1417,8 @@ export class DesignService {
     const loaded = await this.load(canvasId);
     if (loaded.kind === "missing") return { kind: "missing", ...base };
     if (loaded.kind === "problem") {
-      const summary = this.library.entries.get(canvasId);
-      if (summary?.environmentId !== environmentId) return { kind: "missing", ...base };
+      if ((await this.problemOwner(canvasId)) !== environmentId)
+        return { kind: "missing", ...base };
       return {
         kind: "record-problem",
         ...base,
@@ -1308,6 +1479,7 @@ export class DesignService {
 
   async list(environmentId: string) {
     await this.initialize();
+    await this.refreshLibrary();
     return Array.from(this.library.entries.values())
       .filter((entry) => entry.environmentId === environmentId && entry.state === "live")
       .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || a.id.localeCompare(b.id))
@@ -1316,10 +1488,16 @@ export class DesignService {
 
   async libraryPage(environmentId: string, query: DesignLibraryQuery): Promise<DesignLibraryPage> {
     await this.initialize();
+    await this.refreshLibrary();
     return this.library.query(environmentId, query);
   }
 
+  /**
+   * Synchronous answer from the index. A change by another process is picked
+   * up by a background refresh, so it is visible to the next call.
+   */
   hasCanvases(environmentId: string): boolean {
+    if (this.initialized && !this.closed && !this.libraryScan) this.track(this.refreshLibrary());
     for (const entry of this.library.entries.values()) {
       if (
         entry.environmentId === environmentId &&
@@ -1374,6 +1552,7 @@ export class DesignService {
 
   async readiness(probe = false): Promise<DesignReadiness> {
     await this.initialize().catch(() => undefined);
+    if (this.initialized) await this.refreshLibrary();
     const counts = this.library.counts();
     const renderer = probe ? await this.renderer.probe(true) : this.renderer.status();
     return {
@@ -1680,6 +1859,7 @@ export class DesignService {
     await this.library.flush();
     this.library.close();
     await this.renderer.close();
+    await this.coordination.close();
   }
 
   private async collectStartupOrphans(): Promise<void> {
@@ -1687,19 +1867,27 @@ export class DesignService {
       .filter((entry) => entry.state === "live" || entry.state === "deleted")
       .slice(0, 256);
     for (const entry of candidates) {
-      await this.lane(entry.id, () => this.collectHistoryOrphans(entry.id)).catch(() => 0);
+      await this.collectHistoryOrphans(entry.id).catch(() => 0);
     }
   }
 
-  /** Orphaned checkpoint collection, bounded and age-gated. */
+  /**
+   * Orphaned checkpoint collection, bounded and age-gated. Runs under the
+   * canvas lane (its cross-process lease) against the record as it is on disk
+   * now, so a checkpoint any process's committed record references is kept;
+   * a checkpoint written but not yet referenced is younger than the age gate.
+   * A canvas whose record cannot be read keeps every checkpoint.
+   */
   async collectHistoryOrphans(canvasId: string): Promise<number> {
-    const loaded = await this.load(canvasId);
-    if (loaded.kind !== "record") return 0;
-    return collectOrphans(
-      this.store,
-      canvasId,
-      new Set(loaded.record.history.entries.map((entry) => entry.checkpoint)),
-    );
+    return this.lane(canvasId, async () => {
+      const loaded = await this.load(canvasId);
+      if (loaded.kind !== "record" || loaded.legacy) return 0;
+      return collectOrphans(
+        this.store,
+        canvasId,
+        new Set(loaded.record.history.entries.map((entry) => entry.checkpoint)),
+      );
+    });
   }
 }
 

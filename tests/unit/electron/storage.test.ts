@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -17,6 +17,15 @@ import {
   sanitizeEnvironmentName,
   StorageService,
 } from "../../../apps/backend/src/core/storage";
+import {
+  hasStore,
+  readStoredValue,
+  seedStore,
+  seedUnreadableStore,
+  storageFilesContain,
+} from "../../../apps/backend/src/core/storage-test-support";
+import { openBackendDatabase } from "../../../apps/backend/src/core/storage-stores";
+import type { StorageDatabase } from "../../../apps/backend/src/core/storage-database";
 
 const resizeKanbanImageToBuffer = mock(async () => Buffer.from("webp-bytes"));
 const transparentPngBase64 =
@@ -72,6 +81,29 @@ function withFixedDate<T>(iso: string, fn: () => T): T {
   } finally {
     globalThis.Date = RealDate;
   }
+}
+
+/** Leaves lease `name` held by a backend that crashed: no release, no heartbeat. */
+async function abandonLease(dataDir: string, name: string): Promise<void> {
+  const crashed = openBackendDatabase(dataDir);
+  await crashed.acquireLease(name, "crashed backend");
+  crashed.db.query("UPDATE leases SET heartbeat_at = 0 WHERE name = ?").run(name);
+  crashed.close();
+}
+
+function heldLeases(dataDir: string): string[] {
+  const database = openBackendDatabase(dataDir);
+  try {
+    return (database.db.query("SELECT name FROM leases").all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    );
+  } finally {
+    database.close();
+  }
+}
+
+function leaseHeld(dataDir: string, name: string): boolean {
+  return heldLeases(dataDir).includes(name);
 }
 
 afterEach(async () => {
@@ -1243,6 +1275,38 @@ describe("Electron StorageService", () => {
     );
   });
 
+  test("keeps every one of a run of same-millisecond backend observations, in order", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-terminal-run-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const occurredAt = new Date(Date.parse(environment.createdAt) + 1_000).toISOString();
+    const earlier = new Date(Date.parse(occurredAt) - 1).toISOString();
+
+    // Three serialized sweeps in one millisecond: the second's token is bumped
+    // to T+1, and the third, still observed at T, must not be mistaken for an
+    // observation older than T+1.
+    for (const state of ["working", "waiting", "idle"] as const) {
+      await storage.setEnvironmentAgentActivity(environment.id, state, occurredAt, "native-agent");
+    }
+    const latest = (await storage.getEnvironment(environment.id))!;
+    expect(latest.agentActivityState).toBe("idle");
+    expect(latest.agentActivitySources!["native-agent"]).toMatchObject({
+      state: "idle",
+      updatedAt: new Date(Date.parse(occurredAt) + 2).toISOString(),
+      observedAt: occurredAt,
+    });
+
+    // An observation genuinely older than the held one is still stale.
+    const stale = await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      earlier,
+      "native-agent",
+    );
+    expect(stale.agentActivityState).toBe("idle");
+  });
+
   test("bounds client clocks and recovers poisoned legacy activity timestamps", async () => {
     const dataDir = await createTempDir("ork-storage-agent-clock-");
     const storage = new StorageService(dataDir);
@@ -1254,27 +1318,23 @@ describe("Electron StorageService", () => {
       storage.setEnvironmentAgentActivity(environment.id, "working", maximumDate),
     ).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
 
-    const environmentsPath = path.join(dataDir, "environments.json");
-    await fs.writeFile(
-      environmentsPath,
-      JSON.stringify([
-        {
-          ...environment,
-          agentActivityState: "working",
-          agentActivityUpdatedAt: maximumDate,
-          agentActivitySources: {
-            frontend: {
-              state: "working",
-              updatedAt: maximumDate,
-            },
-            "claude-terminal": {
-              state: "invalid-legacy-state",
-              updatedAt: "not-a-date",
-            },
+    seedStore(dataDir, "environments.json", [
+      {
+        ...environment,
+        agentActivityState: "working",
+        agentActivityUpdatedAt: maximumDate,
+        agentActivitySources: {
+          frontend: {
+            state: "working",
+            updatedAt: maximumDate,
+          },
+          "claude-terminal": {
+            state: "invalid-legacy-state",
+            updatedAt: "not-a-date",
           },
         },
-      ]),
-    );
+      },
+    ]);
 
     const occurredAt = new Date().toISOString();
     await expect(
@@ -1287,20 +1347,17 @@ describe("Electron StorageService", () => {
       },
     });
 
-    await fs.writeFile(
-      environmentsPath,
-      JSON.stringify([
-        {
-          ...environment,
-          status: "running",
-          agentActivityState: "working",
-          agentActivityUpdatedAt: maximumDate,
-          agentActivitySources: {
-            frontend: { state: "working", updatedAt: maximumDate },
-          },
+    seedStore(dataDir, "environments.json", [
+      {
+        ...environment,
+        status: "running",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: maximumDate,
+        agentActivitySources: {
+          frontend: { state: "working", updatedAt: maximumDate },
         },
-      ]),
-    );
+      },
+    ]);
     await expect(
       storage.updateEnvironment(environment.id, { status: "error" }),
     ).resolves.toMatchObject({
@@ -1321,7 +1378,7 @@ describe("Electron StorageService", () => {
     delete environment.agentActivityState;
     delete environment.agentActivityUpdatedAt;
     delete environment.agentActivitySources;
-    await fs.writeFile(path.join(dataDir, "environments.json"), JSON.stringify([environment]));
+    seedStore(dataDir, "environments.json", [environment]);
 
     const legacy = await storage.getEnvironment(environment.id);
     expect(legacy?.id).toBe(environment.id);
@@ -1526,7 +1583,11 @@ describe("Electron StorageService", () => {
     // The backend's own observation survives and becomes the aggregate.
     expect(cleared.agentActivityState).toBe("waiting");
     expect(cleared.agentActivitySources).toEqual({
-      "claude-terminal": { state: "waiting", updatedAt: terminalWaitingAt },
+      "claude-terminal": {
+        state: "waiting",
+        updatedAt: terminalWaitingAt,
+        observedAt: terminalWaitingAt,
+      },
     });
     expect(cleared.frontendAgentActivityObservers).toEqual({});
     // The token moves forward so a frontend hydrating from this snapshot
@@ -1575,7 +1636,7 @@ describe("Electron StorageService", () => {
     // State and token both survive intact; only `frontend` is dropped, and the
     // recomputed aggregate is the survivor's own state.
     expect(cleared.agentActivitySources).toEqual({
-      "native-agent": { state: "waiting", updatedAt: nativeWaitingAt },
+      "native-agent": { state: "waiting", updatedAt: nativeWaitingAt, observedAt: nativeWaitingAt },
     });
     expect(cleared.agentActivityState).toBe("waiting");
     expect(cleared.frontendAgentActivityObservers).toEqual({});
@@ -1609,17 +1670,14 @@ describe("Electron StorageService", () => {
     const createdTime = Date.parse(environment.createdAt);
     const reportedAt = new Date(createdTime + 1_000).toISOString();
 
-    const environmentsPath = path.join(dataDir, "environments.json");
-    const stored = JSON.parse(await fs.readFile(environmentsPath, "utf8")) as Array<
-      Record<string, unknown>
-    >;
+    const stored = readStoredValue<Array<Record<string, unknown>>>(dataDir, "environments.json")!;
     stored[0]!.agentActivityState = "working";
     stored[0]!.agentActivityUpdatedAt = reportedAt;
     stored[0]!.agentActivitySources = {
       "claude-terminal": { state: "working", updatedAt: reportedAt },
       frontend: { state: "working", updatedAt: reportedAt },
     };
-    await fs.writeFile(environmentsPath, `${JSON.stringify(stored)}\n`, "utf8");
+    seedStore(dataDir, "environments.json", stored);
 
     const announced: string[] = [];
     storage.setResourceChangeListener((change) => announced.push(change.id));
@@ -1678,34 +1736,13 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-stale-environment-lock-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const lockPath = path.join(dataDir, "environments.json.lock");
-    await fs.writeFile(lockPath, "abandoned");
-    const staleTime = new Date(Date.now() - 20_000);
-    await fs.utimes(lockPath, staleTime, staleTime);
+    await abandonLease(dataDir, "environments.json");
+    expect(leaseHeld(dataDir, "environments.json")).toBe(true);
 
     const environment = await storage.addEnvironment(createEnvironment("project-1"));
 
     expect((await storage.getEnvironment(environment.id))?.id).toBe(environment.id);
-    await expect(fs.access(lockPath)).rejects.toThrow();
-  });
-
-  test("recovers an orphaned stale-lock reclaim marker without hanging", async () => {
-    const dataDir = await createTempDir("ork-storage-orphaned-reclaim-");
-    const storage = new StorageService(dataDir);
-    await storage.init();
-    const lockPath = path.join(dataDir, "environments.json.lock");
-    const reclaimPath = `${lockPath}.reclaim`;
-    await fs.writeFile(lockPath, "abandoned");
-    await fs.writeFile(reclaimPath, "orphaned");
-    const staleTime = new Date(Date.now() - 20_000);
-    await fs.utimes(lockPath, staleTime, staleTime);
-    await fs.utimes(reclaimPath, staleTime, staleTime);
-
-    const environment = await storage.addEnvironment(createEnvironment("project-1"));
-
-    expect((await storage.getEnvironment(environment.id))?.id).toBe(environment.id);
-    await expect(fs.access(lockPath)).rejects.toThrow();
-    await expect(fs.access(reclaimPath)).rejects.toThrow();
+    expect(leaseHeld(dataDir, "environments.json")).toBe(false);
   });
 
   test("serializes concurrent waiters reclaiming the same stale environment lock", async () => {
@@ -1713,10 +1750,7 @@ describe("Electron StorageService", () => {
     const first = new StorageService(dataDir);
     const second = new StorageService(dataDir);
     await Promise.all([first.init(), second.init()]);
-    const lockPath = path.join(dataDir, "environments.json.lock");
-    await fs.writeFile(lockPath, "abandoned");
-    const staleTime = new Date(Date.now() - 20_000);
-    await fs.utimes(lockPath, staleTime, staleTime);
+    await abandonLease(dataDir, "environments.json");
 
     const [one, two] = await Promise.all([
       first.addEnvironment(createEnvironment("project-1", { name: "first" })),
@@ -2000,7 +2034,7 @@ describe("Electron StorageService", () => {
     await storage.init();
 
     await expect(storage.deletePaneLayout("missing")).resolves.toBeUndefined();
-    await expect(fs.stat(path.join(dataDir, "pane-layouts.json"))).rejects.toThrow();
+    expect(hasStore(dataDir, "pane-layouts.json")).toBe(false);
   });
 
   test("serializes concurrent same-instance pane layout saves in issue order", async () => {
@@ -2047,7 +2081,7 @@ describe("Electron StorageService", () => {
 
     const stored = await storage.getPaneLayout(environment.id);
     expect(stored).toMatchObject({ revision: 5, root: rootFor(4) });
-    const onDisk = JSON.parse(await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"));
+    const onDisk = readStoredValue<Record<string, unknown>>(dataDir, "pane-layouts.json")!;
     expect(Object.keys(onDisk)).toEqual([environment.id]);
     expect(onDisk[environment.id]).toEqual(stored);
   });
@@ -2095,7 +2129,7 @@ describe("Electron StorageService", () => {
       expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
-    const onDisk = JSON.parse(await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"));
+    const onDisk = readStoredValue<Record<string, unknown>>(dataDir, "pane-layouts.json")!;
     expect(onDisk).toEqual({});
 
     await expect(
@@ -2155,9 +2189,7 @@ describe("Electron StorageService", () => {
       expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
-    expect(JSON.parse(await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"))).toEqual(
-      {},
-    );
+    expect(readStoredValue(dataDir, "pane-layouts.json")).toEqual({});
 
     await expect(
       competingStorage.savePaneLayout(
@@ -2504,14 +2536,23 @@ describe("Electron StorageService", () => {
       apiKey: "lin_api_secret",
       viewer: { email: "ada@example.com" },
     });
-    expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
+    // The credential lives in the private database file, never in a JSON file.
+    expect((await fs.stat(path.join(dataDir, "orkestrator.sqlite"))).mode & 0o777).toBe(0o600);
+    expect(readStoredValue(dataDir, "linear-auth.json")).toMatchObject({
+      apiKey: "lin_api_secret",
+    });
 
     await storage.saveLinearAuth("lin_api_reconnected", {
       id: "viewer-2",
       name: "Grace",
     });
-    expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
-    expect(await fs.readdir(dataDir)).not.toContain("linear-auth.json.bak.1");
+    expect((await fs.stat(path.join(dataDir, "orkestrator.sqlite"))).mode & 0o777).toBe(0o600);
+    expect(readStoredValue(dataDir, "linear-auth.json")).toMatchObject({
+      apiKey: "lin_api_reconnected",
+    });
+    expect((await fs.readdir(dataDir)).filter((file) => file.startsWith("linear-auth"))).toEqual(
+      [],
+    );
 
     const posted = await storage.saveLinearCompletionComment({
       pipelineId: "pipeline-1",
@@ -2586,7 +2627,7 @@ describe("Electron StorageService", () => {
       status: "failed",
       error: "GitHub API unavailable",
     });
-    expect(await fs.readdir(dataDir)).toContain("github-completion-comments.json");
+    expect(hasStore(dataDir, "github-completion-comments.json")).toBe(true);
   });
 
   test("serializes GitHub completion comment writes across storage instances", async () => {
@@ -2611,9 +2652,10 @@ describe("Electron StorageService", () => {
       }),
     );
 
-    const records = JSON.parse(
-      await fs.readFile(path.join(dataDir, "github-completion-comments.json"), "utf8"),
-    ) as Array<{ pipelineId: string }>;
+    const records = readStoredValue<Array<{ pipelineId: string }>>(
+      dataDir,
+      "github-completion-comments.json",
+    )!;
     expect(records).toHaveLength(20);
     expect(new Set(records.map((record) => record.pipelineId)).size).toBe(20);
     await expect(first.getGitHubCompletionComment("pipeline-0")).resolves.toMatchObject({
@@ -2624,7 +2666,7 @@ describe("Electron StorageService", () => {
       status: "posted",
       commentId: "9019",
     });
-    expect(await fs.readdir(dataDir)).not.toContain("github-completion-comments.json.lock");
+    expect(heldLeases(dataDir)).toEqual([]);
   });
 
   test("serializes the complete GitHub completion transaction across storage instances", async () => {
@@ -2669,26 +2711,21 @@ describe("Electron StorageService", () => {
     await storage.init();
     const pipelineId = "pipeline-abandoned";
     const key = createHash("sha256").update(pipelineId).digest("hex");
-    const lockDir = path.join(dataDir, "github-completion-comment-locks");
-    const lockPath = path.join(lockDir, `${key}.lock`);
-    await fs.mkdir(lockDir, { recursive: true });
-    await fs.writeFile(lockPath, "abandoned");
-    const staleTime = new Date(Date.now() - 20_000);
-    await fs.utimes(lockPath, staleTime, staleTime);
+    const lease = `github-completion-comment-locks/${key}`;
+    await abandonLease(dataDir, lease);
+    expect(leaseHeld(dataDir, lease)).toBe(true);
 
     await expect(
       storage.withGitHubCompletionCommentLock(pipelineId, async () => "recovered"),
     ).resolves.toBe("recovered");
-    await expect(fs.access(lockPath)).rejects.toThrow();
+    expect(leaseHeld(dataDir, lease)).toBe(false);
   });
 
   test("recovers GitHub completion comments from malformed persistence", async () => {
     const dataDir = await createTempDir("ork-storage-github-completion-malformed-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const file = path.join(dataDir, "github-completion-comments.json");
-
-    await fs.writeFile(file, "{not-json");
+    seedUnreadableStore(dataDir, "github-completion-comments.json");
     await expect(storage.getGitHubCompletionComment("missing")).resolves.toBeNull();
 
     await storage.saveGitHubCompletionComment({
@@ -2708,27 +2745,40 @@ describe("Electron StorageService", () => {
       commentId: "9001",
       postedAt: "2026-07-24T12:00:00.000Z",
     });
-    await fs.writeFile(file, "{truncated");
 
+    // The first write replaced the unreadable store; the latest outcome wins.
     await expect(storage.getGitHubCompletionComment("pipeline-recovered")).resolves.toMatchObject({
-      status: "failed",
-      error: "first attempt failed",
+      status: "posted",
+      commentId: "9001",
     });
+    expect(
+      readStoredValue<Array<{ pipelineId: string }>>(dataDir, "github-completion-comments.json"),
+    ).toEqual([expect.objectContaining({ pipelineId: "pipeline-recovered", status: "posted" })]);
+
+    // A store that becomes unreadable later still reads leniently as absent.
+    seedUnreadableStore(dataDir, "github-completion-comments.json", "{truncated");
+    await expect(storage.getGitHubCompletionComment("pipeline-recovered")).resolves.toBeNull();
   });
 
-  test("removes temporary Linear auth files when a secret write fails", async () => {
+  test("leaves no trace of a Linear secret when its write fails", async () => {
     const dataDir = await createTempDir("ork-storage-linear-failed-");
     const storage = new StorageService(dataDir);
     await storage.init();
+    const database = (storage as unknown as { database: StorageDatabase }).database;
+    const writeStore = spyOn(database, "writeStore").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
 
-    await fs.mkdir(path.join(dataDir, "linear-auth.json"));
+    try {
+      await expect(storage.saveLinearAuth("lin_api_failed_secret")).rejects.toThrow("disk full");
+    } finally {
+      writeStore.mockRestore();
+    }
 
-    await expect(storage.saveLinearAuth("lin_api_secret")).rejects.toThrow();
-
-    const files = await fs.readdir(dataDir);
-    expect(
-      files.filter((file) => file.startsWith(".linear-auth.json.") && file.endsWith(".tmp")),
-    ).toEqual([]);
+    await expect(storage.getLinearAuth()).resolves.toBeNull();
+    expect(hasStore(dataDir, "linear-auth.json")).toBe(false);
+    expect(storageFilesContain(dataDir, "lin_api_failed_secret")).toBe(false);
+    expect((await fs.readdir(dataDir)).filter((file) => file.includes("linear-auth"))).toEqual([]);
   });
 
   test("persists kanban images as retrievable files and removes them when deleted", async () => {
@@ -2909,36 +2959,56 @@ describe("Electron StorageService", () => {
     });
   });
 
-  test("recovers a looped-review snapshot from backup after file corruption", async () => {
+  test("imports a legacy looped-review snapshot from its backup when the primary file is corrupt", async () => {
     const dataDir = await createTempDir("ork-storage-looped-review-corrupt-");
-    const storage = new StorageService(dataDir);
-    await storage.init();
     const environment = createEnvironment("project-1", {
       name: "looped-review-corrupt",
       environmentType: "local",
     });
-    await storage.addEnvironment(environment);
-    await storage.saveLoopedReviewWorkflow(
-      "workflow-corrupt",
-      environment.id,
-      1,
-      { phase: "preparing" },
-      0,
-    );
-    await storage.saveLoopedReviewWorkflow(
-      "workflow-corrupt",
-      environment.id,
-      1,
-      { phase: "discovering" },
-      1,
-    );
+    const record = (phase: string, revision: number) => ({
+      version: 1,
+      id: "workflow-corrupt",
+      environmentId: environment.id,
+      snapshot: { phase },
+      updatedAt: "2026-07-25T00:00:00.000Z",
+      revision,
+    });
+    // A data directory from the JSON-file era: the last write left a corrupt
+    // primary, and the previous good state survives in the newest backup.
+    await fs.writeFile(path.join(dataDir, "environments.json"), JSON.stringify([environment]));
     await fs.writeFile(path.join(dataDir, "looped-reviews.json"), "{broken", "utf8");
+    await fs.writeFile(
+      path.join(dataDir, "looped-reviews.json.bak.1"),
+      JSON.stringify({ "workflow-corrupt": record("preparing", 1) }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(dataDir, "looped-reviews.json.bak.2"),
+      JSON.stringify({ "workflow-corrupt": record("stale", 0) }),
+      "utf8",
+    );
+
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await expect(storage.getLoopedReviewWorkflow("workflow-corrupt")).resolves.toMatchObject({
+      revision: 1,
+      snapshot: { phase: "preparing" },
+    });
+    await expect(
+      storage.saveLoopedReviewWorkflow(
+        "workflow-corrupt",
+        environment.id,
+        1,
+        { phase: "discovering" },
+        1,
+      ),
+    ).resolves.toMatchObject({ revision: 2 });
 
     const restarted = new StorageService(dataDir);
     await restarted.init();
     await expect(restarted.getLoopedReviewWorkflow("workflow-corrupt")).resolves.toMatchObject({
-      revision: 1,
-      snapshot: { phase: "preparing" },
+      revision: 2,
+      snapshot: { phase: "discovering" },
     });
   });
 
@@ -2951,28 +3021,24 @@ describe("Electron StorageService", () => {
       environmentType: "local",
     });
     await storage.addEnvironment(environment);
-    await fs.writeFile(
-      path.join(dataDir, "looped-reviews.json"),
-      JSON.stringify({
-        "wrong-key": {
-          version: 1,
-          id: "another-id",
-          environmentId: environment.id,
-          snapshot: { phase: "preparing" },
-          updatedAt: "2026-07-25T00:00:00.000Z",
-          revision: 1,
-        },
-        "primitive-snapshot": {
-          version: 1,
-          id: "primitive-snapshot",
-          environmentId: environment.id,
-          snapshot: "not-an-object",
-          updatedAt: "2026-07-25T00:00:00.000Z",
-          revision: 1,
-        },
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    );
+    seedStore(dataDir, "looped-reviews.json", {
+      "wrong-key": {
+        version: 1,
+        id: "another-id",
+        environmentId: environment.id,
+        snapshot: { phase: "preparing" },
+        updatedAt: "2026-07-25T00:00:00.000Z",
+        revision: 1,
+      },
+      "primitive-snapshot": {
+        version: 1,
+        id: "primitive-snapshot",
+        environmentId: environment.id,
+        snapshot: "not-an-object",
+        updatedAt: "2026-07-25T00:00:00.000Z",
+        revision: 1,
+      },
+    });
 
     await expect(storage.getLoopedReviewWorkflow("wrong-key")).resolves.toBeNull();
     await expect(storage.getLoopedReviewWorkflow("primitive-snapshot")).resolves.toBeNull();
@@ -3015,7 +3081,7 @@ describe("Electron StorageService", () => {
     await expect(storage.getLoopedReviewWorkflow("workflow-oversized")).resolves.toBeNull();
   });
 
-  test("restricts looped-review snapshots and their backups to the current user", async () => {
+  test("restricts looped-review snapshots to the current user", async () => {
     const dataDir = await createTempDir("ork-storage-looped-review-sensitive-");
     const storage = new StorageService(dataDir);
     await storage.init();
@@ -3039,14 +3105,15 @@ describe("Electron StorageService", () => {
       1,
     );
 
-    const primaryMode = (await fs.stat(path.join(dataDir, "looped-reviews.json"))).mode & 0o777;
-    const backupMode =
-      (await fs.stat(path.join(dataDir, "looped-reviews.json.bak.1"))).mode & 0o777;
-    expect(primaryMode).toBe(0o600);
-    expect(backupMode).toBe(0o600);
+    // Snapshots live only in the private database file; no JSON copy or backup.
+    expect((await fs.stat(path.join(dataDir, "orkestrator.sqlite"))).mode & 0o777).toBe(0o600);
+    expect(storageFilesContain(dataDir, "updated private review material")).toBe(true);
+    expect((await fs.readdir(dataDir)).filter((name) => name.startsWith("looped-reviews"))).toEqual(
+      [],
+    );
   });
 
-  test("deletes every workflow and retained backup for one environment", async () => {
+  test("deletes every workflow for one environment unrecoverably", async () => {
     const dataDir = await createTempDir("ork-storage-looped-review-cascade-");
     const storage = new StorageService(dataDir);
     await storage.init();
@@ -3084,6 +3151,8 @@ describe("Electron StorageService", () => {
       1,
     );
 
+    expect(storageFilesContain(dataDir, privateMarker)).toBe(true);
+
     await storage.deleteLoopedReviewWorkflowsByEnvironment(deletedEnvironment.id);
 
     await expect(storage.listLoopedReviewWorkflows(deletedEnvironment.id)).resolves.toEqual([]);
@@ -3091,10 +3160,8 @@ describe("Electron StorageService", () => {
     await expect(storage.listLoopedReviewWorkflows(retainedEnvironment.id)).resolves.toMatchObject([
       { id: "workflow-retained" },
     ]);
-    for (const name of await fs.readdir(dataDir)) {
-      if (!name.startsWith("looped-reviews.json")) continue;
-      const contents = await fs.readFile(path.join(dataDir, name), "utf8");
-      expect(contents).not.toContain(privateMarker);
-    }
+    // Neither the old rows nor their WAL frames survive the delete.
+    expect(storageFilesContain(dataDir, privateMarker)).toBe(false);
+    expect(storageFilesContain(dataDir, "retained material")).toBe(true);
   });
 });

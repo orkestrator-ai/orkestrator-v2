@@ -1,45 +1,75 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { promises as fs, lstatSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import path from "node:path";
 import {
   PIPELINE_TRANSCRIPT_REFERENCE_VERSION,
   type PipelineTranscriptReference,
 } from "@orkestrator/protocol/build-pipeline";
-import { KeyedSerialQueue } from "./keyed-record-concurrency.js";
-import { sha256Hex } from "./keyed-record-format.js";
-import type { KeyedRecordLock, KeyedRecordObserver } from "./keyed-record-store.js";
 import {
-  RecordManifestStore,
-  type ChunkRef,
-  type ManifestFaultStage,
-  type RecordManifest,
-} from "./record-manifest.js";
+  ensureNamespaceDirectory,
+  isMissingPathError,
+  readBoundedFile,
+  recordFileStem,
+  sha256Hex,
+  syncDirectory,
+  writeExclusivePrivateFile,
+} from "./keyed-record-format.js";
+import {
+  TranscriptManifestRows,
+  type TranscriptChunkRef,
+  type TranscriptManifestRow,
+} from "./build-pipeline-transcript-manifests.js";
+import {
+  importLegacyManifest,
+  legacyManifestsSettled,
+  migrateLegacyManifests,
+  type LegacyManifestDeps,
+  type LegacyManifestMigrationReport,
+} from "./build-pipeline-transcript-legacy-manifests.js";
+import type { StorageDatabase } from "./storage-database.js";
 
 /**
  * Durable build-pipeline display transcripts, stored apart from the workflow
  * control record (plan step 16, finding E14).
  *
- * Layout under the backend data directory:
+ * Metadata lives in the database (`build-pipeline-transcript-layout.ts`): one
+ * manifest row per pipeline session naming its ordered chunks, plus quota
+ * totals. The message bodies stay files:
  *
- *   build-pipeline-transcripts/
- *     manifests/<sha256>.rec        one manifest per pipeline session (+ .prev)
- *     manifests/_meta/index.json    quota/owner metadata only
- *     chunks/<stem>-<sha256>.chunk  immutable JSON-array slices of messages
+ *   build-pipeline-transcripts/chunks/<stem>-<sha256>.chunk
  *
- * A session's transcript is a sequence of immutable chunks named by a small
- * versioned manifest (step 06). Completed chunks are never rewritten: an
- * active turn rewrites only its unsealed tail chunk plus the manifest. The
- * manifest commits before the workflow record references it, so a crash leaves
- * either the old reference (still readable: the durable store retains the
- * previous generation and its chunks) or orphans that `repair`/`sweep` remove.
+ * immutable, content-addressed JSON-array slices of messages. Completed
+ * chunks are never rewritten: an active turn writes only its unsealed tail
+ * chunk.
+ *
+ * A checkpoint has two steps:
+ *
+ * 1. {@link BuildPipelineTranscriptStore.stage} (async, outside any
+ *    transaction) writes and fsyncs the new chunk files and keeps the new
+ *    manifest in memory, returning the reference the control record will carry.
+ * 2. The control-record write commits the manifest row in the SAME database
+ *    transaction as the control row ({@link commitStagedInTransaction}), after
+ *    checking the manifest's base revision, the quota and that its new chunks
+ *    are on disk. Either both land or neither does: a control record never
+ *    references a manifest that is not committed, and a committed manifest
+ *    always has its control record.
+ *
+ * Chunk files are only ever unlinked while holding the database write lock
+ * and only when no committed row references them ({@link unlinkUnreferenced});
+ * a commit checks its new chunks exist under that same lock. So a chunk can
+ * never disappear under a committed manifest, in this process or another.
+ * A crash leaves at worst unreferenced chunk files, which {@link repair}
+ * collects after the grace window.
  *
  * Unlike native display tails (a regenerable cache), this is the offline copy
- * the user was promised, so it is `durable`: fsynced, one previous generation
- * kept, never evicted. Oversized content is recorded as explicitly incomplete
- * rather than failing the workflow write that carries it.
+ * the user was promised: fsynced, never evicted. Oversized content is recorded
+ * as explicitly incomplete rather than failing the workflow write.
  */
 export const BUILD_PIPELINE_TRANSCRIPT_DIRECTORY = "build-pipeline-transcripts";
 export const BUILD_PIPELINE_TRANSCRIPT_NAMESPACE = "build-pipeline-transcript/v1";
-export const BUILD_PIPELINE_TRANSCRIPT_SCHEMA = "build-pipeline-transcript-v1";
-const META_VERSION = 1;
+const CHUNKS_DIRECTORY = "chunks";
+const CHUNK_EXTENSION = ".chunk";
+const TEMP_EXTENSION = ".tmp";
 
 export interface BuildPipelineTranscriptLimits {
   /** Chunks are packed up to this size; a smaller final chunk is the mutable tail. */
@@ -67,17 +97,29 @@ export const BUILD_PIPELINE_TRANSCRIPT_LIMITS: Readonly<BuildPipelineTranscriptL
     maxManifestBytes: 512 * 1024,
   });
 
-/** How long an unreferenced manifest must age before the orphan sweep may remove it. */
+/**
+ * How long an unreferenced chunk (or a manifest row without a control record)
+ * must age before repair may remove it. Covers a staged checkpoint waiting
+ * for its control write.
+ */
 export const BUILD_PIPELINE_TRANSCRIPT_ORPHAN_GRACE_MS = 10 * 60_000;
-const MAX_FENCE_MEMORY = 4_096;
+/** Staged checkpoints kept for their control write; older ones are dropped. */
+const MAX_STAGED = 256;
+/** Chunk unlinks per write-locked transaction. */
+const UNLINK_BATCH = 64;
+/** Concurrent stage operations (each may hold a whole session's chunks in memory). */
+const MAX_CONCURRENT_STAGES = 2;
+const MAX_LEGACY_MISSES = 4_096;
 
 export type BuildPipelineTranscriptFaultStage =
-  | ManifestFaultStage
+  | "after-chunks"
+  | "after-commit"
   | "before-control-save"
   | "after-control-save"
   | "migration-after-import"
   | "migration-before-control-commit"
-  | "delete-after-control";
+  | "delete-after-control"
+  | "legacy-manifest-batch";
 
 export interface BuildPipelineTranscriptFaults {
   /** Test-only hook. Throw to simulate a crash at `stage`; on-disk state is left as is. */
@@ -85,12 +127,17 @@ export interface BuildPipelineTranscriptFaults {
 }
 
 export interface BuildPipelineTranscriptStoreOptions {
+  /** `<data>/build-pipeline-transcripts`: chunk files and the legacy manifests. */
   directory: string;
-  lock?: KeyedRecordLock;
+  database: () => StorageDatabase;
+  /**
+   * Whether a pipeline tag still has a control record. Synchronous: called
+   * inside transactions (legacy import, orphan sweep). Defaults to "yes".
+   */
+  isLivePipeline?: (pipelineTag: string) => boolean;
   now?: () => number;
   limits?: Partial<BuildPipelineTranscriptLimits>;
   faults?: () => BuildPipelineTranscriptFaults | null | undefined;
-  observer?: KeyedRecordObserver;
 }
 
 export interface TranscriptCommitInput {
@@ -106,15 +153,38 @@ export interface TranscriptCommitInput {
   sourceRevision?: number;
 }
 
+/** A checkpoint whose chunks are durable and whose manifest awaits its control write. */
+export interface StagedTranscript {
+  readonly key: string;
+  readonly pipelineTag: string;
+  readonly sessionKey: string;
+  /** Committed manifest revision this one replaces (`null`: none). */
+  readonly baseRevision: number | null;
+  readonly row: TranscriptManifestRow;
+  readonly serialized: string;
+  readonly reference: PipelineTranscriptReference;
+  readonly fingerprint: string;
+  /** Chunks the base manifest does not reference. */
+  readonly newChunks: readonly TranscriptChunkRef[];
+  /** Base chunks this manifest no longer references. */
+  readonly droppedChunks: readonly string[];
+  readonly stagedAt: number;
+  readonly chunkWrites: number;
+  readonly chunkBytesWritten: number;
+}
+
 export type TranscriptCommitResult =
   | {
-      status: "committed";
+      status: "staged";
       reference: PipelineTranscriptReference;
       fingerprint: string;
-      /** False when identical content was already committed (idempotent retry). */
+      /**
+       * False when identical content is already committed (idempotent retry):
+       * the reference is the committed one and nothing awaits a commit.
+       */
       written: boolean;
+      staged?: StagedTranscript;
     }
-  | { status: "fenced" }
   | { status: "rejected"; reason: string };
 
 export type TranscriptRead =
@@ -126,13 +196,31 @@ export type TranscriptRead =
       messageCount: number;
       revision: number;
       complete: boolean;
-      /** True when the referenced revision was unreadable and another generation answered. */
+      /**
+       * True when the committed manifest is not the revision the reference
+       * names: a control record written before the commit and the reference
+       * became one transaction, or migrated from the file store. The
+       * committed manifest answered.
+       */
       substituted: boolean;
+      /** The window stopped early at `maxBytes`; more messages follow. */
+      truncated?: true;
     }
   | { status: "missing" }
   | { status: "unavailable"; reason: string };
 
+export interface TranscriptReadWindow {
+  fromIndex?: number;
+  toIndex?: number;
+  /**
+   * Stop before the message that would take the serialized messages (each
+   * `JSON.stringify`, comma-separated) past this many bytes.
+   */
+  maxBytes?: number;
+}
+
 export interface BuildPipelineTranscriptStats {
+  /** Manifest rows committed. */
   commits: number;
   idempotentCommits: number;
   chunkWrites: number;
@@ -141,43 +229,12 @@ export interface BuildPipelineTranscriptStats {
   chunkReads: number;
   chunkBytesRead: number;
   rejected: number;
+  /** fsyncs issued for chunk files and their directory (the commit's own is SQLite's). */
+  fileSyncs: number;
+  chunkUnlinks: number;
 }
 
-interface TranscriptManifestMeta {
-  v: typeof META_VERSION;
-  sdkSessionId: string;
-  revision: number;
-  fingerprint: string;
-  /** Full-content digest; makes a retried import or checkpoint idempotent. */
-  contentDigest: string;
-  messageCount: number;
-  /** Messages per chunk, in manifest order. */
-  counts: number[];
-  bytes: number;
-  omittedMessages: number;
-  committedAt: string;
-  sourceRevision?: number;
-}
-
-function isMeta(value: unknown, chunks: number): value is TranscriptManifestMeta {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const meta = value as Record<string, unknown>;
-  return (
-    meta.v === META_VERSION &&
-    typeof meta.sdkSessionId === "string" &&
-    Number.isSafeInteger(meta.revision) &&
-    typeof meta.fingerprint === "string" &&
-    typeof meta.contentDigest === "string" &&
-    Number.isSafeInteger(meta.messageCount) &&
-    Array.isArray(meta.counts) &&
-    meta.counts.length === chunks &&
-    meta.counts.every((count) => Number.isSafeInteger(count) && (count as number) > 0) &&
-    (meta.counts as number[]).reduce((sum, count) => sum + count, 0) === meta.messageCount &&
-    Number.isSafeInteger(meta.bytes) &&
-    Number.isSafeInteger(meta.omittedMessages) &&
-    typeof meta.committedAt === "string"
-  );
-}
+export type StagedCommitOutcome = { ok: true } | { ok: false; reason: string };
 
 function tag(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
@@ -188,7 +245,8 @@ export function transcriptPipelineTag(pipelineId: string): string {
   return tag(`pipeline\0${pipelineId}`);
 }
 
-function sessionRecordKey(pipelineId: string, sessionKey: string): string {
+/** Row key of one session's manifest. */
+export function transcriptSessionKey(pipelineId: string, sessionKey: string): string {
   return `${transcriptPipelineTag(pipelineId)}/${tag(`session\0${sessionKey}`)}`;
 }
 
@@ -205,11 +263,83 @@ function serializeMessage(message: unknown): string {
   }
 }
 
+function referenceKey(reference: PipelineTranscriptReference): string {
+  return [
+    reference.manifestRevision,
+    reference.committedAt,
+    reference.sdkSessionId,
+    reference.revision,
+    reference.messageCount,
+    reference.bytes,
+  ].join("|");
+}
+
+function digestContent(items: readonly string[]): string {
+  const hash = createHash("sha256");
+  hash.update(String(items.length));
+  for (const item of items) {
+    hash.update("\0");
+    hash.update(item);
+  }
+  return hash.digest("hex");
+}
+
+/** Per-key FIFO without the keyed-record engine. */
+class SerialQueue {
+  private readonly tails = new Map<string, Promise<unknown>>();
+
+  run<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    const next = previous.then(operation, operation);
+    const settled = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.tails.set(key, settled);
+    void settled.then(() => {
+      if (this.tails.get(key) === settled) this.tails.delete(key);
+    });
+    return next;
+  }
+}
+
+class Semaphore {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    } else {
+      this.active += 1;
+    }
+    try {
+      return await operation();
+    } finally {
+      const next = this.waiters.shift();
+      if (next) next();
+      else this.active -= 1;
+    }
+  }
+}
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 export class BuildPipelineTranscriptStore {
-  readonly manifests: RecordManifestStore;
   readonly limits: BuildPipelineTranscriptLimits;
-  private readonly queue = new KeyedSerialQueue();
-  private readonly fences = new Map<string, true>();
+  readonly rows: TranscriptManifestRows;
+  private readonly chunksDirectory: string;
+  private readonly queue = new SerialQueue();
+  private readonly stages = new Semaphore(MAX_CONCURRENT_STAGES);
+  /** Staged checkpoints by row key, oldest first. */
+  private readonly staged = new Map<string, StagedTranscript[]>();
+  private stagedCount = 0;
+  private directoryReady: Promise<void> | null = null;
+  private legacySettled = false;
+  private readonly legacyMisses = new Set<string>();
+  private stemIndex: { revision: number | null; stems: Map<string, string> } | null = null;
   private readonly counters: BuildPipelineTranscriptStats = {
     commits: 0,
     idempotentCommits: 0,
@@ -219,33 +349,22 @@ export class BuildPipelineTranscriptStore {
     chunkReads: 0,
     chunkBytesRead: 0,
     rejected: 0,
+    fileSyncs: 0,
+    chunkUnlinks: 0,
   };
 
   constructor(private readonly options: BuildPipelineTranscriptStoreOptions) {
     this.limits = { ...BUILD_PIPELINE_TRANSCRIPT_LIMITS, ...options.limits };
-    this.manifests = new RecordManifestStore({
-      directory: options.directory,
-      namespace: BUILD_PIPELINE_TRANSCRIPT_NAMESPACE,
-      schema: BUILD_PIPELINE_TRANSCRIPT_SCHEMA,
-      retentionClass: "durable",
-      maxChunkBytes: this.limits.maxChunkBytes,
-      maxChunksPerRecord: this.limits.maxChunksPerSession,
-      maxRecords: this.limits.maxSessions,
-      maxTotalBytes: this.limits.maxTotalBytes,
-      maxManifestBytes: this.limits.maxManifestBytes,
-      ...(options.lock ? { lock: options.lock } : {}),
-      ...(options.now ? { now: options.now } : {}),
-      ...(options.observer ? { observer: options.observer } : {}),
-      faults: { at: (stage, detail) => this.fault(stage, detail.key) },
-    });
+    this.rows = new TranscriptManifestRows(options.database);
+    this.chunksDirectory = path.join(options.directory, CHUNKS_DIRECTORY);
+  }
+
+  private get database(): StorageDatabase {
+    return this.options.database();
   }
 
   stats(): BuildPipelineTranscriptStats {
-    return {
-      ...this.counters,
-      // Manifest bytes are counted by the keyed store that writes them.
-      manifestBytesWritten: this.manifests.manifests.stats().bytesWritten,
-    };
+    return { ...this.counters };
   }
 
   async fault(stage: BuildPipelineTranscriptFaultStage, key: string): Promise<void> {
@@ -256,124 +375,374 @@ export class BuildPipelineTranscriptStore {
     return this.options.now?.() ?? Date.now();
   }
 
+  private isLive(pipelineTag: string): boolean {
+    return this.options.isLivePipeline?.(pipelineTag) ?? true;
+  }
+
+  private ensureDirectories(): Promise<void> {
+    this.directoryReady ??= (async () => {
+      await ensureNamespaceDirectory(this.options.directory);
+      await ensureNamespaceDirectory(this.chunksDirectory);
+    })().catch((error) => {
+      this.directoryReady = null;
+      throw error;
+    });
+    return this.directoryReady;
+  }
+
+  private chunkPath(name: string): string {
+    return path.join(this.chunksDirectory, name);
+  }
+
+  private chunkName(key: string, checksum: string): string {
+    return `${recordFileStem(BUILD_PIPELINE_TRANSCRIPT_NAMESPACE, key)}-${checksum}${CHUNK_EXTENSION}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Legacy (file) manifests
+
+  private legacyDeps(): LegacyManifestDeps {
+    return {
+      database: this.options.database,
+      rows: this.rows,
+      namespace: BUILD_PIPELINE_TRANSCRIPT_NAMESPACE,
+      directory: this.options.directory,
+      maxManifestBytes: this.limits.maxManifestBytes,
+      isLive: (pipelineTag) => this.isLive(pipelineTag),
+      now: () => this.now(),
+    };
+  }
+
+  private legacyDone(): boolean {
+    if (this.legacySettled) return true;
+    this.legacySettled = legacyManifestsSettled(this.legacyDeps());
+    return this.legacySettled;
+  }
+
   /**
-   * Refuses later commits for a deleted pipeline in this process. A checkpoint
-   * that was already past its read when the pipeline was deleted must not
-   * recreate the transcript afterwards; the cross-process equivalent is the
-   * orphan sweep. The memory is bounded; a forgotten fence only means the
-   * sweep, not the fence, removes such a late orphan.
+   * Imports one session's pre-database manifest ahead of the background job,
+   * so a read or checkpoint never sees "missing" for data that still exists.
    */
-  fencePipeline(pipelineId: string): void {
-    const id = transcriptPipelineTag(pipelineId);
-    this.fences.delete(id);
-    this.fences.set(id, true);
-    while (this.fences.size > MAX_FENCE_MEMORY) {
-      const oldest = this.fences.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.fences.delete(oldest);
+  private async ensureImported(
+    key: string,
+    options: { preferRevision?: number; ownerIsLive?: boolean } = {},
+  ): Promise<void> {
+    if (this.legacyDone() || this.legacyMisses.has(key) || this.rows.has(key)) return;
+    if ((await importLegacyManifest(this.legacyDeps(), key, options)) === "absent") {
+      this.legacyMisses.add(key);
+      if (this.legacyMisses.size > MAX_LEGACY_MISSES) {
+        this.legacyMisses.delete(this.legacyMisses.values().next().value as string);
+      }
     }
   }
 
-  /** A pipeline id written again after deletion (legacy re-import) may store transcripts again. */
-  unfence(pipelineId: string): void {
-    this.fences.delete(transcriptPipelineTag(pipelineId));
+  /** Imports the given sessions' legacy manifests (before deleting their pipeline). */
+  async ensureSessionsImported(pipelineId: string, sessionKeys: readonly string[]): Promise<void> {
+    if (this.legacyDone()) return;
+    for (const sessionKey of sessionKeys) {
+      await this.ensureImported(transcriptSessionKey(pipelineId, sessionKey));
+    }
   }
 
-  private fenced(pipelineId: string): boolean {
-    return this.fences.has(transcriptPipelineTag(pipelineId));
-  }
-
-  async commit(input: TranscriptCommitInput): Promise<TranscriptCommitResult> {
-    const pipelineTag = transcriptPipelineTag(input.pipelineId);
-    return this.queue.run(pipelineTag, async () => {
-      if (this.fenced(input.pipelineId)) return { status: "fenced" };
-      const key = sessionRecordKey(input.pipelineId, input.sessionKey);
-      const serialized = input.messages.map(serializeMessage);
-      const retained = this.retain(serialized);
-      const contentDigest = digestContent(retained.items);
-      const current = await this.manifests.readManifest(key, "current");
-      const currentMeta =
-        current && isMeta(current.manifest.meta, current.manifest.chunks.length)
-          ? current.manifest.meta
-          : null;
-      if (
-        current &&
-        currentMeta &&
-        currentMeta.sdkSessionId === input.sdkSessionId &&
-        currentMeta.contentDigest === contentDigest &&
-        currentMeta.fingerprint === input.fingerprint &&
-        currentMeta.omittedMessages === retained.omitted
-      ) {
-        this.counters.idempotentCommits += 1;
-        return {
-          status: "committed",
-          reference: this.reference(current.revision, currentMeta),
-          fingerprint: currentMeta.fingerprint,
-          written: false,
-        };
-      }
-      const plan = this.plan(
-        retained.items,
-        retained.sizes,
-        currentMeta?.sdkSessionId === input.sdkSessionId && current ? current.manifest : null,
-        currentMeta,
-      );
-      if (plan.parts.length > this.limits.maxChunksPerSession) {
-        this.counters.rejected += 1;
-        return { status: "rejected", reason: "too-many-chunks" };
-      }
-      const meta: TranscriptManifestMeta = {
-        v: META_VERSION,
-        sdkSessionId: input.sdkSessionId,
-        revision: input.revision,
-        fingerprint: input.fingerprint,
-        contentDigest,
-        messageCount: retained.items.length,
-        counts: plan.counts,
-        bytes: retained.bytes,
-        omittedMessages: retained.omitted,
-        committedAt: new Date(this.now()).toISOString(),
-        ...(input.sourceRevision === undefined ? {} : { sourceRevision: input.sourceRevision }),
-      };
-      const existing = new Set(current?.manifest.chunks.map((chunk) => chunk.name) ?? []);
-      const result = await this.manifests.commit(key, plan.parts, {
-        owner: { pipeline: pipelineTag },
-        meta,
+  /**
+   * Before a control write: imports the pre-database manifest of every
+   * referenced session this process did not stage, so the commit transaction
+   * can tell a committed reference from an expired staged one.
+   */
+  async ensureReferencesImported(
+    pipelineId: string,
+    sessions: ReadonlyArray<{ sessionKey: string; transcript?: PipelineTranscriptReference }>,
+  ): Promise<void> {
+    if (this.legacyDone()) return;
+    for (const { sessionKey, transcript } of sessions) {
+      if (!transcript || this.stagedFor(pipelineId, sessionKey, transcript)) continue;
+      await this.ensureImported(transcriptSessionKey(pipelineId, sessionKey), {
+        preferRevision: transcript.manifestRevision,
+        ownerIsLive: true,
       });
-      if (result.status !== "written") {
-        this.counters.rejected += 1;
-        return { status: "rejected", reason: "reason" in result ? result.reason : result.status };
-      }
-      this.counters.commits += 1;
-      for (const part of plan.parts) {
-        if (!Buffer.isBuffer(part)) continue;
-        if (existing.has(this.manifests.chunkName(key, sha256Hex(part)))) continue;
-        this.counters.chunkWrites += 1;
-        this.counters.chunkBytesWritten += part.length;
-      }
-      return {
-        status: "committed",
-        reference: this.reference(result.revision, meta),
-        fingerprint: meta.fingerprint,
-        written: true,
-      };
-    });
+    }
   }
 
-  private reference(
-    manifestRevision: number,
-    meta: TranscriptManifestMeta,
-  ): PipelineTranscriptReference {
+  /** Background import of the pre-database manifest files (see the legacy module). */
+  async migrateLegacyManifests(
+    options: {
+      batchSize?: number;
+      shouldContinue?: () => boolean;
+      preferRevision?: (key: string) => number | undefined;
+    } = {},
+  ): Promise<LegacyManifestMigrationReport> {
+    if (this.legacyDone()) return { imported: 0, skipped: 0, complete: true };
+    const report = await migrateLegacyManifests(this.legacyDeps(), {
+      ...options,
+      afterBatch: (cursor) => this.fault("legacy-manifest-batch", cursor),
+    });
+    if (report.complete) this.legacySettled = true;
+    return report;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Staging
+
+  /**
+   * Writes the chunks of a new session transcript and stages its manifest
+   * for the control write that will reference it. Nothing is committed: the
+   * returned reference becomes durable only through
+   * {@link commitStagedInTransaction}.
+   */
+  async stage(input: TranscriptCommitInput): Promise<TranscriptCommitResult> {
+    const pipelineTag = transcriptPipelineTag(input.pipelineId);
+    return this.queue.run(pipelineTag, () =>
+      this.stages.run(async () => {
+        const key = transcriptSessionKey(input.pipelineId, input.sessionKey);
+        await this.ensureImported(key);
+        await this.pruneStaged();
+        const serialized = input.messages.map(serializeMessage);
+        const retained = this.retain(serialized);
+        const contentDigest = digestContent(retained.items);
+        const read = this.rows.read(key);
+        const current = read.status === "found" ? read.row : null;
+        const baseRevision = this.rows.revisionOf(key);
+        if (
+          current &&
+          current.sdkSessionId === input.sdkSessionId &&
+          current.contentDigest === contentDigest &&
+          current.fingerprint === input.fingerprint &&
+          current.omittedMessages === retained.omitted
+        ) {
+          this.counters.idempotentCommits += 1;
+          return {
+            status: "staged",
+            reference: this.reference(current),
+            fingerprint: current.fingerprint,
+            written: false,
+          };
+        }
+        const base = current?.sdkSessionId === input.sdkSessionId ? current : null;
+        const plan = this.plan(key, retained.items, retained.sizes, base);
+        if (plan.chunks.length > this.limits.maxChunksPerSession) {
+          return this.reject("too-many-chunks");
+        }
+        const row: TranscriptManifestRow = {
+          v: 1,
+          revision: (baseRevision ?? 0) + 1,
+          pipeline: pipelineTag,
+          sdkSessionId: input.sdkSessionId,
+          displayRevision: input.revision,
+          fingerprint: input.fingerprint,
+          contentDigest,
+          messageCount: retained.items.length,
+          bytes: retained.bytes,
+          omittedMessages: retained.omitted,
+          committedAt: new Date(this.now()).toISOString(),
+          ...(input.sourceRevision === undefined ? {} : { sourceRevision: input.sourceRevision }),
+          totalBytes: plan.chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+          chunks: plan.chunks,
+        };
+        const rowJson = JSON.stringify(row);
+        if (Buffer.byteLength(rowJson, "utf8") > this.limits.maxManifestBytes) {
+          return this.reject("manifest-too-large");
+        }
+        // Early admission; the commit transaction checks again authoritatively.
+        const admission = this.admit(key, rowJson, row);
+        if (admission) return this.reject(admission);
+        await this.ensureDirectories();
+        const previousNames = new Set(current?.chunks.map((chunk) => chunk.name) ?? []);
+        const newChunks: TranscriptChunkRef[] = [];
+        let chunkWrites = 0;
+        let chunkBytesWritten = 0;
+        for (const chunk of plan.chunks) {
+          if (previousNames.has(chunk.name)) continue;
+          newChunks.push(chunk);
+          const bytes = plan.bytes.get(chunk.name);
+          if (!bytes) continue;
+          if (await this.writeChunk(chunk.name, bytes)) {
+            chunkWrites += 1;
+            chunkBytesWritten += bytes.length;
+          }
+        }
+        if (chunkWrites > 0) {
+          await syncDirectory(this.chunksDirectory);
+          this.counters.fileSyncs += 1;
+        }
+        this.counters.chunkWrites += chunkWrites;
+        this.counters.chunkBytesWritten += chunkBytesWritten;
+        await this.fault("after-chunks", key);
+        const kept = new Set(plan.chunks.map((chunk) => chunk.name));
+        const staged: StagedTranscript = {
+          key,
+          pipelineTag,
+          sessionKey: input.sessionKey,
+          baseRevision,
+          row,
+          serialized: rowJson,
+          reference: this.reference(row),
+          fingerprint: row.fingerprint,
+          newChunks,
+          droppedChunks: (current?.chunks ?? [])
+            .map((chunk) => chunk.name)
+            .filter((name) => !kept.has(name)),
+          stagedAt: this.now(),
+          chunkWrites,
+          chunkBytesWritten,
+        };
+        const entries = this.staged.get(key) ?? [];
+        entries.push(staged);
+        this.staged.set(key, entries);
+        this.stagedCount += 1;
+        return {
+          status: "staged",
+          reference: staged.reference,
+          fingerprint: staged.fingerprint,
+          written: true,
+          staged,
+        };
+      }),
+    );
+  }
+
+  private reject(reason: string): TranscriptCommitResult {
+    this.counters.rejected += 1;
+    return { status: "rejected", reason };
+  }
+
+  /** Quota admission for replacing `key` with `row`; a reason when refused. */
+  private admit(key: string, serialized: string, row: TranscriptManifestRow): string | null {
+    const next = this.rows.admission(key, serialized, row);
+    if (next.sessions > this.limits.maxSessions) return "too-many-sessions";
+    if (next.bytes > this.limits.maxTotalBytes) return "quota-exceeded";
+    return null;
+  }
+
+  /** The staged checkpoint a control record's reference names, if this process staged it. */
+  stagedFor(
+    pipelineId: string,
+    sessionKey: string,
+    reference: PipelineTranscriptReference,
+  ): StagedTranscript | null {
+    const entries = this.staged.get(transcriptSessionKey(pipelineId, sessionKey));
+    if (!entries) return null;
+    const wanted = referenceKey(reference);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      if (referenceKey(entries[index]!.reference) === wanted) return entries[index]!;
+    }
+    return null;
+  }
+
+  /**
+   * Commits a staged manifest row. Must run inside the transaction that
+   * writes the control record referencing it. Refuses (without throwing) when
+   * another commit moved the session since staging, when a new chunk is no
+   * longer on disk, or when the quota no longer admits it; the caller then
+   * keeps the control record's previous reference.
+   *
+   * The chunk check stats files inside the write transaction on purpose: it
+   * must be atomic with respect to {@link unlinkUnreferenced}, which holds the
+   * same lock. These are a few metadata syscalls, never content I/O.
+   */
+  commitStagedInTransaction(staged: StagedTranscript): StagedCommitOutcome {
+    if (!this.database.db.inTransaction) {
+      throw new Error("Staged transcripts commit inside the control-record transaction");
+    }
+    if (this.rows.revisionOf(staged.key) !== staged.baseRevision) {
+      return { ok: false, reason: "conflict" };
+    }
+    for (const chunk of staged.newChunks) {
+      try {
+        const stat = statSync(this.chunkPath(chunk.name));
+        if (!stat.isFile() || stat.size !== chunk.length)
+          return { ok: false, reason: "chunk-missing" };
+      } catch {
+        return { ok: false, reason: "chunk-missing" };
+      }
+    }
+    const admission = this.admit(staged.key, staged.serialized, staged.row);
+    if (admission) return { ok: false, reason: admission };
+    this.rows.put(staged.key, staged.row, staged.serialized);
+    return { ok: true };
+  }
+
+  /**
+   * After the transaction that committed `committed` (and possibly refused
+   * `refused`): forgets them, drops staged siblings the commit made stale,
+   * and unlinks chunks no committed manifest references any more.
+   */
+  async settleCommitted(
+    committed: readonly StagedTranscript[],
+    refused: readonly StagedTranscript[] = [],
+  ): Promise<void> {
+    if (refused.length > 0) this.counters.rejected += refused.length;
+    const candidates: string[] = [];
+    for (const staged of committed) {
+      this.counters.commits += 1;
+      this.counters.manifestBytesWritten += Buffer.byteLength(staged.serialized, "utf8");
+      candidates.push(...staged.droppedChunks);
+      // Every other checkpoint staged on an older base can never commit now.
+      const entries = this.staged.get(staged.key) ?? [];
+      const stale = entries.filter(
+        (entry) => entry === staged || entry.baseRevision !== staged.row.revision,
+      );
+      this.forgetStaged(staged.key, stale);
+      for (const entry of stale) {
+        if (entry !== staged) candidates.push(...entry.newChunks.map((chunk) => chunk.name));
+      }
+    }
+    if (candidates.length > 0) await this.unlinkUnreferenced(candidates);
+  }
+
+  private forgetStaged(key: string, remove: readonly StagedTranscript[]): void {
+    const entries = this.staged.get(key);
+    if (!entries) return;
+    const kept = entries.filter((entry) => !remove.includes(entry));
+    this.stagedCount -= entries.length - kept.length;
+    if (kept.length > 0) this.staged.set(key, kept);
+    else this.staged.delete(key);
+  }
+
+  /** Drops staged checkpoints past the grace window or over the bound, unlinking their unique chunks. */
+  private async pruneStaged(): Promise<void> {
+    const cutoff = this.now() - BUILD_PIPELINE_TRANSCRIPT_ORPHAN_GRACE_MS;
+    const expired: StagedTranscript[] = [];
+    const all = [...this.staged.values()].flat().sort((a, b) => a.stagedAt - b.stagedAt);
+    for (const [index, entry] of all.entries()) {
+      if (entry.stagedAt < cutoff || all.length - index > MAX_STAGED) expired.push(entry);
+    }
+    if (expired.length === 0) return;
+    for (const entry of expired) this.forgetStaged(entry.key, [entry]);
+    await this.unlinkUnreferenced(expired.flatMap((entry) => entry.newChunks.map((c) => c.name)));
+  }
+
+  /** Forgets specific staged checkpoints (they will not be committed) and unlinks their unique chunks. */
+  async discard(entries: readonly StagedTranscript[]): Promise<void> {
+    if (entries.length === 0) return;
+    for (const entry of entries) this.forgetStaged(entry.key, [entry]);
+    await this.unlinkUnreferenced(entries.flatMap((entry) => entry.newChunks.map((c) => c.name)));
+  }
+
+  /** Forgets every staged checkpoint of a pipeline and unlinks its unique chunks. */
+  async discardStaged(pipelineId: string): Promise<void> {
+    const pipelineTag = transcriptPipelineTag(pipelineId);
+    const dropped: StagedTranscript[] = [];
+    for (const [key, entries] of this.staged) {
+      if (!key.startsWith(`${pipelineTag}/`)) continue;
+      dropped.push(...entries);
+      this.forgetStaged(key, entries);
+    }
+    if (dropped.length > 0) {
+      await this.unlinkUnreferenced(dropped.flatMap((entry) => entry.newChunks.map((c) => c.name)));
+    }
+  }
+
+  private reference(row: TranscriptManifestRow): PipelineTranscriptReference {
     return {
       version: PIPELINE_TRANSCRIPT_REFERENCE_VERSION,
-      sdkSessionId: meta.sdkSessionId,
-      manifestRevision,
-      revision: meta.revision,
-      messageCount: meta.messageCount,
-      bytes: meta.bytes,
-      complete: meta.omittedMessages === 0,
-      ...(meta.omittedMessages > 0 ? { omittedMessages: meta.omittedMessages } : {}),
-      committedAt: meta.committedAt,
+      sdkSessionId: row.sdkSessionId,
+      manifestRevision: row.revision,
+      revision: row.displayRevision,
+      messageCount: row.messageCount,
+      bytes: row.bytes,
+      complete: row.omittedMessages === 0,
+      ...(row.omittedMessages > 0 ? { omittedMessages: row.omittedMessages } : {}),
+      committedAt: row.committedAt,
     };
   }
 
@@ -423,34 +792,40 @@ export class BuildPipelineTranscriptStore {
    * matter how often a streaming turn checkpoints.
    */
   private plan(
+    key: string,
     items: string[],
     sizes: number[],
-    previous: RecordManifest | null,
-    previousMeta: TranscriptManifestMeta | null,
-  ): { parts: Array<Buffer | ChunkRef>; counts: number[] } {
-    const parts: Array<Buffer | ChunkRef> = [];
-    const counts: number[] = [];
+    previous: TranscriptManifestRow | null,
+  ): { chunks: TranscriptChunkRef[]; bytes: Map<string, Buffer> } {
+    const chunks: TranscriptChunkRef[] = [];
+    const bytes = new Map<string, Buffer>();
     let index = 0;
-    if (previous && previousMeta) {
-      for (let chunk = 0; chunk < previous.chunks.length; chunk += 1) {
-        const ref = previous.chunks[chunk]!;
-        const count = previousMeta.counts[chunk]!;
-        const last = chunk === previous.chunks.length - 1;
+    if (previous) {
+      for (const [position, ref] of previous.chunks.entries()) {
+        const last = position === previous.chunks.length - 1;
         if (last && ref.length < this.limits.targetChunkBytes) break;
-        if (index + count > items.length) break;
-        const candidate = encodeChunk(items.slice(index, index + count));
+        if (index + ref.count > items.length) break;
+        const candidate = encodeChunk(items.slice(index, index + ref.count));
         if (candidate.length !== ref.length || sha256Hex(candidate) !== ref.checksum) break;
-        parts.push(ref);
-        counts.push(count);
-        index += count;
+        chunks.push({ ...ref, firstIndex: index });
+        index += ref.count;
       }
     }
     let pending: string[] = [];
     let pendingBytes = 2;
     const flush = () => {
       if (pending.length === 0) return;
-      parts.push(encodeChunk(pending));
-      counts.push(pending.length);
+      const encoded = encodeChunk(pending);
+      const checksum = sha256Hex(encoded);
+      const name = this.chunkName(key, checksum);
+      chunks.push({
+        name,
+        firstIndex: index - pending.length,
+        count: pending.length,
+        length: encoded.length,
+        checksum,
+      });
+      bytes.set(name, encoded);
       pending = [];
       pendingBytes = 2;
     };
@@ -461,104 +836,148 @@ export class BuildPipelineTranscriptStore {
       pendingBytes += size;
     }
     flush();
-    return { parts, counts };
+    return { chunks, bytes };
   }
 
   /**
-   * Reads messages `[fromIndex, toIndex)` of the referenced revision, touching
-   * only the chunks that overlap the window. Every chunk is verified against
-   * the manifest (length, checksum, message count); a mismatch is reported as
-   * unavailable rather than returning a partial transcript.
+   * Writes one immutable chunk (temp file, fsync, rename); returns false when
+   * an identical chunk already exists. A reused file gets a fresh mtime so the
+   * repair grace window protects it until the staged manifest commits.
+   */
+  private async writeChunk(name: string, bytes: Buffer): Promise<boolean> {
+    const target = this.chunkPath(name);
+    try {
+      const stat = await fs.lstat(target);
+      if (stat.isFile() && stat.size === bytes.length) {
+        const now = new Date(this.now());
+        await fs.utimes(target, now, now).catch(() => undefined);
+        return false;
+      }
+      await fs.rm(target, { force: true });
+    } catch {
+      // Missing: write it below.
+    }
+    const temp = path.join(this.chunksDirectory, `.${name}.${randomUUID()}${TEMP_EXTENSION}`);
+    try {
+      await writeExclusivePrivateFile(temp, bytes, true);
+      this.counters.fileSyncs += 1;
+      await fs.rename(temp, target);
+      return true;
+    } catch (error) {
+      await fs.rm(temp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reads
+
+  /**
+   * Reads messages `[fromIndex, toIndex)` of a session's transcript, touching
+   * only the chunks that overlap the window, each once. Every chunk is
+   * verified against the manifest (length, checksum, message count); a
+   * mismatch is reported as unavailable rather than returning a partial
+   * transcript.
    */
   async read(
     pipelineId: string,
     sessionKey: string,
-    reference: Pick<PipelineTranscriptReference, "manifestRevision">,
-    window: { fromIndex?: number; toIndex?: number } = {},
+    reference: Pick<PipelineTranscriptReference, "manifestRevision"> &
+      Partial<PipelineTranscriptReference>,
+    window: TranscriptReadWindow = {},
   ): Promise<TranscriptRead> {
-    const key = sessionRecordKey(pipelineId, sessionKey);
-    const usable = (
-      candidate: { revision: number; manifest: RecordManifest } | null,
-    ): candidate is { revision: number; manifest: RecordManifest } =>
-      candidate !== null && isMeta(candidate.manifest.meta, candidate.manifest.chunks.length);
-    let failure: string | null = null;
-    const current = await this.manifests.readManifest(key, "current");
-    if (usable(current) && current.revision === reference.manifestRevision) {
-      const read = await this.readWindow(key, current.manifest, window);
-      if (read.status === "found") return { ...read, substituted: false };
-      failure = read.reason;
-    }
-    const previous = await this.manifests.readManifest(key, "previous");
-    if (usable(previous) && previous.revision === reference.manifestRevision) {
-      const read = await this.readWindow(key, previous.manifest, window);
-      if (read.status === "found") return { ...read, substituted: false };
-      failure = read.reason;
-    }
-    // The referenced revision is gone or unreadable. A newer current exists
-    // when a checkpoint committed but its workflow write lost; an older one is
-    // the durable fallback. Either is served, marked as substituted.
-    for (const candidate of [current, previous]) {
-      if (!usable(candidate) || candidate.revision === reference.manifestRevision) continue;
-      const read = await this.readWindow(key, candidate.manifest, window);
-      if (read.status === "found") return { ...read, substituted: true };
-      failure = read.reason;
-    }
-    if (failure) return { status: "unavailable", reason: failure };
-    return (await this.manifests.manifests.has(key))
-      ? { status: "unavailable", reason: "manifest-unreadable" }
-      : { status: "missing" };
+    const key = transcriptSessionKey(pipelineId, sessionKey);
+    const staged =
+      reference.committedAt !== undefined
+        ? this.stagedFor(pipelineId, sessionKey, reference as PipelineTranscriptReference)
+        : null;
+    if (staged) return this.readWindow(staged.row, window, false);
+    await this.ensureImported(key, { preferRevision: reference.manifestRevision });
+    const loaded = this.rows.read(key);
+    if (loaded.status === "missing") return { status: "missing" };
+    if (loaded.status === "corrupt")
+      return { status: "unavailable", reason: "manifest-unreadable" };
+    return this.readWindow(loaded.row, window, loaded.row.revision !== reference.manifestRevision);
+  }
+
+  /** Reads and verifies every chunk of a staged manifest (migration verifies before committing). */
+  async verifyStaged(staged: StagedTranscript): Promise<boolean> {
+    const read = await this.readWindow(staged.row, {}, false);
+    return read.status === "found" && read.messages.length === staged.row.messageCount;
+  }
+
+  private async readChunk(ref: TranscriptChunkRef): Promise<Buffer | null> {
+    const read = await readBoundedFile(this.chunkPath(ref.name), ref.length);
+    if (read.status !== "ok") return null;
+    if (read.bytes.length !== ref.length || sha256Hex(read.bytes) !== ref.checksum) return null;
+    return read.bytes;
   }
 
   private async readWindow(
-    key: string,
-    manifest: RecordManifest,
-    window: { fromIndex?: number; toIndex?: number },
-  ): Promise<
-    | Omit<Extract<TranscriptRead, { status: "found" }>, "substituted">
-    | { status: "unavailable"; reason: string }
-  > {
-    const meta = manifest.meta as TranscriptManifestMeta;
-    const fromIndex = Math.max(0, Math.min(window.fromIndex ?? 0, meta.messageCount));
+    row: TranscriptManifestRow,
+    window: TranscriptReadWindow,
+    substituted: boolean,
+  ): Promise<TranscriptRead> {
+    const fromIndex = Math.max(0, Math.min(window.fromIndex ?? 0, row.messageCount));
     const toIndex = Math.max(
       fromIndex,
-      Math.min(window.toIndex ?? meta.messageCount, meta.messageCount),
+      Math.min(window.toIndex ?? row.messageCount, row.messageCount),
     );
+    const maxBytes = window.maxBytes ?? Number.POSITIVE_INFINITY;
     const messages: unknown[] = [];
-    let chunkStart = 0;
-    let startIndex = fromIndex;
-    for (let chunk = 0; chunk < manifest.chunks.length; chunk += 1) {
-      const count = meta.counts[chunk]!;
-      const chunkEnd = chunkStart + count;
-      if (chunkEnd > fromIndex && chunkStart < toIndex) {
-        const ref = manifest.chunks[chunk]!;
-        const bytes = await this.manifests.readChunk(key, ref);
-        if (!bytes) return { status: "unavailable", reason: "chunk-unreadable" };
-        this.counters.chunkReads += 1;
-        this.counters.chunkBytesRead += bytes.length;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(bytes.toString("utf8"));
-        } catch {
-          return { status: "unavailable", reason: "chunk-corrupt" };
-        }
-        if (!Array.isArray(parsed) || parsed.length !== count) {
-          return { status: "unavailable", reason: "chunk-count-mismatch" };
-        }
-        const from = Math.max(0, fromIndex - chunkStart);
-        const to = Math.min(count, toIndex - chunkStart);
-        if (messages.length === 0) startIndex = chunkStart + from;
-        messages.push(...parsed.slice(from, to));
+    let used = 0;
+    let truncated = false;
+    // Chunks are contiguous and ordered: find the first overlapping one.
+    let low = 0;
+    let high = row.chunks.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const chunk = row.chunks[middle]!;
+      if (chunk.firstIndex + chunk.count <= fromIndex) low = middle + 1;
+      else high = middle;
+    }
+    for (let position = low; position < row.chunks.length && !truncated; position += 1) {
+      const ref = row.chunks[position]!;
+      if (ref.firstIndex >= toIndex) break;
+      const bytes = await this.readChunk(ref);
+      if (!bytes) return { status: "unavailable", reason: "chunk-unreadable" };
+      this.counters.chunkReads += 1;
+      this.counters.chunkBytesRead += bytes.length;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(bytes.toString("utf8"));
+      } catch {
+        return { status: "unavailable", reason: "chunk-corrupt" };
       }
-      chunkStart = chunkEnd;
-      if (chunkStart >= toIndex) break;
+      if (!Array.isArray(parsed) || parsed.length !== ref.count) {
+        return { status: "unavailable", reason: "chunk-count-mismatch" };
+      }
+      const from = Math.max(0, fromIndex - ref.firstIndex);
+      const to = Math.min(ref.count, toIndex - ref.firstIndex);
+      for (let offset = from; offset < to; offset += 1) {
+        const message = parsed[offset];
+        if (Number.isFinite(maxBytes)) {
+          const size =
+            Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
+            (messages.length > 0 ? 1 : 0);
+          if (used + size > maxBytes) {
+            truncated = true;
+            break;
+          }
+          used += size;
+        }
+        messages.push(message);
+      }
     }
     return {
       status: "found",
       messages,
-      startIndex,
-      messageCount: meta.messageCount,
-      revision: meta.revision,
-      complete: meta.omittedMessages === 0,
+      startIndex: fromIndex,
+      messageCount: row.messageCount,
+      revision: row.displayRevision,
+      complete: row.omittedMessages === 0,
+      substituted,
+      ...(truncated ? { truncated: true as const } : {}),
     };
   }
 
@@ -567,70 +986,207 @@ export class BuildPipelineTranscriptStore {
     pipelineId: string,
     sessionKey: string,
   ): Promise<{ reference: PipelineTranscriptReference; fingerprint: string } | null> {
-    const loaded = await this.manifests.readManifest(
-      sessionRecordKey(pipelineId, sessionKey),
-      "current",
-    );
-    if (!loaded || !isMeta(loaded.manifest.meta, loaded.manifest.chunks.length)) return null;
-    return {
-      reference: this.reference(loaded.revision, loaded.manifest.meta),
-      fingerprint: loaded.manifest.meta.fingerprint,
-    };
+    const key = transcriptSessionKey(pipelineId, sessionKey);
+    await this.ensureImported(key);
+    const loaded = this.rows.read(key);
+    if (loaded.status !== "found") return null;
+    return { reference: this.reference(loaded.row), fingerprint: loaded.row.fingerprint };
   }
 
   /**
-   * Fences further commits and deletes every session transcript the pipeline
-   * owns (both retained generations and their chunks). Returns the number of
-   * session records removed.
+   * Committed reference for a session, read inside a transaction (used to
+   * restore a control record whose staged checkpoint was refused).
    */
-  async deletePipeline(pipelineId: string): Promise<number> {
+  committedReference(pipelineId: string, sessionKey: string): TranscriptManifestRow | null {
+    const loaded = this.rows.read(transcriptSessionKey(pipelineId, sessionKey));
+    return loaded.status === "found" ? loaded.row : null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deletion and repair
+
+  /**
+   * Deletes every manifest row a pipeline owns. Must run inside the
+   * transaction that deletes its control record. Returns the chunk names to
+   * unlink once that transaction committed ({@link unlinkUnreferenced}).
+   */
+  deletePipelineInTransaction(pipelineId: string): { sessions: number; chunks: string[] } {
     const pipelineTag = transcriptPipelineTag(pipelineId);
-    this.fencePipeline(pipelineId);
-    return this.queue.run(pipelineTag, async () => {
-      let removed = 0;
-      for (const metadata of await this.manifests.manifests.list()) {
-        if (metadata.owner.pipeline !== pipelineTag) continue;
-        if (await this.manifests.delete(metadata.key)) removed += 1;
+    const chunks: string[] = [];
+    let sessions = 0;
+    for (const { key, row } of this.rows.byOwner(pipelineTag)) {
+      if (this.rows.delete(key)) sessions += 1;
+      if (row) chunks.push(...row.chunks.map((chunk) => chunk.name));
+      else chunks.push(...this.chunksOnDiskFor(key));
+    }
+    return { sessions, chunks };
+  }
+
+  /** Chunk files named for `key` (a corrupt row cannot list its own). Synchronous, bounded by the directory. */
+  private chunksOnDiskFor(key: string): string[] {
+    const stem = recordFileStem(BUILD_PIPELINE_TRANSCRIPT_NAMESPACE, key);
+    try {
+      return readdirSync(this.chunksDirectory).filter(
+        (name) => name.startsWith(`${stem}-`) && name.endsWith(CHUNK_EXTENSION),
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  /** Row key of a chunk's session, from the stem its name starts with. */
+  private keyForStem(stem: string): string | undefined {
+    const revision = this.rows.storeRevision();
+    let index = this.stemIndex;
+    if (!index || (!index.stems.has(stem) && index.revision !== revision)) {
+      const stems = new Map<string, string>();
+      for (const key of this.rows.keys()) {
+        stems.set(recordFileStem(BUILD_PIPELINE_TRANSCRIPT_NAMESPACE, key), key);
       }
-      return removed;
-    });
+      index = { revision, stems };
+      this.stemIndex = index;
+    }
+    return index.stems.get(stem);
   }
 
   /**
-   * Removes transcripts whose pipeline no longer exists: a crash between the
-   * control-record delete and the transcript delete, a checkpoint that lost a
-   * race with another process's delete, or an import whose control commit
-   * never landed. Records younger than the grace window are kept, because a
-   * brand-new pipeline's first checkpoint can precede its control commit.
+   * Unlinks chunk files that no committed manifest row (and no checkpoint
+   * staged in this process) references. Each batch checks and unlinks while
+   * holding the database write lock, so a concurrent commit either sees the
+   * file gone (and refuses) or lands first (and the file is kept). Batches
+   * are small and the event loop runs between them. `minAgeMs` keeps files
+   * modified more recently (repair's grace window). Idempotent.
    */
-  async sweepOrphans(
-    livePipelineIds: Iterable<string>,
-    graceMs = BUILD_PIPELINE_TRANSCRIPT_ORPHAN_GRACE_MS,
+  async unlinkUnreferenced(
+    names: Iterable<string>,
+    options: { minAgeMs?: number } = {},
   ): Promise<number> {
-    const live = new Set(Array.from(livePipelineIds, transcriptPipelineTag));
-    const cutoff = this.now() - graceMs;
+    const unique = [...new Set(names)];
     let removed = 0;
-    for (const metadata of await this.manifests.manifests.list()) {
-      const owner = metadata.owner.pipeline;
-      if (!owner || live.has(owner) || metadata.updatedAt > cutoff) continue;
-      const deleted = await this.queue.run(owner, () => this.manifests.delete(metadata.key));
-      if (deleted) removed += 1;
+    for (let offset = 0; offset < unique.length; offset += UNLINK_BATCH) {
+      const batch = unique.slice(offset, offset + UNLINK_BATCH);
+      removed += this.database.transaction(() => {
+        const stagedNames = new Set<string>();
+        for (const entries of this.staged.values()) {
+          for (const entry of entries) {
+            for (const chunk of entry.row.chunks) stagedNames.add(chunk.name);
+          }
+        }
+        // `null`: an unparseable row, which cannot prove its chunks unreferenced.
+        const referencedByKey = new Map<string, Set<string> | null>();
+        let count = 0;
+        for (const name of batch) {
+          if (stagedNames.has(name)) continue;
+          const isTemp = name.startsWith(".") && name.endsWith(TEMP_EXTENSION);
+          if (!isTemp) {
+            const key = this.keyForStem(name.slice(0, 64));
+            if (key) {
+              let referenced = referencedByKey.get(key);
+              if (referenced === undefined) {
+                const loaded = this.rows.read(key);
+                referenced =
+                  loaded.status === "found"
+                    ? new Set(loaded.row.chunks.map((chunk) => chunk.name))
+                    : loaded.status === "corrupt"
+                      ? null
+                      : new Set();
+                referencedByKey.set(key, referenced);
+              }
+              if (referenced === null || referenced.has(name)) continue;
+            }
+          }
+          const file = this.chunkPath(name);
+          try {
+            if (options.minAgeMs !== undefined) {
+              const stat = lstatSync(file);
+              if (this.now() - stat.mtimeMs <= options.minAgeMs) continue;
+            }
+            unlinkSync(file);
+            count += 1;
+          } catch (error) {
+            if (!isMissingPathError(error)) throw error;
+          }
+        }
+        return count;
+      });
+      if (offset + UNLINK_BATCH < unique.length) await yieldToEventLoop();
     }
+    this.counters.chunkUnlinks += removed;
     return removed;
   }
 
-  /** Startup repair: index reconciliation plus unreferenced-chunk collection. */
-  repair(): Promise<{ removedChunks: number; scannedChunks: number; complete: boolean }> {
-    return this.manifests.repair();
+  /**
+   * Removes manifest rows whose pipeline no longer has a control record (a
+   * defensive check: commits and deletes are atomic with the control record,
+   * so this finds only damage), then their chunks. Rows committed within the
+   * grace window are kept.
+   */
+  async sweepOrphans(graceMs = BUILD_PIPELINE_TRANSCRIPT_ORPHAN_GRACE_MS): Promise<number> {
+    const cutoff = this.now() - graceMs;
+    const { sessions, chunks } = this.database.transaction(() => {
+      const names: string[] = [];
+      let removed = 0;
+      for (const owner of this.rows.owners()) {
+        if (this.isLive(owner)) continue;
+        for (const { key, row } of this.rows.byOwner(owner)) {
+          const committedAt = row ? Date.parse(row.committedAt) : Number.NEGATIVE_INFINITY;
+          if (Number.isFinite(committedAt) && committedAt > cutoff) continue;
+          if (this.rows.delete(key)) removed += 1;
+          if (row) names.push(...row.chunks.map((chunk) => chunk.name));
+        }
+      }
+      return { sessions: removed, chunks: names };
+    });
+    if (sessions > 0) {
+      this.database.scrubDeletedContent();
+      await this.unlinkUnreferenced(chunks);
+    }
+    return sessions;
   }
-}
 
-function digestContent(items: readonly string[]): string {
-  const hash = createHash("sha256");
-  hash.update(String(items.length));
-  for (const item of items) {
-    hash.update("\0");
-    hash.update(item);
+  /**
+   * Startup repair: chunk and temp files on disk minus the chunks any
+   * committed manifest references, once older than the grace window. Skipped
+   * (incomplete) while legacy manifests still await import, since their
+   * chunks have no row yet. Also recounts the quota totals.
+   */
+  async repair(
+    graceMs = BUILD_PIPELINE_TRANSCRIPT_ORPHAN_GRACE_MS,
+  ): Promise<{ removedChunks: number; scannedChunks: number; complete: boolean }> {
+    if (!this.legacyDone()) return { removedChunks: 0, scannedChunks: 0, complete: false };
+    this.database.transaction(() => this.rows.rebuildTotals());
+    const maxEntries = this.limits.maxSessions * this.limits.maxChunksPerSession + 1_024;
+    let directory;
+    try {
+      directory = await fs.opendir(this.chunksDirectory, { bufferSize: 64 });
+    } catch (error) {
+      if (isMissingPathError(error)) return { removedChunks: 0, scannedChunks: 0, complete: true };
+      throw error;
+    }
+    let scannedChunks = 0;
+    let removedChunks = 0;
+    let complete = true;
+    let batch: string[] = [];
+    try {
+      for await (const dirent of directory) {
+        if (scannedChunks >= maxEntries) {
+          complete = false;
+          break;
+        }
+        scannedChunks += 1;
+        if (!dirent.isFile()) continue;
+        batch.push(dirent.name);
+        if (batch.length >= UNLINK_BATCH * 4) {
+          removedChunks += await this.unlinkUnreferenced(batch, { minAgeMs: graceMs });
+          batch = [];
+        }
+      }
+    } finally {
+      await directory.close().catch(() => undefined);
+    }
+    if (batch.length > 0) {
+      removedChunks += await this.unlinkUnreferenced(batch, { minAgeMs: graceMs });
+    }
+    return { removedChunks, scannedChunks, complete };
   }
-  return hash.digest("hex");
 }

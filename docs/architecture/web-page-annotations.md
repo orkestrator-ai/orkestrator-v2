@@ -34,7 +34,7 @@ until a new host note refers to them.
 | Contract | `packages/protocol/src/web-annotations.ts`, `web-annotations-validation.ts`, `web-annotations-fixtures.ts`; capture transport at the end of `browser-preview.ts` |
 | Page runtime | `apps/desktop/electron/browser-preview-annotation-script.ts`, `browser-preview-anchor-script.ts` |
 | Native capture and spool | `apps/desktop/electron/browser-preview-capture.ts`, `browser-preview-capture-store.ts`, `browser-preview-capture-validation.ts` |
-| Backend storage and service | `apps/backend/src/core/web-annotation-storage.ts`, `web-annotation-assets.ts`, `web-annotation-sync.ts`, `web-annotation-service*.ts`, `web-annotation-migration.ts` |
+| Backend storage and service | `apps/backend/src/core/web-annotation-storage.ts`, `web-annotation-store-layout.ts`, `web-annotation-store-rows.ts`, `web-annotation-legacy-import.ts`, `web-annotation-assets.ts`, `web-annotation-sync.ts`, `web-annotation-service*.ts`, `web-annotation-migration.ts` |
 | Execution adapters | `web-annotation-brief.ts`, `web-annotation-dispatch.ts`, `web-annotation-tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
 | Commands | `commands-registry-web-annotations.ts` (every name in `WEB_ANNOTATION_COMMANDS`) |
 | Renderer | `apps/web/src/lib/web-annotations/`, `stores/webAnnotationStore.ts`, `hooks/useWebAnnotations.ts`, `components/browser/annotations/`, `components/chat/WebAnnotationRequestChip.tsx` |
@@ -97,21 +97,45 @@ the panel resumes it on mount.
 
 ## Backend storage
 
-Per environment under `<dataDir>/web-annotations/<environment-id>/`:
+Metadata lives in the backend database (`orkestrator.sqlite`, see
+[storage](storage.md)): one envelope store per environment,
+`web-annotations/<environment-id>`, whose collections are listed in
+`web-annotation-store-layout.ts`. Each annotation, capture index, entry
+index, request (with its instruction and response excerpt), result, asset
+record, receipt and draft is one row; `records` holds the immutable bodies
+(captures, entries, request briefs, results, draft text) keyed
+`<id>/<revision>`; `meta` holds the environment revision, record bytes,
+storage status and legacy-migration receipts. Files stay files under
+`<dataDir>/web-annotations/<environment-id>/`:
 
 ```text
-manifest.json         bounded indexes, request state, receipts, env revision
-manifest.prev.json    previous committed manifest
-records/<id>/<rev>.json  immutable captures, entries, request bodies, results, draft text
 assets/<id>.png       deduplicated by SHA-256 within the environment
-staging/              uncommitted work, removed after a grace period
+staging/              uploads not yet promoted, removed after a grace period
+migration-backups/    private copies of migrated legacy chat drafts
 ```
 
-Mutations run through one bounded queue per environment. Expected revisions
-are checked inside it. Record files are written and synced before the manifest
-replacement, which is the commit point. A change hint is emitted only after
-commit. Unreadable referenced records mark the item `unavailable`; they never
-become an empty list or release a reservation.
+A mutation stages and promotes its image files first, then runs in one
+synchronous SQLite transaction: it reloads whatever another backend committed
+(the store revision moved), checks expected revisions, applies the change and
+writes only the rows that changed plus the new environment revision. SQLite's
+write lock serializes this across processes, so backends sharing a data
+directory never overwrite each other. Every read revalidates against the store
+revision first. A change hint is emitted only after commit (and when a read
+observes another backend's commit). Garbage collection re-reads asset rows in
+the transaction that unlinks a file, so it never removes an image another
+backend committed. Deleting an environment deletes its store, scrubs freed
+pages and the WAL, and removes its files.
+
+The file format of earlier releases (`manifest.json`, `drafts.json`,
+`records/`) is imported on first access, once (a lease and the `meta` row
+guard it against a second backend). A damaged `manifest.json` imports the
+previous copy read-only; a newer-version or unreadable manifest is not
+imported at all and the environment stays unavailable. Missing or damaged
+records become `unreadable` rows. After a clean import the old files move to
+`legacy-json/<timestamp>/web-annotations/<environment-id>/` (kept 14 days);
+after an imperfect one they stay in place. Unreadable referenced records mark
+the item `unavailable`; they never become an empty list or release a
+reservation.
 
 `metadataRevision` advances on any change including execution progress;
 `contentRevision` advances only on human content. Edits create a superseding

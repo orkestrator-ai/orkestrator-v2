@@ -20,7 +20,7 @@ import {
   makePng,
   type ServiceHarness,
 } from "./web-annotation-test-support.js";
-import { environmentDir, readJsonFile } from "./web-annotation-test-helpers.js";
+import { readStoredEnvironment } from "./web-annotation-test-helpers.js";
 
 let harness: ServiceHarness | undefined;
 let worktree: string;
@@ -121,8 +121,8 @@ describe("bounded, isolated migration passes", () => {
     expect(extractLegacyBrowserAnnotations(harness!.host.drafts.get(broken)!.value)).toHaveLength(
       1,
     );
-    const manifest = await readJsonFile(join(environmentDir(harness!.dir), "manifest.json"));
-    expect(manifest.migration.drafts[broken]).toMatchObject({ state: "failed", reason: "other" });
+    const migration = readStoredEnvironment(harness!.dir)!.meta.migration;
+    expect(migration.drafts[broken]).toMatchObject({ state: "failed", reason: "other" });
     // Retried once the draft changes revision (the item's own failure only).
     harness!.host.onGetDraft = null;
     const current = harness!.host.drafts.get(broken)!;
@@ -321,11 +321,9 @@ describe("migration receipts", () => {
       },
     ];
     await harness!.service.migrate(ENV_A);
-    const manifestText = JSON.stringify(
-      await readJsonFile(join(environmentDir(harness!.dir), "manifest.json")),
-    );
-    const manifest = JSON.parse(manifestText);
-    const record = manifest.migration.drafts[draftKey("tab-1")];
+    const manifestText = JSON.stringify(readStoredEnvironment(harness!.dir));
+    const migration = JSON.parse(manifestText).meta.migration;
+    const record = migration.drafts[draftKey("tab-1")];
     expect(record).toMatchObject({
       state: "cleaned",
       legacyIds: ["with-shot", "no-shot"],
@@ -339,7 +337,7 @@ describe("migration receipts", () => {
         },
       ],
     });
-    expect(manifest.migration.drafts[owned]).toMatchObject({
+    expect(migration.drafts[owned]).toMatchObject({
       state: "deferred",
       ownership: {
         logicalSessionKey: `env-${ENV_A}:owned`,
@@ -371,8 +369,8 @@ describe("migration receipts", () => {
     harness!.host.sessions = [];
     harness!.host.putDraft(draftKey("unknown"), ENV_A, draft([note("unknown-note")]));
     await harness!.service.migrate(ENV_A);
-    const later = await readJsonFile(join(environmentDir(harness!.dir), "manifest.json"));
-    expect(later.migration.drafts[draftKey("unknown")].ownership).toEqual({
+    const later = readStoredEnvironment(harness!.dir)!.meta.migration;
+    expect(later.drafts[draftKey("unknown")].ownership).toEqual({
       logicalSessionKey: `env-${ENV_A}:unknown`,
       pendingDispatch: "unknown",
     });

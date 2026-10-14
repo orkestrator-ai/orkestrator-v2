@@ -20,12 +20,9 @@ import {
   AGENT_ACTIVITY_STATES,
   FRONTEND_AGENT_ACTIVITY_LEASE_MS,
   MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS,
-  MAX_JSON_BACKUPS,
   agentActivityStructureFingerprint,
   aggregateEnvironmentAgentActivity,
-  exists,
   frontendAgentActivityObserverKey,
-  fs,
   isAgentActivityTimestamp,
   isClaudeModelCatalogSnapshot,
   isInitialPromptImageAttachment,
@@ -449,36 +446,15 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   /**
-   * Removes superseded launch attachments (or a deleted environment record)
-   * from every retained environment backup. This runs while the environment
-   * mutation lock is held, after the authoritative primary write commits.
+   * Makes superseded launch attachments (or a deleted environment record)
+   * unrecoverable after the environment write that removed them committed.
+   * Runs while the environment mutation lock is held.
    */
   protected async scrubEnvironmentBackups(
-    environmentId: string,
-    removeEnvironment: boolean,
+    _environmentId: string,
+    _removeEnvironment: boolean,
   ): Promise<void> {
-    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
-      const backup = this.backupPath(this.environmentsFile(), index);
-      if (!(await exists(backup))) continue;
-      try {
-        const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as unknown;
-        if (!Array.isArray(parsed)) throw new Error("Backup is not an array");
-        const sanitized = removeEnvironment
-          ? parsed.filter((candidate) => !isRecord(candidate) || candidate.id !== environmentId)
-          : parsed.map((candidate) => {
-              if (!isRecord(candidate) || candidate.id !== environmentId) {
-                return candidate;
-              }
-              const copy = { ...candidate };
-              delete copy.initialPromptAttachments;
-              return copy;
-            });
-        await this.writeAtomic(backup, `${JSON.stringify(sanitized, null, 2)}\n`, false, 0o600);
-      } catch {
-        // A corrupt backup cannot be proven free of the removed payload.
-        await fs.rm(backup, { force: true });
-      }
-    }
+    this.scrubDeletedDatabaseContent();
   }
 
   async getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
@@ -1183,13 +1159,18 @@ export abstract class StorageProjects extends StorageBase {
           : parseUsableAgentActivityTime(environment.agentActivityUpdatedAt, referenceTime);
       let acceptedOccurredTime = occurredTime;
       if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
-        if (source === "frontend" || previousTime > occurredTime) {
-          return environment;
-        }
+        if (source === "frontend") return environment;
         // Backend polling is serialized, so arrival order is authoritative even
-        // if two observations share a millisecond. Keep its per-source token
-        // monotonic instead of dropping a real terminal transition. Strictly
-        // older tokens remain stale and are still rejected.
+        // when observations share a millisecond: keep the per-source token
+        // monotonic instead of dropping a real transition. Staleness is judged
+        // against when the held observation was really made, not its token,
+        // which a run of same-millisecond observations pushes ahead of the
+        // clock. An observation older than the held one is still rejected.
+        const previousObserved =
+          !observerKey && previousSource?.observedAt !== undefined
+            ? Date.parse(previousSource.observedAt)
+            : previousTime;
+        if (previousObserved > occurredTime) return environment;
         acceptedOccurredTime = previousTime + 1;
       }
       const normalizedOccurredAt = new Date(acceptedOccurredTime).toISOString();
@@ -1205,6 +1186,7 @@ export abstract class StorageProjects extends StorageBase {
           state,
           updatedAt: normalizedOccurredAt,
           ...(stale ? { stale: true } : {}),
+          ...(source === "frontend" ? {} : { observedAt: new Date(occurredTime).toISOString() }),
         };
       }
 

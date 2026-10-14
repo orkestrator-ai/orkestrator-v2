@@ -42,6 +42,7 @@
     "./github-clone": "./src/github-clone.ts",
     "./github-repository": "./src/github-repository.ts",
     "./host-test-scheduler": "./src/host-test-scheduler.ts",
+    "./storage-database": "./src/storage-database.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
     "./macos-permissions": "./src/macos-permissions.ts",
     "./mcp-management": "./src/mcp-management.ts",

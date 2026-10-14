@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,8 @@ import {
   defaultConfig,
   StorageService,
 } from "../../../apps/backend/src/core/storage";
+import type { StorageDatabase } from "../../../apps/backend/src/core/storage-database";
+import { openBackendDatabase } from "../../../apps/backend/src/core/storage-stores";
 
 const tempDirs: string[] = [];
 
@@ -22,6 +24,26 @@ function configLockFor(storage: StorageService): Promise<() => Promise<void>> {
       acquireConfigMutationLock(): Promise<() => Promise<void>>;
     }
   ).acquireConfigMutationLock();
+}
+
+/** The configuration file's cross-process lease (it was `config.json.lock`). */
+const CONFIG_LEASE = "config.json";
+
+/** Leaves `name` held by a backend that crashed: no release, no heartbeat. */
+async function abandonLease(dataDir: string, name: string): Promise<void> {
+  const crashed = openBackendDatabase(dataDir);
+  await crashed.acquireLease(name, "crashed backend");
+  crashed.db.query("UPDATE leases SET heartbeat_at = 0 WHERE name = ?").run(name);
+  crashed.close();
+}
+
+function leaseHeld(dataDir: string, name: string): boolean {
+  const database = openBackendDatabase(dataDir);
+  try {
+    return database.db.query("SELECT 1 FROM leases WHERE name = ?").get(name) !== null;
+  } finally {
+    database.close();
+  }
 }
 
 afterEach(async () => {
@@ -386,32 +408,22 @@ describe("StorageService core coverage", () => {
     expect(await storage.getEnvironment(second.id)).toMatchObject({ status: "error" });
     expect(await storage.getEnvironment(unrelated.id)).toMatchObject({ status: "stopped" });
 
-    const storageInternals = storage as unknown as {
-      saveJson(filePath: string, value: unknown): Promise<void>;
-    };
-    const originalSaveJson = storageInternals.saveJson.bind(storage);
-    let saveCalls = 0;
-    storageInternals.saveJson = async (...args) => {
-      saveCalls += 1;
-      await originalSaveJson(...args);
-    };
+    const database = (storage as unknown as { database: StorageDatabase }).database;
+    const writeStore = spyOn(database, "writeStore");
     try {
       await storage.setAllEnvironmentStatusesForContainer("missing-container", "running");
+      expect(writeStore).not.toHaveBeenCalled();
     } finally {
-      storageInternals.saveJson = originalSaveJson;
+      writeStore.mockRestore();
     }
-
-    expect(saveCalls).toBe(0);
   });
 
   test("recovers an abandoned configuration mutation lock", async () => {
     const dataDir = await createTempDir("ork-storage-stale-config-lock-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const lockPath = path.join(dataDir, "config.json.lock");
-    await fs.writeFile(lockPath, "abandoned");
-    const staleTime = new Date(Date.now() - 20_000);
-    await fs.utimes(lockPath, staleTime, staleTime);
+    await abandonLease(dataDir, CONFIG_LEASE);
+    expect(leaseHeld(dataDir, CONFIG_LEASE)).toBe(true);
 
     await storage.updateGlobalConfig({
       ...defaultConfig().global,
@@ -419,21 +431,23 @@ describe("StorageService core coverage", () => {
     });
 
     expect((await storage.loadConfig()).global.agentSettings?.defaultAgent).toBe("codex");
-    await expect(fs.access(lockPath)).rejects.toThrow();
+    expect(leaseHeld(dataDir, CONFIG_LEASE)).toBe(false);
   });
 
-  test("times out when a configuration lock cannot be inspected", async () => {
+  test("times out while another backend holds the configuration lock", async () => {
     const dataDir = await createTempDir("ork-storage-config-lock-timeout-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const lockPath = path.join(dataDir, "config.json.lock");
-    await fs.symlink(path.join(dataDir, "missing-lock-target"), lockPath);
+    const otherBackend = openBackendDatabase(dataDir);
+    const releaseOther = await otherBackend.acquireLease(CONFIG_LEASE, "other backend");
     const originalNow = Date.now;
     const startedAt = originalNow();
     let calls = 0;
+    // The deadline and the first claim attempt see the start time; the
+    // deadline check after the failed claim sees the timeout elapsed.
     Date.now = () => {
       calls += 1;
-      return calls === 1 ? startedAt : startedAt + 20_001;
+      return calls <= 2 ? startedAt : startedAt + 20_001;
     };
 
     try {
@@ -442,25 +456,8 @@ describe("StorageService core coverage", () => {
       );
     } finally {
       Date.now = originalNow;
-    }
-  });
-
-  test("propagates non-EEXIST configuration lock failures", async () => {
-    const dataDir = await createTempDir("ork-storage-config-lock-error-");
-    const storage = new StorageService(dataDir);
-    await storage.init();
-    const originalOpen = fs.open;
-    fs.open = (async () => {
-      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    }) as typeof fs.open;
-
-    try {
-      await expect(configLockFor(storage)).rejects.toMatchObject({
-        message: "permission denied",
-        code: "EACCES",
-      });
-    } finally {
-      fs.open = originalOpen;
+      await releaseOther();
+      otherBackend.close();
     }
   });
 
@@ -492,6 +489,6 @@ describe("StorageService core coverage", () => {
         },
       },
     });
-    await expect(fs.access(`${configPath}.lock`)).rejects.toThrow();
+    expect(leaseHeld(dataDir, CONFIG_LEASE)).toBe(false);
   });
 });

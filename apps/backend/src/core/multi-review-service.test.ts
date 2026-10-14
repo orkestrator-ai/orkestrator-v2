@@ -3825,6 +3825,7 @@ async function withService(
     });
   } finally {
     await service.shutdown();
+    workflowResults?.closeStorage();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }

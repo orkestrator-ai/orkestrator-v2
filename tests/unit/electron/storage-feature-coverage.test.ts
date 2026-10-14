@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { StorageService } from "../../../apps/backend/src/core/storage";
+import { seedStore } from "../../../apps/backend/src/core/storage-test-support";
 
 const tempDirs: string[] = [];
 const validImageBase64 = Buffer.from(
@@ -65,7 +66,7 @@ describe("StorageService feature edge cases", () => {
         0,
       ),
     );
-    await fs.writeFile(path.join(dataDir, "sessions.json"), JSON.stringify(sessions));
+    seedStore(dataDir, "sessions.json", sessions);
     await storage.saveSessionBuffer("session-2", "evict me");
     await storage.saveSessionBuffer("session-7", "keep me");
     await storage.saveSessionBuffer("other-environment-session", "unrelated");
@@ -94,7 +95,7 @@ describe("StorageService feature edge cases", () => {
         index,
       ),
     );
-    await fs.writeFile(path.join(dataDir, "sessions.json"), JSON.stringify(sessions));
+    seedStore(dataDir, "sessions.json", sessions);
 
     const created = await storage.createSession("env-1", "container-1", "new-tab", "plain");
 
@@ -118,13 +119,10 @@ describe("StorageService feature edge cases", () => {
     const { dataDir, storage } = await createStorage("ork-storage-buffer-live-");
     await expect(storage.cleanupOrphanedBuffers()).resolves.toEqual([]);
 
-    await fs.writeFile(
-      path.join(dataDir, "sessions.json"),
-      JSON.stringify([
-        persistedSession("live-a", "env-1", "connected", "2026-01-01T00:00:00.000Z", 0),
-        persistedSession("live-b", "env-1", "disconnected", "2026-01-01T00:01:00.000Z", 1),
-      ]),
-    );
+    seedStore(dataDir, "sessions.json", [
+      persistedSession("live-a", "env-1", "connected", "2026-01-01T00:00:00.000Z", 0),
+      persistedSession("live-b", "env-1", "disconnected", "2026-01-01T00:01:00.000Z", 1),
+    ]);
     await storage.saveSessionBuffer("live-a", "a");
     await storage.saveSessionBuffer("live-b", "b");
 
@@ -135,12 +133,9 @@ describe("StorageService feature edge cases", () => {
 
   test("deletes orphan extensions whose derived stem collides with a live session id", async () => {
     const { dataDir, storage } = await createStorage("ork-storage-buffer-collision-");
-    await fs.writeFile(
-      path.join(dataDir, "sessions.json"),
-      JSON.stringify([
-        persistedSession("live-session", "env-1", "connected", "2026-01-01T00:00:00.000Z", 0),
-      ]),
-    );
+    seedStore(dataDir, "sessions.json", [
+      persistedSession("live-session", "env-1", "connected", "2026-01-01T00:00:00.000Z", 0),
+    ]);
     await storage.saveSessionBuffer("live-session", "live");
     const collidingOrphan = path.join(dataDir, "buffers", "live-session.log");
     await fs.writeFile(collidingOrphan, "orphan");

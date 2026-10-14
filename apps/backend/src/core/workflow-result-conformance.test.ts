@@ -86,6 +86,7 @@ describe("workflow result transport conformance", () => {
 
   afterEach(async () => {
     await server.stop();
+    workflowResults.closeStorage();
     await rm(dataDir, { recursive: true, force: true });
   });
 
@@ -243,8 +244,9 @@ describe("workflow result transport conformance", () => {
     });
     await server.stop();
 
-    const restartedResults = new WorkflowResultService(dataDir);
-    server = new AgentToolsServer(storage, "127.0.0.1", restartedResults);
+    workflowResults.closeStorage();
+    workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
     const renewed = server.workflowResultConnection(
       scope.environmentId,
@@ -259,7 +261,6 @@ describe("workflow result transport conformance", () => {
       arguments: { resultKey },
     });
     expect(status.result?.structuredContent).toMatchObject({ lifecycle: "accepted" });
-    workflowResults = restartedResults;
   });
 
   test("a turn that never calls the tool reaches a closed slot rather than an open wait", async () => {

@@ -180,11 +180,11 @@ export async function exportSave(
     // Legacy save clients match the conflict message prefix; new clients use the code.
     if (record.document.revision !== request.revision)
       throw designConflict(request.revision, record.document.revision, { canvasId });
-    // Only an export this process is actually running blocks; a "writing"
-    // intent left by a failed settlement is stale and reconcilable.
+    // Only an export a live process is actually running blocks; a "writing"
+    // intent left by a failed settlement (or a dead process) is reconcilable.
     if (
       record.pendingExport?.state === "writing" &&
-      activeExports(service).has(record.pendingExport.token)
+      (activeExports(service).has(record.pendingExport.token) || service.exportWriterAlive(record))
     )
       throw new DesignError("capacity", "Another export of this design is still running", {
         retryAfterMs: 1000,
@@ -201,6 +201,7 @@ export async function exportSave(
     };
     const next = cloneRecord(record);
     next.pendingExport = pending;
+    next.pendingExportOwner = service.generation;
     next.statusVersion++;
     await service.commit(next, legacy, {
       revision: next.document.revision,
@@ -326,8 +327,11 @@ export async function reconcileExport(
   const { record } = await service.loadFor(canvasId, environmentId, { allowDeleted: true });
   const pending = record.pendingExport;
   if (!pending) return { state: "none" };
-  // Never reconcile (and so clear) an export this process is still writing.
-  if (pending.state === "writing" && activeExports(service).has(pending.token))
+  // Never reconcile (and so clear) an export a live process is still writing.
+  if (
+    pending.state === "writing" &&
+    (activeExports(service).has(pending.token) || service.exportWriterAlive(record))
+  )
     return { state: "unavailable" };
   if (pending.repository !== repositoryIdentity(environmentId, context.destination))
     return { state: "unavailable" };
@@ -394,7 +398,8 @@ export async function openDesignFile(
     if (state.bytes.byteLength > DESIGN_MAX_DOCUMENT_BYTES)
       throw new DesignError("invalid-input", `${relativePath} is too large to open as a design`);
 
-    for (const entry of service.library.entries.values()) {
+    await service.refreshLibrary();
+    for (const entry of Array.from(service.library.entries.values())) {
       if (
         entry.environmentId !== environmentId ||
         entry.state !== "live" ||

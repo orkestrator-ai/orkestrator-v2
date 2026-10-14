@@ -3,9 +3,6 @@ import * as shared from "./storage-shared.js";
 import {
   activeBuildAdmissionKey,
   activeGitHubBuildReservation,
-  exists,
-  fs,
-  isMissingFileError,
   isNonBlankString,
   isNonNegativeInteger,
   isPersistedBuildPipeline,
@@ -16,13 +13,17 @@ import {
 import {
   BUILD_PIPELINE_TRANSCRIPT_DIRECTORY,
   BuildPipelineTranscriptStore,
+  transcriptPipelineTag,
+  transcriptSessionKey,
   type BuildPipelineTranscriptFaultStage,
   type BuildPipelineTranscriptFaults,
   type BuildPipelineTranscriptLimits,
   type BuildPipelineTranscriptStats,
+  type StagedTranscript,
   type TranscriptCommitInput,
   type TranscriptCommitResult,
   type TranscriptRead,
+  type TranscriptReadWindow,
 } from "./build-pipeline-transcript-store.js";
 import {
   LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES,
@@ -31,8 +32,11 @@ import {
 import {
   migrateInlineBuildPipelineTranscripts,
   type BuildPipelineTranscriptMigrationReport,
+  type InlineImportBatchEntry,
+  type InlineImportBatchOutcome,
 } from "./build-pipeline-transcript-migration.js";
 import { StoragePrompts } from "./storage-prompts.ts";
+import { StoreCorruptError } from "./storage-database.js";
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 
 export type BuildPipelineDowngradeExport =
@@ -40,20 +44,70 @@ export type BuildPipelineDowngradeExport =
   | { status: "incompatible"; reason: "too-large" | "transcript-unavailable"; bytes?: number }
   | { status: "missing" };
 
+/** Committed control records and the store revision they were read at. */
+interface LoadedBuildPipelines {
+  records: Readonly<Record<string, PersistedBuildPipeline>>;
+  revision: number | null;
+}
+
+/** The session fields that describe which transcript a control record references. */
+const TRANSCRIPT_FIELDS = [
+  "transcript",
+  "messages",
+  "messageRevision",
+  "messagesFingerprint",
+] as const;
+
+interface RevertedSession {
+  sessionKey: string;
+  fields: Partial<Record<(typeof TRANSCRIPT_FIELDS)[number], unknown>>;
+  reason: string;
+}
+
+interface ControlCommit {
+  committed: StagedTranscript[];
+  refused: StagedTranscript[];
+  /** Per written pipeline: sessions restored to their previous transcript. */
+  reverted: Map<string, RevertedSession[]>;
+  /** Chunk files of deleted transcripts, to unlink after the commit. */
+  deletedChunks: string[];
+}
+
+class RefusedImport extends Error {}
+
+function sessionsOf(snapshot: unknown): Array<Record<string, unknown>> {
+  if (!isRecord(snapshot) || !Array.isArray(snapshot.sessions)) return [];
+  return (snapshot.sessions as unknown[]).filter(
+    (session): session is Record<string, unknown> =>
+      isRecord(session) && typeof session.sessionKey === "string" && session.sessionKey !== "",
+  );
+}
+
+function sameReference(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 /**
  * Build-pipeline workflow storage (plan step 16).
  *
- * Control records stay in the shared `build-pipelines.json` under the
- * cross-process build-pipeline lock, which is also the admission lock that
- * keeps project/GitHub build reservations unique. Display transcripts live in
- * `build-pipeline-transcripts/` (see `BuildPipelineTranscriptStore`): the
- * control record carries only a small versioned reference, so a phase, queue,
- * cancel or lease update rewrites control state rather than every pipeline's
- * history, and can no longer fail the 32 MiB snapshot bound because of display
- * data.
+ * Control records live in the `build-pipelines` record store under the
+ * cross-process build-pipeline lease, which is also the admission lock that
+ * keeps project/GitHub build reservations unique. Display transcripts are
+ * manifest rows plus immutable chunk files (see `BuildPipelineTranscriptStore`):
+ * the control record carries only a small versioned reference.
  *
- * Reads are served from a stat-validated decoded cache: an unchanged file
- * costs one `stat` per read instead of a full read, parse and validation.
+ * Every control write is one database transaction that also commits the
+ * transcript manifests its sessions newly reference (staged by the
+ * checkpoint just before), after re-checking inside that transaction the
+ * control revision the caller read and each manifest's base revision. So a
+ * control record and the transcripts it names always change together: no
+ * fences, retained generations or orphan windows. A manifest that cannot
+ * commit (quota, a concurrent checkpoint, a vanished chunk) never blocks the
+ * control write: that session keeps its previous reference, with a
+ * content-free `transcriptCheckpointError`, and the caller's snapshot object
+ * is updated to match so its next checkpoint retries.
+ *
+ * Reads are served from a revision-validated decoded cache.
  */
 export abstract class StorageBuildPipelines extends StoragePrompts {
   private buildPipelineReadCache: {
@@ -64,12 +118,14 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   private buildPipelineTranscriptFaultHooks: BuildPipelineTranscriptFaults | null = null;
   private buildPipelineTranscriptLimitOverrides: Partial<BuildPipelineTranscriptLimits> | null =
     null;
+  private liveBuildPipelineTagCache: { revision: number | null; tags: Set<string> } | null = null;
 
-  /** Constructed lazily: storage that never runs a build never creates the namespace. */
+  /** Constructed lazily: storage that never runs a build never creates the chunk directory. */
   protected buildPipelineTranscriptStore(): BuildPipelineTranscriptStore {
     this.buildPipelineTranscriptStoreInstance ??= new BuildPipelineTranscriptStore({
       directory: this.file(BUILD_PIPELINE_TRANSCRIPT_DIRECTORY),
-      lock: (target) => this.acquireMutationLock(target, "build pipeline transcript storage"),
+      database: () => this.database,
+      isLivePipeline: (pipelineTag) => this.liveBuildPipelineTags()?.has(pipelineTag) ?? true,
       faults: () => this.buildPipelineTranscriptFaultHooks,
       ...(this.buildPipelineTranscriptLimitOverrides
         ? { limits: this.buildPipelineTranscriptLimitOverrides }
@@ -102,30 +158,61 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     return this.buildPipelineTranscriptStore().stats();
   }
 
-  private async buildPipelineFileFingerprint(): Promise<string> {
+  private buildPipelineStore(): string {
+    return this.storeForFile(this.buildPipelinesFile())!;
+  }
+
+  /**
+   * One committed control record, read inside a transaction. A store
+   * imported from an unreadable legacy file reads as empty, exactly as
+   * `loadBuildPipelines` treats it; the next write replaces it.
+   */
+  private committedBuildPipeline(id: string): PersistedBuildPipeline | null {
+    let current: unknown;
     try {
-      const stat = await fs.stat(this.buildPipelinesFile(), { bigint: true });
-      return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      current = this.database.readStoreRow(this.buildPipelineStore(), id);
     } catch (error) {
-      if (isMissingFileError(error)) return "missing";
-      // Not evidence of an empty store: take the uncached path, which falls
-      // back to the backups or surfaces the failure.
-      return `unreadable:${Date.now()}:${Math.random()}`;
+      if (error instanceof StoreCorruptError) return null;
+      throw error;
     }
+    return isPersistedBuildPipeline(current, id) ? current : null;
+  }
+
+  /**
+   * Pipeline tags that have a control record, revalidated against the store
+   * revision. Synchronous so it can run inside a transaction. `null` when the
+   * store is unreadable: nothing may be treated as orphaned then.
+   */
+  private liveBuildPipelineTags(): Set<string> | null {
+    const store = this.buildPipelineStore();
+    const revision = this.database.storeRevision(store);
+    if (this.liveBuildPipelineTagCache?.revision === revision) {
+      return this.liveBuildPipelineTagCache.tags;
+    }
+    let value: unknown;
+    try {
+      value = this.database.readStore(store)?.value ?? {};
+    } catch {
+      return null;
+    }
+    const tags = new Set(Object.keys(isRecord(value) ? value : {}).map(transcriptPipelineTag));
+    this.liveBuildPipelineTagCache = { revision, tags };
+    return tags;
   }
 
   /**
    * Decoded control records. The returned map and its records are shared with
    * the cache: callers must treat them as read-only and clone before mutating.
    *
-   * The stat precedes the read, so a foreign write landing in between caches
-   * fresh content under a stale fingerprint — one extra re-read later, never a
-   * stale answer.
+   * The revision is read before the rows, so a foreign write landing in
+   * between caches fresh content under a stale revision — one extra re-read
+   * later, never a stale answer.
    */
-  protected async loadBuildPipelines(): Promise<Readonly<Record<string, PersistedBuildPipeline>>> {
-    const fingerprint = await this.buildPipelineFileFingerprint();
+  private async loadBuildPipelineState(): Promise<LoadedBuildPipelines> {
+    const revision = this.database.storeRevision(this.buildPipelineStore());
+    const fingerprint = revision === null ? "missing" : `revision:${revision}`;
     const cached = this.buildPipelineReadCache;
-    if (cached && cached.fingerprint === fingerprint) return cached.records;
+    if (cached && cached.fingerprint === fingerprint) return { records: cached.records, revision };
     const stored = await this.loadJson<Record<string, PersistedBuildPipeline>>(
       this.buildPipelinesFile(),
       () => ({}),
@@ -135,26 +222,143 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         isPersistedBuildPipeline(pipeline, storedId),
       ),
     ) as Record<string, PersistedBuildPipeline>;
-    this.buildPipelineReadCache = fingerprint.startsWith("unreadable:")
-      ? null
-      : { fingerprint, records };
-    return records;
+    this.buildPipelineReadCache = { fingerprint, records };
+    return { records, revision };
+  }
+
+  protected async loadBuildPipelines(): Promise<Readonly<Record<string, PersistedBuildPipeline>>> {
+    return (await this.loadBuildPipelineState()).records;
   }
 
   /**
-   * Writes the control file and primes the cache. Callers hold the
-   * build-pipeline mutation lock, so no other writer can land between the
-   * write and the stat that fingerprints it.
+   * The one write path for control records: puts and deletes rows, commits
+   * the staged manifests the written records newly reference, and deletes
+   * the transcripts of removed pipelines — all in ONE transaction. Callers
+   * hold the build-pipeline lease; the revision each touched row had when
+   * `loaded` was read is re-checked inside the transaction anyway, so a
+   * write that raced another process fails instead of overwriting it.
+   *
+   * `put` records may be adjusted in place: a session whose staged manifest
+   * cannot commit is restored to its previous transcript fields.
    */
-  protected async writeBuildPipelines(
-    pipelines: Record<string, PersistedBuildPipeline>,
-  ): Promise<void> {
-    this.buildPipelineReadCache = null;
-    await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-    const fingerprint = await this.buildPipelineFileFingerprint();
-    if (!fingerprint.startsWith("unreadable:") && fingerprint !== "missing") {
-      this.buildPipelineReadCache = { fingerprint, records: pipelines };
+  private commitBuildPipelineChanges(
+    loaded: LoadedBuildPipelines,
+    changes: {
+      put?: readonly PersistedBuildPipeline[];
+      remove?: readonly string[];
+      /** Pipeline ids whose transcripts are deleted without a control row (never created). */
+      removeTranscripts?: readonly string[];
+    },
+  ): ControlCommit {
+    const store = this.buildPipelineStore();
+    const transcripts = this.buildPipelineTranscriptStore();
+    const result: ControlCommit = {
+      committed: [],
+      refused: [],
+      reverted: new Map(),
+      deletedChunks: [],
+    };
+    const touchesControl = (changes.put?.length ?? 0) + (changes.remove?.length ?? 0) > 0;
+    let primed: Record<string, PersistedBuildPipeline> | null = touchesControl
+      ? { ...loaded.records }
+      : null;
+    const fingerprint = this.database.transaction(() => {
+      if (this.database.storeRevision(store) !== loaded.revision) primed = null;
+      for (const id of [
+        ...(changes.put ?? []).map((record) => record.id),
+        ...(changes.remove ?? []),
+      ]) {
+        const currentRevision = this.committedBuildPipeline(id)?.revision ?? null;
+        if (currentRevision !== (loaded.records[id]?.revision ?? null)) {
+          throw new Error("Build pipeline revision conflict");
+        }
+      }
+      for (const id of [...(changes.remove ?? []), ...(changes.removeTranscripts ?? [])]) {
+        result.deletedChunks.push(...transcripts.deletePipelineInTransaction(id).chunks);
+      }
+      for (const id of changes.remove ?? []) {
+        this.database.updateStoreRow(store, id, () => ({ result: undefined, delete: true }));
+        if (primed) delete primed[id];
+      }
+      for (const record of changes.put ?? []) {
+        const reverted = this.commitSessionTranscripts(record, loaded.records[record.id], result);
+        if (reverted.length > 0) result.reverted.set(record.id, reverted);
+        this.database.updateStoreRow(store, record.id, () => ({
+          result: undefined,
+          value: record,
+        }));
+        if (primed) primed[record.id] = record;
+      }
+      const revision = this.database.storeRevision(store);
+      return revision === null ? "missing" : `revision:${revision}`;
+    });
+    if (touchesControl) {
+      this.buildPipelineReadCache = primed ? { fingerprint, records: primed } : null;
     }
+    return result;
+  }
+
+  /**
+   * Inside the control transaction: commits each staged manifest `record`'s
+   * sessions reference. A session whose new reference cannot be committed —
+   * refused, or staged too long ago to still be held — gets its previous
+   * transcript fields back.
+   */
+  private commitSessionTranscripts(
+    record: PersistedBuildPipeline,
+    previous: PersistedBuildPipeline | undefined,
+    result: ControlCommit,
+  ): RevertedSession[] {
+    const transcripts = this.buildPipelineTranscriptStore();
+    const previousSessions = new Map(
+      sessionsOf(previous?.snapshot).map((session) => [session.sessionKey as string, session]),
+    );
+    const reverted: RevertedSession[] = [];
+    for (const session of sessionsOf(record.snapshot)) {
+      const sessionKey = session.sessionKey as string;
+      const reference = session.transcript as PipelineSession["transcript"];
+      const before = previousSessions.get(sessionKey);
+      if (!reference || sameReference(reference, before?.transcript)) continue;
+      const staged = transcripts.stagedFor(record.id, sessionKey, reference);
+      let reason: string | null = null;
+      if (staged) {
+        const outcome = transcripts.commitStagedInTransaction(staged);
+        if (outcome.ok) {
+          result.committed.push(staged);
+          continue;
+        }
+        result.refused.push(staged);
+        reason = outcome.reason;
+      } else if (
+        transcripts.rows.revisionOf(transcriptSessionKey(record.id, sessionKey)) !==
+        reference.manifestRevision
+      ) {
+        // A reference this process no longer holds staged (expired) and that
+        // is not the committed manifest either: never persist it.
+        reason = "stage-expired";
+      }
+      if (reason === null) continue;
+      const fields: RevertedSession["fields"] = {};
+      for (const field of TRANSCRIPT_FIELDS) {
+        if (before && field in before) fields[field] = structuredClone(before[field]);
+      }
+      for (const field of TRANSCRIPT_FIELDS) delete session[field];
+      Object.assign(session, structuredClone(fields));
+      session.transcriptCheckpointError = reason.slice(0, 128);
+      reverted.push({ sessionKey, fields, reason });
+    }
+    return reverted;
+  }
+
+  /** After a commit: settles staged manifests and unlinks chunks nothing references any more. */
+  private async settleControlCommit(commit: ControlCommit, key: string): Promise<void> {
+    const transcripts = this.buildPipelineTranscriptStoreInstance;
+    if (!transcripts) return;
+    if (commit.committed.length > 0 || commit.deletedChunks.length > 0) {
+      await this.buildPipelineTranscriptFault("after-commit", key);
+    }
+    await transcripts.settleCommitted(commit.committed, commit.refused);
+    if (commit.deletedChunks.length > 0) await transcripts.unlinkUnreferenced(commit.deletedChunks);
   }
 
   async getBuildPipeline(pipelineId: string): Promise<PersistedBuildPipeline | null> {
@@ -182,6 +386,13 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
       .map((record) => structuredClone(record));
   }
 
+  /**
+   * Writes one control record and, in the same transaction, the transcript
+   * manifests staged for the references its sessions carry. When a staged
+   * manifest cannot commit, that session keeps its previous transcript in
+   * the stored record, and `snapshot`'s matching session is updated in place
+   * to agree with it.
+   */
   async saveBuildPipeline(
     pipelineId: string,
     projectId: string,
@@ -235,7 +446,8 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
       if (environmentId) {
         await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Build pipeline");
       }
-      const pipelines = { ...(await this.loadBuildPipelines()) };
+      const loaded = await this.loadBuildPipelineState();
+      const pipelines = loaded.records;
       const previous = pipelines[pipelineId];
       if (previous && previous.projectId !== projectId) {
         throw new Error("Build pipeline belongs to another project");
@@ -251,7 +463,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         const admitted = Object.values(pipelines).find(
           (pipeline) => activeBuildAdmissionKey(pipeline.snapshot) === admissionKey,
         );
-        if (admitted) return { record: structuredClone(admitted), created: false };
+        if (admitted) return { record: structuredClone(admitted), commit: null };
       }
       const reservation = activeGitHubBuildReservation(storedSnapshot);
       if (
@@ -273,13 +485,33 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
       };
-      pipelines[pipelineId] = record;
-      await this.writeBuildPipelines(pipelines);
+      await this.buildPipelineTranscriptStore().ensureReferencesImported(
+        pipelineId,
+        sessionsOf(storedSnapshot) as Array<{
+          sessionKey: string;
+          transcript?: PipelineSession["transcript"];
+        }>,
+      );
+      const commit = this.commitBuildPipelineChanges(loaded, { put: [record] });
       this.announce("build-pipeline", pipelineId, projectId);
-      return { record: structuredClone(record), created: !previous };
+      return { record: structuredClone(record), commit };
     });
-    // An id written again after a delete (legacy re-import) may own transcripts again.
-    if (saved.created) this.buildPipelineTranscriptStoreInstance?.unfence(pipelineId);
+    if (saved.commit) {
+      const reverted = saved.commit.reverted.get(pipelineId) ?? [];
+      for (const entry of reverted) {
+        console.warn(
+          `[build-pipeline] Transcript checkpoint not committed for ${pipelineId}: ${entry.reason}`,
+        );
+        const live = sessionsOf(snapshot).find(
+          (session) => session.sessionKey === entry.sessionKey,
+        );
+        if (!live) continue;
+        for (const field of TRANSCRIPT_FIELDS) delete live[field];
+        Object.assign(live, structuredClone(entry.fields));
+        live.transcriptCheckpointError = entry.reason.slice(0, 128);
+      }
+      await this.settleControlCommit(saved.commit, pipelineId);
+    }
     return saved.record;
   }
 
@@ -287,21 +519,26 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     if (!isNonBlankString(pipelineId)) {
       throw new Error("Build pipeline ID must not be blank");
     }
-    await this.enqueueBuildPipelineMutation(async () => {
-      const pipelines = { ...(await this.loadBuildPipelines()) };
-      if (pipelineId in pipelines) {
-        const removedProjectId = pipelines[pipelineId]?.projectId;
-        delete pipelines[pipelineId];
-        await this.writeBuildPipelines(pipelines);
-        this.announce("build-pipeline", pipelineId, removedProjectId, undefined, true);
+    const commit = await this.enqueueBuildPipelineMutation(async () => {
+      const loaded = await this.loadBuildPipelineState();
+      const record = loaded.records[pipelineId];
+      await this.importTranscriptsBeforeDelete(record ? [record] : []);
+      const removed = record ? [pipelineId] : [];
+      const commit = this.commitBuildPipelineChanges(loaded, {
+        remove: removed,
+        removeTranscripts: record ? [] : [pipelineId],
+      });
+      if (record) {
+        this.announce("build-pipeline", pipelineId, record.projectId, undefined, true);
       }
       await this.scrubSensitiveJsonBackups(
         this.buildPipelinesFile(),
         (storedId, pipeline) =>
           storedId !== pipelineId && isPersistedBuildPipeline(pipeline, storedId),
       );
+      return commit;
     });
-    await this.deleteBuildPipelineTranscripts([pipelineId]);
+    await this.finishTranscriptDeletion([pipelineId], commit);
   }
 
   async deleteBuildPipelinesByEnvironment(
@@ -318,68 +555,98 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     ) {
       throw new Error("Linked build pipeline ID must not be blank");
     }
-    const { removedIds, transcriptOwners } = await this.enqueueBuildPipelineMutation(async () => {
-      const pipelines = { ...(await this.loadBuildPipelines()) };
-      const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
-      const removedPipelines = Object.values(pipelines).filter(
-        (pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId,
-      );
-      const removedIds = removedPipelines.map((pipeline) => pipeline.id);
-      if (removedIds.length > 0) {
-        for (const removedId of removedIds) delete pipelines[removedId];
-        await this.writeBuildPipelines(pipelines);
+    const { removedIds, transcriptOwners, commit } = await this.enqueueBuildPipelineMutation(
+      async () => {
+        const loaded = await this.loadBuildPipelineState();
+        const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
+        const removedPipelines = Object.values(loaded.records).filter(
+          (pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId,
+        );
+        const removedIds = removedPipelines.map((pipeline) => pipeline.id);
+        const removedIdSet = new Set(removedIds);
+        const transcriptOnly = linkedId && !removedIdSet.has(linkedId) ? [linkedId] : [];
+        await this.importTranscriptsBeforeDelete(removedPipelines);
+        const commit = this.commitBuildPipelineChanges(loaded, {
+          remove: removedIds,
+          removeTranscripts: transcriptOnly,
+        });
         for (const removed of removedPipelines) {
           this.announce("build-pipeline", removed.id, removed.projectId, undefined, true);
         }
-      }
-      const removedIdSet = new Set(removedIds);
-      if (linkedId) removedIdSet.add(linkedId);
-
-      // Task snapshots embed base64 attachments and full review findings, so
-      // the same backup scrub the looped review path performs applies here.
-      // Check both ownership forms because a newly-created pipeline deliberately
-      // has a blank environmentId until create_environment links it.
-      await this.scrubSensitiveJsonBackups(
-        this.buildPipelinesFile(),
-        (storedId, pipeline) =>
-          isPersistedBuildPipeline(pipeline, storedId) &&
-          pipeline.environmentId !== environmentId &&
-          !removedIdSet.has(storedId),
-      );
-      return { removedIds, transcriptOwners: [...removedIdSet] };
-    });
-    await this.deleteBuildPipelineTranscripts(transcriptOwners);
+        if (linkedId) removedIdSet.add(linkedId);
+        // Task snapshots embed base64 attachments and full review findings, so
+        // the deleting commit is scrubbed from free pages and the WAL. Check
+        // both ownership forms because a newly-created pipeline deliberately
+        // has a blank environmentId until create_environment links it.
+        await this.scrubSensitiveJsonBackups(
+          this.buildPipelinesFile(),
+          (storedId, pipeline) =>
+            isPersistedBuildPipeline(pipeline, storedId) &&
+            pipeline.environmentId !== environmentId &&
+            !removedIdSet.has(storedId),
+        );
+        return { removedIds, transcriptOwners: [...removedIdSet], commit };
+      },
+    );
+    await this.finishTranscriptDeletion(transcriptOwners, commit);
     return removedIds;
   }
 
   /**
-   * Transcript deletion runs after the control record and its legacy backups
-   * are gone, outside the control lock. The store fences later checkpoints
-   * for these pipelines; a crash in between leaves orphans the startup sweep
-   * removes, never a transcript a live record still references.
+   * A pipeline deleted while the pre-database manifests are still being
+   * imported: import its sessions' manifests first so their rows, and the
+   * chunks they name, are deleted with it instead of lingering on disk.
    */
-  private async deleteBuildPipelineTranscripts(pipelineIds: readonly string[]): Promise<void> {
-    if (pipelineIds.length === 0) return;
-    // Storage that never stored a transcript has nothing to delete; do not
-    // create the namespace just to find that out. The fence still applies.
-    const present = await exists(this.file(BUILD_PIPELINE_TRANSCRIPT_DIRECTORY));
-    for (const pipelineId of pipelineIds) {
-      await this.buildPipelineTranscriptFault("delete-after-control", pipelineId);
-      if (present) await this.buildPipelineTranscriptStore().deletePipeline(pipelineId);
-      else this.buildPipelineTranscriptStoreInstance?.fencePipeline(pipelineId);
+  private async importTranscriptsBeforeDelete(
+    records: readonly PersistedBuildPipeline[],
+  ): Promise<void> {
+    for (const record of records) {
+      const sessionKeys = sessionsOf(record.snapshot).map(
+        (session) => session.sessionKey as string,
+      );
+      await this.buildPipelineTranscriptStore().ensureSessionsImported(record.id, sessionKeys);
     }
   }
 
-  /** Removes transcripts committed for a pipeline id whose control record was never created. */
-  async deleteBuildPipelineTranscriptsFor(pipelineId: string): Promise<void> {
-    if (!isNonBlankString(pipelineId)) return;
-    if ((await this.loadBuildPipelines())[pipelineId]) return;
-    await this.deleteBuildPipelineTranscripts([pipelineId]);
+  /**
+   * After the deleting transaction (control rows and manifest rows together)
+   * and its scrub: drops staged checkpoints of the removed pipelines and
+   * unlinks their chunk files. A crash before the unlinks leaves only
+   * unreferenced chunks, which repair removes.
+   */
+  private async finishTranscriptDeletion(
+    pipelineIds: readonly string[],
+    commit: ControlCommit,
+  ): Promise<void> {
+    for (const pipelineId of pipelineIds) {
+      await this.buildPipelineTranscriptFault("delete-after-control", pipelineId);
+    }
+    const transcripts = this.buildPipelineTranscriptStoreInstance;
+    if (!transcripts) return;
+    for (const pipelineId of pipelineIds) await transcripts.discardStaged(pipelineId);
+    if (commit.deletedChunks.length > 0) await transcripts.unlinkUnreferenced(commit.deletedChunks);
   }
 
-  /** Commits one session's display transcript ahead of the workflow record that will reference it. */
+  /** Removes transcripts staged or committed for a pipeline id whose control record was never created. */
+  async deleteBuildPipelineTranscriptsFor(pipelineId: string): Promise<void> {
+    if (!isNonBlankString(pipelineId)) return;
+    const commit = await this.enqueueBuildPipelineMutation(async () => {
+      const loaded = await this.loadBuildPipelineState();
+      if (loaded.records[pipelineId]) return null;
+      const commit = this.commitBuildPipelineChanges(loaded, { removeTranscripts: [pipelineId] });
+      if (commit.deletedChunks.length > 0) this.scrubDeletedDatabaseContent();
+      return commit;
+    });
+    if (commit) await this.finishTranscriptDeletion([pipelineId], commit);
+  }
+
+  /**
+   * Stages one session's display transcript (chunk files written and
+   * fsynced) for the control write that will reference it; that write
+   * commits the manifest.
+   */
   commitBuildPipelineTranscript(input: TranscriptCommitInput): Promise<TranscriptCommitResult> {
-    return this.buildPipelineTranscriptStore().commit(input);
+    return this.buildPipelineTranscriptStore().stage(input);
   }
 
   /**
@@ -390,7 +657,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   async readBuildPipelineTranscript(
     pipelineId: string,
     session: Pick<PipelineSession, "sessionKey" | "transcript" | "messages" | "messageRevision">,
-    window: { fromIndex?: number; toIndex?: number } = {},
+    window: TranscriptReadWindow = {},
   ): Promise<TranscriptRead> {
     if (session.transcript) {
       return this.buildPipelineTranscriptStore().read(
@@ -404,43 +671,108 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   }
 
   /**
-   * Moves legacy inline transcripts out of the control file. See
-   * `migrateInlineBuildPipelineTranscripts` for the per-pipeline CAS protocol.
+   * Background transcript migration: first the pre-database manifest files
+   * (batched, resumable), then legacy inline transcripts out of the control
+   * records. See `migrateInlineBuildPipelineTranscripts`.
    */
-  migrateBuildPipelineTranscripts(
+  async migrateBuildPipelineTranscripts(
     options: { maxPipelinesPerBatch?: number; shouldContinue?: () => boolean } = {},
   ): Promise<BuildPipelineTranscriptMigrationReport> {
-    return migrateInlineBuildPipelineTranscripts({
-      store: this.buildPipelineTranscriptStore(),
+    const store = this.buildPipelineTranscriptStore();
+    const referenced = new Map<string, number>();
+    for (const record of Object.values(await this.loadBuildPipelines())) {
+      for (const session of sessionsOf(record.snapshot)) {
+        const reference = session.transcript as PipelineSession["transcript"];
+        if (reference) {
+          referenced.set(
+            transcriptSessionKey(record.id, session.sessionKey as string),
+            reference.manifestRevision,
+          );
+        }
+      }
+    }
+    const legacy = await store.migrateLegacyManifests({
+      ...(options.shouldContinue ? { shouldContinue: options.shouldContinue } : {}),
+      preferRevision: (key) => referenced.get(key),
+    });
+    const report = await migrateInlineBuildPipelineTranscripts({
+      store,
       load: () => this.loadBuildPipelines(),
-      commitControl: (operation) =>
-        this.enqueueBuildPipelineMutation(async () => {
-          const pipelines = { ...(await this.loadBuildPipelines()) };
-          const changed = await operation(pipelines);
-          await this.buildPipelineTranscriptFault("migration-before-control-commit", "control");
-          if (changed) await this.writeBuildPipelines(pipelines);
-        }),
+      commitBatch: (entries) => this.commitInlineImportBatch(entries),
       fault: (stage, key) => this.buildPipelineTranscriptFault(stage, key),
       ...options,
     });
+    return { ...report, legacyManifests: { imported: legacy.imported, complete: legacy.complete } };
+  }
+
+  /** One transaction for a batch of inline-transcript imports; see the migration module. */
+  private async commitInlineImportBatch(
+    entries: readonly InlineImportBatchEntry[],
+  ): Promise<InlineImportBatchOutcome> {
+    const outcome: InlineImportBatchOutcome = {
+      migrated: [],
+      conflicted: [],
+      missing: [],
+      refused: [],
+    };
+    if (entries.length === 0) return outcome;
+    const transcripts = this.buildPipelineTranscriptStore();
+    const store = this.buildPipelineStore();
+    const settled = await this.enqueueBuildPipelineMutation(async () => {
+      await this.buildPipelineTranscriptFault("migration-before-control-commit", "control");
+      const committed: StagedTranscript[] = [];
+      const refused: StagedTranscript[] = [];
+      this.buildPipelineReadCache = null;
+      this.database.transaction(() => {
+        for (const entry of entries) {
+          const current = this.committedBuildPipeline(entry.pipelineId);
+          if (!current) {
+            outcome.missing.push(entry.pipelineId);
+            continue;
+          }
+          if (current.revision !== entry.sourceRevision) {
+            outcome.conflicted.push(entry.pipelineId);
+            continue;
+          }
+          try {
+            // A savepoint per pipeline: all of its manifests and its control
+            // row, or none of them.
+            this.database.transaction(() => {
+              for (const staged of entry.staged) {
+                const result = transcripts.commitStagedInTransaction(staged);
+                if (!result.ok) throw new RefusedImport(result.reason);
+              }
+              this.database.updateStoreRow(store, entry.pipelineId, () => ({
+                result: undefined,
+                value: { ...current, snapshot: entry.apply(current.snapshot) },
+              }));
+            });
+            committed.push(...entry.staged);
+            outcome.migrated.push(entry.pipelineId);
+          } catch (error) {
+            if (!(error instanceof RefusedImport)) throw error;
+            refused.push(...entry.staged);
+            outcome.refused.push(entry.pipelineId);
+          }
+        }
+      });
+      return { committed, refused };
+    });
+    await transcripts.settleCommitted(settled.committed, settled.refused);
+    return outcome;
   }
 
   /**
-   * Startup repair: removes transcripts no control record owns (after the
-   * grace window) and chunks no manifest references.
+   * Startup repair: removes manifest rows no control record owns (after the
+   * grace window; a defensive check, since commits and deletes are atomic
+   * with the control record) and chunk files no manifest references.
    */
   async sweepBuildPipelineTranscripts(
     options: { graceMs?: number } = {},
   ): Promise<{ orphans: number; removedChunks: number; complete: boolean }> {
-    // Nothing to collect before the first transcript, and sweeping must not
-    // create the namespace for storage that never ran a build.
-    if (!(await exists(this.file(BUILD_PIPELINE_TRANSCRIPT_DIRECTORY)))) {
-      return { orphans: 0, removedChunks: 0, complete: true };
-    }
     const store = this.buildPipelineTranscriptStore();
-    const live = Object.keys(await this.loadBuildPipelines());
-    const orphans = await store.sweepOrphans(live, options.graceMs);
-    const repair = await store.repair();
+    const orphans = this.liveBuildPipelineTags() ? await store.sweepOrphans(options.graceMs) : 0;
+    const repair = await store.repair(options.graceMs);
     return { orphans, removedChunks: repair.removedChunks, complete: repair.complete };
   }
 

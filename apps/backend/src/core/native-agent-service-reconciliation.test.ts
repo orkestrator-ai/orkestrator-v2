@@ -58,6 +58,7 @@ import {
   OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS,
   openCodeIncompleteTurnRequestId,
 } from "./opencode-turn-recovery.js";
+import { seedStore } from "./storage-test-support.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -394,10 +395,7 @@ async function seedLoopedReviewNativeSessions(
       ];
     }),
   );
-  await fs.writeFile(
-    path.join(storage.getDataDir(), "native-agent-sessions.json"),
-    `${JSON.stringify(sessions)}\n`,
-  );
+  seedStore(storage.getDataDir(), "native-agent-sessions.json", sessions);
 }
 
 /**

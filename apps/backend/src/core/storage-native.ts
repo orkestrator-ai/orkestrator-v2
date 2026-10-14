@@ -15,7 +15,6 @@ import {
   isPersistedNativeAgentSession,
   isPersistedPromptQueue,
   isRecord,
-  migratePersistedNativeAgentSession,
   nowIso,
   pruneAgentInteractionResolutionJournal,
   resolveNativeAgentInteractionMetadata,
@@ -242,32 +241,50 @@ export abstract class StorageNative extends StorageReviews {
     if (!isRecord(stored)) {
       throw new Error("Stored native agent sessions are invalid");
     }
+    // Legacy unversioned records were upgraded once at import
+    // (storage-record-upgrades.ts), so anything that does not validate now is
+    // a record this build cannot read.
     const sessions: Record<string, PersistedNativeAgentSession> = {};
     const opaque: Record<string, unknown> = {};
-    let migratedAny = false;
     for (const [storedKey, session] of Object.entries(stored)) {
-      const migrated = migratePersistedNativeAgentSession(session, storedKey);
-      if (!migrated) {
-        opaque[storedKey] = session;
-        continue;
-      }
-      if (!isPersistedNativeAgentSession(session, storedKey)) migratedAny = true;
-      sessions[storedKey] = migrated;
+      if (isPersistedNativeAgentSession(session, storedKey)) sessions[storedKey] = session;
+      else opaque[storedKey] = session;
     }
-    return { sessions, opaque, migrated: migratedAny };
+    return { sessions, opaque };
   }
 
   /**
-   * Writes the readable records back while preserving every unreadable one
-   * byte-for-byte. Persisting `sessions` alone would erase them.
+   * Writes (or, with `undefined`, deletes) exactly one session's row. Other
+   * keys — including unreadable records — are never re-serialized, so a holder
+   * of one key's lease cannot overwrite another key's concurrent commit.
+   *
+   * `requireLiveEnvironment` fences an insert against environment deletion in
+   * the same transaction: deletion sets the environment's tombstone before it
+   * sweeps its sessions, so a create that commits after the tombstone could
+   * otherwise leave a record behind that the sweep had already passed.
    */
-  protected async saveNativeAgentSessions(
-    sessions: Record<string, PersistedNativeAgentSession>,
-    opaque: Record<string, unknown>,
+  protected async saveNativeAgentSession(
+    key: string,
+    session: PersistedNativeAgentSession | undefined,
+    options: { requireLiveEnvironment?: string } = {},
   ): Promise<void> {
-    await this.saveSensitiveJson(this.nativeAgentSessionsFile(), {
-      ...opaque,
-      ...sessions,
+    const environmentId = options.requireLiveEnvironment;
+    this.updateStoreRow(this.nativeAgentSessionsFile(), key, () => {
+      if (environmentId && !coordinatorIdFromRuntimeId(environmentId)) {
+        const environment = this.database.readStoreRow(
+          this.storeForFile(this.environmentsFile())!,
+          environmentId,
+        );
+        if (!isRecord(environment)) {
+          throw new Error(`Native agent session environment not found: ${environmentId}`);
+        }
+        if (environment.deletionRequestedAt) {
+          throw new Error(`Native agent session environment is being deleted: ${environmentId}`);
+        }
+      }
+      return session === undefined
+        ? { result: undefined, delete: true }
+        : { result: undefined, value: session };
     });
   }
 
@@ -283,24 +300,13 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent session key must not be blank");
     }
-    // Read without the cross-process lock. `getOrCreateNativeAgentSession`
-    // deliberately holds that lock across an external provider create, so
-    // taking it here would make a routine tab reattach wait on — and, past the
-    // 20s lock deadline, fail against — an unrelated session being created.
-    // Only a load that actually migrated something needs to write.
+    // Lock-free: `getOrCreateNativeAgentSession` holds this key's lease across
+    // an external provider create, so a routine tab reattach must not wait on
+    // it. Every caller treats the result as advisory and re-checks under the
+    // lease before acting.
     const loaded = await this.loadNativeAgentSessions();
-    if (!loaded.migrated) {
-      this.assertReadableNativeAgentSession(loaded, key);
-      return loaded.sessions[key] ?? null;
-    }
-    return this.enqueueNativeAgentSessionMutation(async () => {
-      const current = await this.loadNativeAgentSessions();
-      if (current.migrated) {
-        await this.saveNativeAgentSessions(current.sessions, current.opaque);
-      }
-      this.assertReadableNativeAgentSession(current, key);
-      return current.sessions[key] ?? null;
-    });
+    this.assertReadableNativeAgentSession(loaded, key);
+    return loaded.sessions[key] ?? null;
   }
 
   /**
@@ -348,13 +354,13 @@ export abstract class StorageNative extends StorageReviews {
       throw new Error("Native agent session input is invalid");
     }
 
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(input.key, async () => {
       await this.assertEnvironmentAcceptsBackgroundState(
         input.environmentId,
         "Native agent session",
       );
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, input.key);
       const existing = sessions[input.key];
       if (existing) {
@@ -391,10 +397,9 @@ export abstract class StorageNative extends StorageReviews {
             updatedAt: nowIso(),
           };
           sessions[input.key] = migratedOwner;
-          await this.saveNativeAgentSessions(sessions, opaque);
+          await this.saveNativeAgentSession(input.key, sessions[input.key]);
           return migratedOwner;
         }
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return existing;
       }
 
@@ -416,7 +421,9 @@ export abstract class StorageNative extends StorageReviews {
         updatedAt: now,
       };
       sessions[input.key] = saved;
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(input.key, sessions[input.key], {
+        requireLiveEnvironment: input.environmentId,
+      });
       this.announceNativeAgentRecord(saved);
       return saved;
     });
@@ -455,13 +462,13 @@ export abstract class StorageNative extends StorageReviews {
     ) {
       throw new Error("Native agent session adoption input is invalid");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(input.key, async () => {
       await this.assertEnvironmentAcceptsBackgroundState(
         input.environmentId,
         "Native agent session",
       );
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, input.key);
       const existing = sessions[input.key];
       if (existing) {
@@ -518,11 +525,10 @@ export abstract class StorageNative extends StorageReviews {
               updatedAt: nowIso(),
             };
             sessions[input.key] = updated;
-            await this.saveNativeAgentSessions(sessions, opaque);
+            await this.saveNativeAgentSession(input.key, sessions[input.key]);
             this.announceNativeAgentRecord(updated);
             return updated;
           }
-          if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return existing;
         }
         if (existing.providerSessionId !== input.expectedProviderSessionId) {
@@ -563,7 +569,9 @@ export abstract class StorageNative extends StorageReviews {
         updatedAt: now,
       };
       sessions[input.key] = saved;
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(input.key, sessions[input.key], {
+        requireLiveEnvironment: input.environmentId,
+      });
       if (existing?.pendingDispatch) {
         await this.scrubPendingNativeAgentDispatchBackups(
           input.key,
@@ -583,9 +591,9 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key) || !isNonBlankString(expectedProviderSessionId)) {
       throw new Error("Native agent control update identity is invalid");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const existing = sessions[key];
       if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
@@ -637,7 +645,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       if (update.modelId !== undefined) delete updated.inferredComposerSelection;
       sessions[key] = updated;
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       this.announceNativeAgentRecord(updated);
       return updated;
     });
@@ -660,9 +668,9 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(selection.modelId)) {
       throw new Error("Native agent inferred composer selection is invalid");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const existing = sessions[key];
       if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
@@ -685,7 +693,7 @@ export abstract class StorageNative extends StorageReviews {
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       this.announceNativeAgentRecord(updated);
       return updated;
     });
@@ -695,17 +703,16 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key) || !isNonBlankString(providerSessionId)) {
       throw new Error("Native agent session identity must not be blank");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const existing = sessions[key];
       if (!existing || existing.providerSessionId !== providerSessionId) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       delete sessions[key];
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubSensitiveJsonBackups(
         this.nativeAgentSessionsFile(),
         (storedKey) => storedKey !== key,
@@ -719,16 +726,15 @@ export abstract class StorageNative extends StorageReviews {
   }
 
   /**
-   * Display tails live in independent keyed records (plan step 07): reading
-   * or writing one session's restart preview touches only that record and a
-   * small metadata index. Constructed lazily so storage that never shows a
-   * native session never creates the namespace or runs the legacy import.
+   * Display tails are rows of their own database store, one per session:
+   * reading or writing one session's restart preview touches only that row.
+   * Constructed lazily so storage that never shows a native session never
+   * runs the one-time cleanup of the old cache files.
    */
   protected nativeAgentDisplayTailStore(): NativeAgentDisplayTailStore {
     this.displayTailStoreInstance ??= new NativeAgentDisplayTailStore({
-      directory: this.nativeAgentDisplayTailRecordsDir(),
-      legacyFile: this.nativeAgentDisplayTailsFile(),
-      lock: (target) => this.acquireMutationLock(target, "native agent display tail storage"),
+      database: () => this.database,
+      legacyRoot: this.dataDir,
     });
     return this.displayTailStoreInstance;
   }
@@ -776,43 +782,38 @@ export abstract class StorageNative extends StorageReviews {
 
   async deleteNativeAgentSessionsByEnvironment(environmentId: string): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
-    await this.enqueueNativeAgentSessionMutation(async () => {
-      // Deliberately does not refuse an unreadable record. This is the path a
-      // user takes to clear one, so it must always complete; unreadable records
-      // are simply carried across untouched, since nothing here can prove which
-      // environment they belong to.
-      const { sessions, opaque, migrated } = await this.loadNativeAgentSessions();
-      const retained = Object.fromEntries(
-        Object.entries(sessions).filter(([, session]) => session.environmentId !== environmentId),
-      );
-      const removed = Object.keys(retained).length !== Object.keys(sessions).length;
-      if (migrated || removed) {
-        await this.saveNativeAgentSessions(retained, opaque);
-      }
-      // Only a real deletion is worth waking every client for.
-      if (removed) this.announce("native-agent-session", environmentId);
-      // Unconditional: a retry after a partial failure finds the sessions
-      // already gone, and must still clear the tails that failure left.
-      await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
-
-      // Rotating the primary file leaves the deleted environment's logical keys,
-      // provider session ids and dispatch journal readable in its backups. Scrub
-      // unconditionally, as every sibling delete-by-environment does: a prior
-      // failed delete may have removed the primary record while leaving a backup.
-      await this.scrubSensitiveJsonBackups(this.nativeAgentSessionsFile(), (storedKey, session) => {
-        const readable = migratePersistedNativeAgentSession(session, storedKey);
-        if (readable) return readable.environmentId !== environmentId;
-        // An unreadable backup record still names its environment in the
-        // clear often enough to attribute. Keep the ones that provably belong
-        // elsewhere; drop the rest, because a backup that cannot be proven
-        // free of the deleted environment's content is not safe to retain.
-        return (
-          isRecord(session) &&
-          isNonBlankString(session.environmentId) &&
-          session.environmentId !== environmentId
-        );
-      });
-    });
+    // The environment's tombstone is already set, and inserts check it in
+    // their commit (`saveNativeAgentSession`), so no new key can appear
+    // behind this sweep. Each existing key is deleted under its own lease —
+    // one at a time, never two held at once — so an in-flight dispatch on a
+    // key finishes (and its confirmed turn is removed with it) first.
+    //
+    // Deliberately does not refuse an unreadable record. This is the path a
+    // user takes to clear one, so it must always complete; unreadable records
+    // are carried across untouched, since nothing here can prove which
+    // environment they belong to.
+    const keys = Object.entries((await this.loadNativeAgentSessions()).sessions)
+      .filter(([, session]) => session.environmentId === environmentId)
+      .map(([key]) => key)
+      .sort();
+    let removed = false;
+    for (const key of keys) {
+      removed =
+        (await this.enqueueNativeAgentSessionMutation(key, async () => {
+          const { sessions } = await this.loadNativeAgentSessions();
+          if (sessions[key]?.environmentId !== environmentId) return false;
+          await this.saveNativeAgentSession(key, undefined);
+          return true;
+        })) || removed;
+    }
+    // Only a real deletion is worth waking every client for.
+    if (removed) this.announce("native-agent-session", environmentId);
+    // Unconditional: a retry after a partial failure finds the sessions
+    // already gone, and must still clear the tails that failure left.
+    await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
+    // The deleted rows' provider session ids and dispatch journals must not
+    // survive in free pages or the WAL either.
+    this.scrubDeletedDatabaseContent();
   }
 
   async dispatchNativeAgentPromptOnce(
@@ -846,9 +847,9 @@ export abstract class StorageNative extends StorageReviews {
         throw new Error("Pending native agent dispatch exceeds the 32 MB limit");
       }
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
@@ -862,10 +863,9 @@ export abstract class StorageNative extends StorageReviews {
         if (session.pendingDispatch?.requestId === requestId) {
           session = { ...session, pendingDispatch: undefined, updatedAt: nowIso() };
           sessions[key] = session;
-          await this.saveNativeAgentSessions(sessions, opaque);
+          await this.saveNativeAgentSession(key, sessions[key]);
           await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
         }
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { session, dispatched: false };
       }
 
@@ -886,7 +886,7 @@ export abstract class StorageNative extends StorageReviews {
         sessions[key] = session;
         // Persist before touching the provider. A crash or lost acknowledgement
         // can then replay this exact request through the same idempotency key.
-        await this.saveNativeAgentSessions(sessions, opaque);
+        await this.saveNativeAgentSession(key, sessions[key]);
       }
 
       // Keep the cross-process lock until the provider has acknowledged this
@@ -904,7 +904,7 @@ export abstract class StorageNative extends StorageReviews {
           sessions[key] = updated;
           // Persist proof of refusal before cleanup. A restart can release this
           // fence without interpreting a missing provider journal as unsent.
-          await this.saveNativeAgentSessions(sessions, opaque);
+          await this.saveNativeAgentSession(key, sessions[key]);
           this.announceNativeAgentRecord(updated);
           return { session: updated, dispatched: false };
         }
@@ -920,12 +920,11 @@ export abstract class StorageNative extends StorageReviews {
               updatedAt: nowIso(),
             };
             sessions[key] = updated;
-            await this.saveNativeAgentSessions(sessions, opaque);
+            await this.saveNativeAgentSession(key, sessions[key]);
             await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
             this.announceNativeAgentRecord(updated);
             return { session: updated, dispatched: false };
           }
-          if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return { session, dispatched: false };
         }
         const updated: PersistedNativeAgentSession = {
@@ -939,7 +938,7 @@ export abstract class StorageNative extends StorageReviews {
           updatedAt: nowIso(),
         };
         sessions[key] = updated;
-        await this.saveNativeAgentSessions(sessions, opaque);
+        await this.saveNativeAgentSession(key, sessions[key]);
         await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
         this.announceNativeAgentRecord(updated);
         return { session: updated, dispatched: false };
@@ -953,7 +952,7 @@ export abstract class StorageNative extends StorageReviews {
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announceNativeAgentRecord(updated);
       return { session: updated, dispatched: true };
@@ -977,13 +976,12 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent dispatch identity must not be blank");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (!session || session.pendingDispatch?.requestId !== requestId) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       sessions[key] = {
@@ -994,7 +992,7 @@ export abstract class StorageNative extends StorageReviews {
           : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
         updatedAt: nowIso(),
       };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announceNativeAgentRecord(sessions[key]!);
       return true;
@@ -1009,9 +1007,9 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Pending native agent dispatch identity must not be blank");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (
@@ -1019,7 +1017,6 @@ export abstract class StorageNative extends StorageReviews {
         session.pendingDispatch?.requestId !== requestId ||
         (onlyMailRefused && !session.pendingDispatch.mailRefused)
       ) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       sessions[key] = {
@@ -1027,7 +1024,7 @@ export abstract class StorageNative extends StorageReviews {
         pendingDispatch: undefined,
         updatedAt: nowIso(),
       };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
       this.announceNativeAgentRecord(sessions[key]!);
       return true;
@@ -1070,9 +1067,9 @@ export abstract class StorageNative extends StorageReviews {
       throw new Error("Pending native agent steer exceeds its persistence limit");
     }
 
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
@@ -1080,7 +1077,6 @@ export abstract class StorageNative extends StorageReviews {
         throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
       }
       if (session.dispatchedRequestIds?.includes(pendingSteer.requestId) && !session.pendingSteer) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { outcome: "applied" };
       }
       if (session.pendingSteer) {
@@ -1101,7 +1097,7 @@ export abstract class StorageNative extends StorageReviews {
         };
         sessions[key] = session;
         // The record must be durable before a provider can queue the text.
-        await this.saveNativeAgentSessions(sessions, opaque);
+        await this.saveNativeAgentSession(key, sessions[key]);
       }
 
       let outcome: NativeAgentSessionActionOutcome;
@@ -1126,7 +1122,7 @@ export abstract class StorageNative extends StorageReviews {
           pendingSteer: { ...pendingSteer, state: "unknown" },
           updatedAt: nowIso(),
         };
-        await this.saveNativeAgentSessions(sessions, opaque);
+        await this.saveNativeAgentSession(key, sessions[key]);
         this.announceNativeAgentRecord(sessions[key]!);
         return { ...outcome, requestId: pendingSteer.requestId };
       }
@@ -1143,7 +1139,7 @@ export abstract class StorageNative extends StorageReviews {
           : {}),
         updatedAt: nowIso(),
       };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubPendingNativeAgentSteerBackups(key, pendingSteer.requestId);
       this.announceNativeAgentRecord(sessions[key]!);
       return outcome;
@@ -1154,13 +1150,12 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent steer identity must not be blank");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (!session || session.pendingSteer?.requestId !== requestId) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       sessions[key] = {
@@ -1171,7 +1166,7 @@ export abstract class StorageNative extends StorageReviews {
           : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
         updatedAt: nowIso(),
       };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubPendingNativeAgentSteerBackups(key, requestId);
       this.announceNativeAgentRecord(sessions[key]!);
       return true;
@@ -1182,17 +1177,16 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent steer identity must not be blank");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (!session || session.pendingSteer?.requestId !== requestId) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       sessions[key] = { ...session, pendingSteer: undefined, updatedAt: nowIso() };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       await this.scrubPendingNativeAgentSteerBackups(key, requestId);
       this.announceNativeAgentRecord(sessions[key]!);
       return true;
@@ -1215,17 +1209,15 @@ export abstract class StorageNative extends StorageReviews {
     ) {
       throw new Error("OpenCode incomplete-turn notice is invalid");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (!session || session.providerSessionId !== providerSessionId) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       if (notice === null && session.openCodeIncompleteTurnNotice === undefined) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return true;
       }
       const updated: PersistedNativeAgentSession = {
@@ -1234,7 +1226,7 @@ export abstract class StorageNative extends StorageReviews {
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       this.announceNativeAgentRecord(updated);
       return true;
     });
@@ -1284,7 +1276,7 @@ export abstract class StorageNative extends StorageReviews {
     session: PersistedNativeAgentSession | null;
     queue: PersistedPromptQueue | null;
   }> {
-    return this.enqueueNativeAgentSessionMutation(() =>
+    return this.enqueueNativeAgentSessionMutation(key, () =>
       this.enqueuePromptQueueMutation(async () => {
         const loaded = await this.loadNativeAgentSessions();
         this.assertReadableNativeAgentSession(loaded, key);
@@ -1295,23 +1287,7 @@ export abstract class StorageNative extends StorageReviews {
   }
 
   protected enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.promptQueuesFile(),
-        "prompt queue storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.promptQueueMutation.then(run, run);
-    this.promptQueueMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.promptQueuesFile(), "prompt queue storage", operation);
   }
 
   protected validatePromptQueueMessages(messages: unknown): asserts messages is unknown[] {
@@ -1429,9 +1405,9 @@ export abstract class StorageNative extends StorageReviews {
     ) {
       throw new Error("Native agent turn outcome is invalid");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (
@@ -1440,7 +1416,6 @@ export abstract class StorageNative extends StorageReviews {
         !session.dispatchedRequestIds?.includes(outcome.requestId) ||
         session.turnOutcomes?.some((entry) => entry.requestId === outcome.requestId)
       ) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       sessions[key] = {
@@ -1456,7 +1431,7 @@ export abstract class StorageNative extends StorageReviews {
         ],
         updatedAt: nowIso(),
       };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       return true;
     });
   }
@@ -1478,9 +1453,9 @@ export abstract class StorageNative extends StorageReviews {
     ) {
       throw new Error("Native agent turn interrupt is invalid");
     }
-    return this.enqueueNativeAgentSessionMutation(async () => {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque, migrated } = loaded;
+      const { sessions } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (
@@ -1489,7 +1464,6 @@ export abstract class StorageNative extends StorageReviews {
         !session.dispatchedRequestIds?.includes(requestId) ||
         session.interruptedRequestIds?.includes(requestId)
       ) {
-        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       sessions[key] = {
@@ -1497,7 +1471,7 @@ export abstract class StorageNative extends StorageReviews {
         interruptedRequestIds: [...(session.interruptedRequestIds ?? []).slice(-49), requestId],
         updatedAt: nowIso(),
       };
-      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.saveNativeAgentSession(key, sessions[key]);
       return true;
     });
   }
@@ -1607,42 +1581,12 @@ export abstract class StorageNative extends StorageReviews {
       this.promptQueuesFile(),
       () => ({}),
     );
+    // A first-generation dispatch error was upgraded once at import
+    // (storage-record-upgrades.ts); every stored error identifies its item.
     return Object.fromEntries(
-      Object.entries(stored).flatMap(([storedKey, queue]) => {
-        if (!isPersistedPromptQueue(queue, storedKey)) return [];
-        if (
-          !queue.dispatchError ||
-          (isNonBlankString(queue.dispatchError.messageId) &&
-            isNonBlankString(queue.dispatchError.messageFingerprint))
-        ) {
-          return [[storedKey, queue]];
-        }
-
-        // Records written by the first dispatch-error implementation did not
-        // identify the rejected queue item. Upgrade those in memory from the
-        // restored message so the first subsequent mutation gets the same
-        // edit/removal semantics as a newly written record.
-        const failedMessage = queue.messages.find(
-          (candidate) => isRecord(candidate) && candidate.id === queue.dispatchError?.requestId,
-        );
-        if (!isRecord(failedMessage) || !isNonBlankString(failedMessage.id)) {
-          const { dispatchError: _dispatchError, ...withoutError } = queue;
-          return [[storedKey, withoutError as PersistedPromptQueue]];
-        }
-        return [
-          [
-            storedKey,
-            {
-              ...queue,
-              dispatchError: {
-                ...queue.dispatchError,
-                messageId: failedMessage.id,
-                messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
-              },
-            },
-          ],
-        ];
-      }),
-    ) as Record<string, PersistedPromptQueue>;
+      Object.entries(stored).filter(([storedKey, queue]) =>
+        isPersistedPromptQueue(queue, storedKey),
+      ),
+    );
   }
 }

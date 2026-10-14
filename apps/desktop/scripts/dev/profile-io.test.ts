@@ -257,6 +257,56 @@ describe("development profile lifecycle primitives", () => {
     }
   });
 
+  test("seeds catalogues from the production database and never into a profile database", async () => {
+    const { Database } = await import("bun:sqlite");
+    const { roots, profile, destinations } = await modelCacheFixture();
+    // The minimal on-disk shape the backend writes (see @orkestrator/protocol/storage-database).
+    const production = new Database(path.join(roots.productionDataDir, "orkestrator.sqlite"), {
+      create: true,
+    });
+    production.exec(`
+      CREATE TABLE stores (name TEXT PRIMARY KEY, revision INTEGER, layout TEXT, mode TEXT, document TEXT, updated_at INTEGER);
+      CREATE TABLE store_rows (store TEXT, collection TEXT, key TEXT, position INTEGER, owner TEXT, value TEXT);
+    `);
+    production
+      .query("INSERT INTO stores VALUES ('agent-model-catalog', 1, 'document', 'document', ?, 0)")
+      .run(JSON.stringify({ schemaVersion: 1, codex: { updatedAt: "x", models: [] } }));
+    production
+      .query("INSERT INTO stores VALUES ('opencode-model-catalog', 1, 'envelope', 'rows', ?, 0)")
+      .run(JSON.stringify({ schemaVersion: 2, catalogs: "\u0000collection" }));
+    production
+      .query(
+        "INSERT INTO store_rows VALUES ('opencode-model-catalog', 'catalogs', 'p1', 0, NULL, ?)",
+      )
+      .run(JSON.stringify({ projectId: "p1" }));
+    production.close();
+
+    await expect(seedInstalledModelCatalogCaches(profile, { roots, env: {} })).resolves.toEqual([
+      "agent-model-catalog.json",
+      "opencode-model-catalog.json",
+    ]);
+    expect(JSON.parse(await readFile(destinations.agent, "utf8"))).toEqual({
+      schemaVersion: 1,
+      codex: { updatedAt: "x", models: [] },
+    });
+    expect(JSON.parse(await readFile(destinations.opencode, "utf8"))).toEqual({
+      schemaVersion: 2,
+      catalogs: { p1: { projectId: "p1" } },
+    });
+    expect((await stat(destinations.opencode)).mode & 0o777).toBe(0o600);
+
+    // Once the profile's backend has its own database, it owns its catalogues.
+    await rm(destinations.agent);
+    await writeFile(path.join(profile.dataDir, "orkestrator.sqlite"), "");
+    await expect(seedInstalledModelCatalogCaches(profile, { roots, env: {} })).resolves.toEqual([]);
+    expect(
+      await access(destinations.agent).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  });
+
   test("preserves profile-local catalogue updates when a profile is seeded again", async () => {
     const { roots, profile, sources, destinations } = await modelCacheFixture();
     for (const source of Object.values(sources)) await writeFile(source, "initial-host-cache");

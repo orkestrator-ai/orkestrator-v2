@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { StorageService } from "./storage.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
 
 function workflow(id: string): MultiReviewWorkflow {
   const timestamp = new Date(0).toISOString();
@@ -104,7 +105,7 @@ test("Multi Review storage fences revisions and controller ownership", async () 
   });
 });
 
-test("Multi Review lease writes do not rotate workflow backups", async () => {
+test("Multi Review lease writes leave workflow content and revision untouched", async () => {
   await withStorage(async (storage) => {
     await storage.createMultiReviewWorkflowIfNoActive("multi-1", "env-1", 1, workflow("multi-1"));
     const first = await storage.saveMultiReviewWorkflow(
@@ -121,11 +122,8 @@ test("Multi Review lease writes do not rotate workflow backups", async () => {
       workflow("multi-1"),
       first.revision,
     );
-    const file = path.join(storeDir(storage), "multi-reviews.json");
-    const olderBackup = await fs.readFile(`${file}.bak.2`, "utf8");
-    const backupsBefore = (await fs.readdir(storeDir(storage))).filter((name) =>
-      name.startsWith("multi-reviews.json.bak."),
-    );
+    const dataDir = storeDir(storage);
+    const committed = readStoredValue<Record<string, unknown>>(dataDir, "multi-reviews.json")!;
 
     for (let renewal = 0; renewal < 6; renewal++) {
       const claimed = await storage.claimMultiReviewController(
@@ -137,14 +135,14 @@ test("Multi Review lease writes do not rotate workflow backups", async () => {
       await storage.releaseMultiReviewController("multi-1", `owner-${renewal}`, claimed.token);
     }
 
-    const backupsAfter = (await fs.readdir(storeDir(storage))).filter((name) =>
-      name.startsWith("multi-reviews.json.bak."),
-    );
-    expect(backupsAfter.sort()).toEqual(backupsBefore.sort());
-    // Older recovery points still hold content-commit snapshots, not lease churn.
-    expect(await fs.readFile(`${file}.bak.2`, "utf8")).toBe(olderBackup);
-    // The primary is intact and still parses after lease-only writes.
+    // Lease churn is not a content commit: the released record is exactly the
+    // last committed workflow, revision and timestamp included.
+    expect(readStoredValue(dataDir, "multi-reviews.json")).toEqual(committed);
     expect((await storage.getMultiReviewWorkflow("multi-1"))?.revision).toBe(3);
+    // No per-write backup or lock files accumulate beside the database.
+    expect((await fs.readdir(dataDir)).filter((name) => name.startsWith("multi-reviews"))).toEqual(
+      [],
+    );
   });
 });
 
@@ -163,12 +161,14 @@ test("Multi Review fence checks follow every write to the store", async () => {
       false,
     );
 
-    // A write from another process replaces the file; the next check sees it.
-    const file = path.join(storeDir(storage), "multi-reviews.json");
-    const stored = JSON.parse(await fs.readFile(file, "utf8"));
-    delete stored["multi-1"].controllerLease;
-    await fs.writeFile(`${file}.external`, JSON.stringify(stored));
-    await fs.rename(`${file}.external`, file);
+    // A write from another process replaces the store; the next check sees it.
+    const dataDir = storeDir(storage);
+    const stored = readStoredValue<Record<string, { controllerLease?: unknown }>>(
+      dataDir,
+      "multi-reviews.json",
+    )!;
+    delete stored["multi-1"]!.controllerLease;
+    seedStore(dataDir, "multi-reviews.json", stored);
     expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token)).toBe(
       false,
     );

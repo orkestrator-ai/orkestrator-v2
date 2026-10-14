@@ -1,3 +1,4 @@
+import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
 import { WEB_ANNOTATION_QUEUE_ITEM_FROZEN } from "@orkestrator/protocol/web-annotations";
 import * as shared from "./storage-shared.js";
 import {
@@ -824,7 +825,7 @@ export abstract class StoragePrompts extends StorageNative {
   }
 
   protected promptQueueMessageFingerprint(message: unknown): string {
-    return createHash("sha256").update(JSON.stringify(message)).digest("hex");
+    return promptQueueMessageFingerprint(message);
   }
 
   async acknowledgePromptQueueClaim(
@@ -950,94 +951,99 @@ export abstract class StoragePrompts extends StorageNative {
     if (expectedDraftRevision !== undefined && !isNonNegativeInteger(expectedDraftRevision)) {
       throw new Error("Compose draft expected revision must be a non-negative integer");
     }
+    // The draft and the shortened queue commit in one transaction, so a crash
+    // can never leave the prompt in both places or in neither. A retry after
+    // a failed commit still finds the original queue entry.
     return this.enqueuePromptQueueMutation(async () =>
-      this.enqueueComposeDraftMutation(async () => {
-        const environment = await this.assertEnvironmentAcceptsBackgroundState(
-          environmentId,
-          "Prompt queue",
-        );
-        if (
-          (ownerType === "environment" && ownerId !== environmentId) ||
-          (ownerType === "project" && ownerId !== environment.projectId)
-        ) {
-          throw new Error("Compose draft owner does not own the prompt queue");
-        }
-        const queues = await this.loadPromptQueues();
-        const previousQueue = queues[queueKey];
-        if (!previousQueue) {
-          return { removed: null, queue: null, draft: null };
-        }
-        if (previousQueue.environmentId !== environmentId) {
-          throw new Error("Prompt queue belongs to another environment");
-        }
-        const messageIndex = previousQueue.messages.findIndex(
-          (candidate) => isRecord(candidate) && candidate.id === messageId,
-        );
-        if (messageIndex < 0) {
-          return { removed: null, queue: previousQueue, draft: null };
-        }
-        const authoritativeMessage = previousQueue.messages[messageIndex];
-        if (isFrozenPromptQueueMessage(authoritativeMessage)) {
-          throw new Error(
-            `${PROMPT_QUEUE_MESSAGE_FROZEN} ${messageId} is a frozen request snapshot; it cannot be edited or moved into a draft. Remove it to cancel the request.`,
+      this.enqueueComposeDraftMutation(() =>
+        this.atomically(async () => {
+          const environment = await this.assertEnvironmentAcceptsBackgroundState(
+            environmentId,
+            "Prompt queue",
           );
-        }
-        if (
-          !isRecord(authoritativeMessage) ||
-          typeof authoritativeMessage.text !== "string" ||
-          !Array.isArray(authoritativeMessage.attachments)
-        ) {
-          throw new Error("Queued prompt must have text and attachments before transfer");
-        }
-        const value = {
-          text: authoritativeMessage.text,
-          mentions: [],
-          attachments: authoritativeMessage.attachments,
-        };
-
-        const drafts = await this.loadComposeDrafts();
-        const previousDraft = drafts[draftKey];
-        let draft: PersistedComposeDraft;
-        if (previousDraft) {
-          if (previousDraft.ownerType !== ownerType || previousDraft.ownerId !== ownerId) {
-            throw new Error("Compose draft belongs to another owner");
+          if (
+            (ownerType === "environment" && ownerId !== environmentId) ||
+            (ownerType === "project" && ownerId !== environment.projectId)
+          ) {
+            throw new Error("Compose draft owner does not own the prompt queue");
+          }
+          const queues = await this.loadPromptQueues();
+          const previousQueue = queues[queueKey];
+          if (!previousQueue) {
+            return { removed: null, queue: null, draft: null };
+          }
+          if (previousQueue.environmentId !== environmentId) {
+            throw new Error("Prompt queue belongs to another environment");
+          }
+          const messageIndex = previousQueue.messages.findIndex(
+            (candidate) => isRecord(candidate) && candidate.id === messageId,
+          );
+          if (messageIndex < 0) {
+            return { removed: null, queue: previousQueue, draft: null };
+          }
+          const authoritativeMessage = previousQueue.messages[messageIndex];
+          if (isFrozenPromptQueueMessage(authoritativeMessage)) {
+            throw new Error(
+              `${PROMPT_QUEUE_MESSAGE_FROZEN} ${messageId} is a frozen request snapshot; it cannot be edited or moved into a draft. Remove it to cancel the request.`,
+            );
           }
           if (
-            previousDraft.sourcePromptQueue?.queueKey !== queueKey ||
-            previousDraft.sourcePromptQueue.messageId !== messageId
+            !isRecord(authoritativeMessage) ||
+            typeof authoritativeMessage.text !== "string" ||
+            !Array.isArray(authoritativeMessage.attachments)
           ) {
-            throw new Error("Compose draft already exists");
+            throw new Error("Queued prompt must have text and attachments before transfer");
           }
-          draft = previousDraft;
-        } else {
-          if (expectedDraftRevision !== undefined && expectedDraftRevision !== 0) {
-            throw new Error("Compose draft revision conflict");
-          }
-          draft = {
-            draftKey,
-            ownerType,
-            ownerId,
-            value,
-            sourcePromptQueue: { queueKey, messageId },
-            updatedAt: nowIso(),
-            revision: 1,
+          const value = {
+            text: authoritativeMessage.text,
+            mentions: [],
+            attachments: authoritativeMessage.attachments,
           };
-          drafts[draftKey] = draft;
-          await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
-          this.announce("compose-draft", ownerId);
-        }
 
-        const messages = [...previousQueue.messages];
-        const [removed] = messages.splice(messageIndex, 1);
-        const queue = await this.savePromptQueueMutation(
-          queues,
-          queueKey,
-          environmentId,
-          messages,
-          previousQueue,
-        );
-        return { removed: removed ?? null, queue, draft };
-      }),
+          const drafts = await this.loadComposeDrafts();
+          const previousDraft = drafts[draftKey];
+          let draft: PersistedComposeDraft;
+          if (previousDraft) {
+            if (previousDraft.ownerType !== ownerType || previousDraft.ownerId !== ownerId) {
+              throw new Error("Compose draft belongs to another owner");
+            }
+            if (
+              previousDraft.sourcePromptQueue?.queueKey !== queueKey ||
+              previousDraft.sourcePromptQueue.messageId !== messageId
+            ) {
+              throw new Error("Compose draft already exists");
+            }
+            draft = previousDraft;
+          } else {
+            if (expectedDraftRevision !== undefined && expectedDraftRevision !== 0) {
+              throw new Error("Compose draft revision conflict");
+            }
+            draft = {
+              draftKey,
+              ownerType,
+              ownerId,
+              value,
+              sourcePromptQueue: { queueKey, messageId },
+              updatedAt: nowIso(),
+              revision: 1,
+            };
+            drafts[draftKey] = draft;
+            await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+            this.announce("compose-draft", ownerId);
+          }
+
+          const messages = [...previousQueue.messages];
+          const [removed] = messages.splice(messageIndex, 1);
+          const queue = await this.savePromptQueueMutation(
+            queues,
+            queueKey,
+            environmentId,
+            messages,
+            previousQueue,
+          );
+          return { removed: removed ?? null, queue, draft };
+        }),
+      ),
     );
   }
 
@@ -1071,23 +1077,7 @@ export abstract class StoragePrompts extends StorageNative {
   }
 
   protected enqueueComposeDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.composeDraftsFile(),
-        "compose draft storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.composeDraftMutation.then(run, run);
-    this.composeDraftMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.composeDraftsFile(), "compose draft storage", operation);
   }
 
   protected validComposeDrafts(stored: unknown): Record<string, PersistedComposeDraft> {

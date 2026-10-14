@@ -274,6 +274,7 @@ async function harness(
     record: async () => (await storage.getFeaturePlan(plan.id))?.planning,
     dispose: async () => {
       await service.shutdown();
+      workflowResults?.closeStorage();
       await fs.rm(dataDir, { recursive: true, force: true });
     },
   };
@@ -424,6 +425,7 @@ describe("FeaturePlanningService", () => {
       // backend restarting between acceptance and consumption.
       const restarted = new WorkflowResultService(context.dataDir);
       expect(await restarted.structured(record.requestId!)).toMatchObject({ ok: true });
+      restarted.closeStorage();
 
       context.provider.reply("The export plan is ready for confirmation.");
       await context.service.advanceNow(context.featureId);
@@ -1106,6 +1108,7 @@ describe("FeaturePlanningService", () => {
         lifecycle: "consumed",
         completion: "completed",
       });
+      restartedResults.closeStorage();
     } finally {
       await context.dispose();
     }

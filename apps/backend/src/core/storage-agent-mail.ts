@@ -253,20 +253,7 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   private enqueueAgentMailMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(this.agentMailFile(), "agent mail storage");
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.agentMailMutation.then(run, run);
-    this.agentMailMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.serializeMutation(this.agentMailFile(), "agent mail storage", operation);
   }
 
   private async loadAgentMailStore(): Promise<PersistedAgentMailStore> {

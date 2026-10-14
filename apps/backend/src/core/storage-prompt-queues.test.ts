@@ -1,8 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import type { StorageDatabase } from "./storage-database.js";
+import {
+  exportStoresAsLegacyJson,
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+} from "./storage-test-support.js";
+
+function storageDatabase(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
+}
 
 async function withStorage<T>(
   run: (storage: StorageService) => Promise<T>,
@@ -36,6 +47,7 @@ async function withStorage<T>(
 }
 
 const KEY = "claude env-e1:tab-1";
+const QUEUES = "prompt-queues.json";
 
 describe("StorageService prompt queues", () => {
   test("stores and reads a queue", async () => {
@@ -313,14 +325,13 @@ describe("StorageService prompt queues", () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
       await storage.claimPromptQueueHead(KEY, "e1", "m1");
-      const file = path.join(storage.getDataDir(), "prompt-queues.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+      const stored = readStoredValue(storage.getDataDir(), QUEUES) as Record<
         string,
         { outstandingClaim?: { claimedAt: string; expiresAt: string } }
       >;
       stored[KEY]!.outstandingClaim!.claimedAt = new Date(0).toISOString();
       stored[KEY]!.outstandingClaim!.expiresAt = new Date(1).toISOString();
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(storage.getDataDir(), QUEUES, stored);
 
       const events: Array<{ resource: string; id: string }> = [];
       const restarted = new StorageService(storage.getDataDir());
@@ -532,32 +543,31 @@ describe("StorageService prompt queues", () => {
     });
   });
 
-  test("retries a transfer after draft persistence outlives queue persistence", async () => {
+  test("commits a transfer's draft and queue together or not at all", async () => {
     await withStorage(async (storage) => {
       const message = {
         id: "m1",
-        text: "survive the partial failure",
+        text: "survive the failed commit",
         attachments: [{ id: "a1" }],
       };
       await storage.enqueuePromptQueueMessage(KEY, "e1", message);
 
-      type SaveSensitiveJson = (
-        filePath: string,
-        value: unknown,
-        options?: { backup?: boolean },
-      ) => Promise<void>;
-      const mutable = storage as unknown as {
-        saveSensitiveJson: SaveSensitiveJson;
-      };
-      const originalSave = mutable.saveSensitiveJson.bind(storage);
-      let failPromptQueueWrite = true;
-      mutable.saveSensitiveJson = async (filePath, value, options) => {
-        if (failPromptQueueWrite && path.basename(filePath) === "prompt-queues.json") {
-          failPromptQueueWrite = false;
-          throw new Error("injected prompt queue persistence failure");
-        }
-        await originalSave(filePath, value, options);
-      };
+      // Fail the queue write inside the shared commit, after the draft row may
+      // already have been written in the same transaction.
+      const database = storageDatabase(storage);
+      const writeInTransaction = database.writeStoreInTransaction.bind(database);
+      const committedStores: string[] = [];
+      let failQueueWrite = true;
+      const spy = spyOn(database, "writeStoreInTransaction").mockImplementation(
+        (store, value, options) => {
+          committedStores.push(store);
+          if (failQueueWrite && store === "prompt-queues") {
+            failQueueWrite = false;
+            throw new Error("injected prompt queue persistence failure");
+          }
+          return writeInTransaction(store, value, options);
+        },
+      );
 
       await expect(
         storage.transferPromptQueueMessageToComposeDraft(
@@ -569,36 +579,13 @@ describe("StorageService prompt queues", () => {
           "e1",
         ),
       ).rejects.toThrow("injected prompt queue persistence failure");
+      expect(committedStores).toContain("prompt-queues");
+      // Neither store changed: the queue still holds the message and no draft
+      // was created, so nothing is lost and nothing is duplicated.
       expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [message], revision: 1 });
-      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({
-        value: {
-          text: message.text,
-          mentions: [],
-          attachments: message.attachments,
-        },
-        sourcePromptQueue: {
-          queueKey: KEY,
-          messageId: "m1",
-        },
-        revision: 1,
-      });
-      await storage.saveComposeDraft(
-        "compose:e1:tab-1",
-        "environment",
-        "e1",
-        {
-          text: "survive the partial failure",
-          mentions: [],
-          attachments: message.attachments,
-        },
-        1,
-      );
-      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({
-        sourcePromptQueue: { queueKey: KEY, messageId: "m1" },
-        revision: 2,
-      });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toBeNull();
+      expect(readStoredValue(storage.getDataDir(), "compose-drafts.json") ?? {}).toEqual({});
 
-      mutable.saveSensitiveJson = originalSave;
       await expect(
         storage.transferPromptQueueMessageToComposeDraft(
           KEY,
@@ -612,12 +599,14 @@ describe("StorageService prompt queues", () => {
         removed: message,
         queue: { messages: [], revision: 2 },
         draft: {
+          value: { text: message.text, mentions: [], attachments: message.attachments },
           sourcePromptQueue: { queueKey: KEY, messageId: "m1" },
-          revision: 2,
+          revision: 1,
         },
       });
+      spy.mockRestore();
       expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [], revision: 2 });
-      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({ revision: 2 });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({ revision: 1 });
     });
   });
 
@@ -889,10 +878,9 @@ describe("StorageService prompt queues", () => {
   test("ignores a corrupt record instead of failing every read", async () => {
     await withStorage(async (storage) => {
       await storage.savePromptQueue(KEY, "e1", [{ id: "m1" }]);
-      const file = path.join(storage.getDataDir(), "prompt-queues.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
+      const stored = readStoredValue(storage.getDataDir(), QUEUES) as Record<string, unknown>;
       stored.corrupt = { queueKey: "corrupt", environmentId: "e1", messages: "nope", revision: 1 };
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(storage.getDataDir(), QUEUES, stored);
 
       expect((await storage.listPromptQueues("e1")).map((queue) => queue.queueKey)).toEqual([KEY]);
     });
@@ -903,19 +891,26 @@ describe("StorageService prompt queues", () => {
       await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "invalid" }]);
       await storage.reservePromptQueueHeadForDispatch(KEY);
       await storage.failPromptQueueDispatch(KEY, "m1");
-      const file = path.join(storage.getDataDir(), "prompt-queues.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
-        string,
-        { dispatchError?: Record<string, unknown> }
-      >;
-      delete stored[KEY]?.dispatchError?.messageId;
-      delete stored[KEY]?.dispatchError?.messageFingerprint;
-      await fs.writeFile(file, JSON.stringify(stored));
-
-      expect((await storage.getPromptQueue(KEY))?.dispatchError).toMatchObject({
-        messageId: "m1",
-        messageFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      // Rewrite the error in the first implementation's shape and import it
+      // the way an upgraded installation does.
+      const legacyDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-queue-legacy-"));
+      exportStoresAsLegacyJson(storage.getDataDir(), legacyDir, (file, value) => {
+        if (file !== QUEUES) return undefined;
+        const queues = value as Record<string, { dispatchError?: Record<string, unknown> }>;
+        delete queues[KEY]?.dispatchError?.messageId;
+        delete queues[KEY]?.dispatchError?.messageFingerprint;
+        return queues;
       });
+      const upgraded = new StorageService(legacyDir);
+      try {
+        expect((await upgraded.getPromptQueue(KEY))?.dispatchError).toMatchObject({
+          messageId: "m1",
+          messageFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
+      } finally {
+        upgraded.close();
+        await fs.rm(legacyDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1076,33 +1071,22 @@ describe("StorageService prompt queues", () => {
     });
   });
 
-  describe("backup scrubbing", () => {
-    /** Every retained copy of the queue file, primary and backups. */
-    async function readAllCopies(storage: StorageService): Promise<string> {
-      const dir = storage.getDataDir();
-      const names = (await fs.readdir(dir)).filter((name) => name.startsWith("prompt-queues.json"));
-      const contents = await Promise.all(
-        names.map((name) => fs.readFile(path.join(dir, name), "utf8")),
-      );
-      return contents.join("\n");
-    }
-
-    test("removes a deleted environment's prompt text from every retained backup", async () => {
+  describe("deleted content scrubbing", () => {
+    test("leaves a deleted environment's prompt text unrecoverable", async () => {
       await withStorage(async (storage) => {
-        // Several writes so the file rotates and the early prompt survives only
-        // in a backup.
+        // Several writes so the early prompt survives only in superseded pages.
         await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "TOP-SECRET-PROMPT" }]);
         await storage.savePromptQueue(KEY, "e1", [{ id: "m2", text: "second" }], 1);
         await storage.savePromptQueue(KEY, "e1", [{ id: "m3", text: "third" }], 2);
-        expect(await readAllCopies(storage)).toContain("TOP-SECRET-PROMPT");
+        expect(storageFilesContain(storage.getDataDir(), "TOP-SECRET-PROMPT")).toBe(true);
 
         await storage.deletePromptQueuesByEnvironment("e1");
 
-        expect(await readAllCopies(storage)).not.toContain("TOP-SECRET-PROMPT");
+        expect(storageFilesContain(storage.getDataDir(), "TOP-SECRET-PROMPT")).toBe(false);
       });
     });
 
-    test("leaves another environment's queues intact in the backups", async () => {
+    test("leaves another environment's queues intact", async () => {
       await withStorage(async (storage) => {
         await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "keep", text: "KEEP-ME" }]);
         await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "DROP-ME" }]);
@@ -1110,34 +1094,47 @@ describe("StorageService prompt queues", () => {
 
         await storage.deletePromptQueuesByEnvironment("e1");
 
-        const all = await readAllCopies(storage);
-        expect(all).toContain("KEEP-ME");
-        expect(all).not.toContain("DROP-ME");
+        const dataDir = storage.getDataDir();
+        expect(storageFilesContain(dataDir, "KEEP-ME")).toBe(true);
+        expect(storageFilesContain(dataDir, "DROP-ME")).toBe(false);
         expect(await storage.listPromptQueues("e2")).toHaveLength(1);
       });
     });
 
-    test("discards a corrupt backup that cannot be proven scrubbed", async () => {
+    test("retries the scrub after the delete already committed", async () => {
       await withStorage(async (storage) => {
         await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "SENSITIVE" }]);
         await storage.savePromptQueue(KEY, "e1", [{ id: "m2" }], 1);
-        const backup = path.join(storage.getDataDir(), "prompt-queues.json.bak.1");
-        await fs.writeFile(backup, "{ not json SENSITIVE");
+        // The delete commits but its scrub does not (a reader kept the WAL
+        // alive), so superseded frames still hold the prompt.
+        const scrub = spyOn(storageDatabase(storage), "scrubDeletedContent").mockImplementation(
+          () => {},
+        );
+        expect(await storage.deletePromptQueuesByEnvironment("e1")).toEqual([KEY]);
+        scrub.mockRestore();
+        expect(storageFilesContain(storage.getDataDir(), "SENSITIVE")).toBe(true);
 
-        await storage.deletePromptQueuesByEnvironment("e1");
+        // The retry finds nothing left to delete but still finishes the scrub.
+        expect(await storage.deletePromptQueuesByEnvironment("e1")).toEqual([]);
 
-        expect(await readAllCopies(storage)).not.toContain("SENSITIVE");
+        expect(storageFilesContain(storage.getDataDir(), "SENSITIVE")).toBe(false);
       });
     });
 
-    test("does not touch backups when the environment owned no queues", async () => {
+    test("does not touch other queues when the environment owned none", async () => {
       await withStorage(async (storage) => {
         await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "keep", text: "KEEP-ME" }]);
         await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "keep2" }], 1);
+        const write = spyOn(storageDatabase(storage), "writeStore");
 
         expect(await storage.deletePromptQueuesByEnvironment("e1")).toEqual([]);
 
-        expect(await readAllCopies(storage)).toContain("KEEP-ME");
+        expect(write).not.toHaveBeenCalled();
+        write.mockRestore();
+        expect(await storage.getPromptQueue("claude env-e2:t1")).toMatchObject({
+          messages: [{ id: "keep2" }],
+          revision: 2,
+        });
       });
     });
   });
@@ -1176,13 +1173,12 @@ describe("StorageService prompt queue claim leases", () => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
       await storage.claimPromptQueueHead(KEY, "e1", "m1");
 
-      const file = path.join(storage.getDataDir(), "prompt-queues.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+      const stored = readStoredValue(storage.getDataDir(), QUEUES) as Record<
         string,
         { outstandingClaim?: { expiresAt: string } }
       >;
       stored[KEY]!.outstandingClaim!.expiresAt = new Date(1).toISOString();
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(storage.getDataDir(), QUEUES, stored);
 
       const reclaimed = await storage.claimPromptQueueHead(KEY, "e1", "m1");
       expect(reclaimed.claimed).toMatchObject({ id: "m1" });
@@ -1199,15 +1195,14 @@ describe("StorageService prompt queue claim leases", () => {
       await storage.claimPromptQueueHead(KEY, "e1", "m1");
       await storage.claimPromptQueueHead(otherKey, "e2", "m2");
 
-      const file = path.join(storage.getDataDir(), "prompt-queues.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+      const stored = readStoredValue(storage.getDataDir(), QUEUES) as Record<
         string,
         { outstandingClaim?: { expiresAt: string } }
       >;
       for (const record of Object.values(stored)) {
         record.outstandingClaim!.expiresAt = new Date(1).toISOString();
       }
-      await fs.writeFile(file, JSON.stringify(stored));
+      seedStore(storage.getDataDir(), QUEUES, stored);
 
       const events: Array<{ resource: string; id: string }> = [];
       const restarted = new StorageService(storage.getDataDir());
@@ -1253,20 +1248,16 @@ describe("StorageService prompt queue claim leases", () => {
       { token: "t", claimedAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString() },
     ]) {
       await withStorage(async (storage) => {
-        const file = path.join(storage.getDataDir(), "prompt-queues.json");
-        await fs.writeFile(
-          file,
-          JSON.stringify({
-            [KEY]: {
-              queueKey: KEY,
-              environmentId: "e1",
-              messages: [{ id: "m1" }],
-              outstandingClaim,
-              updatedAt: new Date(0).toISOString(),
-              revision: 1,
-            },
-          }),
-        );
+        seedStore(storage.getDataDir(), QUEUES, {
+          [KEY]: {
+            queueKey: KEY,
+            environmentId: "e1",
+            messages: [{ id: "m1" }],
+            outstandingClaim,
+            updatedAt: new Date(0).toISOString(),
+            revision: 1,
+          },
+        });
 
         expect(await storage.getPromptQueue(KEY)).toBeNull();
       });
@@ -1395,21 +1386,17 @@ describe("StorageService prompt queue transfer validation", () => {
       { queueKey: KEY, messageId: "m".repeat(1024 + 1) },
     ]) {
       await withStorage(async (storage) => {
-        const file = path.join(storage.getDataDir(), "compose-drafts.json");
-        await fs.writeFile(
-          file,
-          JSON.stringify({
-            [DRAFT_KEY]: {
-              draftKey: DRAFT_KEY,
-              ownerType: "environment",
-              ownerId: "e1",
-              value: { text: "hi" },
-              sourcePromptQueue,
-              updatedAt: new Date(0).toISOString(),
-              revision: 1,
-            },
-          }),
-        );
+        seedStore(storage.getDataDir(), "compose-drafts.json", {
+          [DRAFT_KEY]: {
+            draftKey: DRAFT_KEY,
+            ownerType: "environment",
+            ownerId: "e1",
+            value: { text: "hi" },
+            sourcePromptQueue,
+            updatedAt: new Date(0).toISOString(),
+            revision: 1,
+          },
+        });
 
         expect(await storage.getComposeDraft(DRAFT_KEY)).toBeNull();
       });

@@ -1,8 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { STORAGE_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import {
+  hasStore,
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+} from "./storage-test-support.js";
 
 async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-agent-handoffs-"));
@@ -32,8 +39,14 @@ async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Pro
   }
 }
 
-async function readStoredHandoffs(filePath: string): Promise<Record<string, unknown>> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as Record<string, unknown>;
+const HANDOFFS = "agent-handoffs.json";
+
+function storageDatabase(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
+}
+
+function readStoredHandoffs(dataDir: string): Record<string, unknown> {
+  return readStoredValue<Record<string, unknown>>(dataDir, HANDOFFS) ?? {};
 }
 
 describe("StorageService agent handoffs", () => {
@@ -49,8 +62,8 @@ describe("StorageService agent handoffs", () => {
       });
       expect(await storage.getAgentHandoff("h1")).toEqual(saved);
 
-      const handoffFile = path.join(storage.getDataDir(), "agent-handoffs.json");
-      const mode = (await fs.stat(handoffFile)).mode & 0o777;
+      const databaseFile = path.join(storage.getDataDir(), STORAGE_DATABASE_FILE);
+      const mode = (await fs.stat(databaseFile)).mode & 0o777;
       expect(mode).toBe(0o600);
 
       const retried = await storage.saveAgentHandoff("h1", "e1", 2, {
@@ -112,7 +125,7 @@ describe("StorageService agent handoffs", () => {
     });
   });
 
-  test("deletes one owned handoff and scrubs every sensitive backup", async () => {
+  test("deletes one owned handoff and scrubs superseded copies", async () => {
     await withStorage(async (storage) => {
       await storage.saveAgentHandoff("h1", "e1", 1, {
         messages: [{ text: "secret-h1" }],
@@ -124,77 +137,44 @@ describe("StorageService agent handoffs", () => {
         messages: [{ text: "keep-h3" }],
       });
 
+      const dataDir = storage.getDataDir();
+      expect(storageFilesContain(dataDir, "secret-h1")).toBe(true);
+
       await expect(storage.deleteAgentHandoff("h1", "e2")).rejects.toThrow("another environment");
       await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(true);
       await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
       await expect(storage.getAgentHandoff("h2")).resolves.not.toBeNull();
       await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(false);
 
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      for (const candidate of [
-        primary,
-        ...Array.from({ length: 5 }, (_, index) => `${primary}.bak.${index + 1}`),
-      ]) {
-        const stat = await fs.stat(candidate).catch(() => null);
-        if (!stat) continue;
-        expect(stat.mode & 0o777).toBe(0o600);
-        const stored = await readStoredHandoffs(candidate);
-        expect(stored.h1).toBeUndefined();
-        expect(JSON.stringify(stored)).not.toContain("secret-h1");
-      }
+      expect(readStoredHandoffs(dataDir).h1).toBeUndefined();
+      expect(storageFilesContain(dataDir, "secret-h1")).toBe(false);
+      expect(storageFilesContain(dataDir, "keep-h2")).toBe(true);
+      expect(storageFilesContain(dataDir, "keep-h3")).toBe(true);
     });
   });
 
-  test("deletes a malformed primary entry and removes corrupt backups", async () => {
+  test("deletes a malformed stored entry and scrubs its content", async () => {
     await withStorage(async (storage) => {
       await storage.saveAgentHandoff("h1", "e1", 1, {
         messages: [{ text: "malformed-secret" }],
       });
       await storage.saveAgentHandoff("h2", "e2", 1, { messages: [] });
 
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      const stored = await readStoredHandoffs(primary);
+      const dataDir = storage.getDataDir();
+      const stored = readStoredHandoffs(dataDir);
       stored.h1 = {
         environmentId: "e1",
         snapshot: { messages: [{ text: "malformed-secret" }] },
         createdAt: "not-a-date",
       };
-      await fs.writeFile(primary, `${JSON.stringify(stored, null, 2)}\n`);
-      const corruptBackup = `${primary}.bak.1`;
-      await fs.writeFile(corruptBackup, "{malformed-secret", { mode: 0o600 });
+      seedStore(dataDir, HANDOFFS, stored);
 
       await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
       await expect(storage.deleteAgentHandoff("h1", "e2")).rejects.toThrow("another environment");
       await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(true);
-      expect(JSON.stringify(await readStoredHandoffs(primary))).not.toContain("malformed-secret");
-      expect(await fs.stat(`${primary}.bak.2`).catch(() => null)).toBeNull();
+      expect(JSON.stringify(readStoredHandoffs(dataDir))).not.toContain("malformed-secret");
+      expect(storageFilesContain(dataDir, "malformed-secret")).toBe(false);
       await expect(storage.getAgentHandoff("h2")).resolves.not.toBeNull();
-    });
-  });
-
-  test("enforces ownership when only a retained backup contains the handoff", async () => {
-    await withStorage(async (storage) => {
-      await storage.saveAgentHandoff("h1", "e1", 1, {
-        messages: [{ text: "backup-only-secret" }],
-      });
-      await storage.saveAgentHandoff("h2", "e2", 1, { messages: [] });
-
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      const stored = await readStoredHandoffs(primary);
-      delete stored.h1;
-      await fs.writeFile(primary, `${JSON.stringify(stored, null, 2)}\n`, {
-        mode: 0o600,
-      });
-
-      await expect(storage.deleteAgentHandoff("h1", "e2")).rejects.toThrow("another environment");
-      await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(false);
-      for (let index = 1; index <= 5; index += 1) {
-        const backup = `${primary}.bak.${index}`;
-        if (!(await fs.stat(backup).catch(() => null))) continue;
-        expect(JSON.stringify(await readStoredHandoffs(backup))).not.toContain(
-          "backup-only-secret",
-        );
-      }
     });
   });
 
@@ -217,39 +197,35 @@ describe("StorageService agent handoffs", () => {
         messages: [{ text: "secret-e1" }],
       });
       await storage.saveAgentHandoff("h2", "e2", 1, { messages: [] });
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      const stored = await readStoredHandoffs(primary);
+      const dataDir = storage.getDataDir();
+      const stored = readStoredHandoffs(dataDir);
       stored.h1 = {
         environmentId: "e1",
         snapshot: { messages: [{ text: "secret-e1" }] },
         createdAt: "invalid",
       };
-      await fs.writeFile(primary, `${JSON.stringify(stored, null, 2)}\n`);
+      seedStore(dataDir, HANDOFFS, stored);
 
       expect(await storage.deleteAgentHandoffsByEnvironment("e1")).toEqual(["h1"]);
       expect(await storage.getAgentHandoff("h1")).toBeNull();
       expect(await storage.getAgentHandoff("h2")).not.toBeNull();
 
-      expect(JSON.stringify(await readStoredHandoffs(primary))).not.toContain("secret-e1");
-      for (let index = 1; index <= 5; index += 1) {
-        const backup = `${primary}.bak.${index}`;
-        if (!(await fs.stat(backup).catch(() => null))) continue;
-        expect(JSON.stringify(await readStoredHandoffs(backup))).not.toContain("secret-e1");
-      }
+      expect(JSON.stringify(readStoredHandoffs(dataDir))).not.toContain("secret-e1");
+      expect(storageFilesContain(dataDir, "secret-e1")).toBe(false);
     });
   });
 
-  test("deleting a stale reference leaves no file when the feature was never used", async () => {
+  test("deleting a stale reference leaves no store when the feature was never used", async () => {
     await withStorage(async (storage) => {
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      expect(await fs.stat(primary).catch(() => null)).toBeNull();
+      const dataDir = storage.getDataDir();
+      expect(hasStore(dataDir, HANDOFFS)).toBe(false);
 
       await expect(storage.deleteAgentHandoff("never-existed", "e1")).resolves.toBe(false);
 
       // The "always rewrite" recovery path only makes sense for a primary that
       // exists and may be corrupt. Creating one here would leave a trace on an
       // installation that never transferred a conversation.
-      expect(await fs.stat(primary).catch(() => null)).toBeNull();
+      expect(hasStore(dataDir, HANDOFFS)).toBe(false);
     });
   });
 
@@ -272,19 +248,18 @@ describe("StorageService agent handoffs", () => {
       expect(await storage.getAgentHandoff("orphan")).toBeNull();
       expect(await storage.getAgentHandoff("other-env")).not.toBeNull();
 
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      for (const candidate of [
-        primary,
-        ...Array.from({ length: 5 }, (_, index) => `${primary}.bak.${index + 1}`),
-      ]) {
-        if (!(await fs.stat(candidate).catch(() => null))) continue;
-        const serialized = JSON.stringify(await readStoredHandoffs(candidate));
-        expect(serialized).not.toContain("orphan-secret");
-        expect(serialized).toContain("still-referenced");
-      }
+      const dataDir = storage.getDataDir();
+      const serialized = JSON.stringify(readStoredHandoffs(dataDir));
+      expect(serialized).not.toContain("orphan-secret");
+      expect(serialized).toContain("still-referenced");
+      expect(storageFilesContain(dataDir, "orphan-secret")).toBe(false);
+      expect(storageFilesContain(dataDir, "other-env-secret")).toBe(true);
 
-      // Idempotent, and a no-op prune must not rewrite or rotate anything.
+      // Idempotent, and a no-op prune must not rewrite anything.
+      const write = spyOn(storageDatabase(storage), "writeStore");
       expect(await storage.pruneAgentHandoffs("e1", ["kept"])).toEqual([]);
+      expect(write).not.toHaveBeenCalled();
+      write.mockRestore();
       expect(await storage.getAgentHandoff("kept")).not.toBeNull();
     });
   });
@@ -307,17 +282,18 @@ describe("StorageService agent handoffs", () => {
   test("prunes a malformed entry that cannot be proven still referenced", async () => {
     await withStorage(async (storage) => {
       await storage.saveAgentHandoff("h1", "e1", 1, { messages: [{ text: "malformed" }] });
-      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
-      const stored = await readStoredHandoffs(primary);
+      const dataDir = storage.getDataDir();
+      const stored = readStoredHandoffs(dataDir);
       stored.h1 = {
         environmentId: "e1",
-        snapshot: { messages: [{ text: "malformed" }] },
+        snapshot: { messages: [{ text: "malformed-prune-secret" }] },
         createdAt: "not-a-date",
       };
-      await fs.writeFile(primary, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+      seedStore(dataDir, HANDOFFS, stored);
 
       expect(await storage.pruneAgentHandoffs("e1", [])).toEqual(["h1"]);
-      expect(JSON.stringify(await readStoredHandoffs(primary))).not.toContain("malformed");
+      expect(JSON.stringify(readStoredHandoffs(dataDir))).not.toContain("malformed");
+      expect(storageFilesContain(dataDir, "malformed-prune-secret")).toBe(false);
     });
   });
 });

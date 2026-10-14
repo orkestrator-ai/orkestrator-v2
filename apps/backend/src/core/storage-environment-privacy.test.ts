@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createEnvironment, StorageService } from "./storage.js";
+import { STORAGE_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import { storageFilesContain } from "./storage-test-support.js";
 
 async function withStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -17,17 +19,12 @@ async function withStorage<T>(
   }
 }
 
-async function backupContents(dataDir: string): Promise<string[]> {
-  const entries = await fs.readdir(dataDir);
-  return Promise.all(
-    entries
-      .filter((entry) => entry.startsWith("environments.json.bak."))
-      .map((entry) => fs.readFile(path.join(dataDir, entry), "utf8")),
-  );
+function storageDatabase(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
 }
 
 describe("StorageService environment attachment privacy", () => {
-  test("clearing attachments scrubs retained backups and restricts permissions", async () => {
+  test("clearing attachments scrubs superseded copies and restricts permissions", async () => {
     await withStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const secret = "c2Vuc2l0aXZlLWltYWdl";
@@ -45,32 +42,25 @@ describe("StorageService environment attachment privacy", () => {
         ?.initialPromptAttachments?.[0];
       expect(storedAttachment?.base64Data).toBe(secret);
       expect(storedAttachment?.previewUrl).toBeUndefined();
-      // Rotate a copy containing the attachment before clearing it.
+      // Supersede the record once while it still holds the attachment.
       await storage.updateEnvironment(environment.id, { name: "renamed" });
-      expect((await backupContents(dataDir)).some((contents) => contents.includes(secret))).toBe(
-        true,
-      );
+      expect(storageFilesContain(dataDir, secret)).toBe(true);
 
       await storage.updateEnvironment(environment.id, {
         initialPromptAttachments: null,
       });
 
-      expect(await fs.readFile(path.join(dataDir, "environments.json"), "utf8")).not.toContain(
-        secret,
-      );
-      for (const contents of await backupContents(dataDir)) {
-        expect(contents).not.toContain(secret);
-      }
-      const entries = (await fs.readdir(dataDir)).filter(
-        (entry) => entry === "environments.json" || entry.startsWith("environments.json.bak."),
-      );
-      for (const entry of entries) {
-        expect((await fs.stat(path.join(dataDir, entry))).mode & 0o777).toBe(0o600);
+      expect((await storage.getEnvironment(environment.id))?.name).toBe("renamed");
+      expect(storageFilesContain(dataDir, secret)).toBe(false);
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const file = path.join(dataDir, `${STORAGE_DATABASE_FILE}${suffix}`);
+        const stat = await fs.stat(file).catch(() => null);
+        if (stat) expect(stat.mode & 0o777).toBe(0o600);
       }
     });
   });
 
-  test("deleting an environment removes its complete record from retained backups", async () => {
+  test("deleting an environment leaves its complete record unrecoverable", async () => {
     await withStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const secret = "ZGVsZXRlZC1pbWFnZQ==";
@@ -85,18 +75,18 @@ describe("StorageService environment attachment privacy", () => {
         ],
       });
       await storage.updateEnvironment(environment.id, { status: "running" });
+      expect(storageFilesContain(dataDir, secret)).toBe(true);
+      expect(storageFilesContain(dataDir, environment.id)).toBe(true);
 
       await storage.removeEnvironment(environment.id);
 
       expect(await storage.getEnvironment(environment.id)).toBeNull();
-      for (const contents of await backupContents(dataDir)) {
-        expect(contents).not.toContain(secret);
-        expect(contents).not.toContain(environment.id);
-      }
+      expect(storageFilesContain(dataDir, secret)).toBe(false);
+      expect(storageFilesContain(dataDir, environment.id)).toBe(false);
     });
   });
 
-  test("retries attachment cleanup after the primary was already cleared", async () => {
+  test("retries the attachment scrub after the clearing write already committed", async () => {
     await withStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const secret = "cmV0cnktY2xlYXItc2VjcmV0";
@@ -110,38 +100,29 @@ describe("StorageService environment attachment privacy", () => {
           },
         ],
       });
-      await storage.updateEnvironment(environment.id, {
-        initialPromptAttachments: null,
-      });
-      const backup = path.join(dataDir, "environments.json.bak.1");
-      await fs.writeFile(
-        backup,
-        JSON.stringify([
-          {
-            ...environment,
-            initialPromptAttachments: [
-              {
-                id: "attachment-retry-clear",
-                name: "private.png",
-                previewUrl: "blob:private",
-                base64Data: secret,
-              },
-            ],
-          },
-        ]),
-        { mode: 0o600 },
+      // The clearing commit lands but its scrub does not (a reader kept the
+      // WAL alive), so superseded frames still hold the attachment.
+      const scrub = spyOn(storageDatabase(storage), "scrubDeletedContent").mockImplementationOnce(
+        () => {},
       );
+      await storage.updateEnvironment(environment.id, {
+        initialPromptAttachments: null,
+      });
+      scrub.mockRestore();
+      expect(
+        (await storage.getEnvironment(environment.id))?.initialPromptAttachments,
+      ).toBeUndefined();
+      expect(storageFilesContain(dataDir, secret)).toBe(true);
 
       await storage.updateEnvironment(environment.id, {
         initialPromptAttachments: null,
       });
 
-      expect(await fs.readFile(backup, "utf8")).not.toContain(secret);
-      expect((await fs.stat(backup)).mode & 0o777).toBe(0o600);
+      expect(storageFilesContain(dataDir, secret)).toBe(false);
     });
   });
 
-  test("retries backup cleanup after the environment primary was already removed", async () => {
+  test("retries the scrub after the environment removal already committed", async () => {
     await withStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const secret = "cmV0cnktZGVsZXRlLXNlY3JldA==";
@@ -155,33 +136,20 @@ describe("StorageService environment attachment privacy", () => {
           },
         ],
       });
-      await storage.removeEnvironment(environment.id);
-      const backup = path.join(dataDir, "environments.json.bak.1");
-      await fs.writeFile(
-        backup,
-        JSON.stringify([
-          {
-            ...environment,
-            initialPromptAttachments: [
-              {
-                id: "attachment-retry-delete",
-                name: "private.png",
-                previewUrl: "blob:private",
-                base64Data: secret,
-              },
-            ],
-          },
-        ]),
-        { mode: 0o600 },
+      const scrub = spyOn(storageDatabase(storage), "scrubDeletedContent").mockImplementationOnce(
+        () => {},
       );
+      await storage.removeEnvironment(environment.id);
+      scrub.mockRestore();
+      expect(await storage.getEnvironment(environment.id)).toBeNull();
+      expect(storageFilesContain(dataDir, secret)).toBe(true);
 
       await expect(storage.removeEnvironment(environment.id)).rejects.toThrow(
         "Environment not found",
       );
 
-      expect(await fs.readFile(backup, "utf8")).not.toContain(secret);
-      expect(await fs.readFile(backup, "utf8")).not.toContain(environment.id);
-      expect((await fs.stat(backup)).mode & 0o777).toBe(0o600);
+      expect(storageFilesContain(dataDir, secret)).toBe(false);
+      expect(storageFilesContain(dataDir, environment.id)).toBe(false);
     });
   });
 });

@@ -1,3 +1,4 @@
+import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -1479,6 +1480,11 @@ export class OrkestratorBackend {
           }),
           new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
         ]);
+        // Last: closing checkpoints the WAL into the database file. A straggler
+        // that still reads storage reopens it lazily.
+        this.workflowResults.closeStorage();
+        closeEnvironmentCleanupStorage();
+        this.context.storage.close();
       }
     })();
     this.shutdownPromise = attempt;

@@ -47,7 +47,7 @@ async function referencedSession(
     revision,
     fingerprint: transcriptFingerprint(body),
   });
-  if (committed.status !== "committed") throw new Error("commit failed");
+  if (committed.status !== "staged") throw new Error("commit failed");
   return {
     phase: "build",
     iteration: 0,
@@ -278,6 +278,49 @@ describe("build pipeline transcript projection", () => {
         held = [...held.slice(0, patch.startIndex), ...patch.messages];
       }
       expect(held).toEqual(build);
+    });
+  });
+
+  test("a patch of many messages reads each chunk once", async () => {
+    await withStorage(async (storage) => {
+      storage.setBuildPipelineTranscriptLimits({ targetChunkBytes: 256 });
+      const { record, build } = await seed(storage);
+      const chunks = new Set<number>();
+      // ~45-byte messages packed into 256-byte chunks: several messages each.
+      let size = 2;
+      let chunk = 0;
+      for (const message of build) {
+        const bytes = JSON.stringify(message).length + 1;
+        if (size > 2 && size + bytes > 256) {
+          chunk += 1;
+          size = 2;
+        }
+        size += bytes;
+        chunks.add(chunk);
+      }
+      expect(chunks.size).toBeGreaterThan(4);
+      const before = storage.buildPipelineTranscriptStats().chunkReads;
+      const read = await conditionalBuildPipelineRead(storage, record, {
+        knownSessions: { review: { revision: 2, count: 20 }, legacy: { revision: 1, count: 4 } },
+        prioritySessionKey: "build",
+      });
+      if (read.unchanged) throw new Error("expected a patch");
+      expect(read.messagePatches[0]).toMatchObject({ sessionKey: "build", messages: build });
+      expect(storage.buildPipelineTranscriptStats().chunkReads - before).toBe(chunks.size);
+
+      // A paged tail read touches only the chunks it returns.
+      const tailBefore = storage.buildPipelineTranscriptStats().chunkReads;
+      const tail = await conditionalBuildPipelineRead(storage, record, {
+        knownRevision: record.revision,
+        knownSessions: {
+          build: { revision: 3, count: 49 },
+          review: { revision: 2, count: 20 },
+          legacy: { revision: 1, count: 4 },
+        },
+      });
+      if (tail.unchanged) throw new Error("expected a patch");
+      expect(tail.messagePatches[0]).toMatchObject({ startIndex: 48, messages: build.slice(48) });
+      expect(storage.buildPipelineTranscriptStats().chunkReads - tailBefore).toBeLessThanOrEqual(2);
     });
   });
 

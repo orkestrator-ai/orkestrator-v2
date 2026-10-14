@@ -5,8 +5,9 @@
  * print fixture secrets or gateway credentials.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { STORAGE_DATABASE_FILE } from "@orkestrator/protocol/storage-database";
 import {
   WEB_ANNOTATION_EVIDENCE_CLOSE,
   WEB_ANNOTATION_EVIDENCE_OPEN,
@@ -108,11 +109,54 @@ export function briefInertness(brief: string): BriefInertness {
 const SCAN_MAX_FILES = 20_000;
 const SCAN_MAX_FILE_BYTES = 16 * 1024 * 1024;
 const SCAN_SKIPPED_DIRECTORIES = new Set(["node_modules", ".git", "toolchains", "worktrees"]);
+/** The backend database and its WAL/shared-memory files: scanned whatever their size. */
+const DATABASE_FILES = new Set(
+  ["", "-wal", "-shm"].map((suffix) => `${STORAGE_DATABASE_FILE}${suffix}`),
+);
+const DATABASE_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Names of the secrets found in a file of any size, read in bounded chunks
+ * that overlap by the longest secret so a match across a boundary is found.
+ */
+async function secretsInLargeFile(
+  file: string,
+  secrets: ReadonlyArray<readonly [string, string]>,
+): Promise<string[]> {
+  const needles = secrets.map(([name, value]) => [name, Buffer.from(value, "latin1")] as const);
+  const overlap = Math.max(0, ...needles.map(([, needle]) => needle.byteLength - 1));
+  const found = new Set<string>();
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(file, "r");
+    const buffer = Buffer.alloc(DATABASE_CHUNK_BYTES + overlap);
+    let carried = 0;
+    let position = 0;
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, carried, DATABASE_CHUNK_BYTES, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      const window = buffer.subarray(0, carried + bytesRead);
+      for (const [name, needle] of needles) {
+        if (!found.has(name) && window.includes(needle)) found.add(name);
+      }
+      carried = Math.min(overlap, window.byteLength);
+      window.copy(buffer, 0, window.byteLength - carried, window.byteLength);
+    }
+  } catch {
+    // Unreadable (removed while scanning): nothing to report.
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+  return Array.from(found);
+}
 
 /**
  * Report which synthetic secrets appear in files below `roots`. Returns
  * relative paths and secret *names* only, never the values, so a failure
- * message cannot itself leak a secret. Bounded by file count and size.
+ * message cannot itself leak a secret. Bounded by file count and size,
+ * except the SQLite database files (main, `-wal`, `-shm`), which hold the
+ * annotation content and are always scanned whole, in chunks.
  */
 export async function findSyntheticSecrets(
   roots: string[],
@@ -135,6 +179,13 @@ export async function findSyntheticSecrets(
         continue;
       }
       if (!entry.isFile() || scannedFiles >= SCAN_MAX_FILES) continue;
+      if (DATABASE_FILES.has(entry.name)) {
+        scannedFiles += 1;
+        for (const secret of await secretsInLargeFile(full, secrets)) {
+          hits.push({ file: path.relative(root, full), secret });
+        }
+        continue;
+      }
       const info = await stat(full).catch(() => null);
       if (!info || info.size > SCAN_MAX_FILE_BYTES) continue;
       scannedFiles += 1;

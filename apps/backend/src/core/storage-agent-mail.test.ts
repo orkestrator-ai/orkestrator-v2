@@ -13,7 +13,17 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { STORAGE_DATABASE_FILE } from "./storage-database.js";
+import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
+
+/** The persisted agent-mail store, as far as these tests edit it. */
+type StoredMail = {
+  mailboxes: Record<string, { messages: Array<{ createdAt: string }> }>;
+  counterparts?: Record<string, { createdAt: string }>;
+};
+
+const PURGE_MARKER = "purge-marker-4b9e1c";
 
 async function fixture() {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-agent-mail-"));
@@ -119,7 +129,7 @@ describe("StorageService agent mail", () => {
       expect((await second.listAgentMailSentByMailbox("e1", "agent")).map(({ id }) => id)).toEqual([
         sent.id,
       ]);
-      expect((await fs.stat(path.join(dataDir, "agent-mail.json"))).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(path.join(dataDir, STORAGE_DATABASE_FILE))).mode & 0o777).toBe(0o600);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
@@ -154,12 +164,11 @@ describe("StorageService agent mail", () => {
           agentMessaging: { ...config.global.agentMessaging!, retentionDays: 1 },
         },
       });
-      const file = path.join(dataDir, "agent-mail.json");
-      const persisted = JSON.parse(await fs.readFile(file, "utf8"));
-      for (const stored of persisted.mailboxes["e2\0agent"].messages) {
+      const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
+      for (const stored of persisted.mailboxes["e2\0agent"]!.messages) {
         stored.createdAt = new Date(0).toISOString();
       }
-      await fs.writeFile(file, `${JSON.stringify(persisted, null, 2)}\n`);
+      seedStore(dataDir, "agent-mail.json", persisted);
 
       const restarted = new StorageService(dataDir);
       await restarted.init();
@@ -1020,8 +1029,9 @@ describe("StorageService agent mail", () => {
     try {
       const message = await storage.sendAgentMail(
         { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
-        { requestId: "purge", toEnvironmentId: "e2", toTabId: "agent", body: "secret" },
+        { requestId: "purge", toEnvironmentId: "e2", toTabId: "agent", body: PURGE_MARKER },
       );
+      expect(storageFilesContain(dataDir, PURGE_MARKER)).toBe(true);
       changes.length = 0;
       await storage.updateEnvironment("e1", { deletionRequestedAt: new Date().toISOString() });
       await storage.deleteAgentMailByEnvironment("e1");
@@ -1042,11 +1052,7 @@ describe("StorageService agent mail", () => {
         { environmentId: "e2", tabId: "agent" },
       ]);
       expect(batch.mailboxes.map((mailbox) => mailbox.descriptor.environmentId)).toEqual(["e2"]);
-      for (const name of (await fs.readdir(dataDir)).filter((entry) =>
-        entry.startsWith("agent-mail.json.bak"),
-      )) {
-        expect(await fs.readFile(path.join(dataDir, name), "utf8")).not.toContain("secret");
-      }
+      expect(storageFilesContain(dataDir, PURGE_MARKER)).toBe(false);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
@@ -1105,10 +1111,9 @@ describe("StorageService agent mail", () => {
       await storage.beginAgentMailInject(mailbox.mailboxId, message.id, mailbox.incarnationId);
       await storage.finishAgentMailInject(mailbox.mailboxId, message.id, { outcome: "accepted" });
 
-      const file = path.join(dataDir, "agent-mail.json");
-      const persisted = JSON.parse(await fs.readFile(file, "utf8"));
-      persisted.mailboxes["e2\0agent"].messages[0].createdAt = new Date(0).toISOString();
-      await fs.writeFile(file, `${JSON.stringify(persisted, null, 2)}\n`);
+      const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
+      persisted.mailboxes["e2\0agent"]!.messages[0]!.createdAt = new Date(0).toISOString();
+      seedStore(dataDir, "agent-mail.json", persisted);
       const restarted = new StorageService(dataDir);
       await restarted.init();
       await restarted.pruneAgentMail(1);
@@ -1139,10 +1144,9 @@ describe("StorageService agent mail", () => {
       );
       await storage.synchronizeAgentMailboxes();
 
-      const file = path.join(dataDir, "agent-mail.json");
-      const persisted = JSON.parse(await fs.readFile(file, "utf8"));
-      persisted.mailboxes["e2\0agent"].messages[0].createdAt = new Date(0).toISOString();
-      await fs.writeFile(file, `${JSON.stringify(persisted, null, 2)}\n`);
+      const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
+      persisted.mailboxes["e2\0agent"]!.messages[0]!.createdAt = new Date(0).toISOString();
+      seedStore(dataDir, "agent-mail.json", persisted);
       const restarted = new StorageService(dataDir);
       await restarted.init();
       await restarted.pruneAgentMail(1);
@@ -1150,7 +1154,9 @@ describe("StorageService agent mail", () => {
       await expect(restarted.getAgentMailMessage("e2", "agent", message.id)).rejects.toMatchObject({
         code: "message-not-found",
       });
-      expect(JSON.parse(await fs.readFile(file, "utf8")).mailboxes["e2\0agent"]).toBeUndefined();
+      expect(
+        readStoredValue<StoredMail>(dataDir, "agent-mail.json")!.mailboxes["e2\0agent"],
+      ).toBeUndefined();
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
@@ -1173,10 +1179,9 @@ describe("StorageService agent mail", () => {
         placement: "undeliverable",
       });
 
-      const file = path.join(dataDir, "agent-mail.json");
-      const persisted = JSON.parse(await fs.readFile(file, "utf8"));
-      persisted.counterparts[message.id].createdAt = new Date(0).toISOString();
-      await fs.writeFile(file, `${JSON.stringify(persisted, null, 2)}\n`);
+      const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
+      persisted.counterparts![message.id]!.createdAt = new Date(0).toISOString();
+      seedStore(dataDir, "agent-mail.json", persisted);
       const restarted = new StorageService(dataDir);
       await restarted.init();
       await restarted.pruneAgentMail(1);
@@ -1350,8 +1355,7 @@ describe("StorageService agent mail", () => {
   test("refuses writes at the idempotency-row and serialized-store bounds", async () => {
     const { storage, dataDir } = await fixture();
     try {
-      const storePath = path.join(dataDir, "agent-mail.json");
-      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      const store = readStoredValue<Record<string, unknown>>(dataDir, "agent-mail.json")!;
       store.idempotency = Object.fromEntries(
         Array.from({ length: AGENT_MAIL_MAX_IDEMPOTENCY_ROWS }, (_, index) => [
           `row-${index}`,
@@ -1363,7 +1367,7 @@ describe("StorageService agent mail", () => {
           },
         ]),
       );
-      await fs.writeFile(storePath, `${JSON.stringify(store)}\n`);
+      seedStore(dataDir, "agent-mail.json", store);
       await expect(
         storage.sendAgentMail(
           { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
@@ -1373,7 +1377,7 @@ describe("StorageService agent mail", () => {
 
       store.idempotency = {};
       store.padding = "x".repeat(AGENT_MAIL_MAX_STORE_BYTES);
-      await fs.writeFile(storePath, `${JSON.stringify(store)}\n`);
+      seedStore(dataDir, "agent-mail.json", store);
       await expect(
         storage.sendAgentMail(
           { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
@@ -1393,15 +1397,16 @@ describe("StorageService agent mail", () => {
   test("fails closed when the durable mail store is malformed", async () => {
     const { dataDir } = await fixture();
     try {
-      for (const name of await fs.readdir(dataDir)) {
-        if (name.startsWith("agent-mail.json.bak")) {
-          await fs.rm(path.join(dataDir, name), { force: true });
-        }
-      }
-      await fs.writeFile(path.join(dataDir, "agent-mail.json"), "{}\n");
+      seedStore(dataDir, "agent-mail.json", {});
       const restarted = new StorageService(dataDir);
       await restarted.init();
       await expect(restarted.getAgentMailSummary()).rejects.toThrow("Unsupported agent mail store");
+      seedStore(dataDir, "agent-mail.json", { version: 2, mailboxes: {}, idempotency: {} });
+      await expect(restarted.getAgentMailSummary()).rejects.toThrow("Unsupported agent mail store");
+      seedStore(dataDir, "agent-mail.json", ["not", "a", "store"]);
+      await expect(restarted.getAgentMailSummary()).rejects.toThrow(
+        "Agent mail store is malformed",
+      );
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

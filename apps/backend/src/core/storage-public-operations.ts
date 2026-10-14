@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   isPublicActionName,
@@ -36,6 +35,7 @@ import {
   repositorySettingsRevision,
 } from "./public-api/revisions.js";
 import { StoragePreviewServices } from "./storage-preview-services.js";
+import { StoreCorruptError } from "./storage-database.js";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { applyProjectFolder } from "./storage-projects.js";
@@ -75,7 +75,6 @@ export type PublicOperationLookup =
  * section before any side effect runs.
  */
 export class StoragePublicOperations extends StoragePreviewServices {
-  protected publicOperationQueue: Promise<unknown> = Promise.resolve();
   protected publicOperationLimits: {
     maxOperationsPerNamespace: number;
     maxNamespaceBytes: number;
@@ -105,43 +104,22 @@ export class StoragePublicOperations extends StoragePreviewServices {
   }
 
   protected enqueuePublicOperationMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        path.join(this.publicOperationsDir(), "store"),
-        "public operation store",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.publicOperationQueue.then(run, run);
-    this.publicOperationQueue = next.then(
-      () => undefined,
-      () => undefined,
+    return this.serializeMutation(
+      path.join(this.publicOperationsDir(), "store"),
+      "public operation store",
+      operation,
     );
-    return next;
   }
 
   /**
-   * Strict read: a store that exists but cannot be parsed (and has no usable
-   * backup) is an error, never "empty". Treating it as empty would reopen
-   * every key it held.
+   * Strict read: a store that exists but cannot be read is an error, never
+   * "empty". Treating it as empty would reopen every key it held.
    */
   private async readStrictJson<T>(file: string): Promise<T | null> {
-    let raw: string;
     try {
-      raw = await fs.readFile(file, "utf8");
+      return this.loadStoreStrict<T>(file)?.value ?? null;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-    try {
-      return JSON.parse(raw) as T;
-    } catch {
-      const recovered = await this.recoverJsonFromBackups<T>(file);
-      if (recovered) return recovered.value;
+      if (!(error instanceof StoreCorruptError)) throw error;
       throw new PublicActionError(
         "internal-error",
         "The public operation store is unreadable; admissions are refused until it is repaired",
@@ -484,16 +462,14 @@ export class StoragePublicOperations extends StoragePreviewServices {
         namespaces: index.namespaces.filter((entry) => !retired.includes(entry.id)),
         retired: [...index.retired, ...retired].slice(-MAX_RETIRED_NAMESPACES),
       };
-      // Publish the retirement before deleting files, so a crash in between
-      // leaves orphaned files rather than an index that forgot the retirement.
-      await this.saveSensitiveJson(this.publicOperationIndexFile(), next);
-      for (const namespace of retired) {
-        const file = this.publicOperationNamespaceFile(namespace);
-        await fs.rm(file, { force: true });
-        for (let backup = 1; backup <= 5; backup += 1) {
-          await fs.rm(this.backupPath(file, backup), { force: true }).catch(() => undefined);
+      // The retirement and the namespace deletions commit together: there is
+      // no window with an index that forgot the retirement or orphaned records.
+      await this.atomically(async () => {
+        await this.saveSensitiveJson(this.publicOperationIndexFile(), next);
+        for (const namespace of retired) {
+          await this.deleteStore(this.publicOperationNamespaceFile(namespace));
         }
-      }
+      });
       return { retired, kept };
     });
   }
@@ -581,7 +557,7 @@ export class StoragePublicOperations extends StoragePreviewServices {
       const current = structuredClone(stored ?? defaultRepositoryConfig());
       const updated = apply(current);
       config.repositories[projectId] = updated;
-      await this.saveJson(this.configFile(), config);
+      await this.saveSensitiveJson(this.configFile(), config);
       return updated;
     });
     this.announce("config", "app");

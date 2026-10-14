@@ -6,7 +6,8 @@
  * carry annotation content.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   WEB_ANNOTATION_LIMITS,
@@ -14,7 +15,6 @@ import {
   type WebAnnotationChangeHint,
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
-import { recordDirectoryName } from "./web-annotation-storage.js";
 import type { WebAnnotationService } from "./web-annotation-service.js";
 import {
   ENV_A,
@@ -23,7 +23,14 @@ import {
   makePng,
   type ServiceHarness,
 } from "./web-annotation-test-support.js";
-import { captureConsole, environmentDir, sendRequest } from "./web-annotation-test-helpers.js";
+import {
+  captureConsole,
+  damageStoredRow,
+  environmentDir,
+  exportLegacyEnvironment,
+  legacyRecordPath,
+  sendRequest,
+} from "./web-annotation-test-helpers.js";
 
 let harness: ServiceHarness | undefined;
 afterEach(async () => {
@@ -307,6 +314,7 @@ describe("content-free logs", () => {
       "SECRET-LEGACY-TEXT-77aa",
     ];
     let dataDir = "";
+    let legacyDir = "";
     const output = await captureConsole(async () => {
       harness = await createHarness();
       dataDir = harness.dir;
@@ -374,30 +382,38 @@ describe("content-free logs", () => {
       };
       await service.migrate(ENV_A).catch(() => undefined);
       harness.host.onGetDraft = null;
-      // Damaged records and degraded storage at startup.
-      const recordsDir = join(environmentDir(dataDir), "records");
-      await writeFile(
-        join(recordsDir, recordDirectoryName(receipt.captureId!), "1.json"),
-        "{ SECRET-BODY-91c2",
-      );
+      // A legacy copy of this environment whose manifest is damaged.
+      legacyDir = await mkdtemp(join(tmpdir(), "ork-wa-legacy-"));
+      await exportLegacyEnvironment(service, legacyDir, { previous: true });
+      await writeFile(join(environmentDir(legacyDir), "manifest.json"), "SECRET-BODY-91c2");
+      await writeFile(legacyRecordPath(legacyDir, receipt.captureId!), "{ SECRET-BODY-91c2");
+      // Damaged rows at startup.
+      damageStoredRow(dataDir, "records", `${receipt.captureId}/1`, "{ SECRET-BODY-91c2");
       const restarted = await harness.restart();
       await restarted.get(ENV_A, receipt.annotationId);
-      await writeFile(join(environmentDir(dataDir), "manifest.json"), "SECRET-BODY-91c2");
-      const degraded = await harness.restart();
-      await degraded.capabilities(ENV_A);
-      await degraded.collectGarbage(ENV_A).catch(() => undefined);
-      await degraded
-        .stageAsset({
-          environmentId: ENV_A,
-          operationId: "op-img",
-          mediaType: "image/png",
-          data: makePng().toString("base64"),
-        })
-        .catch(() => undefined);
+      // Degraded storage (imported from the previous manifest copy).
+      const legacy = await createHarness({}, { dir: legacyDir });
+      try {
+        const degraded = legacy.service;
+        await degraded.capabilities(ENV_A);
+        await degraded.get(ENV_A, receipt.annotationId).catch(() => undefined);
+        await degraded.collectGarbage(ENV_A).catch(() => undefined);
+        await degraded
+          .stageAsset({
+            environmentId: ENV_A,
+            operationId: "op-img",
+            mediaType: "image/png",
+            data: makePng().toString("base64"),
+          })
+          .catch(() => undefined);
+      } finally {
+        await legacy.cleanup();
+      }
     });
     expect(output.length).toBeGreaterThan(0); // The scenario did log.
     for (const secret of secrets) expect(output).not.toContain(secret);
     expect(output).not.toContain(dataDir);
+    expect(output).not.toContain(legacyDir);
     expect(output).not.toContain("localhost");
     expect(output).not.toContain("/settings");
     // Metrics are content-free too.

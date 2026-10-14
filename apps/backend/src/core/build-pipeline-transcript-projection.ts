@@ -1,6 +1,6 @@
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { PersistedBuildPipeline } from "./models.js";
-import type { TranscriptRead } from "./build-pipeline-transcript-store.js";
+import type { TranscriptRead, TranscriptReadWindow } from "./build-pipeline-transcript-store.js";
 import {
   LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES,
   committedTranscriptCursor,
@@ -43,7 +43,8 @@ export interface TranscriptReader {
   readBuildPipelineTranscript(
     pipelineId: string,
     session: Pick<PipelineSession, "sessionKey" | "transcript" | "messages" | "messageRevision">,
-    window?: { fromIndex?: number; toIndex?: number },
+    /** `maxBytes` is a hint: a reader may return more, the projection still bounds the patch. */
+    window?: TranscriptReadWindow,
   ): Promise<TranscriptRead>;
 }
 
@@ -166,10 +167,13 @@ export async function conditionalBuildPipelineRead(
       continue;
     }
     // Overlap by one: the entry the client saw last may still have streamed.
+    // One budgeted read serves the whole patch: the store pins one manifest
+    // and reads each overlapping chunk once, stopping at the byte budget, so
+    // no stored 48 MiB body is materialized here.
     const tailStart = mayHaveBase ? cursor.count - 1 : 0;
     let read = await reader.readBuildPipelineTranscript(record.id, session, {
       fromIndex: tailStart,
-      toIndex: tailStart + 1,
+      maxBytes: remaining,
     });
     // An unrelated generation cannot use the client's tail. A continuation
     // of the same substituted generation can keep paging from that base.
@@ -183,7 +187,7 @@ export async function conditionalBuildPipelineRead(
     if (read.status === "found" && !exactBase && tailStart > 0) {
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: 0,
-        toIndex: 1,
+        maxBytes: remaining,
       });
     }
     if (read.status !== "found") {
@@ -211,32 +215,35 @@ export async function conditionalBuildPipelineRead(
       messages: [],
       ...(read.complete ? {} : { complete: false as const }),
     };
-    // Include the patch envelope and its comma in the response budget. Read
-    // one message at a time so no stored 48 MiB body is materialized here.
+    // Include the patch envelope and its comma in the response budget.
     const patchOverhead =
       Buffer.byteLength(JSON.stringify(patch), "utf8") + (messagePatches.length > 0 ? 1 : 0);
     let allowance = remaining - patchOverhead;
     let nextIndex = read.startIndex;
-    let candidate: TranscriptRead = read;
-    while (candidate.status === "found" && nextIndex < candidate.messageCount) {
-      const message = candidate.messages[0];
-      if (message === undefined) break;
-      const bytes =
-        Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
-        (patch.messages.length > 0 ? 1 : 0);
-      if (bytes > allowance) break;
-      patch.messages.push(message);
-      allowance -= bytes;
-      nextIndex += 1;
-      if (nextIndex >= candidate.messageCount) break;
-      candidate = await reader.readBuildPipelineTranscript(record.id, session, {
+    let page: TranscriptRead = read;
+    pages: while (page.status === "found") {
+      for (const message of page.messages) {
+        const bytes =
+          Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
+          (patch.messages.length > 0 ? 1 : 0);
+        if (bytes > allowance) break pages;
+        patch.messages.push(message);
+        allowance -= bytes;
+        nextIndex += 1;
+      }
+      // Done when the store stopped at the budget, the transcript ended, or a
+      // reader returned nothing. Only a reader that pages on its own (fewer
+      // messages than asked, no budget stop) is asked again.
+      if (page.truncated || page.messages.length === 0 || nextIndex >= page.messageCount) break;
+      page = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: nextIndex,
-        toIndex: nextIndex + 1,
+        maxBytes: allowance,
       });
       if (
-        candidate.status !== "found" ||
-        candidate.substituted !== read.substituted ||
-        candidate.revision !== read.revision
+        page.status !== "found" ||
+        page.substituted !== read.substituted ||
+        page.revision !== read.revision ||
+        page.startIndex !== nextIndex
       )
         break;
     }

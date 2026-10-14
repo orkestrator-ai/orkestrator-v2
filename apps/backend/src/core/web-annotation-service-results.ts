@@ -246,15 +246,23 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     return (existing.at(-1)?.revision ?? 0) + 1;
   }
 
-  /** The base a new revision carries forward: the latest revision of any provenance. */
-  private async resultBase(
-    store: WebAnnotationEnvironmentStore,
-    manifest: WebAnnotationManifest,
+  /**
+   * The base a new revision carries forward: the latest revision of any
+   * provenance, read synchronously inside the commit so it is the committed
+   * latest even when another backend wrote it.
+   */
+  private resultBase(
+    tx: WebAnnotationTransaction,
     requestId: string,
-  ): Promise<{ index: ManifestResult | null; record: WebAnnotationResult | null }> {
-    const index = this.latestResult(manifest, requestId);
+  ): { index: ManifestResult | null; record: WebAnnotationResult | null } {
+    const index = this.latestResult(tx.manifest, requestId);
     if (!index) return { index: null, record: null };
-    const record = await this.readResult(store, index.id);
+    let record: WebAnnotationResult | null = null;
+    try {
+      record = tx.readRecord<WebAnnotationResult>("result", index.id, 1);
+    } catch {
+      record = null;
+    }
     if (!record) {
       throw new WebAnnotationServiceError(
         "Web annotation storage degraded: the latest result record is unreadable",
@@ -315,7 +323,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     const selection = preview.selections.find((item) => item.annotationId === annotationId)!;
     const original = await this.readCapture(store, store.manifest, selection.captureId);
 
-    const committed = await store.mutate(async (tx) => {
+    const committed = await store.mutate((tx) => {
       const existing = this.lookupReceipt(
         tx.manifest,
         input.operationId,
@@ -332,7 +340,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
       const annotation = tx.manifest.annotations[annotationId];
       if (!annotation || annotation.state === "deleted") throw notFound("Annotation");
       const revision = this.assertResultCapacity(tx.manifest, request.id);
-      const base = await this.resultBase(store, tx.manifest, request.id);
+      const base = this.resultBase(tx, request.id);
       const resultId = newId("result");
       const comparison = webAnnotationComparison(
         annotation,
@@ -612,7 +620,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     const input = validated.value;
     const store = await this.env(scope.environmentId);
     const fileChecks = await this.fileChecks(scope.environmentId, input.files);
-    const committed = await store.mutate(async (tx) => {
+    const committed = await store.mutate((tx) => {
       const request = tx.manifest.requests[input.requestId];
       if (!request || !scope.tabId || request.destination.tabId !== scope.tabId) {
         throw new WebAnnotationServiceError("Request is not assigned to this session");
@@ -647,7 +655,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
         );
       }
       const revision = this.assertResultCapacity(tx.manifest, request.id);
-      const base = await this.resultBase(store, tx.manifest, request.id);
+      const base = this.resultBase(tx, request.id);
       const outcomes = request.selections.map((selection) => {
         const reported = input.outcomes.find(
           (outcome) => outcome.annotationId === selection.annotationId,

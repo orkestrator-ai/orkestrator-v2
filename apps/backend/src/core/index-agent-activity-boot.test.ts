@@ -1,9 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
 import type { ClientEnvironment, Environment } from "./models.js";
+import type { StorageDatabase } from "./storage-database.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
+import type { StorageService } from "./storage.js";
 
 /**
  * A `frontend` activity snapshot is only meaningful while the renderer that
@@ -26,6 +29,9 @@ const baseEnvironment = {
   networkAccessMode: "restricted",
   order: 0,
   environmentType: "local",
+  // Setup already finished, so boot does not adopt (and, with no worktree,
+  // fail) a pending setup that would rewrite the activity under test.
+  setupScriptsComplete: true,
 };
 
 async function withBackend<T>(
@@ -33,10 +39,7 @@ async function withBackend<T>(
   run: (backend: OrkestratorBackend, dataDir: string) => Promise<T>,
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-activity-boot-"));
-  await fs.writeFile(
-    path.join(dataDir, "environments.json"),
-    JSON.stringify(environments, null, 2),
-  );
+  seedStore(dataDir, "environments.json", environments);
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
@@ -87,9 +90,7 @@ describe("OrkestratorBackend agent activity boot reset", () => {
         });
         expect(environment).not.toHaveProperty("agentActivitySources");
         expect(environment).not.toHaveProperty("frontendAgentActivityObservers");
-        const [persisted] = JSON.parse(
-          await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
-        ) as Environment[];
+        const [persisted] = readStoredValue<Environment[]>(dataDir, "environments.json")!;
         expect(persisted).toMatchObject({
           agentActivitySources: {},
           frontendAgentActivityObservers: {},
@@ -132,9 +133,7 @@ describe("OrkestratorBackend agent activity boot reset", () => {
           agentActivityState: "waiting",
         });
         expect(environment).not.toHaveProperty("agentActivitySources");
-        const [persisted] = JSON.parse(
-          await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
-        ) as Environment[];
+        const [persisted] = readStoredValue<Environment[]>(dataDir, "environments.json")!;
         expect(persisted).toMatchObject({
           agentActivitySources: {
             "claude-terminal": { state: "waiting", updatedAt: terminalAt },
@@ -185,13 +184,25 @@ describe("OrkestratorBackend agent activity boot reset", () => {
         },
       ],
       async (backend, dataDir) => {
-        const environmentsFile = path.join(dataDir, "environments.json");
-        await fs.rm(environmentsFile);
-        // A directory where the file belongs makes every write to it fail.
-        await fs.mkdir(environmentsFile);
-
-        await expect(backend.init()).resolves.toBeUndefined();
-        await fs.rm(environmentsFile, { recursive: true, force: true });
+        const storage = (backend as unknown as { context: { storage: StorageService } }).context
+          .storage;
+        const database = (storage as unknown as { database: StorageDatabase }).database;
+        const writeStore = database.writeStore.bind(database);
+        // Every write to the environments store fails; other stores still work.
+        const failing = spyOn(database, "writeStore").mockImplementation((store, value) => {
+          if (store === "environments") throw new Error("disk full");
+          return writeStore(store, value);
+        });
+        try {
+          await expect(backend.init()).resolves.toBeUndefined();
+          expect(failing.mock.calls.some(([store]) => store === "environments")).toBe(true);
+        } finally {
+          failing.mockRestore();
+        }
+        // The reset was attempted and lost; the stale hint is all that remains.
+        expect(readStoredValue<Environment[]>(dataDir, "environments.json")![0]).toMatchObject({
+          agentActivitySources: { frontend: { state: "working", updatedAt: stuckAt } },
+        });
       },
     );
   });

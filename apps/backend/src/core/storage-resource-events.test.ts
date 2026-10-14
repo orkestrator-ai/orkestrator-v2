@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { databaseStoreForPath } from "./storage-stores.js";
+import { seedStore } from "./storage-test-support.js";
 import {
   RESOURCE_MANIFEST_KINDS,
   type ResourceChange,
@@ -74,14 +76,24 @@ const RESOURCE_MANIFEST_FILES: Record<ResourceManifestKind, string> = {
   "agent-mail-summary": "agent-mail.json",
 };
 
-async function replaceManifestFile(
+/**
+ * Replaces a manifest resource's persisted value the way another process
+ * would: a database store through its own connection, the configuration (which
+ * stays a file the desktop process also writes) by renaming a new file in.
+ */
+async function replaceManifestStore(
   storage: StorageService,
   resource: ResourceManifestKind,
-  contents: string,
+  value: unknown,
 ): Promise<void> {
-  const target = path.join(storage.getDataDir(), RESOURCE_MANIFEST_FILES[resource]);
+  const file = RESOURCE_MANIFEST_FILES[resource];
+  if (databaseStoreForPath(file) !== null) {
+    seedStore(storage.getDataDir(), file, value);
+    return;
+  }
+  const target = path.join(storage.getDataDir(), file);
   const temporary = `${target}.test-replacement`;
-  await fs.writeFile(temporary, contents);
+  await fs.writeFile(temporary, JSON.stringify(value));
   await fs.rename(temporary, target);
 }
 
@@ -232,7 +244,7 @@ describe("StorageService resource change announcements", () => {
         manifest.generation,
         "0".repeat(32),
         async () => {
-          await replaceManifestFile(storage, "project", JSON.stringify([{ id: "new" }]));
+          await replaceManifestStore(storage, "project", [{ id: "new" }]);
           return [{ id: "old" }];
         },
       );
@@ -248,17 +260,19 @@ describe("StorageService resource change announcements", () => {
     });
   });
 
-  test("maps every manifest resource to its own persistent file", async () => {
+  test("maps every manifest resource to its own persistent store", async () => {
     await withStorage(async (storage) => {
       expect(Object.keys(RESOURCE_MANIFEST_FILES)).toEqual([...RESOURCE_MANIFEST_KINDS]);
+      // Only the configuration stays a file; every other resource is a store.
+      expect(
+        RESOURCE_MANIFEST_KINDS.filter(
+          (resource) => databaseStoreForPath(RESOURCE_MANIFEST_FILES[resource]) === null,
+        ),
+      ).toEqual(["config"]);
 
       for (const [index, resource] of RESOURCE_MANIFEST_KINDS.entries()) {
         const before = await storage.getResourceRevisionManifest();
-        await replaceManifestFile(
-          storage,
-          resource,
-          JSON.stringify({ resource, marker: "x".repeat(index + 1) }),
-        );
+        await replaceManifestStore(storage, resource, { resource, marker: "x".repeat(index + 1) });
         const after = await storage.getResourceRevisionManifest(
           before.generation,
           before.revisions,
@@ -750,10 +764,7 @@ describe("StorageService resource change announcements", () => {
         expect.objectContaining({ resource: "project-notes", id: "p1" }),
       );
 
-      await fs.writeFile(
-        path.join(storage.getDataDir(), "project-notes.json"),
-        JSON.stringify({ p1: "written elsewhere" }),
-      );
+      await replaceManifestStore(storage, "project-notes", { p1: "written elsewhere" });
       const external = await storage.getScopedResourceRevisionManifest(
         scoped.generation,
         scoped.cursor,

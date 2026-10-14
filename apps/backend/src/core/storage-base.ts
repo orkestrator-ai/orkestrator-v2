@@ -15,7 +15,7 @@ import {
 } from "./storage-shared.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { BACKUP_CHECK_INTERVAL_MS, takeDailySnapshotIfDue } from "./storage-backups.js";
+import { BACKUP_CHECK_INTERVAL_MS, takeHourlySnapshotIfDue } from "./storage-backups.js";
 import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
 import {
   databaseStoreForPath,
@@ -653,8 +653,8 @@ export abstract class StorageBase {
     this.database.purgeAbandonedLeases();
     await this.recoverExpiredPromptQueueClaims();
     if (this.snapshots && this.snapshotTimers.length === 0) {
-      // Off the start-up path; then a cheap "is one due?" check every few hours.
-      const check = () => void takeDailySnapshotIfDue(this.database, this.dataDir);
+      // Off the start-up path; then a cheap "is one due?" check every few minutes.
+      const check = () => void takeHourlySnapshotIfDue(this.database, this.dataDir);
       const first = setTimeout(check, 60_000);
       const periodic = setInterval(check, BACKUP_CHECK_INTERVAL_MS);
       first.unref?.();

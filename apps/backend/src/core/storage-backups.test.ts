@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   BACKUP_DIRECTORY,
-  DAILY_INTERVAL_MS,
-  KEEP_DAILY,
+  HOURLY_INTERVAL_MS,
+  KEEP_HOURLY,
   MAX_BACKUP_AGE_MS,
   listStorageSnapshots,
   purgeStorageSnapshots,
-  takeDailySnapshotIfDue,
+  retainedHourlySnapshots,
+  takeHourlySnapshotIfDue,
+  type StorageSnapshot,
 } from "./storage-backups.js";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase, storeLayout } from "./storage-stores.js";
@@ -37,12 +39,12 @@ afterEach(async () => {
 });
 
 describe("database snapshots", () => {
-  test("a daily snapshot is a private, sound, restorable copy", async () => {
+  test("an hourly snapshot is a private, sound, restorable copy", async () => {
     const directory = await dataDir();
     const database = backend(directory);
     database.writeStore("kanban", [{ id: "t1", projectId: "p1", title: "Snapshot me" }]);
 
-    const file = await takeDailySnapshotIfDue(database, directory);
+    const file = await takeHourlySnapshotIfDue(database, directory);
     expect(file).not.toBeNull();
     expect((await fs.stat(file!)).mode & 0o777).toBe(0o600);
     expect((await fs.stat(path.join(directory, BACKUP_DIRECTORY))).mode & 0o777).toBe(0o700);
@@ -56,23 +58,84 @@ describe("database snapshots", () => {
     ]);
   });
 
-  test("takes at most one daily snapshot per interval, then rotates and ages them out", async () => {
+  test("takes a snapshot at most hourly, and only when the content changed", async () => {
     const directory = await dataDir();
     const database = backend(directory);
     let now = Date.parse("2026-10-01T00:00:00.000Z");
-    expect(await takeDailySnapshotIfDue(database, directory, () => now)).not.toBeNull();
-    now += DAILY_INTERVAL_MS / 2;
-    expect(await takeDailySnapshotIfDue(database, directory, () => now)).toBeNull();
-    for (let day = 0; day < KEEP_DAILY + 2; day += 1) {
-      now += DAILY_INTERVAL_MS;
-      await takeDailySnapshotIfDue(database, directory, () => now);
+    const take = () => takeHourlySnapshotIfDue(database, directory, () => now);
+    expect(await take()).not.toBeNull();
+
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1", title: "Changed" }]);
+    now += HOURLY_INTERVAL_MS / 2;
+    expect(await take()).toBeNull();
+    now += HOURLY_INTERVAL_MS / 2;
+    expect(await take()).not.toBeNull();
+
+    // Unchanged content, a write that changes nothing and a lease heartbeat
+    // are not changes.
+    now += HOURLY_INTERVAL_MS;
+    expect(await take()).toBeNull();
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1", title: "Changed" }]);
+    const release = await database.acquireLease("unrelated", "test", {
+      acquireTimeoutMs: 1_000,
+      staleMs: 60_000,
+    });
+    await release();
+    now += HOURLY_INTERVAL_MS;
+    expect(await take()).toBeNull();
+
+    // Deleting a store is.
+    database.deleteStore("kanban");
+    expect(await take()).not.toBeNull();
+    expect(listStorageSnapshots(directory)).toHaveLength(3);
+  });
+
+  test("keeps the newest six, one about a day old and one about three days old", () => {
+    const start = Date.parse("2026-10-01T00:00:00.000Z");
+    const day = 24 * HOURLY_INTERVAL_MS;
+    let pool: StorageSnapshot[] = [];
+    // A change every hour for two weeks; each check lands up to 5 minutes late.
+    let now = start;
+    for (let hour = 0; hour < 14 * 24; hour += 1) {
+      now += HOURLY_INTERVAL_MS + (hour % 6) * 60_000;
+      pool = [{ file: `hourly-${now}`, kind: "hourly" as const, takenAt: now }, ...pool];
+      const kept = retainedHourlySnapshots(pool, now);
+      pool = pool.filter((entry) => kept.has(entry));
+      if (now - start < 4 * day) continue;
+      const ages = pool.map((entry) => now - entry.takenAt);
+      expect(pool.slice(0, KEEP_HOURLY).every((entry) => kept.has(entry))).toBe(true);
+      expect(ages.some((age) => age >= day && age < 2 * day + 2 * HOURLY_INTERVAL_MS)).toBe(true);
+      expect(ages.some((age) => age >= 3 * day && age < 4 * day + 2 * HOURLY_INTERVAL_MS)).toBe(
+        true,
+      );
+      expect(pool.length).toBeLessThanOrEqual(KEEP_HOURLY + 4);
     }
-    const daily = listStorageSnapshots(directory).filter((entry) => entry.kind === "daily");
-    expect(daily).toHaveLength(KEEP_DAILY);
-    expect(daily[0]!.takenAt).toBe(now);
+  });
+
+  test("ages snapshots out, then replaces them even when nothing changed", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    let now = Date.parse("2026-10-01T00:00:00.000Z");
+    expect(await takeHourlySnapshotIfDue(database, directory, () => now)).not.toBeNull();
 
     purgeStorageSnapshots(directory, now + MAX_BACKUP_AGE_MS + 1);
     expect(listStorageSnapshots(directory)).toEqual([]);
+
+    expect(await takeHourlySnapshotIfDue(database, directory, () => now)).not.toBeNull();
+    now += MAX_BACKUP_AGE_MS + 1;
+    const fresh = await takeHourlySnapshotIfDue(database, directory, () => now);
+    expect(fresh).not.toBeNull();
+    expect(listStorageSnapshots(directory).map((entry) => entry.file)).toEqual([fresh!]);
+  });
+
+  test("an unreadable newest snapshot is replaced", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    let now = Date.parse("2026-10-01T00:00:00.000Z");
+    const first = await takeHourlySnapshotIfDue(database, directory, () => now);
+    await fs.writeFile(first!, "not a database");
+    now += HOURLY_INTERVAL_MS;
+    expect(await takeHourlySnapshotIfDue(database, directory, () => now)).not.toBeNull();
   });
 
   test("a failed snapshot never breaks the backend and leaves no partial file", async () => {
@@ -83,7 +146,7 @@ describe("database snapshots", () => {
     });
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(await takeDailySnapshotIfDue(database, directory)).toBeNull();
+      expect(await takeHourlySnapshotIfDue(database, directory)).toBeNull();
     } finally {
       backup.mockRestore();
       warn.mockRestore();

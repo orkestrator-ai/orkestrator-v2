@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { StorageDatabase } from "./storage-database.js";
@@ -13,9 +14,12 @@ import type { StorageDatabase } from "./storage-database.js";
  *
  * - `pre-migration-v<from>-<stamp>.sqlite`, taken before an existing database
  *   is migrated to a newer schema. The newest {@link KEEP_PRE_MIGRATION} stay.
- * - `daily-<stamp>.sqlite`, taken at most once per {@link DAILY_INTERVAL_MS}
- *   (checked at start-up and every few hours). The newest {@link KEEP_DAILY}
- *   stay.
+ * - `hourly-<stamp>.sqlite`, taken when the newest one is at least
+ *   {@link HOURLY_INTERVAL_MS} old and the database content changed since it
+ *   (checked a minute after start-up and every {@link BACKUP_CHECK_INTERVAL_MS}).
+ *   The newest {@link KEEP_HOURLY} stay, and so does one a day as it ages
+ *   ({@link retainedHourlySnapshots}), so there is always a copy about a day
+ *   old and one about {@link OLDEST_DAILY_AGE_MS} old.
  *
  * Every snapshot older than {@link MAX_BACKUP_AGE_MS} is deleted regardless.
  * That bound is also the privacy cost: content deleted from the live database
@@ -26,14 +30,20 @@ import type { StorageDatabase } from "./storage-database.js";
  */
 
 export const BACKUP_DIRECTORY = "backups";
-export const DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
-export const BACKUP_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
-export const KEEP_DAILY = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const HOURLY_INTERVAL_MS = 60 * 60 * 1000;
+/** Short against the interval, so a snapshot is at most this late. */
+export const BACKUP_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+export const KEEP_HOURLY = 6;
+/** Spacing of the hourly snapshots kept as they age. */
+export const DAILY_SPACING_MS = DAY_MS;
+/** The oldest daily copy kept: the youngest at least this old. */
+export const OLDEST_DAILY_AGE_MS = 3 * DAY_MS;
 export const KEEP_PRE_MIGRATION = 2;
-export const MAX_BACKUP_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_BACKUP_AGE_MS = 7 * DAY_MS;
 
 const SNAPSHOT =
-  /^(daily|pre-migration-v\d+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.sqlite$/;
+  /^(hourly|pre-migration-v\d+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.sqlite$/;
 
 function stampOf(now: number): string {
   return new Date(now).toISOString().replace(/[:.]/g, "-");
@@ -53,7 +63,7 @@ function backupDirectory(dataDir: string): string {
 
 export interface StorageSnapshot {
   file: string;
-  kind: "daily" | "pre-migration";
+  kind: "hourly" | "pre-migration";
   takenAt: number;
 }
 
@@ -72,7 +82,7 @@ export function listStorageSnapshots(dataDir: string): StorageSnapshot[] {
     if (!Number.isFinite(takenAt)) continue;
     snapshots.push({
       file: path.join(dataDir, BACKUP_DIRECTORY, entry),
-      kind: match[1] === "daily" ? "daily" : "pre-migration",
+      kind: match[1] === "hourly" ? "hourly" : "pre-migration",
       takenAt,
     });
   }
@@ -111,17 +121,91 @@ function snapshot(database: StorageDatabase, dataDir: string, name: string): str
   }
 }
 
-/** Deletes snapshots beyond the per-kind counts and every one past the age bound. */
-export function purgeStorageSnapshots(dataDir: string, now = Date.now()): void {
-  const kept = { daily: 0, "pre-migration": 0 };
-  for (const entry of listStorageSnapshots(dataDir)) {
-    const limit = entry.kind === "daily" ? KEEP_DAILY : KEEP_PRE_MIGRATION;
-    const expired = now - entry.takenAt > MAX_BACKUP_AGE_MS;
-    if (expired || kept[entry.kind] >= limit) {
-      fs.rmSync(entry.file, { force: true });
-      continue;
+/**
+ * The hourly snapshots to keep, from `snapshots` newest first: the newest
+ * {@link KEEP_HOURLY}, plus daily ones. Walking from the oldest, each
+ * snapshot taken {@link DAILY_SPACING_MS} or more after the previous daily
+ * one is daily, so the dailies stay put as newer snapshots come and go. The
+ * dailies are kept from the youngest at least {@link OLDEST_DAILY_AGE_MS} old
+ * onwards: that one is the "3 days ago" copy, the youngest at least a day old
+ * is the "1 day ago" copy, and the ones between are what age into them.
+ */
+export function retainedHourlySnapshots(
+  snapshots: readonly StorageSnapshot[],
+  now: number,
+): Set<StorageSnapshot> {
+  const kept = new Set(snapshots.slice(0, KEEP_HOURLY));
+  const dailies: StorageSnapshot[] = [];
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+    const entry = snapshots[index]!;
+    const previous = dailies.at(-1);
+    if (!previous || entry.takenAt - previous.takenAt >= DAILY_SPACING_MS) dailies.push(entry);
+  }
+  let oldest = 0;
+  for (let index = dailies.length - 1; index >= 0; index -= 1) {
+    if (now - dailies[index]!.takenAt >= OLDEST_DAILY_AGE_MS) {
+      oldest = index;
+      break;
     }
-    kept[entry.kind] += 1;
+  }
+  for (const entry of dailies.slice(oldest)) kept.add(entry);
+  return kept;
+}
+
+/** Deletes snapshots the rotation no longer keeps and every one past the age bound. */
+export function purgeStorageSnapshots(dataDir: string, now = Date.now()): void {
+  const snapshots = listStorageSnapshots(dataDir);
+  const kept = retainedHourlySnapshots(
+    snapshots.filter((entry) => entry.kind === "hourly"),
+    now,
+  );
+  for (const entry of snapshots
+    .filter((entry) => entry.kind === "pre-migration")
+    .slice(0, KEEP_PRE_MIGRATION)) {
+    kept.add(entry);
+  }
+  for (const entry of snapshots) {
+    if (!kept.has(entry) || now - entry.takenAt > MAX_BACKUP_AGE_MS) {
+      fs.rmSync(entry.file, { force: true });
+    }
+  }
+}
+
+/**
+ * Identifies a database's content: every store's revision (each committed
+ * change to a store bumps it), the deletion bookkeeping in `storage_meta` and
+ * the schema version. Leases are coordination, not content, so a heartbeat
+ * does not count as a change. A snapshot keeps all three, so its fingerprint
+ * is the live database's at the moment it was taken.
+ */
+function contentFingerprint(db: Database): string {
+  const hash = createHash("sha256");
+  const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
+  hash.update(`schema\0${user_version}`);
+  const stores = db.query("SELECT name, revision FROM stores ORDER BY name").all() as Array<{
+    name: string;
+    revision: number;
+  }>;
+  for (const { name, revision } of stores) hash.update(`\0store\0${name}\0${revision}`);
+  const meta = db.query("SELECT key, value FROM storage_meta ORDER BY key").all() as Array<{
+    key: string;
+    value: string;
+  }>;
+  for (const { key, value } of meta) hash.update(`\0meta\0${key}\0${value}`);
+  return hash.digest("hex");
+}
+
+/** The snapshot's content fingerprint, or `null` when it cannot be read. */
+function snapshotFingerprint(file: string): string | null {
+  try {
+    const copy = new Database(file, { readonly: true });
+    try {
+      return contentFingerprint(copy);
+    } finally {
+      copy.close();
+    }
+  } catch {
+    return null;
   }
 }
 
@@ -140,11 +224,12 @@ export function snapshotBeforeMigration(
 }
 
 /**
- * Takes the daily snapshot if the newest one is at least a day old, then
- * purges. Serialized across backends sharing the directory by a lease, and
- * never throws: a missed backup must not take the backend down.
+ * Takes an hourly snapshot if the newest is at least an hour old and the
+ * database changed since it, then purges. Serialized across backends sharing
+ * the directory by a lease, and never throws: a missed backup must not take
+ * the backend down.
  */
-export async function takeDailySnapshotIfDue(
+export async function takeHourlySnapshotIfDue(
   database: StorageDatabase,
   dataDir: string,
   now: () => number = Date.now,
@@ -155,17 +240,21 @@ export async function takeDailySnapshotIfDue(
       acquireTimeoutMs: 5_000,
       staleMs: 120_000,
     });
-    const newest = listStorageSnapshots(dataDir).find((entry) => entry.kind === "daily");
     const at = now();
-    const file =
-      newest && at - newest.takenAt < DAILY_INTERVAL_MS
-        ? null
-        : snapshot(database, dataDir, `daily-${stampOf(at)}`);
+    // Purge first: a snapshot past the age bound must not stand in for a new one.
+    purgeStorageSnapshots(dataDir, at);
+    const newest = listStorageSnapshots(dataDir).find((entry) => entry.kind === "hourly");
+    if (newest) {
+      if (at - newest.takenAt < HOURLY_INTERVAL_MS) return null;
+      // An unreadable newest snapshot never matches, so it is replaced.
+      if (snapshotFingerprint(newest.file) === contentFingerprint(database.db)) return null;
+    }
+    const file = snapshot(database, dataDir, `hourly-${stampOf(at)}`);
     purgeStorageSnapshots(dataDir, at);
     return file;
   } catch (error) {
     console.warn(
-      "[Storage] Daily database snapshot failed:",
+      "[Storage] Hourly database snapshot failed:",
       error instanceof Error ? error.message : "unknown error",
     );
     return null;

@@ -160,9 +160,16 @@ verified with `quick_check` before it is renamed into place:
 - `pre-migration-v<from>-<stamp>.sqlite` before an existing database is
   migrated to a newer schema (a failed snapshot aborts the open instead of
   migrating unprotected); the newest two are kept.
-- `daily-<stamp>.sqlite`, checked a minute after start-up and every six hours,
-  taken when the newest is a day old; the newest three are kept. A failed
-  daily snapshot only logs.
+- `hourly-<stamp>.sqlite`, checked a minute after start-up and every five
+  minutes, taken when the newest is an hour old **and** the content changed
+  since it: any store's revision, the deletion bookkeeping in `storage_meta`
+  or the schema version. Lease heartbeats and writes that change nothing do
+  not count. A failed hourly snapshot only logs.
+- Rotation keeps the newest six hourly snapshots plus one a day as it ages
+  (each the first taken a day or more after the previous one), from the
+  youngest at least three days old onwards. So there is always a copy about a
+  day old and one about three days old; the one about two days old in between
+  is what becomes the next three-day copy. At most about ten files.
 - Anything older than seven days is deleted. That is also the privacy cost:
   content deleted from the live database can survive in a snapshot until it
   ages out.

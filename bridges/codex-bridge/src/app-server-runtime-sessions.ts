@@ -1,6 +1,5 @@
 import {
   SteerOrdering,
-  MAX_HISTORICAL_ASSISTANT_SEGMENTS,
   DEFAULT_SESSION_RETENTION_MS,
   DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS,
   mergeAccountUsage,
@@ -10,6 +9,7 @@ import {
 } from "./app-server-runtime-base.js";
 import { inheritCommandChanges } from "./sessions/command-changes.js";
 import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
+import { openAssistantRow } from "./app-server-runtime-rows.js";
 import { createHash } from "node:crypto";
 import {
   CODEX_SIGN_IN_REQUIRED_MESSAGE,
@@ -25,8 +25,6 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
-
-import { beginTurnRenderState } from "./messages/render-turn.js";
 
 import { createMessageId, createSessionId, type NormalizedMessage } from "./messages/types.js";
 
@@ -680,10 +678,14 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     const turn = context.activeTurn;
     if (!turn || turn.turnId !== turnId) return;
     const state = this.stateFor(context.threadId);
-    const boundary = turn.freezeAssistantSegment(
-      turn.boundaryAfterItems(ordering),
-      ordering.requestedAt,
-    );
+    const placement = turn.placeSteer(ordering);
+    if (placement.kind === "before") {
+      this.insertSteerBefore(context, input, turnId, placement.assistantMessageId);
+      await state.coalescer.flushNow();
+      this.emitStatus(context);
+      return;
+    }
+    const boundary = turn.freezeAssistantSegment(placement.boundary, ordering.requestedAt);
 
     // Finish the pre-steer row before announcing the user message. The
     // coalescer serializes this against a render already in flight, while the
@@ -693,42 +695,14 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     const userMessage = this.appendUserMessage(context, input, []);
     userMessage.turnId = turnId;
-    const previousAssistant = context.messages.find(
-      (message) => message.id === turn.assistantMessageId,
-    );
-    const assistantMessage: NormalizedMessage = {
-      id: createMessageId(),
-      role: "assistant",
-      content: "",
-      parts: [],
+    const assistantMessage = openAssistantRow(context, state, turn, {
+      boundary,
+      startedAt: ordering.requestedAt,
       createdAt: new Date(this.now()).toISOString(),
-      turnId,
-      revision: 1,
-      ...(previousAssistant?.modelId ? { modelId: previousAssistant.modelId } : {}),
-      ...(previousAssistant?.planReview ? { planReview: true } : {}),
-    };
-    context.messages.push(assistantMessage);
-    state.historicalAssistantSegments.set(turn.assistantMessageId, {
-      render: state.render,
-      publishedParts: state.publishedParts.slice(),
-      ...(state.publishedModelId ? { publishedModelId: state.publishedModelId } : {}),
+      keepsRenderedItems: false,
     });
-    // `Map` iterates in insertion order, so the first key is the oldest row.
-    // Dropping it stops that row re-rendering; its published parts stand and the
-    // rollout can rebuild it exactly on the next hydration. Deliberately *not*
-    // `releaseTurnRenderState`: every row shares one `fileChange` context, so
-    // releasing a historical row would clear the live row's diff baselines.
-    while (state.historicalAssistantSegments.size > MAX_HISTORICAL_ASSISTANT_SEGMENTS) {
-      const oldest = state.historicalAssistantSegments.keys().next().value;
-      if (typeof oldest !== "string") break;
-      state.historicalAssistantSegments.delete(oldest);
-    }
-    turn.startAssistantSegment(assistantMessage.id, boundary, ordering.requestedAt);
-    state.render = beginTurnRenderState(state.render);
-    state.assistantMessageId = assistantMessage.id;
+    // Announced below together with the user message, which must precede it.
     state.publishedMessageId = assistantMessage.id;
-    state.publishedParts = [];
-    state.publishedModelId = assistantMessage.modelId;
     this.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
       this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
@@ -744,6 +718,35 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // event to happen to schedule the new row.
     await state.coalescer.flushNow();
     this.emitStatus(context);
+  }
+
+  /**
+   * Puts a steer's user row directly above `rowId`, the first assistant row
+   * whose items all followed it (`TurnAccumulator.placeSteer`). No row opens:
+   * the live one already holds what came after the steer.
+   *
+   * Synchronous, so no item can land between choosing the row and placing the
+   * user row above it. Readers re-read the transcript window by revision, and
+   * the rows involved opened during the steer itself, so they are at its tail.
+   */
+  private insertSteerBefore(
+    context: ThreadContext,
+    input: string,
+    turnId: string,
+    rowId: string,
+  ): void {
+    const userMessage = this.appendUserMessage(context, input, []);
+    userMessage.turnId = turnId;
+    let index = context.messages.length - 2;
+    while (index >= 0 && context.messages[index]!.id !== rowId) index -= 1;
+    if (index >= 0) {
+      context.messages.pop();
+      context.messages.splice(index, 0, userMessage);
+    }
+    this.bumpMessageRevision(context);
+    for (const id of context.bridgeSessionIds) {
+      this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
+    }
   }
 
   async startNativeReview(

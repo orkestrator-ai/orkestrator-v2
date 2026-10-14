@@ -36,6 +36,29 @@ rather than a name, and "signed in" is one answer per provider.
   terminal tab or by writing `auth.json`; containers are handed the resulting
   directory as a bind mount.
 
+## One row per model response
+
+`translate.ts` writes each model response to a row of its own: Pi's
+`message_start` for an assistant message closes the current row, and the next
+content opens one lazily. Pi runs a response's tools after its `message_end`
+and before the next `message_start`, so their cards stay on the row of the
+response that requested them. Never fold a whole turn back into one row: a
+turn can run for hours, and a multi-megabyte row fits no transcript window, so
+readers can only show a front-trimmed copy and lose it once newer rows push it
+out of the live tail. A tool update, result or image goes to the row holding
+that call (`toolCallRows`), a nested call to the row holding its parent, and a
+`tool_execution_start` always to the current row, because some providers
+reuse call ids across responses. Every row change goes through `rowChanged` /
+`noteRowRevised` (`src/transcript.ts`): it bumps `state.revision`, which is what
+the backend's transcript token keys on, and notes the row for
+`revisedMessageIds`, so a late update to a row newer ones pushed out of the
+live window reaches readers through `revisedMessages`. `resetRenderedHistory`
+clears the notes; a new change site must use the helper, not bump `revision`
+alone. "Did this turn answer" is
+`turnOpenedAssistantRow`, not `currentAssistantMessageId`, which a response
+boundary clears mid-turn. A resume replays one row per Pi entry, dated by the
+entry, so live and resumed transcripts have the same shape.
+
 ## When touching the Pi bridge
 
 - The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every

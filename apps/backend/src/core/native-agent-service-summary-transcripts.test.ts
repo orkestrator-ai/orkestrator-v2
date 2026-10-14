@@ -18,6 +18,7 @@ import type {
   ProviderTranscriptPage,
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
+import { applyNativeAgentTranscriptDelta } from "@orkestrator/protocol/native-agent";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 
@@ -42,7 +43,13 @@ function message(id: string, parts: Array<Record<string, unknown>> = []): TestMe
 }
 
 /** A provider that behaves like a v2 bridge over an in-memory history. */
-function summaryProvider(history: { messages: TestMessage[]; epoch: number; revision: number }) {
+function summaryProvider(history: {
+  messages: TestMessage[];
+  epoch: number;
+  revision: number;
+  /** Rows the bridge changed recently, newest first. */
+  revised?: string[];
+}) {
   const generation = "g1";
   const transcriptSnapshot = async (
     _sessionId: string,
@@ -57,6 +64,7 @@ function summaryProvider(history: { messages: TestMessage[]; epoch: number; revi
       targetBytes: options.targetBytes,
       complete: true,
       pages: true,
+      ...(history.revised ? { revisedMessageIds: history.revised } : {}),
       ...(options.knownSourceToken ? { knownToken: options.knownSourceToken } : {}),
     });
     if (update.status === "unchanged") return { unchanged: true, sourceToken: update.token };
@@ -70,6 +78,7 @@ function summaryProvider(history: { messages: TestMessage[]; epoch: number; revi
       freshness: "current",
       representation: "summary",
       ...(update.value.historyCursor ? { historyCursor: update.value.historyCursor } : {}),
+      ...(update.value.revisedMessages ? { revisedMessages: update.value.revisedMessages } : {}),
     };
   };
   const transcriptDetail = async (
@@ -297,6 +306,134 @@ describe("summary transcripts", () => {
   });
 });
 
+describe("revised rows before the window", () => {
+  test("are projected like window rows, resolve their details, and deltas mirror them", async () => {
+    const output = "late result ".repeat(1_000);
+    const history = {
+      messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+      revised: [] as string[],
+    };
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-revised-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const read = (knownToken?: string) =>
+          service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            ...(knownToken ? { knownToken } : { forceSnapshot: true }),
+          });
+        const first = await read();
+        if (first.status !== "snapshot") throw new Error("expected a snapshot");
+        expect(first.value.revisedMessages).toBeUndefined();
+
+        // A background tool's result lands on a step long out of the window,
+        // and a step inside the window changed too.
+        history.messages[10] = message("m10", [
+          {
+            type: "tool-invocation",
+            content: "Run",
+            sourcePartId: "m10:0",
+            toolUseId: "call-10",
+            toolOutput: output,
+            toolState: "success",
+          },
+        ]);
+        history.messages[140] = { ...history.messages[140]!, content: "edited" };
+        history.revised = ["m140", "m10"];
+        history.revision += 1;
+        const second = await read(first.token);
+        if (second.status !== "delta") throw new Error(`expected a delta, got ${second.status}`);
+        const revised = second.delta.revisedMessages as TestMessage[] | undefined;
+        // The window row travels in the window; only the one before it is extra.
+        expect(revised?.map((entry) => entry.id)).toEqual(["m10"]);
+        const part = revised![0]!.parts[0]!;
+        expect(part.toolOutput).toBeUndefined();
+        expect(part.detail).toBeUndefined();
+        const details = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: part.detailRef as string,
+        });
+        expect(details.toolOutput).toBe(output);
+        const view = applyNativeAgentTranscriptDelta(first.value, second.delta);
+        if (!view) throw new Error("expected the delta to apply");
+        expect(view.revisedMessages).toEqual(revised);
+
+        // Once the bridge stops naming the row, a delta's absence clears it.
+        history.revised = [];
+        history.revision += 1;
+        const third = await read(second.token);
+        if (third.status !== "delta") throw new Error(`expected a delta, got ${third.status}`);
+        expect(third.delta.revisedMessages).toBeUndefined();
+        expect(applyNativeAgentTranscriptDelta(view, third.delta)?.revisedMessages).toBeUndefined();
+      },
+    );
+  });
+});
+
+describe("revised rows in a joined prefix", () => {
+  test("replace the older copy the view joined ahead of the provider's window", async () => {
+    const running = (id: string, state: string) =>
+      message(id, [
+        { type: "tool-invocation", content: "Run", toolUseId: `${id}-call`, toolState: state },
+      ]);
+    let read = 0;
+    const transcriptSnapshot = async (): Promise<ProviderTranscriptSnapshot> => {
+      read += 1;
+      // The window moves forward by one row, and the row it left behind
+      // settles: the provider names it as revised.
+      return read === 1
+        ? {
+            messages: [running("m3", "pending"), message("m4"), message("m5")],
+            historyStartIndex: 3,
+            complete: false,
+            historyEpoch: "g1:1",
+            sourceToken: "t1",
+            freshness: "current",
+          }
+        : {
+            messages: [message("m4"), message("m5"), message("m6")],
+            historyStartIndex: 4,
+            complete: false,
+            historyEpoch: "g1:1",
+            sourceToken: "t2",
+            freshness: "current",
+            revisedMessages: [running("m3", "success")],
+          };
+    };
+    const stub = createProviderStub("codex", { transcriptSnapshot });
+    await withService(
+      { prefix: "orkestrator-summary-revised-join-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const first = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (first.status !== "snapshot") throw new Error("expected a snapshot");
+        const second = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (second.status !== "snapshot") throw new Error("expected a snapshot");
+        const rows = second.value.messages as TestMessage[];
+        expect(rows.map((row) => row.id)).toEqual(["m3", "m4", "m5", "m6"]);
+        expect(rows[0]!.parts[0]!.toolState).toBe("success");
+        // Already in the view, so not sent a second time.
+        expect(second.value.revisedMessages).toBeUndefined();
+      },
+    );
+  });
+});
+
 describe("remote detail reads", () => {
   function heavyHistory(count: number) {
     return {
@@ -497,6 +634,35 @@ describe("direct history page cache", () => {
           service.getMessagePage({ ...identity, syncVersion: 1, before }),
         ).rejects.toThrow("expired");
         expect(stub.transcriptPage).toHaveBeenCalledTimes(3);
+      },
+    );
+  });
+
+  test("a row revised since a page was cached is read again, not served stale", async () => {
+    const history = { ...pagedHistory(250), revised: [] as string[] };
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-page-revised-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const before = await firstCursor(service);
+        await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        // An unchanged revised list keeps the cache.
+        await firstCursor(service);
+        await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(1);
+
+        history.messages[2] = message("m2", [{ type: "text", content: "settled late" }]);
+        history.revised = ["m2"];
+        history.revision += 1;
+        await firstCursor(service);
+        await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(2);
+        // Named again unchanged, it does not drop the cache a second time.
+        history.revision += 1;
+        await firstCursor(service);
+        await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(2);
       },
     );
   });

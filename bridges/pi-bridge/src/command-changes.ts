@@ -24,7 +24,7 @@ import { commandChangeJournalPath, workingDirectory } from "./config.js";
 import { schedulePersist } from "./persistence.js";
 import type { SessionState } from "./state.js";
 import { applyCommandChanges } from "./translate.js";
-import { chargeTranscript } from "./transcript.js";
+import { chargeTranscript, noteRowRevised } from "./transcript.js";
 
 /** Pi's built-in shell tools. Neither has a background mode to skip. */
 const SHELL_TOOLS = new Set(["bash", "powershell"]);
@@ -168,6 +168,7 @@ export async function overlayCommandChanges(
         if (!change) continue;
         part.commandChanges = change;
         chargeTranscript(state, Buffer.byteLength(JSON.stringify(change)));
+        noteRowRevised(state, message.id);
         if (own && inherited?.get(part.toolUseId) === change) {
           copies.push(own.append(part.toolUseId, change));
         }

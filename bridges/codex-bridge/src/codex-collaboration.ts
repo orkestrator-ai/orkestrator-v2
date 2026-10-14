@@ -210,7 +210,7 @@ export function isCodexCollabToolCallItem(value: unknown): value is CodexCollabT
   );
 }
 
-function isSpawnTool(tool: string): boolean {
+export function isCodexSpawnTool(tool: string): boolean {
   return tool === "spawn_agent" || tool === "spawn";
 }
 
@@ -228,7 +228,7 @@ function getReceiverThreadIds(item: CodexCollabToolCallItem): string[] {
 export function getCodexSpawnedAgentIdsInOrder(items: unknown[]): Array<string | undefined> {
   return items
     .map(normalizeCodexCollabToolCallItem)
-    .filter((item): item is CodexCollabToolCallItem => item !== null && isSpawnTool(item.tool))
+    .filter((item): item is CodexCollabToolCallItem => item !== null && isCodexSpawnTool(item.tool))
     .map((item) => {
       const receiverThreadIds = getReceiverThreadIds(item);
       return receiverThreadIds.length === 1 ? receiverThreadIds[0] : undefined;
@@ -315,7 +315,7 @@ export function applyCodexCollabStateToSubagentParts(
   if (lifecycleItems.length === 0) return transcriptParts;
 
   const latestByAgentId = new Map<string, LatestCollabAgentState>();
-  const spawnItems = collabItems.filter((item) => isSpawnTool(item.tool));
+  const spawnItems = collabItems.filter((item) => isCodexSpawnTool(item.tool));
   const failedSpawnAgentIds = new Set<string>();
 
   // Preserve the engine's item order. A child can finish one task and then be
@@ -369,7 +369,7 @@ export function applyCodexCollabStateToSubagentParts(
       continue;
     }
     const spawnPrompt =
-      isSpawnTool(item.tool) && typeof item.prompt === "string" ? item.prompt : undefined;
+      isCodexSpawnTool(item.tool) && typeof item.prompt === "string" ? item.prompt : undefined;
     for (const agentId of getReceiverThreadIds(item)) {
       const previous = latestByAgentId.get(agentId);
       const reportedState = item.agents_states?.[agentId];

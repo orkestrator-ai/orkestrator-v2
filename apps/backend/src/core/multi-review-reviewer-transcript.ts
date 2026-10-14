@@ -31,13 +31,19 @@
  */
 import { createHash } from "node:crypto";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
-import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
+import {
+  NATIVE_AGENT_REVISED_MESSAGES_MAX,
+  type NativeAgentToolDetails,
+} from "@orkestrator/protocol/native-agent";
 import {
   BRIDGE_DETAIL_LOCATOR_MAX_LENGTH,
   isBridgeDetailLocator,
   readBridgePartDetail,
 } from "@orkestrator/protocol/node/bridge-transcript-summary";
-import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
+import type {
+  NativeAgentRuntimeProvider,
+  ProviderTranscriptSnapshot,
+} from "./agent-provider-contract.js";
 import {
   DIRECT_HISTORY_CURSOR_MAX_LENGTH,
   decodeHistoryCursor,
@@ -74,7 +80,37 @@ export type ReviewerTranscriptRead =
       historyCursor?: string;
       /** History continuity epoch; set when the read was given a history key. */
       historyEpoch?: string;
+      /** Rows before `messages` the provider says changed recently. */
+      revisedMessages?: unknown[];
     };
+
+/** Byte bound on the revised rows one reviewer read carries beside its tail. */
+const MAX_REVIEWER_REVISED_BYTES = 256 * 1024;
+
+/**
+ * The provider's revised rows that fall outside the tail shown, in the same
+ * display form as the tail, within a byte bound. A row the tail already holds
+ * travels there; one too large for what remains is left to paging.
+ */
+function reviewerRevisedMessages(
+  snapshot: ProviderTranscriptSnapshot,
+  shown: readonly unknown[],
+): unknown[] {
+  if (!snapshot.revisedMessages?.length) return [];
+  const id = (message: unknown) => (message as { id?: unknown } | null)?.id;
+  const inTail = new Set(shown.map(id));
+  const revised: unknown[] = [];
+  let bytes = 0;
+  for (const raw of snapshot.revisedMessages.slice(0, NATIVE_AGENT_REVISED_MESSAGES_MAX)) {
+    const message = snapshot.representation === "summary" ? displayMessage(raw) : raw;
+    if (inTail.has(id(message))) continue;
+    const size = Buffer.byteLength(JSON.stringify(message));
+    if (bytes + size > MAX_REVIEWER_REVISED_BYTES) break;
+    bytes += size;
+    revised.push(message);
+  }
+  return revised;
+}
 
 type SnapshotCapable = BuildPipelineProvider &
   Partial<
@@ -269,6 +305,7 @@ export async function readReviewerTranscript(
           providerIncomplete: !bounded.truncated,
         });
     }
+    const revisedMessages = reviewerRevisedMessages(snapshot, bounded.messages);
     return {
       kind: "snapshot",
       messages: bounded.messages,
@@ -278,6 +315,7 @@ export async function readReviewerTranscript(
       bytes: bounded.bytes,
       ...(historyCursor ? { historyCursor } : {}),
       ...(history ? { historyEpoch } : {}),
+      ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
     };
   }
   // Compatibility path for providers without a bounded snapshot surface. The

@@ -356,7 +356,8 @@ export interface SessionState {
   /** Monotonic count of turns dispatched in this process. */
   promptSequence: number;
   /**
-   * The assistant message the current turn writes into.
+   * The assistant row the current model step writes into. Cleared at a step
+   * boundary, so the next step opens a row of its own.
    *
    * Held by id rather than by reference so a transcript trim that evicts the
    * message cannot leave the translator appending to an orphan that no longer

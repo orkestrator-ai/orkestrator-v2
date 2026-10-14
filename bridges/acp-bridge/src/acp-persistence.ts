@@ -81,11 +81,8 @@ import {
   setGrokInterjectionJournal,
   type GrokInterjectionJournalEntry,
 } from "./grok-interjection.js";
-import {
-  indexActiveSubagentsFromTranscript,
-  boundedModelId,
-  restoreCursorTodosFromMessages,
-} from "./acp-tools.js";
+import { indexActiveSubagentsFromTranscript, restoreCursorTodosFromMessages } from "./acp-tools.js";
+import { boundedModelId } from "./acp-rows.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { restorePersistedCommands } from "./acp-commands.js";
 import {

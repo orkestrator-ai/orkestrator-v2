@@ -54,6 +54,33 @@ describe("reviewer transcript bounds", () => {
   });
 });
 
+describe("revised reviewer rows", () => {
+  test("rows the provider revised outside the tail travel beside it, not ones it shows", async () => {
+    const provider = {
+      agent: "claude",
+      async messages() {
+        throw new Error("the unbounded route must not be used");
+      },
+      async transcriptSnapshot() {
+        return {
+          messages: [{ id: "m9", role: "assistant", content: "tail", parts: [] }],
+          sourceToken: "rev-1",
+          complete: false,
+          revisedMessages: [
+            { id: "m2", role: "assistant", content: "settled late", parts: [] },
+            { id: "m9", role: "assistant", content: "tail", parts: [] },
+          ],
+        };
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(provider, "session-a", undefined);
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(read.revisedMessages).toEqual([
+      { id: "m2", role: "assistant", content: "settled late", parts: [] },
+    ]);
+  });
+});
+
 describe("conditional reviewer transcript reads", () => {
   function snapshotProvider() {
     const calls: Array<{ limit: number; targetBytes: number; knownSourceToken?: string }> = [];

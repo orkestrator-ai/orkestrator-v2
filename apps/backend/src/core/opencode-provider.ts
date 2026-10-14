@@ -41,7 +41,6 @@ import {
   type ProviderDispatchStatus,
   type ProviderInteractiveSnapshot,
   type ProviderSessionStateSnapshot,
-  type ProviderTranscriptSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
@@ -81,7 +80,12 @@ import {
 import {
   boundedOwnedOpenCodeCollection,
   openCodeSessionStateSnapshot,
+  openCodeTranscriptPage,
   openCodeTranscriptSnapshot,
+  openCodeTranscriptSource,
+  readOpenCodeMessages,
+  type OpenCodeTranscriptPageOptions,
+  type OpenCodeTranscriptSnapshotOptions,
 } from "./opencode-snapshots.js";
 import {
   OpenCodeDiscoveryMetadataCache,
@@ -977,18 +981,18 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  async transcriptSnapshot(
-    sessionId: string,
-    options: { limit: number; targetBytes: number; knownSourceToken?: string },
-  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
-    return openCodeTranscriptSnapshot({
-      sessionId,
-      options,
-      revision: () => this.streamState.revision(sessionId),
-      currentMessages: () => this.streamState.currentMessages(sessionId),
-      readMessages: (limit) => this.readMessagesSnapshot(sessionId, limit),
-      replaceMessages: (messages) => this.streamState.replaceMessages(sessionId, messages),
-      title: () => this.streamState.title(sessionId),
+  async transcriptSnapshot(sessionId: string, options: OpenCodeTranscriptSnapshotOptions) {
+    return openCodeTranscriptSnapshot(this.transcriptSource(sessionId), options);
+  }
+
+  /** Older history from OpenCode's own `before` read; like the snapshot, no child hydration. */
+  async transcriptPage(sessionId: string, options: OpenCodeTranscriptPageOptions) {
+    return openCodeTranscriptPage(this.transcriptSource(sessionId), options);
+  }
+
+  private transcriptSource(sessionId: string) {
+    return openCodeTranscriptSource(this.streamState, sessionId, {
+      readMessages: (limit, before) => this.readMessagesSnapshot(sessionId, limit, before),
       recordUnknown: (type) => this.health.recordUnknown(`part:${type}`),
       ...(this.commandChanges
         ? { commandChanges: () => this.commandChanges!.changes(sessionId) }
@@ -1040,7 +1044,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const current = this.streamState.currentMessages(sessionId);
     if (current) return [...boundedOpenCodeMessageHistory(current.slice(-limit), { count: limit })];
     const messages = await this.readMessagesSnapshot(sessionId, limit);
-    this.streamState.replaceMessages(sessionId, messages);
+    this.streamState.replaceMessages(sessionId, messages, undefined, limit);
     return [...boundedOpenCodeMessageHistory(messages.slice(-limit), { count: limit })];
   }
 
@@ -1060,13 +1064,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return "error";
   }
 
-  private async readMessagesSnapshot(sessionId: string, limit?: number): Promise<unknown[]> {
-    const response = await this.client.session.messages(
-      { sessionID: sessionId, ...(limit === undefined ? {} : { limit }) },
-      this.requestOptions(),
-    );
-    assertSdkResponse(response, "OpenCode transcript read");
-    return Array.isArray(response.data) ? response.data : [];
+  private readMessagesSnapshot(sessionId: string, limit?: number, before?: string) {
+    return readOpenCodeMessages(this.client, this.requestOptions(), sessionId, limit, before);
   }
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {

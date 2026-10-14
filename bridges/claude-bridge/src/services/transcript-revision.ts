@@ -62,6 +62,8 @@ export function markTranscriptChanged(session: SessionState): void {
  * only on one of them.
  */
 export function resetTranscriptEpoch(session: SessionState): void {
+  // Ids noted against the previous history name nothing in the new one.
+  session.revisedRows?.clear();
   session.transcriptEpoch = nextStamp();
   session.transcriptRevision = nextStamp();
   observe(session);

@@ -3850,6 +3850,33 @@ describe("coalesceAdjacentToolMessages", () => {
     expect(rows[0]?.planReview).toBe(true);
   });
 
+  test("merges the step rows of one plan-mode turn and keeps the flag", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("step-1", "2026-09-03T10:43:01.000Z", ["Read"], {
+        planReview: true,
+        turnId: "turn-1",
+      }),
+      toolMessage("step-2", "2026-09-03T10:43:20.000Z", ["Grep"], {
+        planReview: true,
+        turnId: "turn-1",
+      }),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["step-1"]);
+    expect(rows[0]?.planReview).toBe(true);
+    expect(rows[0]?.latestSourceMessageId).toBe("step-2");
+  });
+
+  test("does not merge an unflagged tool row into a plan-review row", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("tool", "2026-09-03T10:43:01.000Z", ["Read"]),
+      toolMessage("plan", "2026-09-03T10:43:20.000Z", ["Read"], { planReview: true }),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["tool", "plan"]);
+    expect(rows[1]?.planReview).toBe(true);
+  });
+
   test("flattens and regroups adjacent agent activity", () => {
     const rows = coalesceAdjacentToolMessages([
       {

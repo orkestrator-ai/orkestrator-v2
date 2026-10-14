@@ -57,6 +57,7 @@ export function claudeTranscriptSource(
       complete: loaded,
       freshness: loaded ? "current" : "cached",
       title: sessionData.title,
+      ...(sessionData.revisedRows ? { revisedMessageIds: sessionData.revisedRows.ids() } : {}),
     },
   };
 }

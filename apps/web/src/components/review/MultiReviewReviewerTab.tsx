@@ -108,6 +108,7 @@ export function mergeMultiReviewReviewerTranscript(
     truncated: _truncated,
     historyCursor: _historyCursor,
     historyEpoch: _historyEpoch,
+    revisedMessages: _revisedMessages,
     ...rest
   } = next;
   return {
@@ -127,6 +128,7 @@ function reviewerStateKey(snapshot: MultiReviewReviewerTranscript): string {
     truncated: _truncated,
     historyCursor: _historyCursor,
     historyEpoch: _historyEpoch,
+    revisedMessages: _revisedMessages,
     ...state
   } = snapshot;
   // Both sides are backend answers of the same shape, so key order matches.
@@ -222,8 +224,13 @@ export function mergeReviewerHistory(
       reset: true,
     };
   }
-  const earlier = combined.slice(0, overlap);
-  if (earlier.length === history.earlier.length) return { history, reset: false };
+  const earlier = withRevisedRows(combined.slice(0, overlap), next.revisedMessages);
+  if (
+    earlier.length === history.earlier.length &&
+    earlier.every((message, index) => message === history.earlier[index])
+  ) {
+    return { history, reset: false };
+  }
   if (earlier.length > MAX_REVIEWER_EARLIER_MESSAGES) {
     // Dropping the oldest rows leaves nothing a cursor could continue from.
     return {
@@ -236,6 +243,30 @@ export function mergeReviewerHistory(
     };
   }
   return { history: { ...history, earlier }, reset: false };
+}
+
+/**
+ * Held rows with the backend's revised copies laid over them. A row is one
+ * model response, so a late tool result can land on a row the tail no longer
+ * carries; the copy this tab holds is replaced, and a revised row it does not
+ * hold is never inserted. Returns `rows` itself when nothing changed.
+ */
+function withRevisedRows(rows: unknown[], revised: readonly unknown[] | undefined): unknown[] {
+  if (!revised?.length) return rows;
+  const byId = new Map<string, unknown>();
+  for (const message of revised) {
+    const id = messageId(message);
+    if (id !== undefined && !byId.has(id)) byId.set(id, message);
+  }
+  let changed = false;
+  const next = rows.map((message) => {
+    const id = messageId(message);
+    const replacement = id === undefined ? undefined : byId.get(id);
+    if (replacement === undefined || replacement === message) return message;
+    changed = true;
+    return replacement;
+  });
+  return changed ? next : rows;
 }
 
 /**

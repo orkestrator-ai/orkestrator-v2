@@ -18,6 +18,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `bridges/codex-bridge/` | [`bridges/codex-bridge/AGENTS.md`](bridges/codex-bridge/AGENTS.md) |
 | `bridges/pi-bridge/` | [`bridges/pi-bridge/AGENTS.md`](bridges/pi-bridge/AGENTS.md) |
 | `bridges/cursor-bridge/` | [`bridges/cursor-bridge/AGENTS.md`](bridges/cursor-bridge/AGENTS.md) |
+| `bridges/acp-bridge/` | [`bridges/acp-bridge/AGENTS.md`](bridges/acp-bridge/AGENTS.md) |
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
 | OpenCode provider, SDK pin or `patches/` | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
@@ -74,6 +75,15 @@ compression, or synchronization code, preserve these invariants:
 13. Closing a tab never deletes the conversation. Never call Claude's
     `DELETE /session/:id` or SDK `deleteSession`, Codex `thread/delete`, or
     OpenCode `client.session.delete` from a close path.
+14. A transcript row is one model response (one step of the agent loop),
+    never a whole turn. A turn kept alive by background work runs for hours,
+    and a multi-megabyte row fits no transcript window: readers get only a
+    trimmed copy and lose its start once newer rows push it out of the live
+    tail. Late updates find the row holding their call, a changed row outside
+    the live tail still reaches readers (`revisedMessages`), and everything
+    that leaves the live tail stays reachable through history paging. See
+    `bridges/AGENTS.md` ("Transcript rows"); each bridge's `AGENTS.md` names
+    its row boundary.
 
 Test the inactive-environment path: start work, switch away, let it progress or
 finish, return, and verify status, messages, pending prompts and controls.
@@ -410,6 +420,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | -------------------------------------------------------------- | -------------------------------------------------- |
 | `bridges/codex-bridge/src/index.ts`                            | Routes, SSE, composition root                      |
 | `bridges/codex-bridge/src/app-server-runtime.ts`               | Session surface for the app-server engine          |
+| `bridges/codex-bridge/src/app-server-runtime-rows.ts`          | A turn's assistant rows: open, render, publish     |
 | `bridges/codex-bridge/src/event-ring.ts`                       | Bounded SSE replay buffer + cursor parsing         |
 | `bridges/codex-bridge/src/app-server/process-supervisor.ts`    | Child lifecycle, generations, restart policy       |
 | `bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`      | Transport; must never await consumer work          |

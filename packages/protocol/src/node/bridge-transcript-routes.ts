@@ -23,6 +23,7 @@ import {
   type BridgeTranscriptSummaryUpdate,
 } from "./bridge-transcript-summary.js";
 import { bridgeTranscriptUpdate } from "./progressive-transcript.js";
+import type { RecentlyRevisedRows } from "./revised-rows.js";
 
 /** Everything a transcript route reads, computed once per request. */
 export interface BridgeTranscriptSource<T extends { content: string; parts: unknown[] }> {
@@ -34,6 +35,12 @@ export interface BridgeTranscriptSource<T extends { content: string; parts: unkn
   complete: boolean;
   freshness?: "cached" | "current";
   title?: string;
+  /**
+   * Ids of rows the bridge changed recently, newest first (a
+   * {@link RecentlyRevisedRows} list). Those before the live window travel
+   * with the summary so readers refresh their copies of them.
+   */
+  revisedMessageIds?: readonly string[];
 }
 
 /** A query-string reader: `URLSearchParams#get` and Hono's `c.req.query` both fit. */
@@ -61,7 +68,11 @@ export function bridgeTranscriptRouteBody<T extends { content: string; parts: un
     title: source.title,
   };
   return query("version") === "2"
-    ? bridgeTranscriptSummaryUpdate(source.messages, { ...options, pages: true })
+    ? bridgeTranscriptSummaryUpdate(source.messages, {
+        ...options,
+        pages: true,
+        ...(source.revisedMessageIds ? { revisedMessageIds: source.revisedMessageIds } : {}),
+      })
     : bridgeTranscriptUpdate(source.messages, options);
 }
 

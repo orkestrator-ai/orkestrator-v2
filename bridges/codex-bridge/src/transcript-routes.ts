@@ -25,6 +25,8 @@ export interface CodexTranscriptRuntime {
     freshness: "cached" | "current";
     complete: boolean;
   } | null;
+  /** Rows recently changed, newest first, for the summary's `revisedMessages`. */
+  getRevisedMessageIds?(sessionId: string): readonly string[];
 }
 
 /**
@@ -59,6 +61,7 @@ export function codexTranscriptSource(
   const status = runtime.getStatus(sessionId, false);
   const cached = runtime.getCachedMessages(sessionId);
   if (!status || !cached) return undefined;
+  const revisedMessageIds = runtime.getRevisedMessageIds?.(sessionId);
   return {
     messages: cached.messages,
     sessionIdentity: sessionId,
@@ -68,6 +71,7 @@ export function codexTranscriptSource(
     complete: cached.complete,
     freshness: cached.freshness,
     title: status.title,
+    ...(revisedMessageIds?.length ? { revisedMessageIds } : {}),
   };
 }
 

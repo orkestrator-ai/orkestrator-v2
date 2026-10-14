@@ -144,8 +144,8 @@ describe("boundTranscript", () => {
   });
 
   test("keeps at least one message however large it is", () => {
-    // A single turn can exceed the whole budget on its own; dropping it would
-    // leave the tab with nothing at all.
+    // A single model response can exceed the whole budget on its own;
+    // dropping it would leave the tab with nothing at all.
     const state = seed([message("m1", [textPart("x".repeat(40 * 1024 * 1024))])]);
     boundTranscript(state);
     expect(state.messages).toHaveLength(1);

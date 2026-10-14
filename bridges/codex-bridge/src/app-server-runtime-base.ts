@@ -144,30 +144,85 @@ export interface HistoricalAssistantSegmentState {
   render: TurnRenderState;
   publishedParts: NormalizedPart[];
   publishedModelId?: string;
+  /** False until the client has been sent a whole snapshot of this row. */
+  announced: boolean;
   /** `assistantSegmentVersion` as of this row's last render. */
   renderedItemVersion?: number;
+  /** Rendered once since the turn ended, which is the last render it needs. */
+  renderedTerminal?: boolean;
+  /** Past the tracking bound: published once more if it moved, then dropped. */
+  retiring?: boolean;
 }
 
 /**
- * Live render state retained for earlier assistant rows of one turn.
- *
- * Each steer adds a row, and each retained row costs a `TurnRenderState` —
- * chiefly its `completedItemParts` map. Past this many rows the oldest stops
- * being re-rendered and freezes at its last published parts; the rollout stays
- * authoritative, so a reload rebuilds it in full. Segment *descriptors* on the
- * accumulator are five scalar fields and are not the consumer worth bounding.
+ * What a row past the tracking bound keeps once its render state goes, so
+ * tracking it again re-renders only the items that changed. Its parts are the
+ * ones the published row holds, so keeping them costs the map, not the parts.
  */
-export const MAX_HISTORICAL_ASSISTANT_SEGMENTS = 8;
+export interface ReleasedAssistantRow {
+  /**
+   * Its rendered file changes. A diff is taken once, against the file as the
+   * change found it, and the turn's per-item diff cache is bounded: rendered
+   * again after later edits moved the file, an old diff comes out blank.
+   */
+  diffParts?: TurnRenderState["completedItemParts"];
+  /** Its sub-agent cards and where they sit among its items. */
+  subagents?: { timelineOrder: string[]; parts: Map<string, NormalizedPart> };
+  /**
+   * Let go before the turn ended with a sub-agent card that may still read as
+   * running, so the turn's end tracks it again for a last probe.
+   */
+  awaitingSubagent: boolean;
+}
+
+/**
+ * Earlier assistant rows of one turn that keep their render state.
+ *
+ * A turn gets a row per model response (and per steer), and one left running
+ * for hours makes thousands, so the rows holding a `TurnRenderState` — chiefly
+ * its `completedItemParts`, which shares its parts with the published message
+ * — are bounded. Past this bound the least recently tracked row lets its state
+ * go and stays in the transcript as last published. It is not forgotten: a
+ * later change to one of its items (a command finishing, its output, the turn
+ * ending around it) tracks it again and re-renders the items that changed,
+ * keeping what it kept (`ReleasedAssistantRow`, `app-server-runtime-rows.ts`).
+ * A publish tick only renders the rows that moved, so the bound is about
+ * memory, not per-tick work.
+ */
+export const MAX_TRACKED_ASSISTANT_ROWS = 256;
+
+/**
+ * Rows kept past `MAX_TRACKED_ASSISTANT_ROWS` because a sub-agent they show is
+ * still running. Its card moves through the periodic transcript probe, not an
+ * item change, so letting the row go freezes the card mid-run until the turn
+ * ends and tracks it again for a last probe. Agents running at once are few;
+ * this only bounds a pathological turn.
+ */
+export const MAX_HELD_ASSISTANT_ROWS = 64;
 
 export interface ThreadRuntimeState {
   render: TurnRenderState;
-  /** Render/publish baselines for earlier assistant rows in the active turn. */
+  /**
+   * Render/publish baselines for earlier assistant rows in the active turn,
+   * least recently tracked first. At most `MAX_TRACKED_ASSISTANT_ROWS`, plus
+   * up to `MAX_HELD_ASSISTANT_ROWS` waiting on a sub-agent.
+   */
   historicalAssistantSegments: Map<string, HistoricalAssistantSegmentState>;
+  /**
+   * Rows of the active turn let go past the tracking bound that kept
+   * something for when they are tracked again, by row id.
+   */
+  releasedAssistantRows: Map<string, ReleasedAssistantRow>;
   coalescer: UpdateCoalescer;
   /** Bounded estimate for adapting the cadence of whole-message snapshots. */
   lastPublishedSnapshotChars: number;
   /** Assistant message currently being streamed into. */
   assistantMessageId?: string;
+  /**
+   * The streaming row's `assistantSegmentVersion` as of its last render, so a
+   * row a new model response freezes without changing is not rendered again.
+   */
+  renderedRow?: { id: string; itemVersion: number };
   /** Last parts successfully published for the active assistant message. */
   publishedMessageId?: string;
   publishedParts: NormalizedPart[];
@@ -500,23 +555,37 @@ export function buildRecoveredContextPrompt(
   messages: readonly NormalizedMessage[],
   prompt: string,
 ): string {
-  const transcript = messages
-    .map((message) => {
-      // Text parts first, not `content`. One assistant message covers a whole
-      // turn and its `content` is only the *last* agent text (mirroring the live
-      // renderer), so preferring `content` would silently drop every earlier
-      // segment of a multi-step turn from the context replayed to the model.
-      // The parts are a superset; `content` is the fallback for messages that
-      // carry text nowhere else.
-      const content =
-        message.parts
-          .filter((part) => part.type === "text")
-          .map((part) => part.content)
-          .join("\n")
-          .trim() || message.content.trim();
-      return content ? `${message.role.toUpperCase()}:\n${content}` : "";
-    })
-    .filter(Boolean)
+  // One block per speaker change. A turn renders as one assistant row per model
+  // response, and a heading per row would split one reply into fragments.
+  const blocks: Array<{ role: NormalizedMessage["role"]; turnId?: string; texts: string[] }> = [];
+  for (const message of messages) {
+    // Text parts first, not `content`. An assistant row's `content` is only its
+    // *last* agent text (mirroring the live renderer), so preferring it would
+    // silently drop every earlier message of a response from the context
+    // replayed to the model. The parts are a superset; `content` is the
+    // fallback for messages that carry text nowhere else.
+    const content =
+      message.parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.content)
+        .join("\n")
+        .trim() || message.content.trim();
+    if (!content) continue;
+    const previous = blocks.at(-1);
+    if (
+      previous &&
+      message.role === "assistant" &&
+      previous.role === "assistant" &&
+      message.turnId !== undefined &&
+      previous.turnId === message.turnId
+    ) {
+      previous.texts.push(content);
+      continue;
+    }
+    blocks.push({ role: message.role, turnId: message.turnId, texts: [content] });
+  }
+  const transcript = blocks
+    .map((block) => `${block.role.toUpperCase()}:\n${block.texts.join("\n")}`)
     .join("\n\n");
   const bounded =
     transcript.length > MAX_RECOVERED_CONTEXT_CHARS
@@ -702,7 +771,10 @@ export abstract class AppServerRuntimeBase {
   ): Promise<{ status: "cancelling" | "idle"; phase: SessionPhase } | null>;
   protected abstract notifyThreadActivity(): void;
   protected abstract scheduleRecoveryBackstop(context: ThreadContext): void;
-  protected abstract bumpMessageRevision(context: ThreadContext): void;
+  protected abstract bumpMessageRevision(
+    context: ThreadContext,
+    revised?: readonly NormalizedMessage[],
+  ): void;
   protected abstract settleAmbiguousDispatch(
     context: ThreadContext,
     requestId: string,
@@ -765,6 +837,11 @@ export abstract class AppServerRuntimeBase {
       resolved: (request, answer, resolution) =>
         this.onInteractionResolved(request, answer, resolution),
     });
+  }
+
+  /** Rows recently changed for a session, newest first; see `BridgeSession.revisedRows`. */
+  getRevisedMessageIds(sessionId: string): readonly string[] {
+    return this.registry.getSession(sessionId)?.revisedRows?.ids() ?? [];
   }
 
   /**

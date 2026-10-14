@@ -230,7 +230,6 @@ import {
   appendInterruptedNotice,
   appendSubagentInterruptedNotice,
   boundedNoticeText,
-  buildMessageParts,
   memoryRecallPart,
   parseMessageContent,
   persistedBackgroundTaskMessage,
@@ -250,7 +249,6 @@ import {
   ClaudeAttachmentError,
   attachmentTag,
   buildSdkPrompt,
-  getMessageTextFromParts,
   holdSdkPromptOpen,
   readPersistedSessionMessagesOnce,
   sdkPromptMessages,
@@ -1475,20 +1473,8 @@ export async function sendPrompt(
         return;
       }
       if (session.latestTurnGeneration !== turnGeneration) return;
-      if (stream.currentAssistantMessage) {
-        stream.currentAssistantMessage.parts = buildMessageParts(
-          stream.accumulatedOrderedParts,
-          toolTracker,
-        );
-        stream.emitCurrentAssistantMessage();
-      }
-      refreshSettledToolRows(
-        session,
-        sessionId,
-        toolTracker,
-        [toolUseId],
-        stream.currentAssistantMessage,
-      );
+      const refreshed = stream.refreshToolRows([toolUseId]);
+      refreshSettledToolRows(session, sessionId, toolTracker, [toolUseId], refreshed);
     };
     const commandChangeHookFor = (route: (toolUseId: string) => ClaudeRuntimeTurn) =>
       commandChangeHooks((toolUseId, change) =>
@@ -2392,21 +2378,14 @@ export async function sendPrompt(
                 ? { source: denial.decision_reason_type.slice(0, 64) }
                 : {}),
             });
-          if (marked && stream.currentAssistantMessage) {
-            stream.currentAssistantMessage.parts = buildMessageParts(
-              stream.accumulatedOrderedParts,
-              toolTracker,
-            );
-            markTranscriptChanged(session);
-            stream.emitCurrentAssistantMessage();
-          }
           if (marked) {
+            const refreshed = stream.refreshToolRows([denial.tool_use_id]);
             refreshSettledToolRows(
               session,
               sessionId,
               toolTracker,
               [denial.tool_use_id],
-              stream.currentAssistantMessage,
+              refreshed,
             );
           } else {
             // A call this turn never saw (a subagent's, or one from before a
@@ -2552,84 +2531,29 @@ export async function sendPrompt(
           activeTaskIds.add(taskId);
         }
 
-        // Group by API message id so these blocks land on top of the partial
-        // events that streamed them (see `blocksByApiMessage`). The SDK sends one
-        // assistant message per content block, all sharing `message.id`, so the
-        // running finalized-block count gives each block its stream index.
+        // Each root model response is a row of its own; a subagent's output
+        // joins the row holding the call that started it.
         const apiMessageId = (message as SDKAssistantMessage).message?.id;
         const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
         const isRootAssistant = isRootAssistantRecord(
           parentToolUseId,
           (message as { isSidechain?: unknown }).isSidechain,
         );
-        if (isRootAssistant && apiMessageId) stream.startPostSteerRowFor(apiMessageId);
-        const messageKey =
-          apiMessageId ??
-          (message.uuid as string | undefined) ??
-          `assistant-${(stream.syntheticMessageKeyCounter += 1)}`;
-
-        const blocks = stream.getBlocksForMessage(messageKey);
-        const blockIndexBase = stream.finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
-        for (const part of orderedParts) {
-          const blockIndex = blockIndexBase + (part.blockOffset ?? 0);
-          const streamedPart = blocks.get(blockIndex);
-          blocks.set(blockIndex, {
-            ...part,
-            timestamp: streamedPart?.timestamp ?? part.timestamp ?? receivedAt,
-            messageUuid: messageKey,
-          });
-        }
-        stream.finalizedBlockCountByApiMessage.set(messageKey, blockIndexBase + contentBlockCount);
-        stream.rebuildAccumulatedOrderedParts();
-
-        // Build final parts maintaining chronological order
-        const finalParts = buildMessageParts(stream.accumulatedOrderedParts, toolTracker);
-        // Derive content from the accumulated parts rather than this SDK message
-        // alone. The SDK splits one API message into one `assistant` message per
-        // content block, so `content` here only holds the current block's text and
-        // would blank out the turn's text whenever the block is thinking/tool_use.
-        const accumulatedContent = getMessageTextFromParts(finalParts);
-
-        // The transcript uuid of the record this block was written to. The SDK
-        // emits one `assistant` message per content block, each its own
-        // transcript record; the latest is the inclusive end of this message,
-        // which is what a fork boundary must point at.
         const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
         const observedModel = (message as { message?: { model?: unknown } }).message?.model;
         const modelId = isRootAssistant ? normalizeBackendModelId(observedModel) : undefined;
-        if (!stream.currentAssistantMessage) {
-          stream.currentAssistantMessage = {
-            id: messageKey,
-            role: "assistant",
-            content: accumulatedContent,
-            parts: finalParts,
-            createdAt: new Date().toISOString(),
-            ...(modelId ? { modelId } : {}),
-            ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
-          };
-          session.messages.push(stream.currentAssistantMessage);
-          markTranscriptChanged(session);
-          debugLog("[session-manager] Created assistant message", {
-            sessionId,
-            messageId: stream.currentAssistantMessage.id,
-          });
-        } else {
-          stream.currentAssistantMessage.content = accumulatedContent;
-          stream.currentAssistantMessage.parts = finalParts;
-          if (modelId) {
-            stream.currentAssistantMessage.modelId = modelId;
-          }
-          if (typeof sdkMessageUuid === "string") {
-            stream.currentAssistantMessage.sdkUuid = sdkMessageUuid;
-          }
-          markTranscriptChanged(session);
-          debugLog("[session-manager] Updated assistant message", {
-            sessionId,
-            messageId: stream.currentAssistantMessage.id,
-          });
-        }
-
-        stream.emitCurrentAssistantMessage();
+        stream.applyAssistantRecord({
+          ...(typeof apiMessageId === "string" ? { apiMessageId } : {}),
+          ...(typeof sdkMessageUuid === "string" ? { uuid: sdkMessageUuid } : {}),
+          ...(typeof parentToolUseId === "string" && parentToolUseId.length > 0
+            ? { parentToolUseId }
+            : {}),
+          isRoot: isRootAssistant,
+          orderedParts,
+          contentBlockCount,
+          ...(modelId ? { modelId } : {}),
+          ...(receivedAt ? { receivedAt } : {}),
+        });
       } else if (message.type === "user") {
         // User message with tool results - parse to update tool tracker
         const {
@@ -2722,23 +2646,21 @@ export async function sendPrompt(
           }
         }
 
-        // Rebuild message parts with updated tool results
-        if (stream.currentAssistantMessage) {
-          const finalParts = buildMessageParts(stream.accumulatedOrderedParts, toolTracker);
-          stream.currentAssistantMessage.parts = finalParts;
-          markTranscriptChanged(session);
-
-          stream.emitCurrentAssistantMessage();
-        }
-        // A task report can land on a call from an earlier message of this
-        // turn (one split off by a steer, say), whose parts the rebuild above
-        // does not reach.
+        // Rebuild the rows holding the calls these results settle. A result can
+        // land on an earlier row of this turn: a subagent's tools render in the
+        // row holding the call that started it, however many responses ago.
+        const refreshed = stream.refreshToolRows([
+          ...toolResultIds(sdkUserMessage),
+          ...attachedTaskToolUseIds,
+        ]);
+        // A result can land on a call this turn no longer tracks: a task report
+        // for an earlier turn's call, or a row past the tracking bound.
         refreshSettledToolRows(
           session,
           sessionId,
           toolTracker,
-          attachedTaskToolUseIds,
-          stream.currentAssistantMessage,
+          [...toolResultIds(sdkUserMessage), ...attachedTaskToolUseIds],
+          refreshed,
         );
         for (const report of unattachedTaskNotifications) {
           appendTranscriptNotice(
@@ -2960,7 +2882,7 @@ export async function sendPrompt(
           if (
             !options?.outputSchema &&
             !localCommandOutputSeen &&
-            !stream.currentAssistantMessage &&
+            !stream.assistantOutputSeen &&
             typeof resultMsg.result === "string" &&
             resultMsg.result.trim()
           ) {
@@ -3032,18 +2954,21 @@ export async function sendPrompt(
         stream.applyPartialAssistantMessage(message);
       } else if (message.type === "tool_progress") {
         // A live sub-line on the tool row it names, not a row of its own. It is
-        // pushed into the *current assistant message* so the backend's
-        // projection can fold it onto the matching call — a progress part in
-        // its own message would have nothing to attach to.
+        // pushed into the assistant message holding the call so the backend's
+        // projection can fold it onto that call — a progress part in its own
+        // message would have nothing to attach to.
         const progress = message as SDKToolProgressMessage;
-        if (stream.currentAssistantMessage && progress.tool_use_id) {
+        const progressRow = progress.tool_use_id
+          ? stream.rowHoldingTool(progress.tool_use_id)
+          : null;
+        if (progressRow && progress.tool_use_id) {
           const elapsedMs =
             typeof progress.elapsed_time_seconds === "number"
               ? Math.max(0, Math.round(progress.elapsed_time_seconds * 1_000))
               : undefined;
           // Only the newest report per call survives: progress is a hint over
           // the authoritative tool state, so superseded lines are noise.
-          const parts = stream.currentAssistantMessage.parts.filter(
+          const parts = progressRow.parts.filter(
             (candidate) =>
               candidate.type !== "progress" || candidate.toolUseId !== progress.tool_use_id,
           );
@@ -3058,9 +2983,9 @@ export async function sendPrompt(
             ...(elapsedMs !== undefined ? { elapsedMs } : {}),
             createdAt: new Date().toISOString(),
           });
-          stream.currentAssistantMessage.parts = parts;
+          progressRow.parts = parts;
           markTranscriptChanged(session);
-          stream.emitCurrentAssistantMessage();
+          stream.publishRow(progressRow);
         }
       } else if (message.type === "tool_use_summary") {
         const summary = (message as SDKToolUseSummaryMessage).summary?.trim();

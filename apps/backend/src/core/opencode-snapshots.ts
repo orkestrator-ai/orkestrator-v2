@@ -1,7 +1,12 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
-import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
+import {
+  boundedOpenCodeMessageHistory,
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+} from "@orkestrator/protocol/opencode-message-id";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   asRecord,
+  assertSdkResponse,
   MAX_TRACKED_INTERACTION_SESSIONS,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
   nonEmptyString,
@@ -11,6 +16,7 @@ import {
   ProviderUnavailableError,
   type ProviderSessionStateSnapshot,
   type ProviderStatus,
+  type ProviderTranscriptPage,
   type ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
 import type {
@@ -20,8 +26,14 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { normalizeOpenCodeTranscriptMessages } from "./opencode-messages.js";
 import { lastAssistantModelRef } from "./native-agent-composer-selection.js";
+import {
+  BRIDGE_REVISED_MESSAGES_MAX,
+  BRIDGE_REVISED_MESSAGES_MAX_BYTES,
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
+import { inlineFileContentLabel, inlineFileUrlDisposition } from "./native-agent-inline-files.js";
+import { normalizeOpenCodeTranscriptGroups } from "./opencode-messages.js";
+import { isProvisionalOpenCodeMessage, type OpenCodeStreamState } from "./opencode-stream-state.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 
 // One more than the sessions we can track, so a full tracking set still leaves
@@ -29,49 +41,404 @@ import { openCodeContextUsage } from "./opencode-usage.js";
 export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS = MAX_TRACKED_INTERACTION_SESSIONS + 1;
 export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
-export async function openCodeTranscriptSnapshot(input: {
-  sessionId: string;
-  options: { limit: number; targetBytes: number; knownSourceToken?: string };
+/**
+ * Wider than any OpenCode message id plus its timestamp, and well inside the
+ * backend's direct-cursor envelope.
+ */
+const OPEN_CODE_HISTORY_CURSOR_MAX_LENGTH = 512;
+
+/**
+ * An OpenCode `before` cursor naming the history strictly older than `message`.
+ *
+ * OpenCode pages `GET /session/:id/message?limit=&before=` by its own cursor,
+ * base64url JSON `{ id, time }`, ordering rows by `(time_created, id)` and
+ * returning only rows strictly older than the pair. It mints that cursor from
+ * the oldest message of a page, and `time_created` is the message's
+ * `info.time.created`, so the same cursor can be named for any message held,
+ * including one served from the stream cache. A server that rejects it answers
+ * 400, which surfaces as a failed page read rather than a wrong page.
+ *
+ * Only a message OpenCode itself reported can name one. The stream's
+ * `session.compacted` row has no OpenCode id, and a placeholder a part event
+ * created before its `message.updated` carries a backend or event clock rather
+ * than the message's creation time, which would skip or repeat rows.
+ */
+export function openCodeHistoryCursor(message: unknown): string | undefined {
+  if (isProvisionalOpenCodeMessage(message)) return undefined;
+  const info = asRecord(asRecord(message)?.info);
+  const id = nonEmptyString(info?.id);
+  const created = asRecord(info?.time)?.created;
+  if (
+    !id?.startsWith("msg_") ||
+    typeof created !== "number" ||
+    !Number.isSafeInteger(created) ||
+    created < 0
+  ) {
+    return undefined;
+  }
+  return Buffer.from(JSON.stringify({ id, time: created })).toString("base64url");
+}
+
+type OpenCodeHistoryPosition = { id: string; time: number };
+
+function openCodeHistoryPosition(cursor: string): OpenCodeHistoryPosition | undefined {
+  if (cursor.length === 0 || cursor.length > OPEN_CODE_HISTORY_CURSOR_MAX_LENGTH) return undefined;
+  try {
+    const body = asRecord(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
+    const id = nonEmptyString(body?.id);
+    return id?.startsWith("msg_") === true &&
+      typeof body?.time === "number" &&
+      Number.isSafeInteger(body.time) &&
+      body.time >= 0
+      ? { id, time: body.time }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `message` sorts strictly before `position` in OpenCode's `(time_created, id)` order. */
+function olderThan(message: unknown, position: OpenCodeHistoryPosition): boolean {
+  const info = asRecord(asRecord(message)?.info);
+  const id = nonEmptyString(info?.id);
+  const created = asRecord(info?.time)?.created;
+  if (!id || typeof created !== "number") return false;
+  return created === position.time ? id < position.id : created < position.time;
+}
+
+/** Stands in for a deferred body: the projection's 32-character detail reference. */
+const DETAIL_REFERENCE = "0".repeat(32);
+
+/**
+ * A row's size once the native projection has moved its heavy bodies behind
+ * detail references (`projectionPart`): tool output and error, diff bodies,
+ * and the inline data URLs it defers. That is what a window or page costs on
+ * screen, and measuring the inline bodies instead would let one large tool
+ * result shrink a window to a single message. A replacer skips those strings
+ * rather than copying them, so the measure stays cheap on every poll.
+ *
+ * An inline payload the projection keeps — a PDF, or an image too large for
+ * the detail cache — is counted in full. Counting it as a reference let a
+ * window outgrow the live view, which then dropped the head the cursor named.
+ */
+function openCodeDisplayBytes(row: unknown): number {
+  try {
+    const serialized = JSON.stringify(row, (key, value: unknown) => {
+      if (key === "toolOutput" || key === "toolError") return DETAIL_REFERENCE;
+      if (key === "toolDiff") {
+        const diff = asRecord(value);
+        return diff
+          ? {
+              filePath: diff.filePath,
+              additions: diff.additions,
+              deletions: diff.deletions,
+              deferred: true,
+            }
+          : value;
+      }
+      const part = asRecord(value);
+      const disposition = part ? inlineFileUrlDisposition(part) : undefined;
+      if (part && disposition) {
+        const { fileUrl, ...rest } = part;
+        const label = inlineFileContentLabel(part);
+        return {
+          ...rest,
+          ...(label === undefined ? {} : { content: label }),
+          ...(disposition === "defer" ? { detailRef: DETAIL_REFERENCE } : {}),
+          ...(disposition === "inline" ? { fileUrl } : {}),
+        };
+      }
+      return value;
+    });
+    return Buffer.byteLength(serialized ?? "");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
+ * The index of the oldest message in the newest run of whole messages whose
+ * rows fit `rows` and `targetBytes`. Always keeps the newest message, so a
+ * window or page never comes back empty while history remains.
+ *
+ * Both consumers bound the projected rows exactly — the live view drops
+ * leading rows, which would orphan the cursor, and a reader trims a page from
+ * its old end, which would strand those rows behind it — so the fill stops a
+ * sixteenth short of the target to absorb what projection adds beyond this
+ * estimate.
+ */
+function newestOpenCodeGroups(
+  groups: readonly Record<string, unknown>[][],
+  limits: { rows: number; targetBytes: number },
+): number {
+  const targetBytes = limits.targetBytes - Math.floor(limits.targetBytes / 16);
+  let start = groups.length;
+  let rows = 0;
+  // The array's brackets; each row then adds its separator.
+  let bytes = 1;
+  while (start > 0) {
+    const group = groups[start - 1]!;
+    const groupBytes = group.reduce((total, row) => total + openCodeDisplayBytes(row) + 1, 0);
+    if (
+      start < groups.length &&
+      (rows + group.length > limits.rows || bytes + groupBytes > targetBytes)
+    ) {
+      break;
+    }
+    rows += group.length;
+    bytes += groupBytes;
+    start -= 1;
+  }
+  return start;
+}
+
+/** What one session's transcript reads need from the provider and its stream cache. */
+export interface OpenCodeTranscriptSource {
   revision: () => number;
   currentMessages: () => unknown[] | undefined;
-  readMessages: (limit: number) => Promise<unknown[]>;
-  replaceMessages: (messages: unknown[]) => void;
+  /** Whether the current cache begins at the session's first message. */
+  currentMessagesFromStart: () => boolean;
+  /** The epoch this session's page cursors belong to; see `openCodeTranscriptPage`. */
+  historyEpoch: () => string;
+  /** One `session.messages` read; `before` is an `openCodeHistoryCursor`. */
+  readMessages: (limit: number, before?: string) => Promise<readonly unknown[]>;
+  /** Messages OpenCode changed in place recently, newest change first. */
+  revisedMessageIds?: () => readonly string[];
+  replaceMessages: (messages: unknown[], requestedLimit: number) => void;
   title: () => string | undefined;
   recordUnknown: (type: string) => void;
   /** Measured shell changes to overlay by `callID`; see `opencode-command-changes.ts`. */
   commandChanges?: () => Promise<ReadonlyMap<string, MeasuredWorkspaceChange>>;
-}): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+}
+
+export function openCodeTranscriptSource(
+  stream: OpenCodeStreamState,
+  sessionId: string,
+  reads: Pick<OpenCodeTranscriptSource, "readMessages" | "recordUnknown" | "commandChanges">,
+): OpenCodeTranscriptSource {
+  return {
+    revision: () => stream.revision(sessionId),
+    currentMessages: () => stream.currentMessages(sessionId),
+    currentMessagesFromStart: () => stream.currentMessagesFromStart(sessionId),
+    historyEpoch: () => stream.historyEpoch(sessionId),
+    revisedMessageIds: () => stream.revisedMessageIds(sessionId),
+    replaceMessages: (messages, requestedLimit) =>
+      stream.replaceMessages(sessionId, messages, undefined, requestedLimit),
+    title: () => stream.title(sessionId),
+    ...reads,
+  };
+}
+
+export type OpenCodeTranscriptSnapshotOptions = {
+  limit: number;
+  targetBytes: number;
+  knownSourceToken?: string;
+};
+
+export type OpenCodeTranscriptPageOptions = { cursor: string; limit: number; targetBytes: number };
+
+/** One `session.messages` read: the newest `limit`, strictly older than `before` when given. */
+export async function readOpenCodeMessages(
+  client: OpencodeClient,
+  requestOptions: { signal: AbortSignal },
+  sessionId: string,
+  limit?: number,
+  before?: string,
+): Promise<unknown[]> {
+  const response = await client.session.messages(
+    {
+      sessionID: sessionId,
+      ...(limit === undefined ? {} : { limit }),
+      ...(before === undefined ? {} : { before }),
+    },
+    requestOptions,
+  );
+  assertSdkResponse(response, "OpenCode transcript read");
+  return Array.isArray(response.data) ? response.data : [];
+}
+
+export async function openCodeTranscriptSnapshot(
+  input: OpenCodeTranscriptSource,
+  options: OpenCodeTranscriptSnapshotOptions,
+): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
   try {
     const revision = input.revision();
-    const sourceToken = `opencode:${revision}:${input.options.limit}:${input.options.targetBytes}`;
+    const historyEpoch = input.historyEpoch();
+    const sourceToken = `opencode:${historyEpoch}:${revision}:${options.limit}:${options.targetBytes}`;
     const current = input.currentMessages();
-    if (current && input.options.knownSourceToken === sourceToken) {
+    if (current && options.knownSourceToken === sourceToken) {
       return { unchanged: true, sourceToken };
     }
-    const rawMessages = current ?? (await input.readMessages(input.options.limit));
+    const fromStart = current ? input.currentMessagesFromStart() : undefined;
+    const rawMessages = current ?? [...(await input.readMessages(options.limit))];
     // Only a read covering the provider's whole retained history may seed the
     // stream cache. A short tail (a one-message progress probe) would
     // otherwise become the "current" transcript every display read serves.
-    if (!current && input.options.limit >= OPEN_CODE_MESSAGE_HISTORY_LIMIT) {
-      input.replaceMessages(rawMessages);
+    let snapshotEpoch = historyEpoch;
+    if (!current && options.limit >= OPEN_CODE_MESSAGE_HISTORY_LIMIT) {
+      const beforeReplace = input.historyEpoch();
+      input.replaceMessages(rawMessages, options.limit);
+      // Checked against a stream gap's baseline, this read can itself prove
+      // history was rewritten; its rows belong to the epoch that proof began.
+      // An epoch that moved during the read (a removal event) keeps the old
+      // label, so cursors named here expire rather than outlive the removal.
+      const afterReplace = input.historyEpoch();
+      if (beforeReplace === historyEpoch && afterReplace !== beforeReplace) {
+        snapshotEpoch = afterReplace;
+      }
     }
     const commandChanges = await input.commandChanges?.();
-    const messages = normalizeOpenCodeTranscriptMessages(
-      rawMessages.slice(-input.options.limit),
+    const windowMessages = rawMessages.slice(-options.limit);
+    const groups = normalizeOpenCodeTranscriptGroups(
+      windowMessages,
+      input.recordUnknown,
+      commandChanges,
+    );
+    const start = newestOpenCodeGroups(groups, {
+      rows: options.limit,
+      targetBytes: options.targetBytes,
+    });
+    /*
+     * Each OpenCode message is one agent-loop step, so a long turn alone can
+     * outgrow the window. What precedes it stays reachable through
+     * `transcriptPage`, named by the oldest kept message that can name a
+     * cursor. Rows ahead of that one are both on screen and on the first
+     * page; the reader deduplicates by id, while a cursor named past them
+     * would leave nothing to fill.
+     */
+    const olderHistory =
+      start > 0 ||
+      rawMessages.length > windowMessages.length ||
+      !(fromStart ?? rawMessages.length < options.limit);
+    const historyCursor = olderHistory
+      ? windowMessages
+          .slice(start)
+          .map(openCodeHistoryCursor)
+          .find((cursor) => cursor !== undefined)
+      : undefined;
+    const revisedMessages = openCodeRevisedRows(
+      rawMessages,
+      rawMessages.length - windowMessages.length + start,
+      input.revisedMessageIds?.(),
       input.recordUnknown,
       commandChanges,
     );
     const title = input.title();
     return {
-      messages,
+      messages: groups.slice(start).flat(),
       sourceToken,
-      complete: rawMessages.length < input.options.limit,
+      complete: !olderHistory,
       revision: input.revision(),
       freshness: "current",
+      historyEpoch: snapshotEpoch,
+      ...(historyCursor ? { historyCursor } : {}),
+      ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
       ...(title ? { title } : {}),
     };
   } catch (error) {
     throw new ProviderUnavailableError("OpenCode transcript is unavailable", { cause: error });
+  }
+}
+
+/**
+ * Rows of the recently revised messages held before the window, newest change
+ * first, within the bridge bounds for `revisedMessages`. OpenCode changes a
+ * message in place, so a late tool result lands on a step newer steps have
+ * already pushed out of the window. A message this read does not hold is
+ * skipped: its content is not here, and a reader pages it back whole.
+ */
+function openCodeRevisedRows(
+  messages: readonly unknown[],
+  end: number,
+  ids: readonly string[] | undefined,
+  recordUnknown: (type: string) => void,
+  commandChanges: ReadonlyMap<string, MeasuredWorkspaceChange> | undefined,
+): Record<string, unknown>[] {
+  if (!ids?.length || end <= 0) return [];
+  const wanted = new Set(ids);
+  const found = new Map<string, unknown>();
+  for (let index = 0; index < end && found.size < wanted.size; index += 1) {
+    const id = nonEmptyString(asRecord(asRecord(messages[index])?.info)?.id);
+    if (id && wanted.has(id)) found.set(id, messages[index]);
+  }
+  const ordered = ids
+    .flatMap((id) => (found.has(id) ? [found.get(id)] : []))
+    .slice(0, BRIDGE_REVISED_MESSAGES_MAX);
+  const rows: Record<string, unknown>[] = [];
+  let bytes = 0;
+  for (const group of normalizeOpenCodeTranscriptGroups(ordered, recordUnknown, commandChanges)) {
+    if (rows.length + group.length > BRIDGE_REVISED_MESSAGES_MAX) break;
+    const size = group.reduce((total, row) => total + openCodeDisplayBytes(row), 0);
+    if (bytes + size > BRIDGE_REVISED_MESSAGES_MAX_BYTES) continue;
+    bytes += size;
+    rows.push(...group);
+  }
+  return rows;
+}
+
+/**
+ * History strictly older than `cursor`, newest messages first to fill the
+ * page, as whole messages.
+ *
+ * The read asks for one message more than the page can hold, so a page that
+ * reaches the session's first message says so instead of leaving an empty
+ * final page to discover it. The epoch is checked on both sides of the read:
+ * a removal that lands mid-read expires the cursor instead of serving a page
+ * from the history it rewrote.
+ *
+ * Rows that are not strictly older than the cursor are dropped. A server that
+ * ignored `before` would otherwise answer with the newest messages, which the
+ * reader already holds, under a cursor that names the same page again; it
+ * gets an empty, final page instead.
+ */
+export async function openCodeTranscriptPage(
+  input: Pick<
+    OpenCodeTranscriptSource,
+    "historyEpoch" | "readMessages" | "recordUnknown" | "commandChanges"
+  >,
+  options: OpenCodeTranscriptPageOptions,
+): Promise<ProviderTranscriptPage> {
+  const position = openCodeHistoryPosition(options.cursor);
+  if (!position) return { status: "expired" };
+  const historyEpoch = input.historyEpoch();
+  const count = Math.max(
+    1,
+    Math.min(
+      Number.isSafeInteger(options.limit) ? options.limit : 1,
+      OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+    ),
+  );
+  try {
+    const read = boundedOpenCodeMessageHistory(
+      await input.readMessages(count + 1, options.cursor),
+      {
+        count: count + 1,
+      },
+    ).filter((message) => olderThan(message, position));
+    if (input.historyEpoch() !== historyEpoch) return { status: "expired" };
+    const more = read.length > count;
+    const candidates = read.slice(-count);
+    const groups = normalizeOpenCodeTranscriptGroups(
+      candidates,
+      input.recordUnknown,
+      await input.commandChanges?.(),
+    );
+    const start =
+      candidates.length === 0
+        ? 0
+        : newestOpenCodeGroups(groups, { rows: count, targetBytes: options.targetBytes });
+    const olderHistory = start > 0 || more;
+    const historyCursor = olderHistory ? openCodeHistoryCursor(candidates[start]) : undefined;
+    return {
+      status: "page",
+      messages: groups.slice(start).flat(),
+      ...(historyCursor ? { historyCursor } : {}),
+      complete: !olderHistory,
+      truncated: false,
+      historyEpoch,
+    };
+  } catch (error) {
+    throw new ProviderUnavailableError("OpenCode history page is unavailable", { cause: error });
   }
 }
 

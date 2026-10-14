@@ -100,7 +100,15 @@ export function approvalsEnabled(): boolean {
 export const projectResourcesEnabled = process.env.PI_BRIDGE_PROJECT_RESOURCES === "1";
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
-export const MAX_MESSAGES = 500;
+/**
+ * Rows retained in the rendered transcript.
+ *
+ * A row is one model response, not one turn, and a long turn produces
+ * hundreds of them; 500 would shed the start of a session after a couple of
+ * such turns. Rows are small, so the byte budget below stays the binding
+ * bound, and both trim whole rows from the front.
+ */
+export const MAX_MESSAGES = 2_000;
 /**
  * The rendered-transcript display budget. Overridable only *downwards* and
  * only within a bounded range, so a test can reach the trim floor without

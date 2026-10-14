@@ -101,6 +101,28 @@ export function sameIds(left: readonly string[], right: readonly string[]): bool
 }
 
 /**
+ * Ids that left a live tail because they were removed from the conversation,
+ * not because newer rows pushed them out of the window's front.
+ *
+ * Both lists are tails of one history (same epoch). A row older than the
+ * oldest row both windows still share has aged out: it is still history, and
+ * a client that reads it as a deletion drops a message the user can no longer
+ * page back to. When the windows share nothing, the tail moved past every row
+ * it held — unless the new window starts at the beginning of the history, in
+ * which case nothing older exists and the old rows really are gone.
+ */
+export function tailDeletions(
+  previousIds: readonly string[],
+  currentIds: readonly string[],
+  currentWindowOmitsOlder: boolean,
+): string[] {
+  const current = new Set(currentIds);
+  const firstShared = previousIds.findIndex((id) => current.has(id));
+  if (firstShared < 0) return currentWindowOmitsOlder ? [] : [...previousIds];
+  return previousIds.slice(firstShared).filter((id) => !current.has(id));
+}
+
+/**
  * Encoded bytes of an object whose `messages` array is measured through the
  * memo; every other field is serialized once. Used for budgets and for
  * choosing between a delta and a snapshot, where one byte of framing drift is

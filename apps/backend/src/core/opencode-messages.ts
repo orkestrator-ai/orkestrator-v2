@@ -586,7 +586,22 @@ export function normalizeOpenCodeTranscriptMessages(
   recordUnknown: (type: string) => void,
   commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
 ): Record<string, unknown>[] {
-  return messages.flatMap((message, index) => {
+  return normalizeOpenCodeTranscriptGroups(messages, recordUnknown, commandChanges).flat();
+}
+
+/**
+ * The rows of each OpenCode message, one group per input message.
+ *
+ * A failed message renders as two rows and a malformed one as none, while
+ * OpenCode pages by whole messages. Windowing over groups keeps a page cursor
+ * on a message boundary.
+ */
+export function normalizeOpenCodeTranscriptGroups(
+  messages: readonly unknown[],
+  recordUnknown: (type: string) => void,
+  commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
+): Record<string, unknown>[][] {
+  return messages.map((message, index) => {
     const normalized = normalizeOpenCodeInteractiveMessage(
       message,
       index,

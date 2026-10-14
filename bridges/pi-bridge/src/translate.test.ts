@@ -73,6 +73,9 @@ describe("streaming text", () => {
     applySessionEvent(state, { type: "message_end" });
     applySessionEvent(state, textDelta("second"));
 
+    // `message_end` closes the blocks only. The row is closed by the next
+    // response's `message_start`, which this stream never sent.
+    expect(state.messages).toHaveLength(1);
     expect(parts(state).map((part) => (part as BridgeTextPart).content)).toEqual([
       "first",
       "second",
@@ -102,6 +105,205 @@ describe("streaming text", () => {
     expect(state.messages[0]!.parts.length).toBeLessThanOrEqual(MAX_PARTS_PER_MESSAGE);
     expect(state.transcriptTruncated).toBe(true);
     expect(state.droppedParts).toBeGreaterThan(0);
+  });
+});
+
+describe("one row per model response", () => {
+  function responseStart() {
+    return { type: "message_start", message: { role: "assistant", content: [] } };
+  }
+  function toolResultMessage(toolCallId: string) {
+    return {
+      type: "message_start",
+      message: { role: "toolResult", toolCallId, toolName: "bash", content: [] },
+    };
+  }
+  function toolStart(toolCallId: string, extra: Record<string, unknown> = {}) {
+    return {
+      type: "tool_execution_start",
+      toolCallId,
+      toolName: "bash",
+      args: { command: `echo ${toolCallId}` },
+      ...extra,
+    };
+  }
+  function toolEnd(toolCallId: string, result: unknown, extra: Record<string, unknown> = {}) {
+    return { type: "tool_execution_end", toolCallId, toolName: "bash", result, ...extra };
+  }
+  function toolIds(message: { parts: Array<{ type: string }> }): string[] {
+    return message.parts.flatMap((part) =>
+      part.type === "tool-invocation" ? [(part as BridgeToolPart).toolUseId] : [],
+    );
+  }
+
+  test("a multi-response turn writes each response to its own row", () => {
+    // Pi's order: a response streams, ends, its tools run (with a toolResult
+    // message each), and the next response starts. A whole turn used to be
+    // one row, which outgrew every transcript window on a long run.
+    const state = running();
+    applySessionEvent(state, { type: "message_start", message: { role: "user", content: "go" } });
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, textDelta("Looking"));
+    applySessionEvent(state, { type: "message_end", message: { role: "assistant" } });
+    applySessionEvent(state, toolStart("call-1"));
+    applySessionEvent(state, toolEnd("call-1", { content: [{ type: "text", text: "ok" }] }));
+    applySessionEvent(state, toolResultMessage("call-1"));
+    applySessionEvent(state, { type: "turn_end", message: { role: "assistant" } });
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, textDelta("Done"));
+
+    expect(state.messages).toHaveLength(2);
+    const [first, second] = state.messages;
+    expect(first).toMatchObject({ role: "assistant", content: "Looking" });
+    expect(toolIds(first!)).toEqual(["call-1"]);
+    expect(second).toMatchObject({ role: "assistant", content: "Done" });
+    expect(toolIds(second!)).toEqual([]);
+    expect(second!.id).not.toBe(first!.id);
+    expect(state.currentAssistantMessageId).toBe(second!.id);
+  });
+
+  test("a response that produces nothing leaves no row", () => {
+    const state = running();
+    applySessionEvent(state, textDelta("answer"));
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, { type: "message_end", message: { role: "assistant" } });
+
+    expect(state.messages).toHaveLength(1);
+    // The turn still answered, which is what an extension command's outcome reads.
+    expect(state.turnOpenedAssistantRow).toBe(true);
+  });
+
+  test("a late tool update lands on the row holding the call without duplicating it", () => {
+    const state = running();
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, toolStart("call-1"));
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, textDelta("Next response"));
+    const revision = state.revision;
+
+    applySessionEvent(state, {
+      type: "tool_execution_update",
+      toolCallId: "call-1",
+      toolName: "bash",
+      partialResult: { content: [{ type: "text", text: "partial" }] },
+    });
+    applySessionEvent(state, toolEnd("call-1", { content: [{ type: "text", text: "final" }] }));
+
+    expect(state.messages).toHaveLength(2);
+    const [first, second] = state.messages;
+    expect(toolIds(first!)).toEqual(["call-1"]);
+    expect(first!.parts[0]).toMatchObject({
+      toolUseId: "call-1",
+      toolOutput: "final",
+      toolState: "success",
+      // The remembered input still titles the card on its own row.
+      toolTitle: expect.stringContaining("echo call-1"),
+    });
+    expect(toolIds(second!)).toEqual([]);
+    // The older row changed, so readers keyed on the revision re-read it.
+    expect(state.revision).toBeGreaterThan(revision);
+    // The current response's prose was not split by a card on another row.
+    applySessionEvent(state, textDelta(" continues"));
+    expect(second!.parts).toHaveLength(1);
+    expect(second!.content).toBe("Next response continues");
+  });
+
+  test("a late result's images land on the call's row once", () => {
+    const state = running();
+    const image = { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" };
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, toolStart("shot-1"));
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, textDelta("Next"));
+
+    applySessionEvent(state, toolEnd("shot-1", { content: [image] }));
+    applySessionEvent(state, toolEnd("shot-1", { content: [image] }));
+
+    const [first, second] = state.messages;
+    expect(first!.parts.filter((part) => part.type === "image")).toHaveLength(1);
+    expect(first!.parts.find((part) => part.type === "image")?.sourceMessageId).toBe(first!.id);
+    expect(second!.parts.some((part) => part.type === "image")).toBe(false);
+  });
+
+  test("a nested call lands on the row holding its parent", () => {
+    const state = running();
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, toolStart("codemode-1", { toolName: "codemode" }));
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, textDelta("Next"));
+
+    applySessionEvent(state, toolStart("nested-1", { parentToolCallId: "codemode-1" }));
+    applySessionEvent(
+      state,
+      toolEnd(
+        "nested-1",
+        { content: [{ type: "text", text: "hi" }] },
+        {
+          parentToolCallId: "codemode-1",
+        },
+      ),
+    );
+
+    const [first, second] = state.messages;
+    expect(toolIds(first!)).toEqual(["codemode-1", "nested-1"]);
+    expect(first!.parts[1]).toMatchObject({
+      parentTaskUseId: "codemode-1",
+      sourceMessageId: first!.id,
+      toolState: "success",
+    });
+    expect(toolIds(second!)).toEqual([]);
+  });
+
+  test("a start reusing an earlier response's call id opens a new card", () => {
+    // Some providers number calls per response. A start is a call's first
+    // frame, so it never rewrites a settled card on an earlier row.
+    const state = running();
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, toolStart("call_0"));
+    applySessionEvent(state, toolEnd("call_0", { content: [{ type: "text", text: "first" }] }));
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, toolStart("call_0"));
+    applySessionEvent(state, toolEnd("call_0", { content: [{ type: "text", text: "second" }] }));
+
+    const [first, second] = state.messages;
+    expect(first!.parts[0]).toMatchObject({ toolUseId: "call_0", toolOutput: "first" });
+    expect(second!.parts[0]).toMatchObject({ toolUseId: "call_0", toolOutput: "second" });
+    expect(first!.parts).toHaveLength(1);
+    expect(second!.parts).toHaveLength(1);
+  });
+
+  test("a long turn sheds whole old responses, never the start of the live one", () => {
+    // Each response's text is charged twice (part and body), so ten 1 MiB
+    // responses cross the ~16 MiB budget from inside the listener alone.
+    const state = running();
+    const chunk = "x".repeat(1024 * 1024);
+    for (let index = 0; index < 10; index += 1) {
+      applySessionEvent(state, responseStart());
+      applySessionEvent(state, textDelta(`response ${index}:`));
+      applySessionEvent(state, textDelta(chunk));
+    }
+
+    expect(state.droppedMessages).toBeGreaterThan(0);
+    // Every dropped row went whole: one part each, none cut from a row kept.
+    expect(state.droppedParts).toBe(state.droppedMessages);
+    for (const message of state.messages) expect(message.parts).toHaveLength(1);
+    expect(state.messages.at(-1)!.content.startsWith("response 9:")).toBe(true);
+    expect(state.messages[0]!.content.startsWith(`response ${state.droppedMessages}:`)).toBe(true);
+  });
+
+  test("a call whose row was trimmed falls back to the current row", () => {
+    const state = running();
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, toolStart("call-1"));
+    applySessionEvent(state, responseStart());
+    applySessionEvent(state, textDelta("Next"));
+    // Display trimming dropped the row holding the call.
+    state.messages.shift();
+
+    applySessionEvent(state, toolEnd("call-1", { content: [{ type: "text", text: "done" }] }));
+
+    expect(state.messages).toHaveLength(1);
+    expect(toolIds(state.messages[0]!)).toEqual(["call-1"]);
   });
 });
 

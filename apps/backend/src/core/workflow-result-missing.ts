@@ -74,28 +74,54 @@ function looksLikeJsonObject(text: string): boolean {
   return trimmed.startsWith("{") && trimmed.endsWith("}");
 }
 
-/** Text of the last assistant message in a normalized or raw provider transcript. */
+/**
+ * Messages a caller reads to find the final reply. A row is one model
+ * response, and a turn often ends on rows that only called tools, so the text
+ * can sit several rows back.
+ */
+export const LAST_ASSISTANT_TEXT_READ_LIMIT = 16;
+
+type TranscriptEntry = {
+  role?: unknown;
+  info?: { role?: unknown };
+  content?: unknown;
+  parts?: unknown;
+};
+
+function assistantText(message: TranscriptEntry): string | undefined {
+  if (Array.isArray(message.parts)) {
+    const text = message.parts
+      .map((part: { type?: unknown; content?: unknown; text?: unknown } | null) => {
+        if (part?.type !== "text") return undefined;
+        return typeof part.content === "string" ? part.content : part.text;
+      })
+      .filter((text): text is string => typeof text === "string")
+      .join("\n");
+    if (text) return text;
+  }
+  return typeof message.content === "string" ? message.content : undefined;
+}
+
+/**
+ * Text of the final reply in a normalized or raw provider transcript: the
+ * newest assistant row with text, walking back over rows of the same turn
+ * that only called tools. Stops at the user row that opened the turn, so an
+ * earlier turn's reply is never reported as this one's. When no row of the
+ * turn has text, the newest assistant row's own (empty) content is returned.
+ */
 export function lastAssistantText(messages: readonly unknown[] | undefined): string | undefined {
   if (!messages) return undefined;
+  let newest: string | undefined;
+  let found = false;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as {
-      role?: unknown;
-      info?: { role?: unknown };
-      content?: unknown;
-      parts?: unknown;
-    };
-    if (!message || (message.role ?? message.info?.role) !== "assistant") continue;
-    if (Array.isArray(message.parts)) {
-      const text = message.parts
-        .map((part: { type?: unknown; content?: unknown; text?: unknown } | null) => {
-          if (part?.type !== "text") return undefined;
-          return typeof part.content === "string" ? part.content : part.text;
-        })
-        .filter((text): text is string => typeof text === "string")
-        .join("\n");
-      if (text) return text;
-    }
-    return typeof message.content === "string" ? message.content : undefined;
+    const message = messages[index] as TranscriptEntry | null;
+    const role = message ? (message.role ?? message.info?.role) : undefined;
+    if (found && role === "user") break;
+    if (!message || role !== "assistant") continue;
+    const text = assistantText(message);
+    if (text) return text;
+    if (!found) newest = text;
+    found = true;
   }
-  return undefined;
+  return newest;
 }

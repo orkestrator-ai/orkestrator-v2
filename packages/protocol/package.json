@@ -75,6 +75,7 @@
     "./node/preview-websocket": "./src/node/preview-websocket.ts",
     "./preview-services": "./src/preview-services.ts",
     "./node/progressive-transcript": "./src/node/progressive-transcript.ts",
+    "./node/revised-rows": "./src/node/revised-rows.ts",
     "./project-folders": "./src/project-folders.ts",
     "./public-api": "./src/public-api.ts",
     "./public-api-resources": "./src/public-api-resources.ts",

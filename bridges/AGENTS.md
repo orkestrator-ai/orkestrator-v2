@@ -44,6 +44,34 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   ways out — retry under the same idempotency key, or discard — rather than the
   storage-level refusal, which names an invariant the user cannot act on.
 
+## Transcript rows
+
+Every bridge writes one transcript row per model response (one step of the
+agent loop), never one per turn; each bridge's `AGENTS.md` names its boundary.
+A turn kept alive by background work runs for hours, and a multi-megabyte row
+fits no transcript window: readers get only a trimmed copy and lose its start
+once newer rows push it out of the live tail.
+
+- **Late updates find their row.** A tool result, subagent report, command
+  change or settle lands on the row holding the call, however many responses
+  ago that was, never on the newest row and never as a duplicate card. A
+  subagent's output is bounded per call on that row.
+- **Changed rows outside the window still reach readers.** Readers re-read only
+  the live tail, so note a row in a `RecentlyRevisedRows`
+  (`@orkestrator/protocol/node/revised-rows`) whenever it changes after a newer
+  row exists, and pass its ids as `revisedMessageIds` in the
+  `BridgeTranscriptSource`. The v2 summary then carries the changed rows that
+  fall before the window as `revisedMessages`, and readers replace their
+  copies. Note where the row changes, in the same step that moves the
+  transcript revision, never from a deferred publish: a read between the two
+  caches a token that would then never move. Do not note the newest row — it
+  is always in the window, and noting it turns every streamed write into
+  `revisedMessages` once it ages out. Clear the list when the history is
+  replaced.
+- **Pages never cut a row.** A page sends a row larger than its target whole,
+  up to `BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES`, because the next cursor starts
+  before that row, never inside it.
+
 ## Tab close and conversation retention
 
 Closing a tab retains the conversation on every platform. Every managed bridge

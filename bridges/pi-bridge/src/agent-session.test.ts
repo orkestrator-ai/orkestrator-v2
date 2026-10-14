@@ -335,6 +335,10 @@ describe("session ownership", () => {
 
     const resumed = await resumeSession(sessionFile, undefined);
     const tool = resumed.messages[0]?.parts.find((part) => part.type === "tool-invocation");
+    // One row per assistant entry, as a live turn writes one per response,
+    // and dated when Pi wrote it rather than when it was replayed.
+    expect(resumed.messages).toHaveLength(1);
+    expect(resumed.messages[0]).toMatchObject({ id: "assistant-entry", createdAt: timestamp });
     expect(resumed.messages[0]?.content).toBe("Running it");
     expect(tool).toMatchObject({
       toolUseId: "call-1",

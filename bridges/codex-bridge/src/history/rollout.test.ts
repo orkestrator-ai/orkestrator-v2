@@ -1638,7 +1638,9 @@ describe("rollout public helpers (continued)", () => {
     process.env.CWD = "/workspace";
     try {
       const hydrated = await hydrateMessagesFromPersistedSession("thread-tools");
-      expect(hydrated.messages).toHaveLength(2);
+      // The closing answer comes after the tool results, so it is the model's
+      // next response and gets a row of its own.
+      expect(hydrated.messages).toHaveLength(3);
       expect(hydrated.messages[0]).toMatchObject({
         role: "user",
         content: "Inspect the repository",
@@ -1646,9 +1648,18 @@ describe("rollout public helpers (continued)", () => {
       });
       expect(hydrated.messages[1]).toMatchObject({
         role: "assistant",
-        content: "The repository has one modified file.",
+        content: "I'll inspect it.",
         turnId: "turn-tools",
       });
+      expect(hydrated.messages[2]).toMatchObject({
+        role: "assistant",
+        content: "The repository has one modified file.",
+        turnId: "turn-tools",
+        createdAt: "2026-07-25T12:01:06.000Z",
+      });
+      expect(hydrated.messages[2]?.parts).toEqual([
+        { type: "text", content: "The repository has one modified file." },
+      ]);
       expect(hydrated.messages[1]?.parts).toEqual([
         { type: "text", content: "I'll inspect it." },
         {
@@ -1733,7 +1744,6 @@ describe("rollout public helpers (continued)", () => {
           toolOutput: "All tests passed",
           toolError: undefined,
         },
-        { type: "text", content: "The repository has one modified file." },
       ]);
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;

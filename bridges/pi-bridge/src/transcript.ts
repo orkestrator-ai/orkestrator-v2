@@ -14,6 +14,7 @@ import {
   MAX_PARTS_PER_MESSAGE,
   MAX_TRANSCRIPT_BYTES,
 } from "./config.js";
+import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import {
   boundTranscriptInPlace,
   type TranscriptLimits,
@@ -90,7 +91,17 @@ export function sliceToBytes(value: string, limit: number): string {
  * so the caller can bump the revision the renderer watches.
  */
 export function boundTranscript(state: SessionState): boolean {
-  return boundTranscriptInPlace(state, TRANSCRIPT_LIMITS);
+  const rowsBefore = state.messages.slice();
+  const partsBefore = rowsBefore.map((row) => row.parts.length);
+  const trimmed = boundTranscriptInPlace(state, TRANSCRIPT_LIMITS);
+  if (!trimmed) return false;
+  // Note the retained rows that shed parts. Rows go only from the front, so
+  // what is left lines up with the tail of `rowsBefore`.
+  const offset = rowsBefore.length - state.messages.length;
+  state.messages.forEach((row, index) => {
+    if (row.parts.length < partsBefore[index + offset]!) noteRowRevised(state, row.id);
+  });
+  return true;
 }
 
 /**
@@ -126,4 +137,48 @@ export function boundTranscriptDuringStreaming(state: SessionState): void {
 /** Charge appended bytes so the next read knows the budget may have moved. */
 export function chargeTranscript(state: SessionState, bytes: number): void {
   if (bytes > 0) state.uncheckedTranscriptBytes += bytes;
+}
+
+/**
+ * Rows a reader may hold a stale copy of, for `revisedMessageIds`.
+ *
+ * A row is one model response, so a late tool result, a measured command
+ * change or a settled retry can patch a row newer responses have pushed out of
+ * the live window, and readers only re-read the window. Held off the state
+ * object so no persistence path can pick it up; a restored session starts with
+ * none.
+ */
+const revisedRows = new WeakMap<SessionState, RecentlyRevisedRows>();
+
+/** Note that the row `id` changed in place. */
+export function noteRowRevised(state: SessionState, id: string): void {
+  // The newest row is always inside the live window; only a row that changes
+  // once a newer one exists can be outside it.
+  if (state.messages.at(-1)?.id === id) return;
+  let rows = revisedRows.get(state);
+  if (!rows) {
+    rows = new RecentlyRevisedRows();
+    revisedRows.set(state, rows);
+  }
+  rows.note(id);
+}
+
+/**
+ * Record a change to one row: note it and bump the revision readers compare.
+ * Every in-place row change goes through here or `noteRowRevised`.
+ */
+export function rowChanged(state: SessionState, row: BridgeMessage): void {
+  noteRowRevised(state, row.id);
+  state.revision += 1;
+}
+
+/** Recently changed row ids, newest first; undefined when there are none. */
+export function revisedRowIds(state: SessionState): string[] | undefined {
+  const ids = revisedRows.get(state)?.ids();
+  return ids && ids.length > 0 ? ids : undefined;
+}
+
+/** The history was replaced: ids noted against it name nothing in the new one. */
+export function forgetRevisedRows(state: SessionState): void {
+  revisedRows.get(state)?.clear();
 }

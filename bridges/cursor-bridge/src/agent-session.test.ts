@@ -1462,6 +1462,171 @@ describe("resumeSession", () => {
     expect(assistant.planReview).toBeUndefined();
   });
 
+  test("replays a multi-step turn as one row per model step", async () => {
+    const read = (path: string) => ({
+      type: "toolCall",
+      message: {
+        type: "read",
+        args: { path },
+        result: { status: "success", value: { content: "body" } },
+      },
+    });
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "plan it" },
+              steps: [
+                { type: "thinkingMessage", message: { text: "look first" } },
+                { type: "assistantMessage", message: { text: "Reading." } },
+                read("a.ts"),
+                read("b.ts"),
+                { type: "assistantMessage", message: { text: "Planning." } },
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "createPlan",
+                    args: { plan: "do it", todos: [] },
+                    result: { status: "success", value: {} },
+                  },
+                },
+                { type: "thinkingMessage", message: { text: "done?" } },
+                { type: "assistantMessage", message: { text: "Plan ready." } },
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-steps", undefined);
+
+    expect(state.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "assistant",
+    ]);
+    const [, first, second, third] = state.messages;
+    expect(first!.parts.map((part) => part.type)).toEqual([
+      "thinking",
+      "text",
+      "tool-invocation",
+      "tool-invocation",
+    ]);
+    expect(first!.content).toBe("Reading.");
+    expect(second!.parts.map((part) => part.type)).toEqual(["text", "tool-invocation"]);
+    expect(third!.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+    expect(third!.content).toBe("Plan ready.");
+    // Plan review runs from the step that produced the plan to the turn's end.
+    expect(state.messages.map((message) => message.planReview)).toEqual([
+      undefined,
+      undefined,
+      true,
+      true,
+    ]);
+    const ids = state.messages.flatMap((message) =>
+      message.parts.map((part) => {
+        expect(part.sourceMessageId).toBe(message.id);
+        return part.sourcePartId;
+      }),
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("keeps the plan-review controls when prose follows the plan in history", async () => {
+    // The tab offers Approve and Build only while the newest assistant row is
+    // marked, and replay starts a row wherever prose follows a tool call, so
+    // the closing sentence after a plan is a row of its own.
+    const plan = {
+      type: "toolCall",
+      message: {
+        type: "createPlan",
+        args: { plan: "do it", todos: [] },
+        result: { status: "success", value: {} },
+      },
+    };
+    const text = (value: string) => ({ type: "assistantMessage", message: { text: value } });
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: { userMessage: { text: "plan it" }, steps: [text("Drafting."), plan] },
+          },
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "again" },
+              steps: [text("Drafting."), plan, text("Plan is ready.")],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-plan-prose", undefined);
+
+    expect(state.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "plan it"],
+      ["assistant", "Drafting."],
+      ["user", "again"],
+      ["assistant", "Drafting."],
+      ["assistant", "Plan is ready."],
+    ]);
+    expect(state.messages.at(-1)!.planReview).toBe(true);
+    expect(state.messages.map((message) => message.planReview === true)).toEqual([
+      false,
+      true,
+      false,
+      true,
+      true,
+    ]);
+  });
+
+  test("does not carry plan review past the turn that planned", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "plan it" },
+              steps: [
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "createPlan",
+                    args: { plan: "do it", todos: [] },
+                    result: { status: "success", value: {} },
+                  },
+                },
+              ],
+            },
+          },
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "thanks" },
+              steps: [{ type: "assistantMessage", message: { text: "Welcome." } }],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-plan-then-chat", undefined);
+
+    expect(state.messages.map((message) => message.planReview === true)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+  });
+
   test("replays steered historic user messages from the conversation record", async () => {
     runs = {
       items: [

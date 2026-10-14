@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_STREAM_MESSAGES, OpenCodeStreamState } from "./opencode-stream-state.js";
+import {
+  isProvisionalOpenCodeMessage,
+  MAX_STREAM_MESSAGES,
+  OpenCodeStreamState,
+} from "./opencode-stream-state.js";
 
 describe("OpenCodeStreamState turn clock", () => {
   test("beginTurn stamps and rejectTurn clears only the matching dispatch", () => {
@@ -429,5 +433,205 @@ describe("OpenCodeStreamState touch", () => {
     // Not an event: dispatch reconciliation keyed on event versions is unaffected.
     expect(state.eventVersion("session")).toBe(eventVersion);
     expect(state.revision("unknown")).toBe(0);
+  });
+});
+
+describe("OpenCodeStreamState history paging", () => {
+  const message = (id: string) => ({
+    info: { id, sessionID: "session", role: "assistant", time: { created: 1 } },
+    parts: [],
+  });
+
+  test("only a read shorter than it asked for proves the cache starts the session", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", [message("a"), message("b")], undefined, 64);
+    expect(state.currentMessagesFromStart("session")).toBe(true);
+    // Streamed steps extend a window without changing where it starts.
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("c").info },
+    } as never);
+    expect(state.currentMessagesFromStart("session")).toBe(true);
+
+    state.replaceMessages("session", [message("a"), message("b")], undefined, 2);
+    expect(state.currentMessagesFromStart("session")).toBe(false);
+    state.replaceMessages("session", [message("a")]);
+    expect(state.currentMessagesFromStart("session")).toBe(false);
+    // A dirty cache proves nothing.
+    state.replaceMessages("session", [message("a")], undefined, 64);
+    state.markGap();
+    expect(state.currentMessagesFromStart("session")).toBe(false);
+  });
+
+  test("the history epoch survives appends and edits but not removals", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", [message("a"), message("b")], undefined, 64);
+    const initial = state.historyEpoch("session");
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("c").info },
+    } as never);
+    state.replaceMessages("session", [message("a"), message("b"), message("c")], undefined, 64);
+    expect(state.historyEpoch("session")).toBe(initial);
+
+    state.apply({
+      type: "message.removed",
+      properties: { sessionID: "session", messageID: "a" },
+    } as never);
+    const afterRemoval = state.historyEpoch("session");
+    expect(afterRemoval).not.toBe(initial);
+
+    // A removal seen while the cache is dirty still rewrote history.
+    state.markGap();
+    state.apply({
+      type: "message.removed",
+      properties: { sessionID: "session", messageID: "b" },
+    } as never);
+    expect(state.historyEpoch("session")).not.toBe(afterRemoval);
+  });
+
+  test("a reconnect keeps the epoch unless the re-read proves history was rewritten", () => {
+    const state = new OpenCodeStreamState();
+    const seeded = ["a", "b", "c", "d"].map(message);
+    state.replaceMessages("session", seeded, undefined, 64);
+    const initial = state.historyEpoch("session");
+
+    // A gap whose re-read holds the same history, plus a step streamed since.
+    state.markGap();
+    expect(state.historyEpoch("session")).toBe(initial);
+    let version = state.eventVersion("session");
+    expect(state.replaceMessages("session", [...seeded, message("e")], version, 64)).toBe(true);
+    expect(state.historyEpoch("session")).toBe(initial);
+
+    // Reconnects that see nothing change keep paging alive across them.
+    for (let pass = 0; pass < 3; pass += 1) {
+      state.markGap();
+      version = state.eventVersion("session");
+      state.replaceMessages("session", [...seeded, message("e")], version, 64);
+    }
+    expect(state.historyEpoch("session")).toBe(initial);
+
+    // A message removed while the stream was down never arrives as an event;
+    // only the re-read shows it, and that is what moves the epoch.
+    state.markGap();
+    version = state.eventVersion("session");
+    state.replaceMessages("session", ["a", "b", "d", "e"].map(message), version, 64);
+    expect(state.historyEpoch("session")).not.toBe(initial);
+  });
+
+  test("a removal is caught after reconnect even when a read during the outage already shows it", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", ["a", "b", "c"].map(message), undefined, 64);
+    const initial = state.historyEpoch("session");
+    state.markGap();
+    // A display read while the stream is down already reflects the revert. It
+    // mints cursors from the rewritten history, which must not stay valid.
+    state.replaceMessages("session", ["a", "b"].map(message), undefined, 64);
+    const duringOutage = state.historyEpoch("session");
+    expect(duringOutage).not.toBe(initial);
+
+    // A second removal during the same outage is checked against that read.
+    state.replaceMessages("session", ["a"].map(message), undefined, 64);
+    expect(state.historyEpoch("session")).not.toBe(duringOutage);
+    const afterSecond = state.historyEpoch("session");
+
+    // The reconnect's own read matches and ends verification.
+    state.markGap();
+    const version = state.eventVersion("session");
+    state.replaceMessages("session", ["a"].map(message), version, 64);
+    expect(state.historyEpoch("session")).toBe(afterSecond);
+  });
+
+  test("a re-read that shares nothing with a long cache cannot prove continuity", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", ["a", "b"].map(message), undefined, 2);
+    const initial = state.historyEpoch("session");
+    state.markGap();
+    state.replaceMessages("session", ["x", "y"].map(message), state.eventVersion("session"), 2);
+    expect(state.historyEpoch("session")).not.toBe(initial);
+  });
+
+  test("notes messages changed in place, newest first, including during a gap", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", ["a", "b", "c"].map(message), undefined, 64);
+    state.apply({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session",
+        part: { id: "p1", messageID: "a", type: "text", text: "late" },
+      },
+    } as never);
+    state.apply({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session",
+        part: { id: "p2", messageID: "b", type: "text", text: "late" },
+      },
+    } as never);
+    expect(state.revisedMessageIds("session")).toEqual(["b", "a"]);
+
+    state.apply({
+      type: "message.removed",
+      properties: { sessionID: "session", messageID: "b" },
+    } as never);
+    expect(state.revisedMessageIds("session")).toEqual(["a"]);
+
+    // A tool result that lands while the stream is down is found by the
+    // re-read's content check rather than by an event.
+    const cached = state.currentMessages("session")!;
+    state.markGap();
+    const reread = cached.map((entry) =>
+      (entry as { info: { id: string } }).info.id === "c"
+        ? { ...(entry as object), parts: [{ id: "p3", messageID: "c", type: "text", text: "x" }] }
+        : entry,
+    );
+    state.replaceMessages("session", reread, state.eventVersion("session"), 64);
+    expect(state.revisedMessageIds("session")).toEqual(["c", "a"]);
+  });
+
+  test("streaming the newest message, or a new one, notes nothing", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", ["a", "b"].map(message), undefined, 64);
+    const part = (messageID: string, id: string) =>
+      state.apply({
+        type: "message.part.updated",
+        properties: { sessionID: "session", part: { id, messageID, type: "text", text: "x" } },
+      } as never);
+    part("b", "p1");
+    part("c", "p2");
+    part("c", "p3");
+    expect(state.revisedMessageIds("session")).toEqual([]);
+    // Once a newer message exists, a change to an older one is a revision.
+    part("b", "p4");
+    expect(state.revisedMessageIds("session")).toEqual(["b"]);
+  });
+
+  test("a message created from a part event is provisional until OpenCode reports it", () => {
+    const state = new OpenCodeStreamState();
+    state.replaceMessages("session", [message("a")], undefined, 64);
+    state.apply({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session",
+        part: { id: "p1", messageID: "b", type: "text", text: "early" },
+      },
+    } as never);
+    const placeholder = state.currentMessages("session")!.at(-1);
+    expect(isProvisionalOpenCodeMessage(placeholder)).toBe(true);
+    expect(isProvisionalOpenCodeMessage(state.currentMessages("session")![0])).toBe(false);
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("b").info },
+    } as never);
+    expect(isProvisionalOpenCodeMessage(state.currentMessages("session")!.at(-1))).toBe(false);
+  });
+
+  test("epochs are never reused by another instance or a session seen again", () => {
+    const first = new OpenCodeStreamState();
+    const second = new OpenCodeStreamState();
+    expect(first.historyEpoch("session")).not.toBe(second.historyEpoch("session"));
+    const before = first.historyEpoch("session");
+    first.clear();
+    expect(first.historyEpoch("session")).not.toBe(before);
   });
 });

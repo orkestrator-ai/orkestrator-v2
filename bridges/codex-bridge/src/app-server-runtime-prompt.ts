@@ -37,6 +37,7 @@ import type {
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { invalidateTranscriptCatalogCache } from "./history/rollout.js";
+import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import { buildFallbackSessionTitle, persistSessionTitle } from "./session-titles.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
@@ -1093,11 +1094,32 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     }
   }
 
-  /** Advances every bridge view of the canonical thread transcript together. */
-  protected bumpMessageRevision(context: ThreadContext): void {
+  /**
+   * Advances every bridge view of the canonical thread transcript together,
+   * noting each of the `revised` rows a newer row already follows in
+   * `BridgeSession.revisedRows`.
+   *
+   * Noted here, in the same step as the bump, never when the change is sent:
+   * a read between the two would cache a token without the row, and a later
+   * note bumps nothing, so that reader would be told "unchanged" for good. A
+   * send can also be dropped (an ordered-event overflow), which must not lose
+   * the note. The newest row is in every live window, so only rows behind it
+   * are noted; noting every write would carry rows that merely aged out of
+   * the window in every snapshot.
+   */
+  protected bumpMessageRevision(
+    context: ThreadContext,
+    revised: readonly NormalizedMessage[] = [],
+  ): void {
+    const newestId = context.messages.at(-1)?.id;
+    const noted = revised.filter((message) => message.id !== newestId);
     for (const sessionId of context.bridgeSessionIds) {
       const session = this.registry.getSession(sessionId);
-      if (session) session.messageRevision += 1;
+      if (!session) continue;
+      session.messageRevision += 1;
+      if (noted.length === 0) continue;
+      const rows = (session.revisedRows ??= new RecentlyRevisedRows());
+      for (const message of noted) rows.note(message.id);
     }
   }
 

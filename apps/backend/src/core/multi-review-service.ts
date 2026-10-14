@@ -47,7 +47,11 @@ import {
   workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
-import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
+import {
+  LAST_ASSISTANT_TEXT_READ_LIMIT,
+  lastAssistantText,
+  missingWorkflowResultMessage,
+} from "./workflow-result-missing.js";
 import type { AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -777,6 +781,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         : {}),
       ...(transcript?.kind === "snapshot" && transcript.historyEpoch
         ? { historyEpoch: transcript.historyEpoch }
+        : {}),
+      ...(transcript?.kind === "snapshot" && transcript.revisedMessages
+        ? { revisedMessages: transcript.revisedMessages }
         : {}),
       ...(reviewer.report ? { report: reviewer.report } : {}),
       ...(reviewer.error ? { error: reviewer.error } : {}),
@@ -3902,7 +3909,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           );
         }
         const finalText = await provider
-          .messages(session.providerSessionId, { limit: 2 })
+          .messages(session.providerSessionId, { limit: LAST_ASSISTANT_TEXT_READ_LIMIT })
           .then(lastAssistantText, () => undefined);
         throw new Error(
           missingWorkflowResultMessage({

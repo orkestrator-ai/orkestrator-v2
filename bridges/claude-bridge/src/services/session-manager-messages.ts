@@ -503,17 +503,18 @@ export function resultInputUuids(result: ResultInputFields): string[] {
 
 /**
  * Re-publish finished tool rows whose tracked state changed after the message
- * holding them stopped being the one the turn rebuilds.
+ * holding them stopped being one the turn rebuilds.
  *
- * `current` is skipped: the caller has just rebuilt and published it. Each
- * other message is republished whole, the same way a settled retry row is.
+ * Messages in `published` are skipped: the caller has just rebuilt and
+ * published them. Each other message is republished whole, the same way a
+ * settled retry row is.
  */
 export function refreshSettledToolRows(
   session: SessionState,
   sessionId: string,
   toolTracker: ToolTracker,
   toolUseIds: readonly string[],
-  current: NormalizedMessage | null | undefined,
+  published: ReadonlySet<NormalizedMessage> | null | undefined,
 ): void {
   if (toolUseIds.length === 0) return;
   const pending = new Set(toolUseIds);
@@ -526,7 +527,7 @@ export function refreshSettledToolRows(
       }
       pending.delete(part.toolUseId);
       const tracked = toolTracker.getTool(part.toolUseId);
-      if (!tracked || message === current) return part;
+      if (!tracked || published?.has(message)) return part;
       changed = true;
       return part.createdAt && !tracked.createdAt
         ? { ...tracked, createdAt: part.createdAt }

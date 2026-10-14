@@ -128,6 +128,34 @@ describe("lastAssistantText", () => {
     ).toBe("{\n}");
   });
 
+  test("walks back over the turn's tool-only rows to its reply text", () => {
+    // A row is one model response: the reply, then steps that only called tools.
+    const turn = [
+      { role: "user", parts: [{ type: "text", content: "review it" }] },
+      { role: "assistant", parts: [{ type: "text", content: '{"issues":[]}' }] },
+      { role: "assistant", content: "", parts: [{ type: "tool-invocation", toolName: "bash" }] },
+      { role: "assistant", content: "", parts: [{ type: "tool-invocation", toolName: "read" }] },
+    ];
+    expect(lastAssistantText(turn)).toBe('{"issues":[]}');
+    expect(
+      lastAssistantText([
+        { info: { role: "user" }, parts: [{ type: "text", text: "go" }] },
+        { info: { role: "assistant" }, parts: [{ type: "text", text: "done" }] },
+        { info: { role: "assistant" }, parts: [{ type: "tool", tool: "bash" }] },
+      ]),
+    ).toBe("done");
+  });
+
+  test("never reports an earlier turn's reply as this turn's", () => {
+    expect(
+      lastAssistantText([
+        { role: "assistant", parts: [{ type: "text", content: "earlier turn" }] },
+        { role: "user", parts: [{ type: "text", content: "prompt" }] },
+        { role: "assistant", content: "", parts: [{ type: "tool-invocation", toolName: "bash" }] },
+      ]),
+    ).toBe("");
+  });
+
   test("falls back to message content and tolerates malformed entries", () => {
     expect(lastAssistantText([null, { role: "assistant", content: "plain" }])).toBe("plain");
     expect(lastAssistantText([{ role: "user", content: "only a prompt" }])).toBeUndefined();

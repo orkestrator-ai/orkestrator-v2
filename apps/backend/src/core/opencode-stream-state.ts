@@ -1,4 +1,6 @@
+import { createHash, randomUUID } from "node:crypto";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
+import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type {
   NativeAgentContextUsage,
   NativeAgentNotice,
@@ -23,10 +25,121 @@ const MAX_STREAM_SESSIONS = 1_024;
 export const MAX_STREAM_MESSAGES = 1_025;
 const MAX_STREAM_PARTS = 2_048;
 const MAX_STREAM_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
+/**
+ * Newest cached messages whose content a gap baseline fingerprints, so a
+ * re-read can tell which of them changed while the stream was down. Older ones
+ * are still checked for removal, by id.
+ */
+const GAP_BASELINE_FINGERPRINTS = 128;
+
+/** Marks a message the stream created before OpenCode reported its info. */
+const PROVISIONAL_INFO = Symbol("opencode-provisional-info");
+
+/**
+ * Whether a cached message's info was made up by the stream rather than
+ * reported by OpenCode: a part event can precede its message's
+ * `message.updated`, and the placeholder then carries a backend clock (or an
+ * event time) instead of the message's own creation time. A page cursor minted
+ * from it could skip or repeat rows, so cursors are named only from real info.
+ */
+export function isProvisionalOpenCodeMessage(message: unknown): boolean {
+  const info = asRecord(asRecord(message)?.info) as Record<PropertyKey, unknown> | null;
+  return info?.[PROVISIONAL_INFO] === true;
+}
+
+/**
+ * What the cache held when the stream was lost, for checking the re-read
+ * against: message ids in order, and content fingerprints of the newest.
+ */
+type GapBaseline = { ids: string[]; fingerprints: Map<string, string> };
+
+function cachedMessageId(message: unknown): string | undefined {
+  const id = nonEmptyString(asRecord(asRecord(message)?.info)?.id);
+  // A `session.compacted` row is the stream's own; OpenCode never returns it.
+  return id && !id.startsWith("opencode-") ? id : undefined;
+}
+
+function messageFingerprint(message: unknown): string {
+  try {
+    return createHash("sha256")
+      .update(JSON.stringify(message) ?? "")
+      .digest("base64url");
+  } catch {
+    return "";
+  }
+}
+
+function baselineOf(messages: readonly unknown[] | undefined): GapBaseline {
+  const ids: string[] = [];
+  const fingerprints = new Map<string, string>();
+  const fingerprintFrom = Math.max(0, (messages?.length ?? 0) - GAP_BASELINE_FINGERPRINTS);
+  messages?.forEach((message, index) => {
+    const id = cachedMessageId(message);
+    if (!id) return;
+    ids.push(id);
+    if (index >= fingerprintFrom) fingerprints.set(id, messageFingerprint(message));
+  });
+  return { ids, fingerprints };
+}
+
+/**
+ * Whether a read proves history was rewritten since `baseline`: a message it
+ * held is gone, or something now sits between two it held.
+ *
+ * Only the overlap can be checked — from the oldest baseline message the read
+ * still holds, or all of it when the read began at the session's first
+ * message. OpenCode removes a suffix (a revert drops everything after its
+ * point), so a removal always reaches into that overlap. A read sharing
+ * nothing with the baseline proves nothing either way and counts as rewritten.
+ */
+function historyRewritten(
+  baseline: readonly string[],
+  read: readonly string[],
+  fromStart: boolean,
+): boolean {
+  if (baseline.length === 0) return false;
+  const readIds = new Set(read);
+  const first = fromStart ? 0 : baseline.findIndex((id) => readIds.has(id));
+  if (first < 0) return true;
+  let at = read.indexOf(baseline[first]!);
+  if (at < 0) return true;
+  for (let index = first; index < baseline.length; index += 1) {
+    if (read[at] !== baseline[index]) return true;
+    at += 1;
+  }
+  return false;
+}
 
 type OpenCodeStreamSession = {
   messages?: unknown[];
   messagesCurrent: boolean;
+  /**
+   * Whether `messages` begins at the session's first message. Only a read
+   * that came back shorter than it asked for proves that; streamed appends
+   * keep whatever the seeding read established.
+   */
+  messagesFromStart: boolean;
+  /**
+   * Changes when older history was rewritten under a page cursor: a removed
+   * message, or a re-read after a stream gap that proves one (see
+   * `gapBaseline`). Ordinary appends and edits keep it, and so does a
+   * reconnect that changed nothing, so readers keep the history they paged.
+   */
+  historyEpoch: number;
+  /**
+   * The cache as it stood when the stream was lost, until a read taken after
+   * the stream is back has been checked against it. Every authoritative read
+   * in between is checked too and becomes the new baseline, so a removal is
+   * caught even if a read during the outage already reflects it.
+   */
+  gapBaseline?: GapBaseline;
+  /**
+   * Messages OpenCode changed in place, newest first. An OpenCode message is
+   * one agent-loop step, and a late tool result lands on its own step after
+   * newer steps have pushed it out of the live window; the transcript carries
+   * the noted ones from before its window so readers refresh their copies.
+   */
+  revised?: RecentlyRevisedRows;
   /** Monotonic count of inbound session events, including events seen while dirty. */
   eventVersion: number;
   notices: NativeAgentNotice[];
@@ -102,6 +215,13 @@ export function openCodeRetryActionFailure(
  */
 export class OpenCodeStreamState {
   private readonly sessions = new Map<string, OpenCodeStreamSession>();
+  /**
+   * Epochs are drawn from one counter scoped to this instance, so a session
+   * evicted and seen again, or a restarted backend, never reuses an epoch a
+   * reader may still hold a cursor for.
+   */
+  private readonly epochScope = randomUUID().slice(0, 8);
+  private epochCounter = 0;
 
   register(sessionId: string): void {
     this.session(sessionId);
@@ -112,6 +232,8 @@ export class OpenCodeStreamState {
     if (existing) return existing;
     const created: OpenCodeStreamSession = {
       messagesCurrent: false,
+      messagesFromStart: false,
+      historyEpoch: this.nextHistoryEpoch(),
       eventVersion: 0,
       notices: [],
       revision: 0,
@@ -121,16 +243,32 @@ export class OpenCodeStreamState {
     return created;
   }
 
+  /**
+   * Install an authoritative messages read. `requestedLimit` is the limit that
+   * read asked for: a shorter answer proves the window starts at the session's
+   * first message. Without it the start stays unknown, so the window is
+   * treated as possibly having older history.
+   */
   replaceMessages(
     sessionId: string,
     messages: readonly unknown[],
     expectedEventVersion?: number,
+    requestedLimit?: number,
   ): boolean {
     const state = this.session(sessionId);
     if (expectedEventVersion !== undefined && state.eventVersion !== expectedEventVersion) {
       return false;
     }
+    const fromStart = requestedLimit !== undefined && messages.length < requestedLimit;
+    if (state.gapBaseline) {
+      this.verifyGap(state, messages, fromStart);
+      // A read fenced by the event version was taken after the stream came
+      // back, so events cover everything after it; any other read only moves
+      // the baseline forward.
+      state.gapBaseline = expectedEventVersion === undefined ? baselineOf(messages) : undefined;
+    }
     state.messages = [...messages];
+    state.messagesFromStart = fromStart;
     this.recordUsage(sessionId, state.messages);
     state.transcriptBytes = serializedByteLength(state.messages);
     if (!this.messagesWithinBounds(state)) {
@@ -149,6 +287,22 @@ export class OpenCodeStreamState {
   currentMessages(sessionId: string): unknown[] | undefined {
     const state = this.sessions.get(sessionId);
     return state?.messagesCurrent && state.messages ? [...state.messages] : undefined;
+  }
+
+  /** Whether the current cached transcript begins at the session's first message. */
+  currentMessagesFromStart(sessionId: string): boolean {
+    const state = this.sessions.get(sessionId);
+    return Boolean(state?.messagesCurrent && state.messagesFromStart);
+  }
+
+  /** The epoch older-history page cursors for this session belong to. */
+  historyEpoch(sessionId: string): string {
+    return `opencode:${this.epochScope}:${this.session(sessionId).historyEpoch}`;
+  }
+
+  /** Messages OpenCode changed in place recently, newest change first. */
+  revisedMessageIds(sessionId: string): string[] {
+    return this.sessions.get(sessionId)?.revised?.ids() ?? [];
   }
 
   /**
@@ -305,10 +459,23 @@ export class OpenCodeStreamState {
     if (state) this.bump(state);
   }
 
+  /**
+   * The stream was lost: every cache is dirty until re-read. A removal inside
+   * the gap never reaches this state as an event, so the cache is kept as a
+   * baseline the next reads are checked against; only a read that proves a
+   * rewrite moves the history epoch (`verifyGap`). Rotating on every gap made
+   * each reconnect discard every reader's paged history.
+   *
+   * The revision moves instead: the re-read installs whatever changed inside
+   * the gap without an event to bump it, and a transcript token that stayed
+   * put would answer "unchanged" over it.
+   */
   markGap(): void {
     for (const state of this.sessions.values()) {
       state.messagesCurrent = false;
+      state.gapBaseline ??= baselineOf(state.messages);
       this.bumpEventVersion(state);
+      this.bump(state);
     }
   }
 
@@ -463,6 +630,7 @@ export class OpenCodeStreamState {
     if (event.type === "message.updated") {
       const info = asRecord(properties?.info);
       const messageId = nonEmptyString(info?.id);
+      if (messageId) this.noteRevised(state, messageId);
       if (!messageId) {
         return state.messagesCurrent && state.messages
           ? this.invalidate(state, sessionId)
@@ -479,6 +647,24 @@ export class OpenCodeStreamState {
       return { sessionId };
     }
 
+    // A removal rewrites history whether or not the tail cache is current.
+    if (event.type === "message.removed") {
+      state.historyEpoch = this.nextHistoryEpoch();
+      const removedId = nonEmptyString(properties?.messageID);
+      if (removedId) state.revised?.forget(removedId);
+    }
+    // Noted whether or not the cache is current: the transcript re-reads what
+    // it does not hold, and only needs to know which rows to carry.
+    if (
+      event.type === "message.part.updated" ||
+      event.type === "message.part.removed" ||
+      event.type === "message.part.delta"
+    ) {
+      const changedId =
+        nonEmptyString(asRecord(properties?.part)?.messageID) ??
+        nonEmptyString(properties?.messageID);
+      if (changedId) this.noteRevised(state, changedId);
+    }
     if (!state.messagesCurrent || !state.messages) return { sessionId };
     if (event.type === "message.removed") {
       const messageId = nonEmptyString(properties?.messageID);
@@ -560,6 +746,7 @@ export class OpenCodeStreamState {
         sessionID: sessionId,
         role: "assistant",
         time: { created: typeof time === "number" ? time : Date.now() },
+        [PROVISIONAL_INFO]: true,
       },
       parts: [],
     };
@@ -609,6 +796,48 @@ export class OpenCodeStreamState {
   private invalidate(state: OpenCodeStreamSession, sessionId: string): OpenCodeStreamEffect {
     state.messagesCurrent = false;
     return { sessionId };
+  }
+
+  /**
+   * Check a re-read against the gap baseline: a rewrite moves the epoch, and a
+   * message whose content changed while the stream was down is noted as
+   * revised, since no event said so.
+   */
+  private verifyGap(
+    state: OpenCodeStreamSession,
+    messages: readonly unknown[],
+    fromStart: boolean,
+  ): void {
+    const baseline = state.gapBaseline!;
+    const ids = messages.flatMap((message) => cachedMessageId(message) ?? []);
+    if (historyRewritten(baseline.ids, ids, fromStart)) {
+      state.historyEpoch = this.nextHistoryEpoch();
+      return;
+    }
+    for (const message of messages) {
+      const id = cachedMessageId(message);
+      const before = id === undefined ? undefined : baseline.fingerprints.get(id);
+      if (before !== undefined && before !== messageFingerprint(message)) {
+        this.noteRevised(state, id!);
+      }
+    }
+  }
+
+  private noteRevised(state: OpenCodeStreamSession, messageId: string): void {
+    const messages = state.messagesCurrent ? state.messages : undefined;
+    if (messages) {
+      // The newest message is always inside the live window, and one the
+      // cache has not seen is about to become it; only an older message can be
+      // outside. Without a current cache there is no telling, so note it.
+      if (cachedMessageId(messages.at(-1)) === messageId) return;
+      if (this.messageIndex(messages, messageId) < 0) return;
+    }
+    (state.revised ??= new RecentlyRevisedRows()).note(messageId);
+  }
+
+  private nextHistoryEpoch(): number {
+    this.epochCounter = this.epochCounter >= Number.MAX_SAFE_INTEGER ? 1 : this.epochCounter + 1;
+    return this.epochCounter;
   }
 
   private bump(state: OpenCodeStreamSession): void {

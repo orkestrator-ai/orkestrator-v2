@@ -384,6 +384,28 @@ it deliberately drives the real client against a real `Bun.serve` SSE endpoint:
 the `eventHarness` fake in `agent-provider-test-support.ts` closes cleanly on
 abort and cannot reproduce this, which is why the bug shipped.
 
+**History paging relies on OpenCode's message cursor.** Every OpenCode step is
+its own message, so a long turn outgrows the native live window by itself.
+`transcriptSnapshot` names a `before` cursor at its oldest kept message and
+`transcriptPage` reads `session.messages({ limit, before })` from it
+(`opencode-snapshots.ts`). The backend mints that cursor the way OpenCode's
+`MessageV2.page` does — base64url JSON `{ id, time }` with `time` the message's
+`info.time.created`, selecting rows strictly older by `(time_created, id)` —
+verified against the 1.18.35 and pinned 1.19.0 servers, not a documented
+contract. Re-check it on every SDK bump; a server that rejects the cursor fails
+the page read with 400, and rows a server returns that are not strictly older
+than the cursor are dropped. Only a message OpenCode reported can name a
+cursor: not the stream's synthetic compaction row, nor a placeholder a part
+event created before its `message.updated`.
+
+The window estimate (`openCodeDisplayBytes`) must follow the projection's
+deferral rules (`inlineFileUrlDisposition`): an inline payload the projection
+keeps, such as a PDF, counts in full. The history epoch moves on a
+`message.removed` and when a re-read after a stream gap proves history was
+rewritten (`OpenCodeStreamState.markGap`/`verifyGap`), not on every reconnect.
+Messages changed in place are noted in the stream state, and those before the
+window travel as `revisedMessages`.
+
 | Component                         | Purpose                                      |
 | --------------------------------- | -------------------------------------------- |
 | `OpenCodeProvider`                | SDK session surface and backend SSE handling |

@@ -910,6 +910,38 @@ describe("command interpretation", () => {
     expect(state.messages.some((message) => message.id.startsWith("command-outcome:"))).toBe(false);
   });
 
+  test("an extension command's turn counts as answered after a later empty response", async () => {
+    // Each model response closes the row before it, so "the current row" no
+    // longer says whether the turn answered; a final response that produced
+    // nothing must not turn the reply into a "finished without output" row.
+    const state = runningState();
+    let idle = true;
+    const stub = recordingSession({ acceptAtPreflight: false, idle: () => idle });
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: "/plan feature", requestId: "req-empty", extensionCommand: "plan" }),
+    );
+    idle = false;
+    stub.finish();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    applySessionEvent(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Here is the plan" },
+    });
+    applySessionEvent(state, { type: "message_start", message: { role: "assistant" } });
+    applySessionEvent(state, { type: "message_end", message: { role: "assistant" } });
+    expect(state.currentAssistantMessageId).toBeUndefined();
+    idle = true;
+    stub.becomeIdle();
+    await handle.completion;
+
+    expect(state.status).toBe("idle");
+    expect(state.messages.at(-1)?.content).toBe("Here is the plan");
+    expect(state.messages.some((message) => message.id.startsWith("command-outcome:"))).toBe(false);
+  });
+
   test("cancelling an extension command settles the turn although its handler cannot stop", async () => {
     const state = runningState();
     const stub = recordingSession({ acceptAtPreflight: false });

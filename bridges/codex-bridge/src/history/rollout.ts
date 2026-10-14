@@ -1186,6 +1186,13 @@ function describeUnreadableRecords(
 }
 
 /**
+ * Rollout records of a model calling a tool the client runs. A response holding
+ * one waits for the result before the model samples its next response. Hosted
+ * calls (`web_search_call`, `image_generation_call`) run inside the response.
+ */
+const ROLLOUT_TOOL_CALL_TYPES = new Set(["function_call", "custom_tool_call", "local_shell_call"]);
+
+/**
  * Replays one rollout snapshot into normalized messages, streaming its record
  * blocks in file order. Returns `null` if the snapshot went stale mid-replay.
  *
@@ -1258,6 +1265,14 @@ async function replayPersistedRollout(
   let currentTurnId: string | undefined;
   let currentTurnModel: string | undefined;
   let currentAssistantMessage: NormalizedMessage | undefined;
+  /**
+   * The current row holds a tool call, so the model's next reasoning or
+   * message is its next response and opens a row of its own — the same
+   * boundary the live stream splits at (`TurnAccumulator.opensModelStep`).
+   */
+  let currentRowCalledTool = false;
+  /** When the next response began, if it began with a record that renders nothing. */
+  let nextRowStartedAt: string | undefined;
   let lastTimestamp: string | undefined;
   /** Consecutive unreadable records share one warning row. */
   let unreadableRun:
@@ -1269,6 +1284,12 @@ async function replayPersistedRollout(
         end: number;
       }
     | undefined;
+
+  const closeAssistantRow = (): void => {
+    currentAssistantMessage = undefined;
+    currentRowCalledTool = false;
+    nextRowStartedAt = undefined;
+  };
 
   const visit = (record: TranscriptRecord, recordIndex: number): void => {
     if (isCollaborationRecord(record)) collaborationRecords.push(record);
@@ -1312,7 +1333,7 @@ async function replayPersistedRollout(
       ];
       // Whatever the lost record was, later content must not be merged into
       // the message before the gap as if nothing were missing.
-      currentAssistantMessage = undefined;
+      closeAssistantRow();
       return;
     }
 
@@ -1320,7 +1341,7 @@ async function replayPersistedRollout(
     if (recordTurnId && recordTurnId !== currentTurnId) {
       currentTurnId = recordTurnId;
       currentTurnModel = undefined;
-      currentAssistantMessage = undefined;
+      closeAssistantRow();
     }
     if (record.type === "turn_context") {
       currentTurnModel = readTurnModel(record.payload) ?? currentTurnModel;
@@ -1334,6 +1355,14 @@ async function replayPersistedRollout(
     const timestamp =
       typeof record.timestamp === "string" ? record.timestamp : new Date().toISOString();
 
+    if (
+      currentRowCalledTool &&
+      (payload.type === "reasoning" || (payload.type === "message" && payload.role === "assistant"))
+    ) {
+      closeAssistantRow();
+      nextRowStartedAt = timestamp;
+    }
+
     const ensureAssistantMessage = (): NormalizedMessage => {
       if (currentAssistantMessage) return currentAssistantMessage;
       currentAssistantMessage = {
@@ -1341,13 +1370,16 @@ async function replayPersistedRollout(
         role: "assistant",
         content: "",
         parts: [],
-        createdAt: timestamp,
+        createdAt: nextRowStartedAt ?? timestamp,
         ...(currentTurnModel ? { modelId: currentTurnModel } : {}),
         ...(currentTurnId ? { turnId: currentTurnId } : {}),
       };
       messages.push(currentAssistantMessage);
+      nextRowStartedAt = undefined;
       return currentAssistantMessage;
     };
+
+    if (ROLLOUT_TOOL_CALL_TYPES.has(String(payload.type))) currentRowCalledTool = true;
 
     if (payload.type === "function_call" || payload.type === "custom_tool_call") {
       const assistantMessage = ensureAssistantMessage();
@@ -1421,7 +1453,7 @@ async function replayPersistedRollout(
       return;
     }
 
-    currentAssistantMessage = undefined;
+    closeAssistantRow();
     messages.push({
       id: createMessageId(),
       role,

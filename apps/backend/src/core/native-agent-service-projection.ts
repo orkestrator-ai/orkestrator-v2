@@ -5,6 +5,7 @@ import * as shared from "./native-agent-service-shared.js";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import {
   NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
+  NATIVE_AGENT_REVISED_MESSAGES_MAX,
   nativeAsyncQuestionItemId,
   recoverBackgroundTaskLaunchId,
   resolveNativeComposerModelId,
@@ -63,6 +64,9 @@ import {
   NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES,
   NATIVE_DIRECT_PAGE_CACHE_TTL_MS,
   NATIVE_FILE_DETAIL_MAX_BYTES,
+  NATIVE_REVISED_MESSAGES_MAX_BYTES,
+  inlineFileContentLabel,
+  inlineFileUrlDisposition,
   NATIVE_PROJECTED_MESSAGE_CACHE_MAX_BYTES,
   NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES,
   NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRY_BYTES,
@@ -104,7 +108,10 @@ import {
   type ProgressiveReadPhases,
 } from "./native-agent-progressive-metrics.js";
 import { readReadableHostFile } from "./path-safety.js";
-import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/node/bridge-transcript-summary";
+import {
+  BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
+  readBridgePartDetail as bridgePartDetail,
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   DirectHistoryPageCache,
   decodeHistoryCursor,
@@ -126,6 +133,7 @@ import {
   reuseUnchangedMessages,
   sameEncoding,
   sameIds,
+  tailDeletions,
   updateHashWithValues,
   valueFingerprint,
 } from "./native-agent-projection-encoding.js";
@@ -620,6 +628,9 @@ function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string
 
 const PROGRESSIVE_HYDRATION_MAX_ATTEMPTS = 3;
 const PROGRESSIVE_HYDRATION_RETRY_BASE_MS = 25;
+/** One row of a direct history page: a bridge's oversized-row ceiling plus projection slack. */
+const DIRECT_PAGE_ROW_MAX_BYTES =
+  Math.max(NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES, BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES) + 64 * 1024;
 
 type PromptPresentationKind = NonNullable<
   PersistedNativeAgentSession["initialPromptPresentation"]
@@ -1035,42 +1046,29 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      *   losing its preview entirely.
      * - Remote URLs are already a reference and stay put.
      */
-    const inlineFileUrl =
-      typeof part.fileUrl === "string" && part.fileUrl.startsWith("data:")
-        ? part.fileUrl
-        : undefined;
-    if (inlineFileUrl && (part.type === "file" || part.type === "image")) {
-      const content = typeof part.content === "string" ? part.content : "";
-      const readablePath =
-        content.startsWith("/") || content.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(content);
-      if (readablePath) {
-        delete projected.fileUrl;
-      } else if (
-        inlineFileUrl.startsWith("data:image/") &&
-        Buffer.byteLength(inlineFileUrl) <= NATIVE_FILE_DETAIL_MAX_BYTES - 256
-      ) {
-        delete projected.fileUrl;
-        projected.detailRef = this.cacheToolDetails(
-          sessionKey,
-          messageId,
-          partPath,
-          { fileDataUrl: inlineFileUrl },
-          { maximumBytes: NATIVE_FILE_DETAIL_MAX_BYTES },
-        );
-      }
-      /*
-       * OpenCode falls back to the part's `url` for `content` when it has no
-       * filename, so a data-URL attachment arrives with its bytes duplicated in
-       * both `content` and `fileUrl`. Moving `fileUrl` behind a reference is not
-       * enough: the live copy would still carry the whole payload and the
-       * renderer's display name would be a multi-megabyte string. Substitute a
-       * short label whenever `content` is itself the data URL.
-       */
-      if (content.startsWith("data:")) {
-        const filename = typeof part.filename === "string" ? part.filename.trim() : "";
-        projected.content = filename || (part.type === "image" ? "image" : "Attached file");
-      }
+    const fileUrlDisposition = inlineFileUrlDisposition(part);
+    if (fileUrlDisposition === "drop") {
+      delete projected.fileUrl;
+    } else if (fileUrlDisposition === "defer") {
+      delete projected.fileUrl;
+      projected.detailRef = this.cacheToolDetails(
+        sessionKey,
+        messageId,
+        partPath,
+        { fileDataUrl: part.fileUrl as string },
+        { maximumBytes: NATIVE_FILE_DETAIL_MAX_BYTES },
+      );
     }
+    /*
+     * OpenCode falls back to the part's `url` for `content` when it has no
+     * filename, so a data-URL attachment arrives with its bytes duplicated in
+     * both `content` and `fileUrl`. Moving `fileUrl` behind a reference is not
+     * enough: the live copy would still carry the whole payload and the
+     * renderer's display name would be a multi-megabyte string. Substitute a
+     * short label whenever `content` is itself the data URL.
+     */
+    const contentLabel = inlineFileContentLabel(part);
+    if (contentLabel !== undefined) projected.content = contentLabel;
 
     const rawDiff =
       part.toolDiff && typeof part.toolDiff === "object" && !Array.isArray(part.toolDiff)
@@ -1757,11 +1755,18 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const existing = previousById.get(id);
       return !existing || !sameEncoding(existing, message);
     });
-    const currentIdSet = new Set(currentIds);
     return {
       messageUpserts,
       ...(sameIds(previousIds, currentIds) ? {} : { liveMessageIds: currentIds }),
-      deletedMessageIds: previousIds.filter((id) => !currentIdSet.has(id)),
+      // Rows that only aged out of the window are not deletions: the client
+      // keeps them, and pages back to anything it does not hold. Older history
+      // exists whenever the view says so, including a provider that trimmed
+      // its own window (OpenCode) before this projection counted anything.
+      deletedMessageIds: tailDeletions(
+        previousIds,
+        currentIds,
+        !current.historyComplete || current.historyCursor !== undefined,
+      ),
       freshness: current.freshness,
       historyEpoch: current.historyEpoch,
       historyComplete: current.historyComplete,
@@ -1772,6 +1777,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...(current.providerRevision === undefined
         ? {}
         : { providerRevision: current.providerRevision }),
+      // Mirrors the view, absence included: a delta without them clears them.
+      ...(current.revisedMessages ? { revisedMessages: current.revisedMessages } : {}),
     };
   }
 
@@ -1861,6 +1868,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     sessionId: string,
     snapshot: ProviderTranscriptSnapshot,
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
+    /** Whether the view built from `snapshot` pages directly from its cursor. */
+    directPagingAdopted: boolean,
   ): void {
     const sourceToken = progressiveHydrationToken(snapshot);
     // Even a complete/current snapshot that needs no recovery supersedes an
@@ -1880,9 +1889,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * conversation holds. Display reads never attach the thread, which makes
      * this exact read the only thing that ever will: skipping it left a
      * finished session rendering as empty until something else touched it.
+     *
+     * A page cursor the view adopted says the same as a summary: the provider
+     * has already said where the rest of the history is, so its window is
+     * short on purpose. One merely offered says nothing — a view that could
+     * not hold the whole window dropped the row the cursor names, and without
+     * this read the history before what it kept is unreachable.
      */
     if (
-      snapshot.representation === "summary" &&
+      (snapshot.representation === "summary" || directPagingAdopted) &&
       snapshot.freshness !== "cached" &&
       (snapshot.omittedParts ?? 0) <= 0
     )
@@ -2085,7 +2100,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (previous !== undefined && previous.value.historyEpoch !== snapshot.historyEpoch) {
         this.projectedMessages.forgetSession(sessionKey);
       }
-      if (summary) {
+      if (summary || snapshot.historyCursor !== undefined) {
         this.directHistoryPages.observeEpoch(sessionKey, providerSessionId, snapshot.historyEpoch);
       }
     }
@@ -2169,14 +2184,18 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * position: a joined prefix merely overlaps the first page (the client
      * deduplicates by id), but a bound that dropped leading rows would leave
      * a gap no page could ever fill.
+     *
+     * A provider that pages by message (OpenCode) reports no position, and
+     * nothing can be joined ahead of its window, so the view must hold every
+     * row of the snapshot instead. Inline bodies need no summary for this:
+     * the page projection registers them as local details like any other.
      */
+    const viewStartsAtSnapshot =
+      snapshot.historyStartIndex === undefined
+        ? normalized.messages.length === snapshot.messages.length && droppedProjectedMessages === 0
+        : boundedStartIndex !== undefined && boundedStartIndex <= snapshot.historyStartIndex;
     const directHistoryCursor =
-      summary &&
-      snapshot.historyCursor &&
-      snapshot.historyEpoch !== undefined &&
-      snapshot.historyStartIndex !== undefined &&
-      boundedStartIndex !== undefined &&
-      boundedStartIndex <= snapshot.historyStartIndex
+      snapshot.historyCursor && snapshot.historyEpoch !== undefined && viewStartsAtSnapshot
         ? encodeDirectHistoryCursor({
             sessionKey,
             providerSessionId,
@@ -2223,9 +2242,46 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const historyCursor =
       directHistoryCursor ??
       this.transcriptHistoryCursor(sessionKey, bounded.messages, historyEpoch, providerSessionId);
+    // Rows the provider says changed outside its window. One can sit in the
+    // prefix joined ahead of that window from the previous view, which holds
+    // its older copy: the revised copy replaces it there and is not sent again.
+    const revised = this.projectedRevisedMessages(
+      sessionKey,
+      snapshot.revisedMessages,
+      normalized.messages,
+      initialPromptPresentation,
+      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+      summary ? { providerSessionId } : undefined,
+    );
+    const revisedById = new Map(
+      (revised ?? []).map((message) => [(message as { id: string }).id, message] as const),
+    );
+    const viewed = revisedById.size
+      ? bounded.messages.map((message) => {
+          const id = (message as { id?: unknown }).id;
+          const replacement = typeof id === "string" ? revisedById.get(id) : undefined;
+          if (replacement === undefined) return message;
+          revisedById.delete(id as string);
+          return replacement;
+        })
+      : bounded.messages;
+    const revisedMessages = revised?.filter((message) =>
+      revisedById.has((message as { id: string }).id),
+    );
+    // A cached history page holds whatever copy of a row it was read with; a
+    // row that has changed since must not come back from one.
+    if (
+      revised?.length &&
+      revisedRowsChanged(
+        [...(previous?.value.messages ?? []), ...(previous?.value.revisedMessages ?? [])],
+        revised,
+      )
+    ) {
+      this.directHistoryPages.forgetSession(sessionKey);
+    }
     // Unchanged rows keep the objects already held, so every later comparison
     // and encoding of them in this read and the next is a reference check.
-    const messages = reuseUnchangedMessages(previous?.value.messages, bounded.messages);
+    const messages = reuseUnchangedMessages(previous?.value.messages, viewed);
     return {
       value: {
         identity,
@@ -2253,6 +2309,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(directHistoryCursor ? { historyPaging: "direct" as const } : {}),
         historyEpoch,
         historyComplete: complete,
+        ...(revisedMessages?.length ? { revisedMessages } : {}),
       },
       ...(boundedStartIndex === undefined
         ? {}
@@ -2261,6 +2318,65 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             historyEndIndex: boundedStartIndex + bounded.messages.length,
           }),
     };
+  }
+
+  /**
+   * A provider's revised rows from before the window, projected like window
+   * rows so their details register and resolve the same way.
+   *
+   * Rows the window holds are dropped (it is authoritative for them), and so
+   * is any row its projection would have to trim: a reader replaces its whole
+   * copy with what arrives here, and a trimmed row would lose parts it holds.
+   * The session's first prompt is presented by its position in the whole
+   * transcript, which a lone revised row does not carry, so a user row is left
+   * to the copy the reader already presents. Malformed rows are skipped rather
+   * than failing a read that is otherwise sound. Bounded by count and bytes.
+   */
+  private projectedRevisedMessages(
+    sessionKey: string,
+    revised: readonly unknown[] | undefined,
+    window: readonly unknown[],
+    initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
+    coordinatorTranscript: boolean,
+    remote: { providerSessionId: string } | undefined,
+  ): unknown[] | undefined {
+    if (!revised?.length) return undefined;
+    const seen = new Set(window.map((message) => (message as { id?: unknown }).id));
+    const projected: unknown[] = [];
+    let bytes = 0;
+    for (const row of revised) {
+      if (projected.length >= NATIVE_AGENT_REVISED_MESSAGES_MAX) break;
+      const record =
+        row && typeof row === "object" && !Array.isArray(row)
+          ? (row as Record<string, unknown>)
+          : undefined;
+      const id = record?.id;
+      if (typeof id !== "string" || seen.has(id)) continue;
+      seen.add(id);
+      if (initialPromptPresentation && record!.role === "user") continue;
+      let one: { messages: unknown[]; window: NativeAgentMessageWindow };
+      try {
+        one = this.projectionMessages(
+          sessionKey,
+          [row],
+          1,
+          NATIVE_REVISED_MESSAGES_MAX_BYTES,
+          undefined,
+          coordinatorTranscript,
+          remote,
+        );
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) continue;
+        throw error;
+      }
+      const message = one.messages[0];
+      if (one.window.truncated || message === undefined) continue;
+      const size = encodedValue(message).bytes;
+      if (bytes + size > NATIVE_REVISED_MESSAGES_MAX_BYTES) continue;
+      bytes += size;
+      projected.push(message);
+    }
+    return projected.length > 0 ? projected : undefined;
   }
 
   private commitProgressiveTranscript(
@@ -2272,17 +2388,22 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const observed = this.progressiveTranscriptCache.get(key);
     if (observed?.value === value) return observed.token;
     const token = updateHashWithValues(
-      createHash("sha256").update(
-        JSON.stringify([
-          value.identity,
-          value.historyEpoch,
-          value.providerRevision,
-          this.progressiveSourceTokens.get(key),
-          projection.historyStartIndex,
-          projection.historyEndIndex,
-        ]),
+      updateHashWithValues(
+        createHash("sha256").update(
+          JSON.stringify([
+            value.identity,
+            value.historyEpoch,
+            value.providerRevision,
+            this.progressiveSourceTokens.get(key),
+            projection.historyStartIndex,
+            projection.historyEndIndex,
+          ]),
+        ),
+        value.messages,
       ),
-      value.messages,
+      // A provider's token already moves when a revised row changes; hashing
+      // them too keeps "unchanged" honest for one whose token does not.
+      value.revisedMessages ?? [],
     )
       .digest("base64url")
       .slice(0, 43);
@@ -2376,14 +2497,24 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const snapshot = this.resolveProgressiveSnapshot(key, providerResult);
     if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
     else this.progressiveSourceTokens.delete(key);
-    this.scheduleIncompleteProgressiveHydration(
-      input,
-      key,
-      resolved.provider,
-      resolved.session.providerSessionId,
-      providerResult,
-      resolved.session.initialPromptPresentation,
-    );
+    const scheduleHydration = (directPagingAdopted: boolean) =>
+      this.scheduleIncompleteProgressiveHydration(
+        input,
+        key,
+        resolved.provider,
+        resolved.session.providerSessionId,
+        providerResult,
+        resolved.session.initialPromptPresentation,
+        directPagingAdopted,
+      );
+    /*
+     * The projection reads whether a recovery is holding the preview, which
+     * only one for a part-trimmed head does, so that one is scheduled first.
+     * Any other is scheduled after projecting: whether the view could adopt
+     * the provider's cursor decides whether it is needed at all.
+     */
+    const holdsPreview = (snapshot.omittedParts ?? 0) > 0;
+    if (holdsPreview) scheduleHydration(false);
     /*
      * A restarted Codex bridge knows the durable thread identity before it has
      * loaded the rollout body. Its no-touch preview is therefore empty, cached,
@@ -2398,6 +2529,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       previous?.value.identity.providerSessionId === resolved.session.providerSessionId &&
       previous.value.messages.length > 0
     ) {
+      if (!holdsPreview) scheduleHydration(false);
       return {
         value: previous.value,
         ...(previous.historyStartIndex === undefined
@@ -2408,13 +2540,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           : { historyEndIndex: previous.historyEndIndex }),
       };
     }
-    return this.projectProgressiveTranscript(
-      input,
-      key,
-      snapshot,
-      resolved.session.providerSessionId,
-      resolved.session.initialPromptPresentation,
-    );
+    let projection: ProjectedProgressiveTranscript;
+    try {
+      projection = this.projectProgressiveTranscript(
+        input,
+        key,
+        snapshot,
+        resolved.session.providerSessionId,
+        resolved.session.initialPromptPresentation,
+      );
+    } catch (error) {
+      if (!holdsPreview) scheduleHydration(false);
+      throw error;
+    }
+    if (!holdsPreview) scheduleHydration(projection.value.historyPaging === "direct");
+    return projection;
   }
 
   async getTranscriptUpdate(
@@ -3300,7 +3440,17 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
     );
     const candidates = history.messages.slice(Math.max(0, beforeIndex - limit), beforeIndex);
-    const bounded = this.boundedProjectedMessages(candidates, limit, targetBytes);
+    let bounded = this.boundedProjectedMessages(candidates, limit, targetBytes);
+    // A row larger than the target on its own is sent whole, up to the same
+    // ceiling a bridge page uses: the next cursor starts before this row, so
+    // any parts trimmed from its front could never be paged back.
+    if (bounded.messages.length === 1 && bounded.window.omittedParts !== undefined) {
+      bounded = this.boundedProjectedMessages(
+        candidates.slice(-1),
+        1,
+        Math.max(targetBytes, BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES),
+      );
+    }
     const first = bounded.messages[0] as { id?: unknown } | undefined;
     const firstIndex = first
       ? history.messages.findIndex((message) => (message as { id?: unknown }).id === first.id)
@@ -3409,11 +3559,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         this.detailRegistrations = details;
         let projected: { messages: unknown[] };
         try {
+          /*
+           * The provider already bounded the page, so this projection must
+           * not drop a row of it: the row would fall between two cursors.
+           * Only the hard transcript bound applies to the page as a whole.
+           */
           projected = this.projectionMessages(
             resolved.key,
             providerPage.messages,
             Math.max(limit, providerPage.messages.length),
-            NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES + 64 * 1024,
+            NATIVE_PROJECTION_MAX_BYTES,
             resolved.session.initialPromptPresentation,
             Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
             { providerSessionId },
@@ -3422,12 +3577,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           this.detailRegistrations = sink;
         }
         const normalizeMs = monotonicMs() - normalizeStartedAt;
-        // The provider already bounded the page; a projection that still
-        // dropped a row would lose it between two cursors, so refuse rather
-        // than skip it.
         if (projected.messages.length !== providerPage.messages.length) {
           throw new Error("Native agent history page exceeded its bound");
         }
+        /*
+         * A bridge sends a row larger than the page target whole, up to its
+         * oversized-row ceiling, and projection only shrinks it. A provider
+         * that pages raw rows (OpenCode) can still hand over one larger than
+         * that — an inline attachment the projection keeps. Trim that row on
+         * its own rather than refuse the page: refusing wedged the walk on it
+         * forever, while a trimmed row still lets every older page load.
+         */
+        let trimmedRow = false;
+        const pageMessages = projected.messages.map((message) => {
+          if (encodedValue(message).bytes <= DIRECT_PAGE_ROW_MAX_BYTES) return message;
+          const bounded = boundTranscriptResponse(
+            [message as { content: string; parts: unknown[] }],
+            DIRECT_PAGE_ROW_MAX_BYTES,
+            { envelopeReserveBytes: 0, contentFallbackBytes: 64 * 1024 },
+          );
+          trimmedRow = true;
+          return bounded.messages[0] ?? message;
+        });
         const nextCursor = providerPage.historyCursor
           ? encodeDirectHistoryCursor({
               sessionKey: resolved.key,
@@ -3445,11 +3616,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         });
         const page: NativeAgentMessagePage = {
           syncVersion: 1,
-          messages: projected.messages,
+          messages: pageMessages,
           historyEpoch: cursor.epoch,
           ...(nextCursor ? { nextCursor } : {}),
           complete: !nextCursor && providerPage.complete,
-          truncated: Boolean(nextCursor) || !providerPage.complete || providerPage.truncated,
+          truncated:
+            Boolean(nextCursor) || !providerPage.complete || providerPage.truncated || trimmedRow,
         };
         const detailBytes = details.reduce(
           (total, detail) => total + 64 + detail.ref.length + (detail.remote?.locator.length ?? 0),
@@ -4775,4 +4947,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     return projection;
   }
+}
+
+/** Whether `next` names a row the previous view did not carry in exactly this form. */
+function revisedRowsChanged(previous: readonly unknown[], next: readonly unknown[]): boolean {
+  const held = new Map(
+    previous.map((message) => [(message as { id?: unknown }).id, message] as const),
+  );
+  return next.some((message) => {
+    const before = held.get((message as { id?: unknown }).id);
+    return before === undefined || !sameEncoding(before, message);
+  });
 }

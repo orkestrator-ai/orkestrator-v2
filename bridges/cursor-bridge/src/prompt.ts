@@ -29,16 +29,19 @@ import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnosti
 import {
   applyInteractionUpdate,
   applyStreamUsage,
+  completeStreamedProse,
+  endStepBeforeAnswer,
   settleAbandonedToolParts,
   settleBackgroundChildren,
 } from "./translate.js";
-import { boundTranscript } from "./transcript.js";
+import { boundTranscript, rowChanged, turnStartIndex } from "./transcript.js";
 import {
   mergeAccountWindows,
   peekPlanAccountWindows,
   schedulePlanAccountRefresh,
 } from "./plan-usage.js";
 import {
+  type BridgeMessage,
   type JsonObject,
   type PromptJournalEntry,
   type SessionState,
@@ -145,7 +148,10 @@ export async function dispatchPrompt(
 
   if (input.userMessageId) {
     const userMessage = state.messages.find((message) => message.id === input.userMessageId);
-    if (userMessage?.role === "user") userMessage.runId = run.id;
+    if (userMessage?.role === "user") {
+      userMessage.runId = run.id;
+      rowChanged(state, userMessage);
+    }
   }
 
   state.activeRun = run;
@@ -789,42 +795,69 @@ function sumTurnUsage(
  * looked like it never produced a final message.
  *
  * The stream may already hold a prefix, a duplicate, or a different preamble.
- * Skip only when the trailing assistant text already equals or ends with the
- * terminal string. A strict prefix gets just the missing suffix; any other
- * missing tail is applied as its own delta so a narrated turn still keeps
- * `RunResult.result`.
+ * Skip only when the turn's streamed prose already equals or ends with the
+ * terminal string. A strict prefix gets just the missing suffix, on the row
+ * that holds the end of the prefix, even when a step boundary or a steer has
+ * passed since. Anything else is the final model call's answer, published
+ * whole so a narrated turn still keeps `RunResult.result`: on the row being
+ * written when that row still ends in prose or reasoning (the same call's tail
+ * went missing), otherwise on a row of its own — after a tool call or a step
+ * boundary the model was called again, and a row is one model call.
+ *
+ * The comparison is against the whole turn's prose, not one row's: a turn
+ * writes a row per model step, and the SDK's final text is the end of the
+ * turn's prose, which a run of text-only steps can spread over several rows.
  */
 function backfillTerminalAssistantText(state: SessionState, text: string | undefined): void {
   if (!nonBlank(text)) return;
   const terminal = text.trim();
-  const last = state.messages.at(-1);
-  if (last?.role === "assistant" && last.id === state.currentAssistantMessageId) {
-    const streamed = last.content;
-    const streamedTrimmed = streamed.trim();
-    if (
-      streamedTrimmed === terminal ||
-      streamed.endsWith(terminal) ||
-      streamedTrimmed.endsWith(terminal)
-    ) {
-      return;
-    }
-    if (streamed.length > 0 && terminal.startsWith(streamed)) {
-      applyInteractionUpdate(state, { type: "text-delta", text: terminal.slice(streamed.length) });
-      return;
-    }
-    if (streamedTrimmed.length > 0 && terminal.startsWith(streamedTrimmed)) {
-      applyInteractionUpdate(state, {
-        type: "text-delta",
-        text: terminal.slice(streamedTrimmed.length),
-      });
-      return;
-    }
-    if (streamedTrimmed.length > 0) {
-      applyInteractionUpdate(state, { type: "text-delta", text: terminal });
-      return;
-    }
+  const { prose: streamed, whole, holder } = streamedTurnProse(state, terminal);
+  const streamedTrimmed = streamed.trim();
+  if (
+    streamedTrimmed === terminal ||
+    streamed.endsWith(terminal) ||
+    streamedTrimmed.endsWith(terminal)
+  ) {
+    return;
   }
+  // Only the whole prose can be a prefix: a tail longer than the terminal
+  // text never is.
+  if (holder && whole && streamed.length > 0 && terminal.startsWith(streamed)) {
+    completeStreamedProse(state, holder, terminal.slice(streamed.length));
+    return;
+  }
+  if (holder && whole && streamedTrimmed.length > 0 && terminal.startsWith(streamedTrimmed)) {
+    completeStreamedProse(state, holder, terminal.slice(streamedTrimmed.length));
+    return;
+  }
+  endStepBeforeAnswer(state);
   applyInteractionUpdate(state, { type: "text-delta", text: terminal });
+}
+
+/**
+ * The end of the prose this turn streamed, across every row it wrote, and the
+ * newest row holding any of it.
+ *
+ * Read newest row first and only until it holds more than the terminal text
+ * past any trailing whitespace: that is all a suffix comparison reads, and a
+ * long turn's prose can run to megabytes. `whole` says whether it is the
+ * turn's entire prose, which the prefix comparison needs.
+ */
+function streamedTurnProse(
+  state: SessionState,
+  terminal: string,
+): { prose: string; whole: boolean; holder?: BridgeMessage } {
+  let prose = "";
+  let holder: BridgeMessage | undefined;
+  const start = turnStartIndex(state);
+  for (let index = state.messages.length - 1; index >= start; index -= 1) {
+    const row = state.messages[index]!;
+    if (row.role !== "assistant" || !row.content) continue;
+    holder ??= row;
+    prose = row.content + prose;
+    if (prose.trimEnd().length > terminal.length) return { prose, whole: false, holder };
+  }
+  return { prose, whole: true, holder };
 }
 
 /**

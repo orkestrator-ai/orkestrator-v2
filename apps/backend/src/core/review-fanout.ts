@@ -50,6 +50,7 @@ import {
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
 import {
+  LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowResultReminderPrompt,
@@ -1347,7 +1348,9 @@ export class ReviewFanoutRunner {
       }
       await finalUsage();
       const finalText = async () =>
-        lastAssistantText(await transcript.read(2).catch(() => undefined));
+        lastAssistantText(
+          await transcript.read(LAST_ASSISTANT_TEXT_READ_LIMIT).catch(() => undefined),
+        );
       return this.recordStall(
         reviewer,
         async () =>

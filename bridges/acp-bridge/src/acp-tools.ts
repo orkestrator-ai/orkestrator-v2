@@ -1,12 +1,12 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   MAX_ACTIVE_SUBAGENTS_PER_SESSION,
+  MAX_CHILD_PARTS_PER_CALL,
   MAX_CURSOR_CHILD_PROMPT_BYTES,
   MAX_MESSAGES,
   MAX_PARTS_PER_MESSAGE,
   MAX_CURSOR_TOOL_REPLAY_PROCESSES,
   MAX_LIVE_CURSOR_TOOL_REPLAYS_PER_TURN,
-  MAX_MODEL_ID_BYTES,
   MAX_REPLAY_RECONCILE_TOOLS,
   MAX_TOOL_ARGUMENT_BYTES,
   MAX_TOOL_DIFF_BYTES,
@@ -57,6 +57,7 @@ import {
   failTranscriptLimit,
   isTrimNotice,
   mapAcpToolState,
+  rememberTrimmedToolCalls,
   trimPartsTo,
   truncateDisplayText,
   turnRequiresCompleteOutput,
@@ -69,6 +70,16 @@ import {
 } from "./acp-transcript.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { formatAcpProviderError } from "./acp-errors.js";
+import {
+  currentAssistantMessage,
+  droppedToolCall,
+  findToolPart,
+  findTurnPart,
+  noteMessageMutation,
+  notePartMutation,
+  toolPartIn,
+  turnStartIndex,
+} from "./acp-rows.js";
 
 export function pushToolPart(
   state: SessionState,
@@ -85,6 +96,16 @@ export function pushToolPart(
     if (!isInitial) return false;
     trimmed.delete(part.toolUseId);
   }
+  if (part.parentTaskUseId !== undefined) {
+    shedNestedParts(state, owner, part.parentTaskUseId, MAX_CHILD_PARTS_PER_CALL - 1);
+    // Several calls' children can still fill the row between them. They make
+    // room among themselves, never by trimming the row's own cards.
+    const over = owner.parts.length - (MAX_PARTS_PER_MESSAGE - 1);
+    if (over > 0) {
+      const nested = owner.parts.filter(isNestedToolPart).length;
+      shedNestedParts(state, owner, undefined, nested - over);
+    }
+  }
   if (owner.parts.length >= MAX_PARTS_PER_MESSAGE) {
     if (turnRequiresCompleteOutput(state)) {
       failTranscriptLimit(state);
@@ -95,6 +116,55 @@ export function pushToolPart(
   }
   owner.parts.push(part);
   return true;
+}
+
+function isNestedToolPart(part: BridgeMessagePart): part is BridgeToolPart {
+  return part.type === "tool-invocation" && part.parentTaskUseId !== undefined;
+}
+
+/**
+ * Drop the oldest nested parts of `owner` launched by `parentTaskUseId` (by
+ * any call when undefined) until at most `keep` remain, settled ones first.
+ *
+ * A subagent's calls join the row holding its launch card, and a long one
+ * would otherwise grow that row to the part cap: the front trim then took the
+ * launch card itself, later children went to the trailing row, the launch's
+ * completion was dropped as an update for a trimmed call, and a structured
+ * turn failed outright. Shedding is display only and never fails a turn: the
+ * active-subagent registry holds the lifecycle, and the shed ids are recorded
+ * like a trim's so a late update for one is dropped rather than rebuilt as an
+ * empty card.
+ */
+function shedNestedParts(
+  state: SessionState,
+  owner: BridgeMessage,
+  parentTaskUseId: string | undefined,
+  keep: number,
+): void {
+  const nested: number[] = [];
+  owner.parts.forEach((part, index) => {
+    if (!isNestedToolPart(part)) return;
+    if (parentTaskUseId === undefined || part.parentTaskUseId === parentTaskUseId) {
+      nested.push(index);
+    }
+  });
+  const excess = nested.length - Math.max(0, keep);
+  if (excess <= 0) return;
+  const shed = new Set<number>();
+  for (const settledOnly of [true, false]) {
+    for (const index of nested) {
+      if (shed.size >= excess) break;
+      if (settledOnly && !isSettledToolPart(owner.parts[index] as BridgeToolPart)) continue;
+      shed.add(index);
+    }
+  }
+  const removed: BridgeMessagePart[] = [];
+  for (let index = owner.parts.length - 1; index >= 0; index -= 1) {
+    if (shed.has(index)) removed.unshift(...owner.parts.splice(index, 1));
+  }
+  rememberTrimmedToolCalls(owner, removed);
+  state.droppedParts += removed.length;
+  state.transcriptTruncated = true;
 }
 
 /**
@@ -108,6 +178,7 @@ export function commitToolPartMutation(
   source: AcpToolSourceState,
 ): boolean {
   state.revision += 1;
+  notePartMutation(state, part);
   const serializedBytes = Buffer.byteLength(JSON.stringify(part));
   state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
   source.chargedBytes = serializedBytes;
@@ -138,56 +209,68 @@ export function applyToolCallUpdate(
   const toolCallId = truncateUtf8(update.toolCallId, MAX_TOOL_ID_BYTES);
   if (!toolCallId) return undefined;
 
-  // Incremental transcript reads intentionally re-fetch only the trailing
-  // message. Tool updates therefore upsert there as well; mutating an older
-  // message would be authoritative in the bridge but invisible to a mounted tab.
-  let owner = state.messages.at(-1);
-  let part =
-    owner?.role === "assistant"
-      ? owner.parts.find(
-          (messagePart): messagePart is BridgeToolPart =>
-            messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
-        )
-      : undefined;
-
-  // A background child can outlive the turn and message that launched it.
-  // Terminal Cursor updates must target that launch part wherever it remains,
-  // while an evicted launch is settled through the authoritative registry
-  // below instead of being rebuilt as a context-free ghost part.
-  if (!part && state.activeSubagentToolIds.has(toolCallId)) {
-    for (let index = state.messages.length - 1; index >= 0 && !part; index -= 1) {
-      const candidateOwner = state.messages[index]!;
-      const candidate = candidateOwner.parts.find(
-        (messagePart): messagePart is BridgeToolPart =>
-          messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
-      );
-      if (candidate) {
-        owner = candidateOwner;
-        part = candidate;
-      }
-    }
-    if (!part && !isInitial) {
-      if (settleEvictedSubagentFromToolUpdate(state, toolCallId, update)) {
-        state.revision += 1;
-        schedulePersist();
-      }
-      return undefined;
+  // Each model response is its own row (see `acp-rows.ts`), so the call may
+  // sit on any row of the turn, and a late update for a call the turn has
+  // moved past is common rather than exceptional. Looking only at the trailing
+  // row rebuilt such a call as a second, empty `Tool call` there. The current
+  // turn is searched first: an agent may reuse an id in a later turn, so an
+  // earlier turn's card is taken only for work still running there (see
+  // `continuesAcrossTurns`). A new call looks back only for a background
+  // child, or a call nested under one, outliving the turn that launched it.
+  const parentTaskUseId = acpParentTaskUseId(update);
+  const nestedUnder =
+    parentTaskUseId && parentTaskUseId !== toolCallId ? parentTaskUseId : undefined;
+  let found = findToolPart(state, toolCallId, turnStartIndex(state));
+  if (
+    !found &&
+    (!isInitial ||
+      state.activeSubagentToolIds.has(toolCallId) ||
+      (nestedUnder !== undefined && state.activeSubagentToolIds.has(nestedUnder)))
+  ) {
+    const earlier = findToolPart(state, toolCallId);
+    if (
+      earlier &&
+      continuesAcrossTurns(state, earlier.part, isInitial) &&
+      !(isInitial && namesAnotherCall(update, earlier.part))
+    ) {
+      found = earlier;
     }
   }
+  let part = found?.part;
+
+  // An evicted launch is settled through the authoritative registry instead
+  // of being rebuilt as a context-free ghost part.
+  if (!part && !isInitial && state.activeSubagentToolIds.has(toolCallId)) {
+    if (settleEvictedSubagentFromToolUpdate(state, toolCallId, update)) {
+      state.revision += 1;
+      schedulePersist();
+    }
+    return undefined;
+  }
+  // The same holds for any call a trim or an evicted row took with it.
+  if (!part && droppedToolCall(state, toolCallId, isInitial)) return undefined;
 
   if (!part) {
-    owner = currentAssistantMessage(state);
+    // A nested call joins the row holding the call that launched it, so a
+    // child's steps stay with their parent card however far the turn has
+    // moved on since. One already there is this call resent, not a new one.
+    const parent = nestedUnder ? findToolPart(state, nestedUnder) : undefined;
+    let owner = parent?.owner ?? currentAssistantMessage(state);
+    part = parent ? toolPartIn(parent.owner, toolCallId) : undefined;
     // Grok often emits ACP `plan` before the matching `todo_write` tool_call.
-    // Retarget the synthetic plan row so the turn still has one checklist.
-    if (todoToolNameFromUpdate(update)) {
-      const synthetic = owner.parts.find(
+    // Retarget the synthetic plan part, on whichever row of the turn holds
+    // it, so the turn still has one checklist.
+    if (!part && todoToolNameFromUpdate(update)) {
+      const synthetic = findTurnPart(
+        state,
         (messagePart): messagePart is BridgeToolPart =>
           messagePart.type === "tool-invocation" && messagePart.toolUseId === ACP_PLAN_TOOL_USE_ID,
       );
       if (synthetic) {
-        synthetic.toolUseId = toolCallId;
-        synthetic.sourcePartId = `tool:${toolCallId}`;
-        part = synthetic;
+        synthetic.part.toolUseId = toolCallId;
+        synthetic.part.sourcePartId = `tool:${toolCallId}`;
+        owner = synthetic.owner;
+        part = synthetic.part;
       }
     }
     if (!part) {
@@ -199,6 +282,8 @@ export function applyToolCallUpdate(
         toolUseId: toolCallId,
         toolState: "pending",
         createdAt: new Date().toISOString(),
+        // Set before the push, which holds each launch's children to a bound.
+        ...(nestedUnder ? { parentTaskUseId: nestedUnder } : {}),
       };
       if (!pushToolPart(state, owner, part, isInitial)) return undefined;
     }
@@ -224,10 +309,7 @@ export function applyToolCallUpdate(
   if (part.agentState === "finished" || part.agentState === "failed") {
     stampSubagentRuntimeDuration(part);
   }
-  const parentTaskUseId = acpParentTaskUseId(update);
-  if (parentTaskUseId && parentTaskUseId !== toolCallId) {
-    part.parentTaskUseId = parentTaskUseId;
-  }
+  if (nestedUnder) part.parentTaskUseId = nestedUnder;
   syncActiveSubagentTool(state, part);
 
   if (!commitToolPartMutation(state, part, source)) return undefined;
@@ -251,6 +333,36 @@ export function applyToolCallUpdate(
     scheduleCursorToolMetadataReconcile(state);
   }
   return part;
+}
+
+/**
+ * Whether a call found only in an earlier turn is still that call, rather
+ * than an id the agent reused. Work still running is: an unsettled card a
+ * late update completes, a background child, and a call nested under one.
+ * A settled card is history, so an update for its id starts a card of its
+ * own in the current turn instead of rewriting a finished one.
+ */
+/**
+ * Whether a new `tool_call` reusing a running call's id is a different call.
+ * A resend repeats the call's title; an agent that reuses per-turn ids for
+ * new work names that work instead, and must get a card of its own rather
+ * than overwrite the running one.
+ */
+function namesAnotherCall(update: JsonObject, part: BridgeToolPart): boolean {
+  const title = boundedString(update.title, MAX_TOOL_NAME_BYTES)?.trim();
+  return title !== undefined && title.length > 0 && title !== part.content;
+}
+
+function continuesAcrossTurns(
+  state: SessionState,
+  part: BridgeToolPart,
+  isInitial: boolean,
+): boolean {
+  if (state.activeSubagentToolIds.has(part.toolUseId)) return true;
+  if (part.parentTaskUseId !== undefined && state.activeSubagentToolIds.has(part.parentTaskUseId)) {
+    return true;
+  }
+  return !isInitial && !isSettledToolPart(part);
 }
 
 export function collectReplayToolMetadata(
@@ -508,6 +620,7 @@ export function applyReplayToolMetadata(
     if (partChanged) {
       changed = true;
       acpToolSourceStates.delete(part);
+      notePartMutation(state, part);
     }
   }
   // Re-bound, but never fail. Failing here would cancel and error out a
@@ -1475,6 +1588,14 @@ export function applyCursorUpdateTodos(state: SessionState, params: JsonObject):
 
   let found = findToolPart(state, toolCallId);
   if (!found) {
+    // The list above is the session's either way. Only the card is skipped:
+    // a trim or an evicted row took it, and rebuilding it here would leave a
+    // bare `Update TODOs` on the trailing row in its place.
+    if (droppedToolCall(state, toolCallId, false)) {
+      state.revision += 1;
+      schedulePersist();
+      return;
+    }
     const owner = currentAssistantMessage(state);
     const part: BridgeToolPart = {
       type: "tool-invocation",
@@ -1518,23 +1639,12 @@ function isCurrentTodoToolPart(part: BridgeMessagePart): part is BridgeToolPart 
   return source !== undefined && isAcpTodosToolName(acpToolSourceName(source));
 }
 
-function findCurrentAcpTodoPart(
-  state: SessionState,
-): { owner: BridgeMessage; part: BridgeToolPart } | undefined {
-  const owner = state.messages.at(-1);
-  if (!owner || owner.role !== "assistant") return undefined;
-  for (let index = owner.parts.length - 1; index >= 0; index -= 1) {
-    const part = owner.parts[index]!;
-    if (isCurrentTodoToolPart(part)) return { owner, part };
-  }
-  return undefined;
-}
-
 /**
  * ACP `plan` / `plan_update` is the agent's current execution plan. Unlike
  * Cursor `cursor/update_todos`, it is always a full replace and entries often
- * have no `id`. Stamp onto the trailing assistant message's existing todo part
- * when one exists so a Grok `todo_write` plus plan in the same turn is one row.
+ * have no `id`. Stamp onto the turn's existing todo part when one exists, on
+ * whichever response row holds it, so a Grok `todo_write` plus plan in the
+ * same turn is one checklist.
  */
 export function applyAcpPlanUpdate(state: SessionState, update: JsonObject): void {
   if (state.historyReplay === "ignore") return;
@@ -1542,7 +1652,7 @@ export function applyAcpPlanUpdate(state: SessionState, update: JsonObject): voi
   if (incoming === undefined) return;
   state.cursorTodos = incoming;
 
-  let found = findCurrentAcpTodoPart(state);
+  let found = findTurnPart(state, isCurrentTodoToolPart);
   if (!found) {
     if (incoming.length === 0) {
       state.revision += 1;
@@ -1582,21 +1692,6 @@ export function applyAcpPlanUpdate(state: SessionState, update: JsonObject): voi
   if (source.toolState === undefined) source.toolState = "success";
   renderAcpToolSource(part, source);
   commitToolPartMutation(state, part, source);
-}
-
-export function findToolPart(
-  state: SessionState,
-  toolUseId: string,
-): { owner: BridgeMessage; part: BridgeToolPart } | undefined {
-  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    const owner = state.messages[index]!;
-    const part = owner.parts.find(
-      (messagePart): messagePart is BridgeToolPart =>
-        messagePart.type === "tool-invocation" && messagePart.toolUseId === toolUseId,
-    );
-    if (part) return { owner, part };
-  }
-  return undefined;
 }
 
 /**
@@ -1681,6 +1776,9 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     // A terminal or progress frame for an id that is not a live child must not
     // invent a launch part while other children are running.
     if ((agentState || isProgress) && state.activeSubagentToolIds.size > 0) return;
+    // Nor rebuild a launch a trim or an evicted row took, as a bare card on
+    // the trailing row.
+    if (droppedToolCall(state, toolCallId, false)) return;
 
     const owner = currentAssistantMessage(state);
     const part: BridgeToolPart = {
@@ -1755,6 +1853,7 @@ export function failAllActiveSubagents(state: SessionState): void {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation" || !state.activeSubagentToolIds.has(part.toolUseId))
         continue;
+      noteMessageMutation(state, message);
       part.agentState = "failed";
       const source = acpToolSourceStates.get(part);
       if (source) source.agentState = "failed";
@@ -1914,43 +2013,6 @@ export function setOptionalPartField<TKey extends keyof BridgeToolPart>(
 ): void {
   if (value === undefined) delete part[key];
   else part[key] = value;
-}
-
-export function currentAssistantMessage(state: SessionState): BridgeMessage {
-  let message = state.messages.at(-1);
-  // A hydrating replay is idle by definition, so requiring "running" here would
-  // open a fresh, empty assistant message for every tool call in the history.
-  if (
-    !message ||
-    message.role !== "assistant" ||
-    (state.status !== "running" && state.historyReplay !== "hydrate")
-  ) {
-    const modelId = boundedModelId(state.sessionConfig.composer.selectedModelId);
-    message = {
-      id: randomBytes(12).toString("hex"),
-      role: "assistant",
-      content: "",
-      parts: [],
-      createdAt: new Date().toISOString(),
-      ...(modelId ? { modelId } : {}),
-    };
-    state.messages.push(message);
-  }
-  return message;
-}
-
-/**
- * A model id is an identifier, not display text, so an oversized or non-string
- * value is dropped rather than truncated — exactly as `session-config.ts`
- * rejects an over-long `selectedModelId` instead of shortening it. A truncated
- * id would match no catalogue entry and would render as a plausible-looking
- * model the agent never actually ran; absent renders as "no model recorded".
- */
-export function boundedModelId(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (!trimmed || Buffer.byteLength(trimmed) > MAX_MODEL_ID_BYTES) return undefined;
-  return trimmed;
 }
 
 /**

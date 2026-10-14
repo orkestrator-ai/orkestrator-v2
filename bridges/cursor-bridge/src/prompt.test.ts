@@ -302,9 +302,9 @@ describe("a turn that ends with pending tools", () => {
     });
 
     expect(state.status).toBe("idle");
-    const assistant = state.messages.find((message) => message.role === "assistant");
-    expect(assistant?.content).toBe("The ticket is done.");
-    expect(assistant?.parts.some((part) => part.type === "text")).toBe(true);
+    // The answer came after the call, from a later model step: its own row.
+    expect(state.messages.map((message) => message.content)).toEqual(["", "The ticket is done."]);
+    expect(state.messages[1]!.parts.map((part) => part.type)).toEqual(["text"]);
   });
 
   test("does not duplicate assistant text the stream already delivered", async () => {
@@ -339,11 +339,13 @@ describe("a turn that ends with pending tools", () => {
       result: "Done - ticket 123 is now closed.",
     });
 
-    const text = state.messages.find((message) => message.role === "assistant")?.content ?? "";
-    expect(text).toContain("I'll update the ticket.");
-    expect(text).toContain("Done - ticket 123 is now closed.");
-    expect(text.split("I'll update the ticket.")).toHaveLength(2);
-    expect(text.split("Done - ticket 123 is now closed.")).toHaveLength(2);
+    // Each once, and the answer on the later step's row: the row being
+    // written ended in a tool call, so the model was called again after it.
+    // Whether a step frame reported that boundary does not change the split.
+    expect(state.messages.map((message) => message.content)).toEqual([
+      "I'll update the ticket.",
+      "Done - ticket 123 is now closed.",
+    ]);
   });
 
   test("completes a streamed prefix of the terminal result", async () => {
@@ -358,6 +360,124 @@ describe("a turn that ends with pending tools", () => {
     expect(state.messages.find((message) => message.role === "assistant")?.content).toBe(
       "Hello world",
     );
+  });
+
+  test("compares the terminal result against the turn's prose across its step rows", async () => {
+    const state = runningSession();
+    // Two text-only steps: the SDK folds both into one final text.
+    applyInteractionUpdate(state, { type: "text-delta", text: "Hello " });
+    applyInteractionUpdate(state, { type: "step-started", stepId: 2 });
+    applyInteractionUpdate(state, { type: "text-delta", text: "world" });
+    expect(state.messages).toHaveLength(2);
+
+    await completeFollow(state, controlledRun(), { status: "finished", result: "Hello world" });
+
+    expect(state.messages.map((message) => message.content)).toEqual(["Hello ", "world"]);
+  });
+
+  test("does not repeat a final step's text that the stream delivered", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Checking." });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "read-1",
+      modelCallId: "m1",
+      toolCall: { type: "read", args: { path: "a.ts" } },
+    });
+    applyInteractionUpdate(state, { type: "step-started", stepId: 2 });
+    applyInteractionUpdate(state, { type: "text-delta", text: "All good." });
+    applyInteractionUpdate(state, { type: "turn-ended", usage: {} });
+
+    await completeFollow(state, controlledRun(), { status: "finished", result: "All good." });
+
+    expect(state.messages.map((message) => message.content)).toEqual(["Checking.", "All good."]);
+  });
+
+  test("completes a streamed prefix on its own row after a step boundary", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Hello" });
+    applyInteractionUpdate(state, { type: "turn-ended", usage: {} });
+
+    await completeFollow(state, controlledRun(), { status: "finished", result: "Hello world" });
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]!.content).toBe("Hello world");
+    expect(state.messages[0]!.parts).toEqual([
+      expect.objectContaining({ type: "text", content: "Hello world" }),
+    ]);
+  });
+
+  test("completes a streamed prefix on the row holding it, past a tool-only step", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Hel" });
+    applyInteractionUpdate(state, { type: "step-started", stepId: 2 });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "read-1",
+      modelCallId: "m2",
+      toolCall: { type: "read", args: { path: "a.ts" } },
+    });
+    expect(state.messages).toHaveLength(2);
+
+    await completeFollow(state, controlledRun(), { status: "finished", result: "Hello" });
+
+    // One sentence in one bubble; the tool-only step gains no prose.
+    expect(state.messages.map((message) => message.content)).toEqual(["Hello", ""]);
+    expect(state.messages[0]!.parts).toEqual([
+      expect.objectContaining({ type: "text", content: "Hello" }),
+    ]);
+    expect(state.messages[1]!.parts.map((part) => part.type)).toEqual(["tool-invocation"]);
+  });
+
+  test("completes a streamed prefix above a steer rather than below it", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Hel" });
+    applyInteractionUpdate(state, {
+      type: "user-message-appended",
+      userMessage: { text: "also check b.ts" },
+    });
+
+    await completeFollow(state, controlledRun(), { status: "finished", result: "Hello" });
+
+    expect(state.messages.map((message) => [message.role, message.content])).toEqual([
+      ["assistant", "Hello"],
+      ["user", "also check b.ts"],
+    ]);
+  });
+
+  test("a different final text after prose with no step boundary stays on that step's row", async () => {
+    // Nothing ended the step and its row ends in prose, so the missing text
+    // can be the same model call's.
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Checking." });
+
+    await completeFollow(state, controlledRun(), { status: "finished", result: "All good." });
+
+    expect(state.messages.map((message) => message.content)).toEqual(["Checking.All good."]);
+  });
+
+  test("a final text the stream missed after a tool step is still published once", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "I'll update the ticket." });
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "update_ticket" },
+      },
+    });
+    applyInteractionUpdate(state, { type: "step-started", stepId: 2 });
+
+    await completeFollow(state, controlledRun(), {
+      status: "finished",
+      result: "Done - ticket 123 is now closed.",
+    });
+
+    const prose = state.messages.map((message) => message.content).join("");
+    expect(prose).toBe("I'll update the ticket.Done - ticket 123 is now closed.");
+    expect(state.messages.at(-1)!.content).toBe("Done - ticket 123 is now closed.");
   });
 
   test("detaches a still-pending sub-agent before failing leftover cards", async () => {

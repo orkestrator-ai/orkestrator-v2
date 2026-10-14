@@ -1823,7 +1823,17 @@ export interface NativeAgentTranscriptView<TMessage = unknown> {
   historyPaging?: NativeAgentHistoryPaging;
   historyEpoch: string;
   historyComplete: boolean;
+  /**
+   * Rows from before `messages` that changed recently, newest change first. A
+   * row is one model response, so a late tool result or subagent report can
+   * land on a row newer ones have pushed out of the live window. A consumer
+   * replaces its own copy of each and never inserts one it does not hold.
+   */
+  revisedMessages?: TMessage[];
 }
+
+/** Bound on `revisedMessages`, per view and per delta. */
+export const NATIVE_AGENT_REVISED_MESSAGES_MAX = 64;
 
 export type NativeAgentHistoryPaging = "direct";
 
@@ -1935,6 +1945,8 @@ export interface NativeAgentTranscriptDelta<TMessage = unknown> {
   title?: string;
   messageWindow?: NativeAgentMessageWindow;
   providerRevision?: number;
+  /** Mirrors the view's `revisedMessages`, including their absence. */
+  revisedMessages?: TMessage[];
 }
 
 export type NativeAgentTranscriptUpdate<TMessage = unknown> =
@@ -2286,6 +2298,15 @@ function isNativeAgentDomainEnvelope(value: unknown): value is NativeAgentDomain
     : isNativeAgentViewIdentity(candidate.identity);
 }
 
+function isRevisedMessageList(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > NATIVE_AGENT_REVISED_MESSAGES_MAX) return false;
+  return value.every((message) => {
+    const id = (message as { id?: unknown })?.id;
+    return typeof id === "string" && id.length > 0 && id.length <= 4_096;
+  });
+}
+
 function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTranscriptDelta {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
@@ -2307,7 +2328,8 @@ function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTrans
     (candidate.liveMessageIds !== undefined &&
       (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096)) ||
     (candidate.messagePatches !== undefined &&
-      !isNativeAgentMessagePatchList(candidate.messagePatches))
+      !isNativeAgentMessagePatchList(candidate.messagePatches)) ||
+    !isRevisedMessageList(candidate.revisedMessages)
   ) {
     return false;
   }
@@ -2381,6 +2403,8 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
     ...(delta.title === undefined ? {} : { title: delta.title }),
     ...(delta.messageWindow === undefined ? {} : { messageWindow: delta.messageWindow }),
     ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),
+    // Authoritative like the cursor: a delta without revised rows clears them.
+    revisedMessages: delta.revisedMessages,
   };
 }
 
@@ -2424,7 +2448,8 @@ export function isNativeAgentTranscriptUpdate(
     typeof transcript.historyComplete !== "boolean" ||
     (transcript.historyCursor !== undefined &&
       (typeof transcript.historyCursor !== "string" || transcript.historyCursor.length > 1_024)) ||
-    (transcript.historyPaging !== undefined && transcript.historyPaging !== "direct")
+    (transcript.historyPaging !== undefined && transcript.historyPaging !== "direct") ||
+    !isRevisedMessageList(transcript.revisedMessages)
   ) {
     return false;
   }

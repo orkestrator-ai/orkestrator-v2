@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
 import { holdSdkPromptOpen } from "./session-manager-persistence.js";
+import {
+  MAX_SUBAGENT_PARTS_PER_CALL,
+  MAX_TRACKED_STREAM_ROWS,
+} from "./session-manager-prompt-stream.js";
 
 import {
   MAX_IMAGE_ATTACHMENT_BYTES,
@@ -1540,16 +1544,18 @@ describe("sendPrompt", () => {
 
       await promptPromise;
 
-      const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
-      expect(assistant?.parts.map((part) => part.type)).toEqual([
-        "thinking",
-        "tool-invocation",
-        "text",
+      // One row per API message, in the order the model produced them.
+      const rows = getSessionMessages(session.id).filter((m) => m.role === "assistant");
+      expect(rows.map((row) => [row.id, row.parts.map((part) => part.type)])).toEqual([
+        ["msg_multi_1", ["thinking", "tool-invocation"]],
+        ["msg_multi_2", ["text"]],
       ]);
-      expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
-      expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
-      expect(Number.isFinite(new Date(assistant?.parts[2]?.createdAt ?? "").getTime())).toBe(true);
-      expect(assistant?.content).toBe("Working tree is clean.");
+      expect(rows[0]?.parts[0]?.content).toBe("Need the repo state.");
+      expect(rows[0]?.parts[1]?.toolState).toBe("success");
+      expect(rows[0]?.sdkUuid).toBe("multi-final-2");
+      expect(rows[1]?.parts[0]?.content).toBe("Working tree is clean.");
+      expect(Number.isFinite(new Date(rows[1]?.parts[0]?.createdAt ?? "").getTime())).toBe(true);
+      expect(rows[1]?.content).toBe("Working tree is clean.");
     } finally {
       stop();
     }
@@ -2825,6 +2831,165 @@ describe("sendPrompt", () => {
       { type: "text", toolName: undefined, parentTaskUseId: "agent-a" },
       { type: "tool-invocation", toolName: "Edit", parentTaskUseId: "agent-a" },
     ]);
+  });
+
+  test("gives each model response its own row, keeping subagent output on the row that started it", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "record-1",
+        message: {
+          id: "response-1",
+          content: [
+            { type: "text", text: "Starting a reviewer." },
+            { type: "tool_use", id: "agent-a", name: "Agent", input: { description: "Review" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "agent-a", content: "Agent started" }],
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "record-2",
+        message: {
+          id: "response-2",
+          content: [
+            { type: "text", text: "Meanwhile, running the tests." },
+            { type: "tool_use", id: "bash-1", name: "Bash", input: { command: "bun test" } },
+          ],
+        },
+      },
+      // The background reviewer reports after a newer response has started.
+      {
+        type: "assistant",
+        uuid: "child-record",
+        parent_tool_use_id: "agent-a",
+        message: {
+          id: "child-response",
+          content: [
+            { type: "text", text: "The reviewer found an edge." },
+            { type: "tool_use", id: "child-read", name: "Read", input: { file_path: "a.ts" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        parent_tool_use_id: "agent-a",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "child-read", content: "file body" }],
+        },
+      },
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "bash-1", content: "1 pass" }] },
+      },
+      {
+        type: "assistant",
+        uuid: "record-3",
+        message: { id: "response-3", content: [{ type: "text", text: "All done." }] },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const rows = session.messages.filter((message) => message.role === "assistant");
+    expect(rows.map((row) => [row.id, row.content, row.sdkUuid])).toEqual([
+      ["response-1", "Starting a reviewer.The reviewer found an edge.", "record-1"],
+      ["response-2", "Meanwhile, running the tests.", "record-2"],
+      ["response-3", "All done.", "record-3"],
+    ]);
+    expect(
+      rows[0]!.parts.map((part) => [
+        part.type,
+        part.toolUseId,
+        part.parentTaskUseId,
+        part.toolState,
+      ]),
+    ).toEqual([
+      ["text", undefined, undefined, undefined],
+      ["tool-invocation", "agent-a", undefined, "success"],
+      ["text", undefined, "agent-a", undefined],
+      ["tool-invocation", "child-read", "agent-a", "success"],
+    ]);
+    expect(rows[1]!.parts.find((part) => part.toolUseId === "bash-1")?.toolState).toBe("success");
+  });
+
+  test("stops tracking the oldest rows past the bound without losing what they published", async () => {
+    const responses = MAX_TRACKED_STREAM_ROWS + 2;
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "response-0",
+          content: [{ type: "tool_use", id: "agent-old", name: "Agent", input: {} }],
+        },
+      },
+      ...Array.from({ length: responses - 1 }, (_, index) => ({
+        type: "assistant",
+        message: {
+          id: `response-${index + 1}`,
+          content: [{ type: "text", text: `step ${index + 1}` }],
+        },
+      })),
+      // The first row is no longer tracked, so a late frame for its call lands
+      // on the current row rather than reopening it.
+      {
+        type: "assistant",
+        parent_tool_use_id: "agent-old",
+        message: { id: "late-child", content: [{ type: "text", text: "late report" }] },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const rows = session.messages.filter((message) => message.role === "assistant");
+    expect(rows).toHaveLength(responses);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(responses);
+    expect(rows[0]?.parts.map((part) => part.toolUseId)).toEqual(["agent-old"]);
+    expect(rows.at(-1)?.content).toBe(`step ${responses - 1}late report`);
+  });
+
+  test("keeps a bounded tail of a long subagent's parts on the row holding its call", async () => {
+    const childResponses = MAX_SUBAGENT_PARTS_PER_CALL + 20;
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "response-1",
+          content: [
+            { type: "text", text: "Delegating." },
+            { type: "tool_use", id: "agent-a", name: "Agent", input: {} },
+            // A root call beside the agent's, in the same response.
+            { type: "tool_use", id: "root-read", name: "Read", input: { file_path: "a.ts" } },
+          ],
+        },
+      },
+      ...Array.from({ length: childResponses }, (_, index) => ({
+        type: "assistant",
+        parent_tool_use_id: "agent-a",
+        message: { id: `child-${index}`, content: [{ type: "text", text: `child ${index}` }] },
+      })),
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "agent-a", content: "done" }] },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const rows = session.messages.filter((message) => message.role === "assistant");
+    expect(rows).toHaveLength(1);
+    const childTexts = rows[0]!.parts.filter(
+      (part) => part.parentTaskUseId === "agent-a" && part.type === "text",
+    );
+    expect(childTexts).toHaveLength(MAX_SUBAGENT_PARTS_PER_CALL);
+    expect(childTexts.at(0)?.content).toBe(`child ${childResponses - MAX_SUBAGENT_PARTS_PER_CALL}`);
+    expect(childTexts.at(-1)?.content).toBe(`child ${childResponses - 1}`);
+    const card = rows[0]!.parts.find((part) => part.toolUseId === "agent-a");
+    expect(card?.toolState).toBe("success");
+    expect(rows[0]!.parts.some((part) => part.toolUseId === "root-read")).toBe(true);
+    expect(rows[0]!.parts[0]?.content).toBe("Delegating.");
   });
 
   test("sends valid images natively, omits empty image-only text, and escapes file metadata", async () => {

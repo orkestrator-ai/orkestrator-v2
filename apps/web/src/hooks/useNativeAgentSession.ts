@@ -284,6 +284,60 @@ function preferCompleteLiveHead<TMessage>(
 }
 
 /**
+ * The server's revised rows, by id; the first copy of an id wins because the
+ * list is ordered newest change first.
+ */
+function revisedMessagesById<TMessage>(
+  revised: readonly TMessage[] | undefined,
+): Map<string, TMessage> | undefined {
+  if (!revised?.length) return undefined;
+  const byId = new Map<string, TMessage>();
+  for (const message of revised) {
+    const id = (message as { id?: unknown })?.id;
+    if (typeof id === "string" && !byId.has(id)) byId.set(id, message);
+  }
+  return byId.size > 0 ? byId : undefined;
+}
+
+/**
+ * Lay the server's revised rows over the copies this tab holds of them.
+ *
+ * A row is one model response, so a background tool result or a subagent
+ * report can land on a row newer ones have already pushed out of the live
+ * tail. The copy this tab retained from before that is otherwise never read
+ * again, and a card launched there stayed "running" until a reload. A revised
+ * row is the server's whole current row, so it replaces the held copy rather
+ * than merging into it. Its position is outside the window, so an id this tab
+ * does not hold is never inserted; `skip` names rows the same update delivered
+ * itself, which stay authoritative. Returns `held` unchanged when nothing
+ * differs, so an unchanged revision list keeps object identity (and the
+ * cached byte sizes keyed on it).
+ */
+function withRevisedMessages<TMessage>(
+  held: TMessage[],
+  revised: ReadonlyMap<string, TMessage> | undefined,
+  skip?: ReadonlySet<string>,
+): TMessage[] {
+  if (!revised || held.length === 0) return held;
+  let changed = false;
+  const next = held.map((message) => {
+    const id = (message as { id?: unknown })?.id;
+    if (typeof id !== "string" || skip?.has(id)) return message;
+    const replacement = revised.get(id);
+    if (
+      replacement === undefined ||
+      replacement === message ||
+      JSON.stringify(replacement) === JSON.stringify(message)
+    ) {
+      return message;
+    }
+    changed = true;
+    return replacement;
+  });
+  return changed ? next : held;
+}
+
+/**
  * A revision the projection on screen cannot mistake for an older read.
  *
  * `revision` is one ordering within a generation, but the surfaces that mint it
@@ -1370,11 +1424,30 @@ export function useNativeAgentSession<TMessage = unknown>({
   /** Install transcript content without inventing action authority. */
   const applyProgressiveTranscript = useCallback(
     (
-      value: NativeAgentTranscriptView<TMessage>,
+      incoming: NativeAgentTranscriptView<TMessage>,
       token: string,
-      deletedMessageIds?: readonly string[],
+      delta?: {
+        deletedMessageIds: readonly string[];
+        /** Rows the delta upserted or patched; the rest of the view is held. */
+        deliveredIds: ReadonlySet<string>;
+      },
     ) => {
-      if (!identityBelongsToView(value.identity)) return null;
+      if (!identityBelongsToView(incoming.identity)) return null;
+      const deletedMessageIds = delta?.deletedMessageIds;
+      const revised = revisedMessagesById(incoming.revisedMessages);
+      /*
+       * A snapshot's rows are all the server's tail. A delta's are only where
+       * it upserted or patched: the rest is the view this tab held, which a
+       * remount rebuilds from everything on screen, so it can still carry an
+       * aged-out row the server has since revised.
+       */
+      const value =
+        delta && revised
+          ? {
+              ...incoming,
+              messages: withRevisedMessages(incoming.messages, revised, delta.deliveredIds),
+            }
+          : incoming;
       const identityChanged =
         progressiveIdentityRef.current !== undefined &&
         !sameProgressiveIdentity(progressiveIdentityRef.current, value.identity);
@@ -1467,6 +1540,8 @@ export function useNativeAgentSession<TMessage = unknown>({
               return !liveIds.has(id);
             })
           : [];
+      // Before the byte accounting below, so it measures the copies kept.
+      retained = withRevisedMessages(retained, revised, liveIds);
       /*
        * Retention is a client-side buffer and gets the same explicit ceiling
        * sync materialization applies to its retained pages. Exceeding it
@@ -1485,6 +1560,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         retained = [];
         retainedBytes = 0;
       }
+      /*
+       * The live tail no longer starts at any row this tab holds, so nothing
+       * on screen can be stitched to it. A single oversized newest row does
+       * this: while it streams it is the whole tail, and the next prompt
+       * pushes it out of the byte window entirely. The rows on screen drop
+       * with it, exactly as in the collapses above.
+       */
+      const tailJumpedPastHeld =
+        current !== null &&
+        current.messages.length > 0 &&
+        typeof firstLiveId?.id === "string" &&
+        firstLiveIndex < 0;
       const messages = [...retained, ...displayLive];
       const partOnlyTruncation =
         omittedParts > 0 &&
@@ -1510,7 +1597,17 @@ export function useNativeAgentSession<TMessage = unknown>({
         !historyEpochChanged &&
         !evicted &&
         syncLiveProjectionRef.current !== null;
-      if (!pagingCarriesOver) historyUnpageableRef.current = false;
+      /*
+       * Rows this tab had on screen just dropped without the paging state
+       * moving with them. Every cursor held from before was minted behind a
+       * row that is now gone from the screen — the tail head it was issued
+       * for, or the first page a walk already completed — so a click would
+       * page past exactly the rows that dropped, and a walk that reached the
+       * start would hide the control altogether. Neither describes what is
+       * on screen now.
+       */
+      const prefixDropped = collapsedForPartTruncation || tailJumpedPastHeld;
+      if (!pagingCarriesOver || prefixDropped) historyUnpageableRef.current = false;
       /*
        * A direct cursor pages this view's own epoch straight from the
        * provider, so it can seed paging without the joined snapshot that
@@ -1525,10 +1622,14 @@ export function useNativeAgentSession<TMessage = unknown>({
         directHistoryCursor !== undefined &&
         (!pagingCarriesOver ||
           retentionCollapsed ||
+          prefixDropped ||
           (!historyCursorRef.current && !historyBoundaryCursorRef.current));
+      // Without a direct cursor the held ones are still stale: forget them so
+      // a click bootstraps a boundary for the tail actually on screen.
+      const discardHeldCursors = prefixDropped && !adoptDirectCursor;
       const historyBoundaryCursor = adoptDirectCursor
         ? directHistoryCursor
-        : pagingCarriesOver
+        : pagingCarriesOver && !discardHeldCursors
           ? historyBoundaryCursorRef.current
           : undefined;
       /*
@@ -1539,7 +1640,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        */
       const settledHistoryCursor = adoptDirectCursor
         ? directHistoryCursor
-        : !pagingCarriesOver
+        : !pagingCarriesOver || discardHeldCursors
           ? undefined
           : retentionCollapsed
             ? historyBoundaryCursorRef.current
@@ -2033,7 +2134,17 @@ export function useNativeAgentSession<TMessage = unknown>({
               ) {
                 const merged = applyNativeAgentTranscriptDelta(current, update.delta);
                 if (merged) {
-                  applyProgressiveTranscript(merged, update.token, update.delta.deletedMessageIds);
+                  applyProgressiveTranscript(merged, update.token, {
+                    deletedMessageIds: update.delta.deletedMessageIds,
+                    deliveredIds: new Set(
+                      [
+                        ...update.delta.messageUpserts.map(
+                          (message) => (message as { id?: unknown })?.id,
+                        ),
+                        ...(update.delta.messagePatches ?? []).map((patch) => patch.id),
+                      ].filter((id): id is string => typeof id === "string"),
+                    ),
+                  });
                   return "applied";
                 }
               }
@@ -3130,14 +3241,35 @@ export function useNativeAgentSession<TMessage = unknown>({
                     : { messageWindow: undefined }),
                 }
               : syncLive;
-          const existing = new Set(
-            [...historyMessagesRef.current, ...live.messages].map(
-              (message) => (message as { id?: unknown }).id,
-            ),
+          const pageMessageId = (message: TMessage): unknown => (message as { id?: unknown }).id;
+          const liveIds = new Set(live.messages.map(pageMessageId));
+          const held = new Map(
+            historyMessagesRef.current.map((message) => [pageMessageId(message), message]),
           );
-          const newMessages = page.messages.filter(
-            (message) => !existing.has((message as { id?: unknown }).id),
-          );
+          /*
+           * Holding a row's id is not holding the row. A retained copy is
+           * whatever this tab last saw before the row left the live tail: a
+           * part-trimmed head, or a launch row whose tasks have since settled.
+           * Dropping the page's copy as a duplicate froze that copy for good,
+           * so lay it over the held one exactly as a live head is laid over
+           * its local copy — whichever carries more of the row wins. The live
+           * tail itself stays authoritative for the rows it covers.
+           */
+          const refreshed = new Map<unknown, TMessage>();
+          const newMessages: TMessage[] = [];
+          for (const message of page.messages) {
+            const id = pageMessageId(message);
+            if (liveIds.has(id)) continue;
+            const heldCopy = held.get(id);
+            if (heldCopy === undefined) {
+              newMessages.push(message);
+              continue;
+            }
+            const merged = preferCompleteLiveHead([heldCopy], [message]).messages[0]!;
+            if (merged !== heldCopy && JSON.stringify(merged) !== JSON.stringify(heldCopy)) {
+              refreshed.set(id, merged);
+            }
+          }
           /*
            * A direct cursor adopted after messages aged out of the live tail
            * points at the tail's head, so its first pages can hold only rows
@@ -3147,6 +3279,7 @@ export function useNativeAgentSession<TMessage = unknown>({
            */
           if (
             newMessages.length === 0 &&
+            refreshed.size === 0 &&
             page.messages.length > 0 &&
             page.nextCursor &&
             page.nextCursor !== before &&
@@ -3157,7 +3290,9 @@ export function useNativeAgentSession<TMessage = unknown>({
             return loadEarlierMessages();
           }
           duplicatePageSkipsRef.current = 0;
-          const retained = [...historyMessagesRef.current];
+          const retained = historyMessagesRef.current.map(
+            (message) => refreshed.get(pageMessageId(message)) ?? message,
+          );
           const accepted: TMessage[] = [];
           const messageBudget = Math.max(0, CLIENT_HISTORY_MAX_MESSAGES - live.messages.length);
           let acceptedBytes = 0;

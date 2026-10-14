@@ -83,6 +83,7 @@ import {
   type BridgeCommandCatalogueResponse,
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
+  beginAssistantTurn,
   boundTranscript,
   boundTranscriptForRead,
   chargeTranscript,
@@ -1158,7 +1159,7 @@ async function dispatchClaimedPrompt(
   state.currentRunModelId = state.composer.selectedModelId;
   state.currentTurnUsage = {};
   state.currentTurnOutput = schema ? "" : null;
-  state.currentAssistantMessageId = undefined;
+  beginAssistantTurn(state);
   state.revision += 1;
   boundTranscript(state);
   schedulePersist();

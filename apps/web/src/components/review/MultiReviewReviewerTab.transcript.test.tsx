@@ -9,6 +9,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewReviewerTab,
   mergeMultiReviewReviewerTranscript,
+  mergeReviewerHistory,
 } from "./MultiReviewReviewerTab";
 
 const STARTED_AT = "2026-09-14T22:00:00.000Z";
@@ -170,5 +171,36 @@ describe("conditional reviewer transcript reads", () => {
     act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(8)));
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(loadTranscript).not.toHaveBeenCalled();
+  });
+});
+
+describe("revised reviewer rows", () => {
+  const row = (id: string, content = id) => ({
+    id,
+    role: "assistant",
+    content,
+    createdAt: STARTED_AT,
+    parts: [{ type: "text", content }],
+  });
+
+  test("replace the copy of a held earlier row, and never insert one", () => {
+    const history = { earlier: [row("a"), row("b")], cursor: "c1", epoch: "e1" };
+    const tail = [row("c"), row("d")];
+    const next = transcript({
+      messages: [row("c"), row("d"), row("e")],
+      historyEpoch: "e1",
+      revisedMessages: [row("a", "settled late"), row("unknown")],
+    });
+    const merged = mergeReviewerHistory(history, tail, next, false);
+    expect(merged.reset).toBe(false);
+    expect(
+      merged.history.earlier.map((message) => (message as { content: string }).content),
+    ).toEqual(["settled late", "b"]);
+  });
+
+  test("an answer without revisions keeps the held history object", () => {
+    const history = { earlier: [row("a")], cursor: "c1", epoch: "e1" };
+    const next = transcript({ messages: [row("b")], historyEpoch: "e1" });
+    expect(mergeReviewerHistory(history, [row("b")], next, false).history).toBe(history);
   });
 });

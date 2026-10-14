@@ -1,4 +1,5 @@
 import type { Part as OpenCodePart } from "@opencode-ai/sdk/v2/types";
+import { providerInlineErrorMessageId } from "@orkestrator/protocol/native-agent";
 import {
   tryParseStructuredOutputText,
   type JsonSchema,
@@ -98,11 +99,11 @@ export function parseOpenCodeStructuredText(parts: unknown): unknown {
   return value;
 }
 
-function stringifyOpenCodeToolValue(value: unknown): string | undefined {
+function stringifyOpenCodeToolValue(value: unknown, limit = 200_000): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value === "string") return value.slice(0, 200_000);
+  if (typeof value === "string") return value.slice(0, limit);
   try {
-    return JSON.stringify(value, null, 2).slice(0, 200_000);
+    return JSON.stringify(value, null, 2).slice(0, limit);
   } catch {
     return "[unserializable tool value]";
   }
@@ -223,6 +224,55 @@ export function hydrateNormalizedOpenCodeSubagents(
   }));
 }
 
+/** `createdAt` of a message whose provider timestamp is missing or unusable. */
+export const OPEN_CODE_UNKNOWN_CREATED_AT = "1970-01-01T00:00:00.000Z";
+
+/**
+ * An OpenCode epoch (or date string) as ISO text, or undefined when it is not
+ * a usable date. Total: `new Date(x).toISOString()` throws a `RangeError` past
+ * the ECMA-262 time clip (±8.64e15 ms), and one such value must not fail a
+ * whole transcript read.
+ */
+export function openCodeIsoTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || value.length === 0)) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+function isOpenCodeReasoningInProgress(part: Record<string, unknown>): boolean {
+  const time = asRecord(part.time);
+  return typeof time?.start === "number" && time.end === undefined;
+}
+
+/**
+ * OpenCode wraps completed reasoning in one balanced outer bold pair. Remove
+ * that pair together — stripping a leading and a trailing `**` independently
+ * corrupts reasoning that merely starts or ends with bold Markdown
+ * (`**Plan** then inspect`). While a part is still streaming, its opening
+ * delimiter can arrive before the closing one.
+ */
+function stripOpenCodeReasoningBoldMarkers(
+  content: string,
+  allowStreamingOpeningMarker: boolean,
+): string {
+  if (!content.replace(/\*\*/g, "").trim()) return "";
+  const leadingMarker = content.match(/^(\s*)\*\*/);
+  if (!leadingMarker) return content;
+  const markerCount = content.match(/\*\*/g)?.length ?? 0;
+  const trailingMarker = content.match(/\*\*(\s*)$/);
+  if (trailingMarker && markerCount === 2) {
+    return `${leadingMarker[1]}${content.slice(
+      leadingMarker[0].length,
+      content.length - trailingMarker[0].length,
+    )}${trailingMarker[1]}`;
+  }
+  return allowStreamingOpeningMarker && markerCount === 1
+    ? `${leadingMarker[1]}${content.slice(leadingMarker[0].length)}`
+    : content;
+}
+
 export function normalizeOpenCodeInteractiveMessage(
   value: unknown,
   index: number,
@@ -239,6 +289,8 @@ export function normalizeOpenCodeInteractiveMessage(
    * backend overlays what it measured here, on every read.
    */
   commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
+  /** Display reads have their own byte budget and retain complete tool bodies. */
+  toolValueLimit = 200_000,
 ): Record<string, unknown> | null {
   const envelope = asRecord(value);
   const info = asRecord(envelope?.info);
@@ -248,13 +300,8 @@ export function normalizeOpenCodeInteractiveMessage(
       ? info.role
       : "assistant";
   const messageId = nonEmptyString(info.id) ?? `opencode-message-${index}`;
-  const rawCreatedAt = asRecord(info.time)?.created;
   const createdAt =
-    typeof rawCreatedAt === "number" && Number.isFinite(rawCreatedAt)
-      ? new Date(rawCreatedAt).toISOString()
-      : typeof rawCreatedAt === "string" && Number.isFinite(Date.parse(rawCreatedAt))
-        ? new Date(rawCreatedAt).toISOString()
-        : "1970-01-01T00:00:00.000Z";
+    openCodeIsoTimestamp(asRecord(info.time)?.created) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
   const parts: Record<string, unknown>[] = [];
   /**
    * Child sessions already represented by a first-class `subtask` part.
@@ -289,7 +336,10 @@ export function normalizeOpenCodeInteractiveMessage(
       continue;
     }
     if (part.type === "reasoning" && typeof part.text === "string") {
-      const reasoning = part.text.replace(/^\s*\*\*/, "").replace(/\*\*\s*$/, "");
+      const reasoning = stripOpenCodeReasoningBoldMarkers(
+        part.text,
+        isOpenCodeReasoningInProgress(part),
+      );
       if (reasoning.trim()) parts.push({ type: "thinking", content: reasoning, ...source });
       continue;
     }
@@ -376,7 +426,7 @@ export function normalizeOpenCodeInteractiveMessage(
             : undefined;
     const isSubagent = toolName.toLowerCase() === "task" || toolName.toLowerCase() === "agent";
     const input = asRecord(state?.input) ?? undefined;
-    const toolOutput = stringifyOpenCodeToolValue(state?.output);
+    const toolOutput = stringifyOpenCodeToolValue(state?.output, toolValueLimit);
     const taskEnvelope = isSubagent ? openCodeTaskEnvelope(toolOutput) : {};
     const metadata = asRecord(state?.metadata) ?? asRecord(part.metadata);
     const subagentId = isSubagent
@@ -424,7 +474,9 @@ export function normalizeOpenCodeInteractiveMessage(
       ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
       ...(toolOutput === undefined ? {} : { toolOutput }),
-      ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
+      ...(state?.error === undefined
+        ? {}
+        : { toolError: stringifyOpenCodeToolValue(state.error, toolValueLimit) }),
       ...(toolDiff ? { toolDiff } : {}),
       ...(commandChange ? { commandChanges: commandChange } : {}),
       ...(isSubagent
@@ -483,12 +535,6 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
 }
 
 /**
- * Id prefix the renderer styles as an error alert rather than an assistant
- * reply. Matches the renderer's own `ERROR_MESSAGE_PREFIX`.
- */
-export const OPEN_CODE_INLINE_ERROR_ID_PREFIX = "error-opencode-";
-
-/**
  * Appended when the provider refused a tool definition, which otherwise reads
  * like a fault in the conversation rather than in the tools sent with it.
  */
@@ -519,13 +565,14 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
         }`
       : terminal.message;
   const time = asRecord(info.time);
-  const validDate = [time?.completed, time?.created]
-    .filter((candidate): candidate is number => typeof candidate === "number")
-    .map((candidate) => new Date(candidate))
-    .find((candidate) => Number.isFinite(candidate.getTime()));
-  const createdAt = validDate?.toISOString() ?? "1970-01-01T00:00:00.000Z";
+  const createdAt =
+    [time?.completed, time?.created]
+      .filter((candidate): candidate is number => typeof candidate === "number")
+      .map(openCodeIsoTimestamp)
+      .find((candidate) => candidate !== undefined) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
   return {
-    id: `${OPEN_CODE_INLINE_ERROR_ID_PREFIX}${messageId}`,
+    // `error-opencode-<id>`: rendered as an error alert, not an assistant reply.
+    id: providerInlineErrorMessageId("opencode", messageId),
     role: "assistant",
     content,
     parts: [{ type: "text", content }],
@@ -539,7 +586,22 @@ export function normalizeOpenCodeTranscriptMessages(
   recordUnknown: (type: string) => void,
   commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
 ): Record<string, unknown>[] {
-  return messages.flatMap((message, index) => {
+  return normalizeOpenCodeTranscriptGroups(messages, recordUnknown, commandChanges).flat();
+}
+
+/**
+ * The rows of each OpenCode message, one group per input message.
+ *
+ * A failed message renders as two rows and a malformed one as none, while
+ * OpenCode pages by whole messages. Windowing over groups keeps a page cursor
+ * on a message boundary.
+ */
+export function normalizeOpenCodeTranscriptGroups(
+  messages: readonly unknown[],
+  recordUnknown: (type: string) => void,
+  commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
+): Record<string, unknown>[][] {
+  return messages.map((message, index) => {
     const normalized = normalizeOpenCodeInteractiveMessage(
       message,
       index,

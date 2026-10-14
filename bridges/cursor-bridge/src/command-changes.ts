@@ -4,7 +4,7 @@
  * An edit card already says "+N −M" because the SDK reports it. A shell card
  * cannot: `sed -i`, a codemod or `git mv` say nothing about what they wrote,
  * so the worktree is measured around the command instead (see
- * `@orkestrator/protocol/workspace-change-probe`).
+ * `@orkestrator/protocol/node/workspace-change-probe`).
  *
  * Cursor has no pre-execution hook — the bridge learns of a command from the
  * interaction stream once it is already running — so windows open in the
@@ -22,9 +22,9 @@
  * tool call itself — so a journal keyed by call id would have nothing to match.
  */
 import { resolve } from "node:path";
-import { hasMeasuredChanges } from "@orkestrator/protocol/command-change-journal";
+import { hasMeasuredChanges } from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import { workingDirectory } from "./config.js";
 import { schedulePersist } from "./persistence.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";

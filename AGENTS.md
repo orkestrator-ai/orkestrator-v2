@@ -18,6 +18,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `bridges/codex-bridge/` | [`bridges/codex-bridge/AGENTS.md`](bridges/codex-bridge/AGENTS.md) |
 | `bridges/pi-bridge/` | [`bridges/pi-bridge/AGENTS.md`](bridges/pi-bridge/AGENTS.md) |
 | `bridges/cursor-bridge/` | [`bridges/cursor-bridge/AGENTS.md`](bridges/cursor-bridge/AGENTS.md) |
+| `bridges/acp-bridge/` | [`bridges/acp-bridge/AGENTS.md`](bridges/acp-bridge/AGENTS.md) |
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
 | OpenCode provider, SDK pin or `patches/` | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
@@ -74,6 +75,15 @@ compression, or synchronization code, preserve these invariants:
 13. Closing a tab never deletes the conversation. Never call Claude's
     `DELETE /session/:id` or SDK `deleteSession`, Codex `thread/delete`, or
     OpenCode `client.session.delete` from a close path.
+14. A transcript row is one model response (one step of the agent loop),
+    never a whole turn. A turn kept alive by background work runs for hours,
+    and a multi-megabyte row fits no transcript window: readers get only a
+    trimmed copy and lose its start once newer rows push it out of the live
+    tail. Late updates find the row holding their call, a changed row outside
+    the live tail still reaches readers (`revisedMessages`), and everything
+    that leaves the live tail stays reachable through history paging. See
+    `bridges/AGENTS.md` ("Transcript rows"); each bridge's `AGENTS.md` names
+    its row boundary.
 
 Test the inactive-environment path: start work, switch away, let it progress or
 finish, return, and verify status, messages, pending prompts and controls.
@@ -269,6 +279,14 @@ reformatted. Rationale and exclusions are in
 - Iterate a collection you are about to mutate with
   `for (const x of Array.from(collection))`, not a spread; lint's suggested fix
   for the spread form silently skips entries.
+- Module boundaries are lint errors: no runtime import cycles
+  (`import/no-cycle`; type-only imports are exempt), no new `export let`, no
+  `node:`/`bun:` or `@orkestrator/protocol/node/*` value imports in the
+  renderer, no raw `@/lib/native/backend` in components, and
+  `@orkestrator/protocol/testing/*` only from tests. Top-level
+  `packages/protocol/src/*.ts` is shared with the browser; Node- or
+  Bun-dependent protocol code goes in `src/node/`, fixtures and fakes in
+  `src/testing/`. Fix a finding by moving code, not with a disable directive.
 
 ## Application Version Bumps
 
@@ -332,13 +350,10 @@ touching it:
 
 | File                                                     | Purpose                     |
 | -------------------------------------------------------- | --------------------------- |
-| `apps/web/src/components/codex/CodexChatTab.tsx`         | Codex Native Mode chat      |
 | `apps/web/src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
 | `apps/web/src/components/native-agent/AgentNativeTab.tsx` | Shared Native Mode chat   |
-| `apps/web/src/lib/codex-client.ts`                       | Codex bridge client wrapper |
-| `apps/web/src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
-| `apps/web/src/stores/codexStore.ts`                      | Codex state management      |
-| `apps/web/src/stores/openCodeStore.ts`                   | OpenCode state management   |
+| `apps/web/src/stores/codexStore.ts`                      | Codex model catalogue       |
+| `apps/web/src/stores/nativeAgentProjectionStore.ts`      | Native agent projections for every native platform (Claude, Codex, OpenCode, Cursor, Grok, Pi) |
 | `apps/web/src/lib/native/backend.ts`                     | Native IPC command wrapper  |
 
 ### Claude bridge
@@ -405,6 +420,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | -------------------------------------------------------------- | -------------------------------------------------- |
 | `bridges/codex-bridge/src/index.ts`                            | Routes, SSE, composition root                      |
 | `bridges/codex-bridge/src/app-server-runtime.ts`               | Session surface for the app-server engine          |
+| `bridges/codex-bridge/src/app-server-runtime-rows.ts`          | A turn's assistant rows: open, render, publish     |
 | `bridges/codex-bridge/src/event-ring.ts`                       | Bounded SSE replay buffer + cursor parsing         |
 | `bridges/codex-bridge/src/app-server/process-supervisor.ts`    | Child lifecycle, generations, restart policy       |
 | `bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`      | Transport; must never await consumer work          |
@@ -663,7 +679,9 @@ When touching the SDK bridge:
   removal before it answers success. Idle detach (`detachAgent`) is not a
   close and never sets the marker. A method the bridge does not serve on a
   session it *does* have answers 405, so a real gap cannot hide as a missing
-  session.
+  session. A close a previous process recorded but did not finish (a restored
+  tombstone) is finished by `src/session-tombstones.ts`, and resuming the same
+  conversation waits for it first.
 - `persistBarrier()` is a mandatory publication: it rejects when nothing
   reached disk, and prompt/steer dispatch, create, resume and identity-changing
   attach all wait for it. `schedulePersist()` is best-effort. Both share one
@@ -744,7 +762,7 @@ When touching any of them:
   the tab that finds no other mapping performs the provider close.
 - **Transcript v2 reads share one source and answer in band.** Every HTTP
   bridge serves `GET /session/:id/transcript?version=2` (summaries with detail
-  locators, `@orkestrator/protocol/bridge-transcript-summary`) plus
+  locators, `@orkestrator/protocol/node/bridge-transcript-summary`) plus
   `/transcript/detail` and `/transcript/page`, all built from one per-bridge
   read source via `bridge-transcript-routes`. Detail/page answer an unknown
   session 200 `missing`/`expired`, never 404; absent `version` stays v1.

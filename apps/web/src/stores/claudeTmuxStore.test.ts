@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { TranscriptContent, TranscriptLine } from "@/lib/claude-tmux-client";
-import { ERROR_MESSAGE_PREFIX, type ClaudeMessage } from "@/lib/claude-client";
+import type { ClaudeMessage } from "@/lib/claude-types";
+import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import {
   createClaudeTmuxStateKey,
   getEnvironmentIdFromClaudeTmuxStateKey,

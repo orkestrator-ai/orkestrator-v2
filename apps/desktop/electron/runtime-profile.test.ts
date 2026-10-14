@@ -13,7 +13,7 @@ import { APP_SLUG } from "./app-constants";
 import {
   RUNTIME_APP_SLUG,
   runtimeProfileStatusPath,
-} from "@orkestrator/protocol/runtime-profile-status";
+} from "@orkestrator/protocol/node/runtime-profile-status";
 
 const roots = {
   developmentRoot: path.join(path.sep, "safe", "orkestrator-v2-dev"),

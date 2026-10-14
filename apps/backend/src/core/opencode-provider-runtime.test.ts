@@ -14,6 +14,7 @@ import {
   openCodeActivityProvider,
 } from "./agent-provider-test-support.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
+import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { nativeCapabilities, nativeComposerControls } from "./native-agent-service-shared.js";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 
@@ -2301,6 +2302,56 @@ describe("OpenCode progressive discovery", () => {
         expect(snapshot.messages).toHaveLength(1);
       }
       expect(fake.messageCalls.every((call) => call?.sessionID !== "child-session")).toBe(true);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});
+
+describe("OpenCode provider history paging", () => {
+  test("pages older steps through OpenCode's own before cursor until the first message", async () => {
+    const server = openCodeHistoryServer(180);
+    const fake = openCodeFake();
+    fake.setMessagesHandler(async (parameters) => ({
+      data: server.read(
+        parameters?.limit as number | undefined,
+        parameters?.before as string | undefined,
+      ),
+    }));
+    const provider = openCodeActivityProvider(fake);
+    try {
+      // The joined path seeds the stream cache with OpenCode's 64 newest steps;
+      // that window must not then read as the whole conversation.
+      await provider.interactiveSnapshot?.("owned-session");
+      const snapshot = await provider.transcriptSnapshot!("owned-session", {
+        limit: 100,
+        targetBytes: 512 * 1024,
+      });
+      if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+      expect(snapshot.messages).toHaveLength(OPEN_CODE_MESSAGE_HISTORY_LIMIT);
+      expect(snapshot.complete).toBe(false);
+      expect(snapshot.historyEpoch).toEqual(expect.any(String));
+
+      const ids = snapshot.messages.map((message) => (message as { id: string }).id);
+      let cursor = snapshot.historyCursor;
+      while (cursor) {
+        const page = await provider.transcriptPage!("owned-session", {
+          cursor,
+          limit: 50,
+          targetBytes: 512 * 1024,
+        });
+        if (page?.status !== "page") throw new Error("expected a page");
+        expect(page.historyEpoch).toBe(snapshot.historyEpoch!);
+        expect(fake.messageCalls.at(-1)).toMatchObject({
+          sessionID: "owned-session",
+          limit: 51,
+          before: cursor,
+        });
+        ids.unshift(...page.messages.map((message) => (message as { id: string }).id));
+        cursor = page.historyCursor;
+        if (!cursor) expect(page.complete).toBe(true);
+      }
+      expect(ids).toEqual(server.messages.map((message) => message.info.id));
     } finally {
       await provider.dispose?.();
     }

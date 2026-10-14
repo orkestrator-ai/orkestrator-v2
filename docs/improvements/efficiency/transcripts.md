@@ -94,7 +94,7 @@ durable records, or verify dispatch was refused when persistence failed.
 
 Claude's [`GET /:id/transcript`](../../../bridges/claude-bridge/src/routes/session.ts#L535)
 passes no `revision` to `bridgeTranscriptUpdate`. In
-[`bridgeTranscriptToken`](../../../packages/protocol/src/progressive-transcript.ts#L42),
+[`bridgeTranscriptToken`](../../../packages/protocol/src/node/progressive-transcript.ts#L42),
 that selects `digest(JSON.stringify(messages))`. Token computation occurs
 before the unchanged check and before taking the last `limit` messages.
 
@@ -152,7 +152,7 @@ The update cost should be proportional to the changed record, not the store.
 
 **P2 · source-confirmed amplification; magnitude needs profiling.**
 
-The [`bridge transcript envelope`](../../../packages/protocol/src/progressive-transcript.ts#L76)
+The [`bridge transcript envelope`](../../../packages/protocol/src/node/progressive-transcript.ts#L76)
 returns either unchanged or a bounded snapshot. On a change, even unaffected
 messages in that window cross the bridge/backend boundary again. Downstream,
 [`transcriptDelta`](../../../apps/backend/src/core/native-agent-service-projection.ts#L1455)

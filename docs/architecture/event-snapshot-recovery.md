@@ -20,7 +20,7 @@ compare revisions from two generations of the same row.
 
 | Sequence | Owner and scope | Carried on | Who may use it |
 | --- | --- | --- | --- |
-| Gateway replay generation + revision | One backend process's replay ring (`apps/backend/src/gateway-event-replay.ts`); global across every non-droppable event | SSE `id` / cursor frames, `gateway.connected`, `gateway.reconcile-required` | The transport only (`apps/web/src/lib/native/web-gateway.ts`). A scoped subscription skips events it filters out, so its gaps are intentional. Domain code never sees this number. |
+| Gateway replay generation + revision | One backend process's replay ring (`apps/backend/src/gateway-event-replay.ts`); global across every non-droppable event | SSE `id` / cursor frames, `gateway.connected`, `gateway.reconcile-required` | The transport only: `packages/protocol/src/gateway-event-stream.ts`, shared by the browser gateway and the desktop client. A scoped subscription skips events it filters out, so its gaps are intentional. Domain code never sees this number. |
 | Connection epoch | One client; increments on every `native-event-stream-connected` | Client memory | Fences in-flight snapshot reads started before a fresh connection or replay miss. |
 | Resource revision | One backend process; `ResourceChange.revision`, contiguous across all persistent resource kinds on the main stream | `resource-changed` | `resource-sync.ts`: a gap or reset means the transport lost resource events, so it runs the manifest check (and the view safety checks below). |
 | Resource manifest generation / snapshot revisions | Persistent storage snapshots; opaque 128-bit hex digests | `get_resource_revision_manifest`, scoped manifests, conditional resource snapshots | Equality only. Covers persistent resources, not ephemeral views. |
@@ -29,6 +29,36 @@ compare revisions from two generations of the same row.
 | Native observation generation + revision (step 07) | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
 | Target generation (worktree snapshots, step 03) | One tracked environment's lineage inside a `DiffStatsService` generation (worktree path or container, comparison ref); a service-unique integer, new on retarget, resume from pause, or re-track | `targetGeneration` on worktree snapshot states and on file-list/tree read stamps | Equality only. A different value means the file list and tree describe a different target: re-read, never compare its revisions with the old lineage's. An untracked environment is announced as a removal. |
 | File-list / tree revision (step 03) | Per target lineage; advances on every semantic change of the changed-file list (paths, original paths, statuses, line counts, truncation) or of the bounded tree | `fileListRevision` / `treeRevision` in worktree snapshot states; `view.revision` on read responses | Decide whether the list or tree the client shows is older than the announced one. Never a content revision. |
+
+## Transport recovery — one contract for every client
+
+The browser gateway (`apps/web/src/lib/native/web-gateway.ts`) and the desktop
+client (`BackendHttpClient` in `apps/desktop/electron/backend-process.ts`)
+consume the authoritative stream through the same core,
+`GatewayEventStreamState` and `readSseStream` in
+`packages/protocol/src/gateway-event-stream.ts`:
+
+- Every reconnect resumes from the last cursor (`since=` or `Last-Event-ID`),
+  so the gateway replays what the ring still holds.
+- `native-event-stream-connected` is synthesized for the first fresh
+  connection and for every `gateway.reconcile-required`, never for a replayed
+  reconnect. Consumers that see it must refetch.
+- Replay control frames and a server frame named like the synthesized event
+  never reach ordinary listeners. One frame is bounded at
+  `MAX_GATEWAY_EVENT_FRAME_BYTES`.
+
+Both clients run the transport-neutral scenarios in
+`packages/protocol/src/gateway-event-stream-contract-fixtures.ts`. A consumer
+that folds live events over a snapshot should subscribe with
+`listenAuthoritative` (`apps/web/src/lib/native/authoritative-events.ts`),
+which registers the refetch alongside the event so it cannot be forgotten.
+
+Terminal input has the matching shared core, `TerminalInputSequencer`
+(`packages/protocol/src/terminal-input-sequencer.ts`), with its contract in
+`terminal-input-contract-fixtures.ts`. Its one deliberate divergence is the
+recovery rule after an ambiguous loss: the browser re-arms input on a
+successful resize, the desktop client only on a successful start
+(`TerminalInputRecovery`).
 
 Terminal output (generation/revision snapshot protocol with explicit desync)
 and native-agent transcript windows keep their own existing contracts and are

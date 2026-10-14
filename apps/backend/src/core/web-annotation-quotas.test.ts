@@ -8,7 +8,7 @@ import {
   WEB_ANNOTATION_CAPACITY,
   WEB_ANNOTATION_LIMITS,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureAnnotation } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureAnnotation } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { MATERIALIZED_EVIDENCE_RETENTION_MS } from "./web-annotation-materialization.js";
 import type { WebAnnotationFaultStage } from "./web-annotation-storage.js";
 import {

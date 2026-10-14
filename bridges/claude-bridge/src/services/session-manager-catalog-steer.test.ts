@@ -523,9 +523,14 @@ describe("Claude steer journal and transcript", () => {
       turn.call.push(finalText("steer-root", "steer reply"));
       const transcript = await turn.finish(["side-steer-a", "side-steer-b"]);
       const assistants = transcript.filter((m) => m.role === "assistant");
-      expect(assistants).toHaveLength(2);
-      expect(assistants[0]?.content).toContain("delayed original");
-      expect(assistants[1]?.content).toBe("steer reply");
+      // Each root response is a row of its own. Sidechain output whose call
+      // this turn never saw joins the current row, or opens one when the turn
+      // has none yet.
+      expect(assistants.map((m) => m.id)).toEqual(
+        emptySnapshot ? ["side-api", "old-root", "steer-root"] : ["old-root", "steer-root"],
+      );
+      expect(assistants.at(-2)?.content).toContain("delayed original");
+      expect(assistants.at(-1)?.content).toBe("steer reply");
       expect(transcript.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
         "Write the plan",
         "side-steer-a",
@@ -533,6 +538,26 @@ describe("Claude steer journal and transcript", () => {
       ]);
     });
   }
+
+  test("keeps a response that started before a steer above the steer, however late its content", async () => {
+    const turn = await startSteerTurn("Started before steer");
+    // The response is under way when the steer lands, but has produced nothing.
+    const [start, ...content] = textStream("pre-steer", 0, "written without the steer");
+    turn.call.push(start);
+    await turn.steer("late-steer");
+    for (const frame of content) turn.call.push(frame);
+    turn.call.push(finalText("pre-steer", "written without the steer"));
+    turn.result([turn.promptUuid], 0);
+    turn.call.push(finalText("steer-reply", "answer to the steer"));
+    const transcript = await turn.finish(["late-steer"]);
+
+    expect(transcript.map((message) => [message.role, message.content])).toEqual([
+      ["user", "Write the plan"],
+      ["assistant", "written without the steer"],
+      ["user", "late-steer"],
+      ["assistant", "answer to the steer"],
+    ]);
+  });
 
   /** Start a turn, stream its first text, and steer it. */
   async function steerAfterFirstText(title: string) {

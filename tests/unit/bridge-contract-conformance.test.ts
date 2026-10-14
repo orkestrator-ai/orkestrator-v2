@@ -28,7 +28,7 @@ describe("bridge contract capability matrix", () => {
       .filter((entry) => existsSync(path.join(root, "bridges", entry.name, "package.json")))
       .map((entry) => entry.name.replace(/-bridge$/, ""))
       .sort();
-    expect([...BRIDGE_IDS].sort()).toEqual(packages);
+    expect<string[]>([...BRIDGE_IDS].sort()).toEqual(packages);
     expect(Object.keys(BRIDGE_CONTRACT_CAPABILITIES).sort()).toEqual([...BRIDGE_IDS].sort());
   });
 

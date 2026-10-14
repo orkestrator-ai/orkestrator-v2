@@ -53,6 +53,7 @@ function harness(
   options: {
     toolTransport?: boolean;
     finalText?: string;
+    toolOnlyTail?: number;
     submission?: WorkflowResultSubmissionState;
     results?: WorkflowResultService;
     restored?: ReviewerRecord;
@@ -78,10 +79,19 @@ function harness(
     async status() {
       return status;
     },
-    async messages() {
-      return options.finalText === undefined
-        ? []
-        : [{ role: "assistant", parts: [{ type: "text", content: options.finalText }] }];
+    async messages(_sessionId: string, read?: { limit?: number }) {
+      const rows =
+        options.finalText === undefined
+          ? []
+          : [
+              { role: "assistant", parts: [{ type: "text", content: options.finalText }] },
+              ...Array.from({ length: options.toolOnlyTail ?? 0 }, () => ({
+                role: "assistant",
+                content: "",
+                parts: [{ type: "tool-invocation", toolName: "read" }],
+              })),
+            ];
+      return read?.limit ? rows.slice(-read.limit) : rows;
     },
     async structured() {
       return null;
@@ -322,6 +332,7 @@ describe("reviewer idle-result grace under wakeups", () => {
     const { reviewer, runner, sent, closed } = harness(() => "periodic", time, {
       toolTransport: true,
       finalText: '{"issues":[]}',
+      toolOnlyTail: 17,
     });
     await runner.advanceReviewers([reviewer]);
     time.jump(10_000);

@@ -138,7 +138,7 @@ has a reviewable inventory, a durable owner and an accurate terminal outcome.
 - **Decisions.** No automatic expiry. The cap blocks rather than evicts.
   Merge-triggered cleanup already runs through `deleteEnvironmentTask`, so it
   inherits the ledger contract, including recovery copies.
-- **Tests.** `tests/unit/electron/recovery-copies.test.ts` (grouping, listing,
+- **Tests.** `apps/backend/tests/recovery-copies.test.ts` (grouping, listing,
   discard success/partial/stale, restore refusals, deletion entry, volume
   classification, reviewed execution with a resource that became assigned and
   one outside the preview, token consumption). Live (Engine 29.7.2): C17 restore

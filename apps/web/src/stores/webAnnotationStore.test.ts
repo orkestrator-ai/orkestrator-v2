@@ -9,7 +9,7 @@ import {
   fixtureAnnotation,
   fixturePage,
   fixtureRequest,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   acquireWebAnnotationSync,
   registerWebAnnotationList,

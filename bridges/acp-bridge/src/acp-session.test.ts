@@ -904,3 +904,31 @@ describe("ACP bridge", () => {
     expect(JSON.stringify(loads.at(-1))).not.toContain("Bearer token-a");
   });
 });
+
+test("session/load hydration clears replay revisions before readers receive a summary", async () => {
+  const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_ROW_REVISION: "1" } });
+  const listed = (await nativeFetch(`${bridge.base}/session/list`, {
+    headers: bridge.headers,
+  }).then((result) => result.json())) as { sessions: Array<{ id: string; title?: string }> };
+  const external = listed.sessions.find((row) => row.title === "Previous ACP work")!;
+  const response = await nativeFetch(`${bridge.base}/session/resume`, {
+    method: "POST",
+    headers: bridge.headers,
+    body: JSON.stringify({ sessionId: external.id }),
+  });
+  expect(response.status).toBe(201);
+  const { sessionId } = (await response.json()) as { sessionId: string };
+  const summary = (await nativeFetch(
+    `${bridge.base}/session/${sessionId}/transcript?version=2&limit=1`,
+    { headers: bridge.headers },
+  ).then((result) => result.json())) as {
+    value: {
+      revisedMessages?: unknown[];
+      historyReconciliationToken?: string;
+      messages: unknown[];
+    };
+  };
+  expect(summary.value.messages).toHaveLength(1);
+  expect(summary.value.revisedMessages).toBeUndefined();
+  expect(summary.value.historyReconciliationToken).toBeUndefined();
+});

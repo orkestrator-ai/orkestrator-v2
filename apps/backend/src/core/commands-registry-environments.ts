@@ -26,14 +26,10 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import {
-  createEnvironment,
-  defaultEnvironmentName,
-  sanitizeEnvironmentName,
-  discoverAgentExtensions,
-  dockerOwnerNamespace,
-} from "./commands-dependencies.js";
-import type { Environment } from "./commands-dependencies.js";
+import { createEnvironment, defaultEnvironmentName, sanitizeEnvironmentName } from "./storage.js";
+import { discoverAgentExtensions } from "./extension-discovery.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import type { Environment } from "./models.js";
 import {
   terminalProcesses,
   mergingEnvironments,
@@ -176,6 +172,19 @@ export function registerEnvironmentCommands(
   register("get_environment", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     return environment ? reconcileProjectHomeEnvironment(environment, storage) : null;
+  });
+  // `claude-state-*` frames are emitted only on change, so a client whose
+  // disconnect outlasted gateway replay reads the persisted state here instead
+  // of waiting for the next transition. Only the state and its timestamp leave
+  // the backend; the other activity sources stay private. The renderer holds
+  // the stored id, so this is an exact match and never asks Docker.
+  register("get_claude_terminal_state", async ({ containerId }, { storage }) => {
+    const id = asString(containerId, "containerId");
+    const environment = (await storage.loadEnvironments()).find(
+      (candidate) => candidate.containerId === id,
+    );
+    const source = environment?.agentActivitySources?.["claude-terminal"];
+    return source ? { state: source.state, occurredAt: source.updatedAt } : null;
   });
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
     storage

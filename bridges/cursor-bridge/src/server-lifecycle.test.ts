@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { FakeIntervals } from "@orkestrator/protocol/fake-intervals";
+import { FakeIntervals } from "@orkestrator/protocol/testing/fake-intervals";
 
 // `config.ts` reads its environment once, at import, so everything below is
 // loaded after this suite's environment is in place.

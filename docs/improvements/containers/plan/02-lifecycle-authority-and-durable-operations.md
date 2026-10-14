@@ -166,7 +166,7 @@ through this boundary and recovery is proven with real Docker identities.
   marker, unreadable marker blocks writes.
 - **Generation binding.** `expectedRuntimeGeneration` on any command answers
   `runtime-changed` for a replaced runtime.
-- **Tests.** `tests/unit/electron/container-lifecycle-service.test.ts`
+- **Tests.** `apps/backend/tests/container-lifecycle-service.test.ts`
   (dedupe, bounds/horizon, revision conflicts, unsupported schema, every
   recovery-table row including crash after intent / after Docker success /
   after pointer persistence, ownership verdicts, lease exclusivity and

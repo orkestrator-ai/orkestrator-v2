@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { spawnCommand } from "./commands-dependencies.js";
+import { spawnCommand } from "./shell.js";
 
 /**
  * Backend-owned container log followers.

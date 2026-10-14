@@ -118,7 +118,8 @@ describe("build pipeline transcript projection", () => {
         }),
       ).toEqual({ unchanged: true, revision: record.revision });
 
-      // Same control revision, but one body is behind: the tail comes back.
+      // Same control revision, but one body is behind: the tail comes back,
+      // with the rows before it an older revision may hold stale copies of.
       const stale = await conditionalBuildPipelineRead(storage, record, {
         knownRevision: record.revision,
         knownSessions: { ...current, build: { revision: 2, count: 48 } },
@@ -128,14 +129,58 @@ describe("build pipeline transcript projection", () => {
       expect(stale.messagePatches).toEqual([
         {
           sessionKey: "build",
-          baseRevision: 2,
-          baseCount: 48,
-          startIndex: 47,
+          startIndex: 0,
           revision: 3,
-          messages: messages(50, "build").slice(47),
+          messages: messages(50, "build"),
         },
       ]);
       expect(JSON.stringify(stale.record)).not.toContain("legacy-0");
+    });
+  });
+
+  test("a change to an earlier row reaches a reader whose copy is from an older revision", async () => {
+    await withStorage(async (storage) => {
+      const first = messages(50, "build");
+      const session = await referencedSession(storage, "build", first, 1);
+      const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+        id: "p1",
+        phase: "building",
+        sessions: [session],
+        currentSessionIndex: 0,
+      });
+      const initial = await conditionalBuildPipelineRead(storage, record, { knownSessions: {} });
+      if (initial.unchanged) throw new Error("expected a patch");
+      let held = initial.messagePatches[0]!.messages;
+      expect(held).toEqual(first);
+
+      // A late tool result lands on a step several rows back, and a new step
+      // follows. Patching from the reader's last row only left the old copy.
+      const second = [...first, { id: "build-50", role: "assistant", text: "next" }];
+      second[0] = { ...(second[0] as object), text: "build:0 with its tool result" };
+      const updated = await referencedSession(storage, "build", second, 2);
+      const next = await storage.saveBuildPipeline("p1", "proj-1", "", record.revision, {
+        id: "p1",
+        phase: "building",
+        sessions: [updated],
+        currentSessionIndex: 0,
+      });
+      const read = await conditionalBuildPipelineRead(storage, next, {
+        knownRevision: record.revision,
+        knownSessions: { build: { revision: 1, count: held.length } },
+      });
+      if (read.unchanged) throw new Error("expected a patch");
+      const patch = read.messagePatches[0]!;
+      expect(patch).toMatchObject({ startIndex: 0, revision: 2 });
+      expect(patch.baseRevision).toBeUndefined();
+      held = [...held.slice(0, patch.startIndex), ...patch.messages];
+      expect(held).toEqual(second);
+
+      // Once current, the reader pages on from its tail without the overlap.
+      const current = await conditionalBuildPipelineRead(storage, next, {
+        knownSessions: { build: { revision: 2, count: 20 } },
+      });
+      if (current.unchanged) throw new Error("expected a patch");
+      expect(current.messagePatches[0]!.startIndex).toBe(19);
     });
   });
 
@@ -234,6 +279,110 @@ describe("build pipeline transcript projection", () => {
         held = [...held.slice(0, patch.startIndex), ...patch.messages];
       }
       expect(held).toEqual(body);
+    });
+  });
+
+  test("oversized normalized legacy OpenCode rows declare a limitation and do not fence later history", async () => {
+    await withStorage(async (storage) => {
+      const { record } = await seed(storage);
+      const raw = [
+        {
+          info: { id: "legacy-large", role: "assistant" },
+          parts: [{ type: "text", text: "x".repeat(17 * 1024 * 1024) }],
+        },
+        {
+          info: { id: "after-large", role: "assistant" },
+          parts: [{ type: "text", text: "Later history" }],
+        },
+      ];
+      expect(Buffer.byteLength(JSON.stringify(raw))).toBeLessThan(
+        BUILD_PIPELINE_PATCH_BUDGET_BYTES,
+      );
+      const legacy: PipelineSession = {
+        phase: "build",
+        iteration: 0,
+        sessionKey: "legacy-large",
+        sdkSessionId: "sdk-large",
+        status: "idle",
+        startedAt: "2026-09-01T00:00:00.000Z",
+        label: "legacy",
+        messageRevision: 1,
+        messages: raw,
+      };
+      const legacyRecord = { ...record, snapshot: { sessions: [legacy], currentSessionIndex: 0 } };
+      const read = await conditionalBuildPipelineRead(storage, legacyRecord, { knownSessions: {} });
+      if (read.unchanged) throw new Error("expected patches");
+      expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThanOrEqual(
+        BUILD_PIPELINE_PATCH_BUDGET_BYTES,
+      );
+      const patch = read.messagePatches[0]!;
+      expect(patch.deferred).toBeUndefined();
+      expect(patch.messages).toHaveLength(2);
+      expect(patch.messages[0]).toMatchObject({
+        id: "legacy-large",
+        content: expect.stringContaining("omitted from display"),
+      });
+      expect(patch.messages[1]).toMatchObject({ id: "after-large", content: "Later history" });
+      expect(
+        await conditionalBuildPipelineRead(storage, legacyRecord, {
+          knownRevision: record.revision,
+          knownSessions: { "legacy-large": { revision: 1, count: 2 } },
+        }),
+      ).toEqual({ unchanged: true, revision: record.revision });
+      const persisted = await storage.readBuildPipelineTranscript("p1", legacy);
+      expect(persisted.status === "found" && persisted.messages[0]).toBe(raw[0]);
+    });
+  });
+
+  test("a stored row too large for any response is replaced, not left to fence later rows", async () => {
+    await withStorage(async (storage) => {
+      // The store stops a budgeted page before the large row; the projection
+      // must still reach it, whether it follows other rows or starts the page.
+      const body = [
+        { id: "before", role: "assistant", content: "Earlier history" },
+        { id: "large", role: "assistant", content: "x".repeat(8 * 1024) },
+        { id: "after", role: "assistant", content: "Later history" },
+      ];
+      const session = await referencedSession(storage, "stored-large", body, 1);
+      const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+        id: "p1",
+        phase: "complete",
+        sessions: [session],
+        currentSessionIndex: 0,
+      });
+      const budget =
+        Buffer.byteLength(
+          JSON.stringify({
+            unchanged: false,
+            record: withoutTranscriptBodies(record),
+            messagePatches: [],
+          }),
+          "utf8",
+        ) + 2048;
+      let held: unknown[] = [];
+      for (let attempt = 0; attempt < 5 && held.length < body.length; attempt += 1) {
+        const read = await conditionalBuildPipelineRead(
+          storage,
+          record,
+          {
+            knownSessions: held.length
+              ? { "stored-large": { revision: 1, count: held.length } }
+              : {},
+          },
+          budget,
+        );
+        if (read.unchanged) throw new Error("expected a patch");
+        expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(budget);
+        const patch = read.messagePatches[0]!;
+        held = [...held.slice(0, patch.startIndex), ...patch.messages];
+      }
+      expect(held).toHaveLength(3);
+      expect(held[0]).toEqual(body[0]);
+      expect(held[1]).toMatchObject({
+        id: "large",
+        content: expect.stringContaining("omitted from display"),
+      });
+      expect(held[2]).toEqual(body[2]);
     });
   });
 
@@ -338,5 +487,127 @@ describe("build pipeline transcript projection", () => {
       expect(bySession.get("legacy")?.messages).toHaveLength(4);
       expect((read.record.snapshot as { phase: string }).phase).toBe("verifying");
     });
+  });
+
+  test("serves stored OpenCode envelopes as display messages, one for one", async () => {
+    await withStorage(async (storage) => {
+      // Stored exactly as the provider returned them; other backend readers
+      // (structured output, result evidence) parse this raw shape.
+      const openCode = (index: number) => ({
+        info: { id: `oc-${index}`, role: "assistant", time: { created: 1_800_000_000_000 } },
+        parts: [{ id: `part-${index}`, type: "text", text: `opencode:${index}` }],
+      });
+      const raw = [
+        openCode(0),
+        { info: { role: "assistant", time: { created: 1e18 } }, parts: [] },
+        { id: "flat", role: "assistant", content: "bridge row" },
+        openCode(3),
+      ];
+      const session = await referencedSession(storage, "oc", raw, 2);
+      const legacy = {
+        ...session,
+        sessionKey: "legacy-oc",
+        transcript: undefined,
+        messagesFingerprint: undefined,
+        messages: [openCode(9)],
+      };
+      const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+        id: "p1",
+        phase: "building",
+        sessions: [session, legacy],
+        currentSessionIndex: 0,
+      });
+
+      const whole = await conditionalBuildPipelineRead(storage, record, { knownSessions: {} });
+      if (whole.unchanged) throw new Error("expected patches");
+      const bySession = new Map(whole.messagePatches.map((patch) => [patch.sessionKey, patch]));
+      expect(bySession.get("oc")!.messages).toEqual([
+        {
+          id: "oc-0",
+          role: "assistant",
+          content: "opencode:0",
+          parts: [{ type: "text", content: "opencode:0", sourcePartId: "part-0" }],
+          createdAt: "2027-01-15T08:00:00.000Z",
+        },
+        // Out-of-range clock: no throw, no timestamp, a position-derived id.
+        { id: "opencode-message-1", role: "assistant", content: "", parts: [] },
+        raw[2],
+        expect.objectContaining({ id: "oc-3", content: "opencode:3" }),
+      ]);
+      expect(bySession.get("legacy-oc")!.messages).toEqual([
+        expect.objectContaining({ id: "oc-9", content: "opencode:9" }),
+      ]);
+
+      // A tail patch addresses the client's copy by raw index and count. The
+      // client's copy is from an older revision, so the rows before its tail
+      // are re-sent too — as display messages, like every other row.
+      const tail = await conditionalBuildPipelineRead(storage, record, {
+        knownSessions: { oc: { revision: 1, count: 3 }, "legacy-oc": { revision: 2, count: 1 } },
+      });
+      if (tail.unchanged) throw new Error("expected a patch");
+      const patch = tail.messagePatches.find((candidate) => candidate.sessionKey === "oc")!;
+      expect(patch).toMatchObject({ startIndex: 0 });
+      expect(patch.baseCount).toBeUndefined();
+      expect(patch.messages).toEqual([
+        expect.objectContaining({ id: "oc-0", content: "opencode:0" }),
+        { id: "opencode-message-1", role: "assistant", content: "", parts: [] },
+        raw[2],
+        expect.objectContaining({ id: "oc-3" }),
+      ]);
+
+      // The store itself still holds the provider's raw envelopes.
+      const stored = await storage.readBuildPipelineTranscript("p1", session);
+      expect(stored.status === "found" && stored.messages).toEqual(raw);
+    });
+  });
+});
+
+test("revision reconciliation pages every held row even beyond the old overlap byte cap", async () => {
+  await withStorage(async (storage) => {
+    const first = messages(50, "wide").map((row) => ({
+      ...(row as object),
+      content: "x".repeat(24 * 1024),
+    }));
+    const session = await referencedSession(storage, "wide", first, 1);
+    const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+      id: "p1",
+      phase: "building",
+      sessions: [session],
+      currentSessionIndex: 0,
+    });
+    const second = [...first, { id: "wide-50", role: "assistant", content: "new" }];
+    second[0] = { ...(second[0] as object), content: "late root result" };
+    second[36] = { ...(second[36] as object), content: "late overlap result" };
+    const updated = await referencedSession(storage, "wide", second, 2);
+    const next = await storage.saveBuildPipeline("p1", "proj-1", "", record.revision, {
+      id: "p1",
+      phase: "building",
+      sessions: [updated],
+      currentSessionIndex: 0,
+    });
+    let held: unknown[] = first;
+    let revision = 1;
+    for (let pass = 0; pass < 10; pass++) {
+      const read = await conditionalBuildPipelineRead(
+        storage,
+        next,
+        { knownSessions: { wide: { revision, count: held.length } } },
+        400 * 1024,
+      );
+      if (read.unchanged) throw new Error("expected a reconciliation patch");
+      const patch = read.messagePatches[0]!;
+      if (pass === 0) expect(patch.startIndex).toBe(0);
+      expect(patch.messages.length).toBeGreaterThan(0);
+      held = [...held.slice(0, patch.startIndex), ...patch.messages];
+      revision = patch.revision;
+      if (held.length === second.length) break;
+    }
+    expect(held).toEqual(second);
+    expect(
+      await conditionalBuildPipelineRead(storage, next, {
+        knownRevision: next.revision,
+        knownSessions: { wide: { revision, count: held.length } },
+      }),
+    ).toEqual({ unchanged: true, revision: next.revision });
   });
 });

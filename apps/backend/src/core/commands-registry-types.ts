@@ -1,14 +1,13 @@
-import {
-  createExtensionDiscoveryCache,
-  runCommand,
-  type AwaitBridgeReadyResult,
-  type ClaudeModelCatalogSnapshot,
-  type ConditionalResourceSnapshot,
-  type Environment,
-  type ResourceManifestKind,
-  type StorageService,
-  type ClaudeStatePollManager,
-} from "./commands-dependencies.js";
+import { createExtensionDiscoveryCache } from "./extension-discovery.js";
+import { runCommand } from "./shell.js";
+import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
+import type { ClaudeModelCatalogSnapshot, Environment } from "./models.js";
+import type {
+  ConditionalResourceSnapshot,
+  ResourceManifestKind,
+} from "@orkestrator/protocol/resource-events";
+import type { StorageService } from "./storage.js";
+import type { ClaudeStatePollManager } from "./tmux.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";

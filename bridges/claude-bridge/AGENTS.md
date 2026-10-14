@@ -40,6 +40,17 @@ writers on one `.jsonl`. When touching the prompt path:
   applied. During join setup, the session generation fences the old turn's
   input-close and retention paths until submission transfers runtime ownership.
 
+## One row per model response
+
+The live loop (`session-manager-prompt-stream.ts`) writes each root model
+response (one API message id) to a row of its own; a subagent's output joins
+the row holding the call that started it. Never fold a whole turn back into one
+row: a turn the CLI keeps alive for background work runs for hours, and a
+single multi-megabyte row fits no transcript window, so readers can only show a
+trimmed copy and lose it once a newer row pushes it out of the live tail. A
+tool result, denial or command change rebuilds the row holding that call
+(`refreshToolRows`), not only the newest one.
+
 ## Session catalogue and transport
 
 When touching the session catalogue (`session-manager-catalog.ts`):

@@ -23,10 +23,9 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
 } from "@orkestrator/protocol/native-agent";
-import { useConfigStore, useEnvironmentStore, useProjectStore } from "@/stores";
+import { useConfigStore, useProjectStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
@@ -60,12 +59,9 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   // publishes its models after the launcher has mounted.
   const claudeModels = useClaudeStore((state) => state.models);
   const codexModels = useCodexStore((state) => state.models);
-  const openCodeModels = useOpenCodeStore((state) => state.models);
-  const openCodeModelSources = useOpenCodeStore((state) => state.modelSource);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
-  const environments = useEnvironmentStore((state) => state.environments);
   const favoriteModels = useConfigStore((state) => state.config.global.favoriteModels);
   const openCodeModelProviders = useConfigStore(
     (state) => state.config.global.openCodeModelProviders,
@@ -104,30 +100,20 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     };
   }, [catalogRefreshRevision, enabled, projectId]);
 
-  // OpenCode catalogs are repository-scoped. A live catalog may supersede the
-  // durable cache only when its environment belongs to this project.
+  // OpenCode catalogs are repository-scoped and come from the backend's durable
+  // per-project cache.
   const projectOpenCodeModels = useMemo(() => {
-    const projectEnvironmentIds = new Set(
-      environments
-        .filter((environment) => environment.projectId === projectId)
-        .map((environment) => environment.id),
-    );
-    const live = Array.from(projectEnvironmentIds)
-      .filter((environmentId) => openCodeModelSources.get(environmentId) === "server")
-      .flatMap((environmentId) => openCodeModels.get(environmentId) ?? []);
     const cached =
       cachedOpenCodeCatalog?.projectId === projectId ? cachedOpenCodeCatalog.models : [];
-    const selected = live.length > 0 ? live : cached;
-    return selected.filter(
+    return cached.filter(
       (model, index, models) =>
         models.findIndex((candidate) => candidate.id === model.id) === index,
     );
-  }, [cachedOpenCodeCatalog, environments, openCodeModelSources, openCodeModels, projectId]);
+  }, [cachedOpenCodeCatalog, projectId]);
 
   const catalog = useMemo(() => {
-    // `null` retains the standard Claude/Codex catalogs and the unpinned
-    // OpenCode placeholder without aggregating another project's models.
-    const baseCatalog = buildReviewModelCatalog(null);
+    // The standard Claude/Codex catalogs and the unpinned OpenCode placeholder.
+    const baseCatalog = buildReviewModelCatalog();
     const allowedProviders = normalizeOpenCodeModelProviders(openCodeModelProviders);
     const favoriteOpenCodeIds = (favoriteModels ?? [])
       .filter((favorite) => favorite.platform === "opencode")

@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { useClaudeStore } from "@/stores/claudeStore";
+import { afterEach, describe, expect, test } from "bun:test";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { Environment } from "@/types";
 import {
   applyEnvironmentSetupComplete,
@@ -18,13 +16,8 @@ import {
   markWindowBuildPipelineHandoffResolved,
 } from "@/lib/pane-selection-storage";
 
-const originalClaudeClose = useClaudeStore.getState().closeEventSubscription;
-const originalOpenCodeClose = useOpenCodeStore.getState().closeEventSubscription;
-
 afterEach(() => {
   localStorage.clear();
-  useClaudeStore.setState({ closeEventSubscription: originalClaudeClose });
-  useOpenCodeStore.setState({ closeEventSubscription: originalOpenCodeClose });
   useEnvironmentStore.setState({ environments: [] });
 });
 
@@ -48,18 +41,6 @@ function environment(id: string, projectId: string): Environment {
 }
 
 describe("cleanupDeletedEnvironmentSubscriptions", () => {
-  test("stops both store-owned subscriptions for the deleted environment", () => {
-    const closeClaude = mock((_environmentId: string) => {});
-    const closeOpenCode = mock((_environmentId: string) => {});
-    useClaudeStore.setState({ closeEventSubscription: closeClaude });
-    useOpenCodeStore.setState({ closeEventSubscription: closeOpenCode });
-
-    cleanupDeletedEnvironmentSubscriptions("env-deleted");
-
-    expect(closeClaude).toHaveBeenCalledWith("env-deleted");
-    expect(closeOpenCode).toHaveBeenCalledWith("env-deleted");
-  });
-
   test("retires the creating window's startup-agent handoff on deletion", () => {
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {
@@ -98,22 +79,32 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
     }
   });
 
-  test("stops only subscriptions removed by an authoritative project snapshot", () => {
-    const closeClaude = mock((_environmentId: string) => {});
-    const closeOpenCode = mock((_environmentId: string) => {});
-    useClaudeStore.setState({ closeEventSubscription: closeClaude });
-    useOpenCodeStore.setState({ closeEventSubscription: closeOpenCode });
-    const removed = environment("removed", "project-1");
-    const surviving = environment("surviving", "project-1");
-    const otherProject = environment("other-project", "project-2");
-    useEnvironmentStore.setState({
-      environments: [removed, surviving, otherProject],
+  test("cleans up only environments removed by an authoritative project snapshot", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
     });
+    try {
+      const removed = environment("removed", "project-1");
+      const surviving = environment("surviving", "project-1");
+      const otherProject = environment("other-project", "project-2");
+      useEnvironmentStore.setState({
+        environments: [removed, surviving, otherProject],
+      });
+      for (const id of ["removed", "surviving", "other-project"]) {
+        armWindowStartupAgentActivation(id);
+      }
 
-    cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving]);
+      cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving]);
 
-    expect(closeClaude.mock.calls).toEqual([["removed"]]);
-    expect(closeOpenCode.mock.calls).toEqual([["removed"]]);
+      expect(consumeWindowStartupAgentActivation("removed")).toBe(false);
+      expect(consumeWindowStartupAgentActivation("surviving")).toBe(true);
+      expect(consumeWindowStartupAgentActivation("other-project")).toBe(true);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
   });
 });
 

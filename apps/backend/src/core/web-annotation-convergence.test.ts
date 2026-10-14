@@ -14,7 +14,7 @@ import {
   WEB_ANNOTATIONS_CHANGED_EVENT,
   type WebAnnotationChangeHint,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { WebAnnotationService } from "./web-annotation-service.js";
 import {
   ENV_A,

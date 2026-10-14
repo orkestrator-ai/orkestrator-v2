@@ -291,7 +291,9 @@ async function hashBundleArchive(
 
     const hash = createHash("sha256");
     let size = 0;
-    stream.on("data", (chunk: Buffer) => {
+    stream.on("data", (data: unknown) => {
+      // tar-stream entry streams emit Buffer chunks; the typings say `unknown`.
+      const chunk = data as Buffer;
       size += chunk.byteLength;
       hash.update(chunk);
     });

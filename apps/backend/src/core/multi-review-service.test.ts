@@ -3958,6 +3958,11 @@ test.each(["grok", "cursor", "pi", "codex"] as const)(
 
 test("a consolidation that pastes its report instead of submitting it says so", async () => {
   const provider = new Provider(false);
+  const originalMessages = provider.messages.bind(provider);
+  provider.messages = async (id, options) => {
+    const rows = await originalMessages(id, options);
+    return options?.limit ? rows.slice(-options.limit) : rows;
+  };
   const environmentId = "env-tool-results-pasted";
   await withService(
     environmentId,
@@ -3981,6 +3986,11 @@ test("a consolidation that pastes its report instead of submitting it says so", 
       // The model could not reach its submit tool and answered in text.
       provider.messagesValue = [
         { role: "assistant", parts: [{ type: "text", content: JSON.stringify(cleanReport) }] },
+        ...Array.from({ length: 17 }, () => ({
+          role: "assistant",
+          content: "",
+          parts: [{ type: "tool-invocation", toolName: "read" }],
+        })),
       ];
       await waitUntil(async () => {
         await service.advanceNow(started.id);

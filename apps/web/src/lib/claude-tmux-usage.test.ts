@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import { applyTmuxAgentUsageSummaries } from "./claude-tmux-usage";
 import { parseTmuxAgentUsageSummaries } from "@orkestrator/protocol/tmux-observation";
 

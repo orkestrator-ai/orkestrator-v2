@@ -41,7 +41,7 @@ import type {
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { bridgeGeneration } from "./config.js";
-import { chargeTranscript } from "./transcript.js";
+import { chargeTranscript, rowChanged } from "./transcript.js";
 import type { BridgeMessage, BridgeMessagePart, PiCommandRun, SessionState } from "./state.js";
 
 export type PiCommandKind = "template" | "skill" | "extension";
@@ -540,7 +540,7 @@ export function settleCommandRun(
     return undefined;
   }
   // The command started a model turn and it answered; that reply is the outcome.
-  if (state.currentAssistantMessageId !== undefined) return undefined;
+  if (state.turnOpenedAssistantRow === true) return undefined;
   const output = truncateUtf8(run.output.join("\n\n"), MAX_COMMAND_OUTPUT_BYTES);
   appendCommandOutcome(
     state,
@@ -578,5 +578,5 @@ function appendCommandOutcome(
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
-  state.revision += 1;
+  rowChanged(state, message);
 }

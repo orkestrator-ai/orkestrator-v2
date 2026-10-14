@@ -7,7 +7,7 @@ import type {
 } from "@orkestrator/protocol/design-operations";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
-import { DesignClientError } from "./design-client";
+import { DesignClientError } from "@/lib/design-client";
 import {
   buildDesignAgentPrompt,
   DesignLaunchError,

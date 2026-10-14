@@ -123,7 +123,12 @@ export function resolveCursorSettingSources(
 export const settingSources: Array<"user" | "project"> = resolveCursorSettingSources();
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
-export const MAX_MESSAGES = 500;
+/**
+ * Retained transcript rows. A turn writes one row per model step, so this
+ * counts steps rather than turns; `MAX_TRANSCRIPT_BYTES` is what bounds
+ * memory, and dropping whole oldest rows is what keeps the live turn intact.
+ */
+export const MAX_MESSAGES = 2_000;
 /**
  * The rendered-transcript display budget. Overridable only *downwards* and
  * only within a bounded range, so a test can reach the trim floor without

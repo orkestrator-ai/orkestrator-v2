@@ -1,4 +1,4 @@
-import { runCommand } from "../commands-dependencies.js";
+import { runCommand } from "../shell.js";
 import type { Environment } from "../models.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
 import { runWithContinuation } from "./background.js";

@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { BeginOptions } from "@orkestrator/protocol/workspace-change-probe";
+import type { BeginOptions } from "@orkestrator/protocol/node/workspace-change-probe";
 import { readCommandChanges, type CommandChangeProbe } from "./sessions/command-changes.js";
 import type { NormalizedPart } from "./messages/types.js";
+import { MAX_TRACKED_ASSISTANT_ROWS } from "./app-server-runtime-base.js";
 
 import {
   codexHome,
@@ -227,5 +228,114 @@ describe("shell command line changes", () => {
 
     expect(probe.calls).toContain("discard server");
     expect(probe.calls).not.toContain("end server");
+  });
+
+  /** Waits for the notifications so far to be published, up to `lastToolId`'s row. */
+  async function settled(h: Harness, sessionId: string, lastToolId: string): Promise<void> {
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    await waitUntil(
+      async () =>
+        (await h.runtime.getMessages(sessionId))!
+          .at(-1)!
+          .parts.some((part) => part.toolUseId === lastToolId && part.toolState === "success"),
+      `${lastToolId} was not published`,
+      5_000,
+    );
+  }
+
+  /** A later model response: it reasons, then its command runs to completion. */
+  function nextResponse(h: Harness, step: number): void {
+    const reasoning = { id: `r${step}`, type: "reasoning", summary: ["next"], content: [] };
+    for (const method of ["item/started", "item/completed"] as const) {
+      h.child().notify(method, { threadId: "thread-1", turnId: "turn-1", item: reasoning });
+    }
+    notifyCommand(h, "item/started", { id: `c${step}`, source: "userShell" });
+    notifyCommand(h, "item/completed", { id: `c${step}`, source: "userShell" });
+  }
+
+  test("a measurement landing after the next response began patches the command's own row", async () => {
+    const probe = new FakeProbe();
+    const { h, sessionId } = await startTurn(probe);
+    const gate = deferredSignal();
+    probe.gates.set("c1", gate.promise);
+    probe.results.set("c1", change);
+
+    notifyCommand(h, "item/started", { id: "c1" });
+    notifyCommand(h, "item/completed", { id: "c1" });
+    nextResponse(h, 2);
+    // Not `drain`: that would wait for the gated measurement.
+    await settled(h, sessionId, "c2");
+    const [, commandRow, nextRow] = (await h.runtime.getMessages(sessionId))!;
+    expect(commandRow?.parts.some((part) => part.toolUseId === "c1")).toBe(true);
+    expect(nextRow?.parts.some((part) => part.toolUseId === "c2")).toBe(true);
+
+    const before = h.events.length;
+    gate.resolve();
+    await h.drain();
+
+    expect((await bashPart(h, sessionId, "c1")).commandChanges).toEqual(change);
+    const patched = h.events
+      .slice(before)
+      .filter((event) => event.type === "message.patched")
+      .map((event) => (event.data as { messageId: string }).messageId);
+    expect(patched).toEqual([commandRow!.id]);
+  });
+
+  test("a measurement for a row past the tracking bound patches the stored row", async () => {
+    const probe = new FakeProbe();
+    const { h, sessionId } = await startTurn(probe);
+    const gate = deferredSignal();
+    probe.gates.set("c1", gate.promise);
+    probe.results.set("c1", change);
+
+    notifyCommand(h, "item/started", { id: "c1" });
+    notifyCommand(h, "item/completed", { id: "c1" });
+    for (let step = 2; step <= MAX_TRACKED_ASSISTANT_ROWS + 3; step += 1) nextResponse(h, step);
+    await settled(h, sessionId, `c${MAX_TRACKED_ASSISTANT_ROWS + 3}`);
+    const commandRow = (await h.runtime.getMessages(sessionId))![1]!;
+
+    const before = h.events.length;
+    gate.resolve();
+    await h.drain();
+
+    // The row no longer re-renders, but the turn is still streaming: the
+    // measurement must not wait for a render that will never come.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ phase: "running" });
+    expect((await bashPart(h, sessionId, "c1")).commandChanges).toEqual(change);
+    const patch = h.events.slice(before).find((event) => event.type === "message.patched")?.data as
+      | { messageId: string; changedParts: { part: NormalizedPart }[] }
+      | undefined;
+    expect(patch?.messageId).toBe(commandRow.id);
+    expect(patch?.changedParts.map(({ part }) => part.commandChanges)).toEqual([change]);
+  });
+
+  test("a measurement after the turn notes its row with the revision, not with the send", async () => {
+    const probe = new FakeProbe();
+    const { h, sessionId } = await startTurn(probe);
+    notifyCommand(h, "item/started", { id: "c1" });
+    notifyCommand(h, "item/completed", { id: "c1" });
+    await settled(h, sessionId, "c1");
+    nextResponse(h, 2);
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    const commandRow = (await h.runtime.getMessages(sessionId))![1]!;
+    expect(h.runtime.getRevisedMessageIds(sessionId)).not.toContain(commandRow.id);
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, { orderedReconcilePending: boolean }>;
+      applyCommandChanges(threadId: string, itemId: string, value: MeasuredWorkspaceChange): void;
+    };
+    // The patch's send waits behind the coalesced flush, and an overflowed
+    // ordered-event queue drops it for a reconcile.
+    runtime.threadState.get("thread-1")!.orderedReconcilePending = true;
+    runtime.applyCommandChanges("thread-1", "c1", change);
+    // Noted before anything awaits: a read now must not cache a token without it.
+    expect(h.runtime.getRevisedMessageIds(sessionId)).toEqual([commandRow.id]);
+    await h.drain();
+    expect(h.runtime.getRevisedMessageIds(sessionId)).toEqual([commandRow.id]);
+    expect((await bashPart(h, sessionId, "c1")).commandChanges).toEqual(change);
   });
 });

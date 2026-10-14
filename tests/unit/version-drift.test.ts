@@ -121,7 +121,7 @@ function getDockerfileArg(argName: string): string {
   if (!match) {
     throw new Error(`Expected ARG ${argName} in docker/Dockerfile`);
   }
-  return match[1];
+  return match[1]!;
 }
 
 function getDockerfileArchitectureDigest(
@@ -139,7 +139,7 @@ function getDockerfileArchitectureDigest(
   if (!match) {
     throw new Error(`Expected ${digestVariable} for ${dockerArchitecture} in docker/Dockerfile`);
   }
-  return match[1];
+  return match[1]!;
 }
 
 function getShellVar(scriptRel: string, varName: string): string {
@@ -148,7 +148,7 @@ function getShellVar(scriptRel: string, varName: string): string {
   if (!match) {
     throw new Error(`Expected ${varName} in ${scriptRel}`);
   }
-  return match[1];
+  return match[1]!;
 }
 
 function getMiseToolVersion(tool: string): string {
@@ -157,7 +157,7 @@ function getMiseToolVersion(tool: string): string {
   if (!match) {
     throw new Error(`Expected ${tool} in mise.toml [tools]`);
   }
-  return match[1];
+  return match[1]!;
 }
 
 function getDockerfileBaseImageTag(): string {
@@ -166,7 +166,7 @@ function getDockerfileBaseImageTag(): string {
   if (!match) {
     throw new Error("Expected `FROM oven/bun:<tag>` in docker/Dockerfile");
   }
-  return match[1];
+  return match[1]!;
 }
 
 /** Every `FROM oven/bun` line, as `tag@digest`. */
@@ -278,13 +278,11 @@ const AGENT_PINS: Record<string, AgentPins> = {
   opencode: {
     dockerArg: "OPENCODE_CLI_VERSION",
     containerInstall: "pinned-archive",
-    sdkPins: [
-      { file: "apps/web/package.json", dep: "@opencode-ai/sdk", tracksCli: true },
-      // The backend drives build pipelines through the same SDK. Checking only
-      // the web workspace is how native chat can look healthy while pipelines
-      // still speak the previous contract.
-      { file: "apps/backend/package.json", dep: "@opencode-ai/sdk", tracksCli: true },
-    ],
+    // The backend is the only OpenCode client: it drives native chat and build
+    // pipelines alike, and the live compatibility probe resolves the SDK from
+    // it. `OpenCode: the renderer does not depend on the SDK` keeps it the only
+    // pin.
+    sdkPins: [{ file: "apps/backend/package.json", dep: "@opencode-ai/sdk", tracksCli: true }],
   },
   grok: {
     dockerArg: "GROK_BUILD_VERSION",
@@ -385,7 +383,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       /^\d+\.\d+\.\d+$/,
     );
     expect(Object.keys(PINNED_TOOLCHAIN_VERSIONS)).not.toContain("cursor");
-    expect(PINNED_TOOLCHAIN_ARTIFACTS.some((artifact) => artifact.name === "cursor")).toBe(false);
+    expect(PINNED_TOOLCHAIN_ARTIFACTS.some(({ name }: { name: string }) => name === "cursor")).toBe(
+      false,
+    );
     expect(dockerfileInstructions()).not.toContain("CURSOR_AGENT_VERSION");
   });
 
@@ -646,7 +646,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       "bridges/codex-bridge/src/app-server/generated",
     );
     expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(config.version);
-    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(config.version);
+    expect<string>(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(config.version);
   });
 
   test("Codex: committed app-server protocol manifest matches the pinned version", () => {
@@ -774,13 +774,23 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
-  test("OpenCode: the SDK pin, patch registration, patch file and lockfile stay aligned", () => {
-    const webVersion = expectExactVersion("apps/web/package.json", "@opencode-ai/sdk");
-    const backendVersion = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
-    expect(backendVersion).toBe(webVersion);
+  test("OpenCode: the renderer does not depend on the SDK", () => {
+    // The renderer has no OpenCode client; only the backend talks to
+    // `opencode serve`. A second pin would be a second version to keep in step
+    // with the CLI and the patch for no consumer.
+    const pkg = JSON.parse(read("apps/web/package.json")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    expect(pkg.dependencies?.["@opencode-ai/sdk"]).toBeUndefined();
+    expect(pkg.devDependencies?.["@opencode-ai/sdk"]).toBeUndefined();
+  });
 
-    const expectedKey = `@opencode-ai/sdk@${webVersion}`;
-    const expectedPatch = `patches/@opencode-ai%2Fsdk@${webVersion}.patch`;
+  test("OpenCode: the SDK pin, patch registration, patch file and lockfile stay aligned", () => {
+    const backendVersion = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
+
+    const expectedKey = `@opencode-ai/sdk@${backendVersion}`;
+    const expectedPatch = `patches/@opencode-ai%2Fsdk@${backendVersion}.patch`;
     const rootPackage = JSON.parse(read("package.json")) as {
       patchedDependencies?: Record<string, string>;
     };
@@ -804,7 +814,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     );
     expect(lockPatchKeys).toEqual([expectedKey]);
     expect(lock.patchedDependencies?.[expectedKey]).toBe(expectedPatch);
-    expect(lockfileResolvedVersion("bun.lock", "@opencode-ai/sdk")).toBe(webVersion);
+    expect(lockfileResolvedVersion("bun.lock", "@opencode-ai/sdk")).toBe(backendVersion);
   });
 
   test("Cursor: the diagnostic seam patch matches the SDK pin and lockfile", () => {
@@ -1229,7 +1239,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     for (const platform of ["darwin", "linux"] as const) {
       for (const architecture of ["arm64", "x64"] as const) {
         const selected = pinnedToolchainArtifacts(platform, architecture);
-        expect(selected.map((artifact) => artifact.name).sort()).toEqual(
+        expect<string[]>(selected.map((artifact) => artifact.name).sort()).toEqual(
           Object.keys(PINNED_TOOLCHAIN_VERSIONS).sort(),
         );
         expect(
@@ -1264,7 +1274,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(() =>
       selectPinnedToolchainArtifacts(
-        [darwinArm64[0], darwinArm64[0], darwinArm64[1]],
+        [darwinArm64[0]!, darwinArm64[0]!, darwinArm64[1]!],
         "darwin",
         "arm64",
       ),

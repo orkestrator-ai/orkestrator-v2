@@ -5,7 +5,7 @@ import {
   bridgeTranscriptPageRouteBody,
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import {
   getSessionMessages,
   hydratePersistedSessionMessages,
@@ -57,6 +57,12 @@ export function claudeTranscriptSource(
       complete: loaded,
       freshness: loaded ? "current" : "cached",
       title: sessionData.title,
+      ...(sessionData.revisedRows
+        ? {
+            revisedMessageIds: sessionData.revisedRows.ids(),
+            revisedRowsOverflowVersion: sessionData.revisedRows.overflowVersion,
+          }
+        : {}),
     },
   };
 }

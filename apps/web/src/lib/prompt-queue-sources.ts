@@ -1,4 +1,3 @@
-import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import {
   applyPromptQueueSnapshot,
   claimPromptQueueHead,
@@ -8,33 +7,20 @@ import {
   type PromptQueueSource,
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
-import {
-  awaitComposeDraftWrites,
-  composeDraftKey,
-  recordComposeDraftRevision,
-} from "@/lib/compose-draft-persistence";
-import {
-  composerOccupiedError,
-  isWebAnnotationQueueItemFrozenError,
-  webAnnotationQueueItemFrozenError,
-  isComposeDraftOccupiedBackendError,
-} from "@/lib/prompt-queue-errors";
 import * as backend from "@/lib/backend";
-import { useClaudeStore } from "@/stores/claudeStore";
 import {
   getEnvironmentIdFromClaudeTmuxStateKey,
   useClaudeTmuxStore,
 } from "@/stores/claudeTmuxStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 
 /**
- * Adapts each agent store to backend-owned prompt-queue snapshots.
+ * Adapts renderer agent stores to backend-owned prompt-queue snapshots.
  *
- * All four agents already expose the same queue shape (an ordered list of
- * messages with stable ids, keyed by tab); they differ only in how their key
- * encodes the environment. The stores are renderer projections only; mutation
- * helpers below always call the backend before installing a new snapshot.
+ * Only Claude Tmux keeps a renderer queue projection. Native agents (Claude,
+ * Codex, OpenCode and the rest) are queued and drained by the backend and
+ * render their queue from the native-agent projection, so they have no source
+ * here. The store is a projection only; mutation helpers below always call the
+ * backend before installing a new snapshot.
  */
 
 type AnyQueueStore = {
@@ -65,30 +51,12 @@ function createSource(
   };
 }
 
-/**
- * Every agent whose queue is projected. Claude native, Codex and OpenCode share
- * the `env-{id}:{tab}` key; tmux uses its own scoped form.
- */
+/** Every agent whose queue is projected into a renderer store. */
 let sharedSources: PromptQueueSource[] | null = null;
 
 function getSharedSources(): PromptQueueSource[] {
   if (sharedSources) return sharedSources;
   sharedSources = [
-    createSource(
-      "claude",
-      useClaudeStore as unknown as AnyQueueStore,
-      getEnvironmentIdFromSessionKey,
-    ),
-    createSource(
-      "codex",
-      useCodexStore as unknown as AnyQueueStore,
-      getEnvironmentIdFromSessionKey,
-    ),
-    createSource(
-      "opencode",
-      useOpenCodeStore as unknown as AnyQueueStore,
-      getEnvironmentIdFromSessionKey,
-    ),
     createSource(
       "claude-tmux",
       useClaudeTmuxStore as unknown as AnyQueueStore,
@@ -123,29 +91,6 @@ export async function retryAgentPromptQueueDispatch(
   const source = getSharedSources().find((candidate) => candidate.agent === agent);
   if (!source) return;
   await retryPromptQueueDispatch(source, sessionKey);
-}
-
-/**
- * Drops a launch prompt from the durable queue once the renderer's own dispatch
- * of that request id was accepted. When a tab mounts before the backend enqueue
- * settles, both paths carry the same request id; the tab winning that race would
- * otherwise leave the head queued, where it lingers in the projection and can be
- * re-promoted as a prompt that was never sent. Best effort: if the queue or
- * backend is unavailable, the periodic scan reconciles the head on its next pass.
- */
-export async function clearQueuedLaunchPrompt(
-  agent: "claude" | "codex" | "opencode",
-  sessionKey: string,
-  launchRequestId: string,
-): Promise<void> {
-  try {
-    await removeAgentPrompt(agent, sessionKey, launchRequestId);
-  } catch (error) {
-    console.debug(
-      `[prompt-queue] Could not clear already-sent launch prompt ${launchRequestId}:`,
-      error,
-    );
-  }
 }
 
 function sourceFor<TItem extends QueuedItem>(agent: string): PromptQueueSource<TItem> | null {
@@ -263,57 +208,6 @@ export async function removeAgentPrompt<TItem extends QueuedItem>(
     applyPromptQueueSnapshot(source, result.queue);
   } else {
     source.setQueue(sessionKey, []);
-  }
-  return result.removed;
-}
-
-export async function transferAgentPromptToComposeDraft<TItem extends QueuedItem>(
-  agent: "claude" | "codex" | "opencode",
-  sessionKey: string,
-  messageId: string,
-): Promise<TItem | null> {
-  const source = sourceFor<TItem>(agent);
-  if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
-  const identity = queueIdentity(source, sessionKey);
-  const draftKey = composeDraftKey(agent, identity.environmentId, sessionKey);
-
-  // The composer persists its own draft on a debounce. Transferring before those
-  // writes settle makes the backend judge the draft slot against a stale record:
-  // an unfinished save looks like an occupied composer, and an unfinished delete
-  // looks like an empty one.
-  await awaitComposeDraftWrites(draftKey);
-
-  let result: Awaited<ReturnType<typeof backend.transferPromptQueueMessageToComposeDraft<TItem>>>;
-  try {
-    result = await backend.transferPromptQueueMessageToComposeDraft<TItem>(
-      identity.queueKey,
-      identity.environmentId,
-      messageId,
-      draftKey,
-      "environment",
-      identity.environmentId,
-    );
-  } catch (error) {
-    // The backend never overwrites a draft it did not create. That is a state
-    // the user can clear themselves, so it must not surface as an opaque
-    // "could not confirm" failure.
-    if (isComposeDraftOccupiedBackendError(error)) {
-      throw composerOccupiedError({ cause: error });
-    }
-    // A web annotation request is a frozen snapshot: it can be removed (which
-    // cancels it) but never turned back into an editable draft.
-    if (isWebAnnotationQueueItemFrozenError(error)) {
-      throw webAnnotationQueueItemFrozenError({ cause: error });
-    }
-    throw error;
-  }
-  if (result.queue) {
-    applyPromptQueueSnapshot(source, result.queue);
-  } else {
-    source.setQueue(sessionKey, []);
-  }
-  if (result.draft && typeof result.draft.revision === "number") {
-    recordComposeDraftRevision(draftKey, result.draft.revision);
   }
   return result.removed;
 }

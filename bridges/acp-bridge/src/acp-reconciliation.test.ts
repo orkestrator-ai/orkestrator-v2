@@ -223,8 +223,11 @@ describe("ACP bridge", () => {
       "Recovered and finished the original request.",
     );
     expect(session.messages.at(-1)?.content).not.toContain("resource_exhausted");
+    // The completed call stays on the row of the attempt that made it.
     expect(
-      session.messages.at(-1)?.parts.find((part) => part.toolUseId === "resource-safe-1"),
+      session.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "resource-safe-1"),
     ).toMatchObject({ toolState: "success" });
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
 

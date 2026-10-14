@@ -54,7 +54,7 @@ describe("agent upgrade runbook contracts", () => {
     // regex over exact line-continuation whitespace, so reflowing the markdown
     // does not fail the build for a cosmetic edit.
     const runbook = await read("docs/development/upgrade-agents.md");
-    const fences = [...runbook.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
+    const fences = [...runbook.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]!);
 
     const generationBlock = fences.find((fence) => fence.includes("verify:codex:protocol"));
     const liveContractBlock = fences.find((fence) => fence.includes("live-contract.test.ts"));
@@ -82,7 +82,7 @@ describe("agent upgrade runbook contracts", () => {
     // task name. Capture any trailing `<` so those are recognisable and drop
     // them — a lookahead would just backtrack into the shorter `download`.
     const invocations = [...runbook.matchAll(/\bmise run ([\w:-]+<?)/g)]
-      .map((match) => match[1])
+      .map((match) => match[1]!)
       .filter((task) => !task.includes("<"));
 
     expect(invocations.length).toBeGreaterThan(0);
@@ -101,7 +101,8 @@ describe("agent upgrade runbook contracts", () => {
 
     let workspaceInvocations = 0;
     for (const match of runbook.matchAll(/\bbun run --cwd (\S+) ([\w:-]+)/g)) {
-      const [, workspace, script] = match;
+      const workspace = match[1]!;
+      const script = match[2]!;
       workspaceInvocations += 1;
       const manifest = (await Bun.file(path.join(root, workspace, "package.json")).json()) as {
         scripts?: Record<string, string>;
@@ -120,7 +121,7 @@ describe("agent upgrade runbook contracts", () => {
     const runbook = await read("docs/development/upgrade-agents.md");
     const cited = new Set(
       [...runbook.matchAll(/`((?:apps|bridges|config|docs|packages|scripts|tests)\/[\w./-]+)`/g)]
-        .map((match) => match[1])
+        .map((match) => match[1]!)
         .filter((candidate) => path.extname(candidate) !== ""),
     );
 
@@ -149,7 +150,8 @@ describe("agent upgrade runbook contracts", () => {
     // The Codex line was corrected while the line directly below it kept naming
     // a dependency the root manifest does not have.
     const opencodeSyncComment = dockerfile.match(/^#   OPENCODE_CLI_VERSION.*$/m)?.[0];
-    expect(opencodeSyncComment).toContain("apps/web/package.json");
+    // The backend is the only workspace that pins the SDK.
     expect(opencodeSyncComment).toContain("apps/backend/package.json");
+    expect(opencodeSyncComment).not.toContain("apps/web/package.json");
   });
 });

@@ -1,7 +1,7 @@
 # Container baselines and optimization decisions
 
 Step 13 report for the [containers plan](plan/00-index.md). Numbers are
-from the opt-in harness `tests/unit/electron/container-benchmarks.test.ts`
+from the opt-in harness `apps/backend/tests/container-benchmarks.test.ts`
 (`RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image>`), which
 writes the full JSON under `output/benchmarks/` (git-ignored; its own reports
 older than 30 days are removed on each run). Fixtures are synthetic; nothing

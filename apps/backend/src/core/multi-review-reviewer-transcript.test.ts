@@ -4,7 +4,7 @@ import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
-} from "@orkestrator/protocol/bridge-transcript-summary";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   LEGACY_HISTORY_EPOCH,
   MAX_REVIEWER_TRANSCRIPT_MESSAGES,
@@ -15,6 +15,13 @@ import {
   reviewerHistoryDigest,
   reviewerHistoryKey,
 } from "./multi-review-reviewer-transcript.js";
+import { OpenCodeStreamState } from "./opencode-stream-state.js";
+import { openCodeHistoryServer, openCodeMessageId } from "./opencode-history-test-support.js";
+import {
+  openCodeTranscriptSource,
+  openCodeTranscriptSnapshot,
+  openCodeTranscriptPage,
+} from "./opencode-snapshots.js";
 import { encodeDirectHistoryCursor } from "./native-agent-direct-history.js";
 
 function bytes(value: unknown): number {
@@ -51,6 +58,33 @@ describe("reviewer transcript bounds", () => {
     expect(bounded.messages).toEqual([]);
     expect(bounded.truncated).toBe(true);
     expect(bounded.bytes).toBeLessThanOrEqual(1_000);
+  });
+});
+
+describe("revised reviewer rows", () => {
+  test("rows the provider revised outside the tail travel beside it, not ones it shows", async () => {
+    const provider = {
+      agent: "claude",
+      async messages() {
+        throw new Error("the unbounded route must not be used");
+      },
+      async transcriptSnapshot() {
+        return {
+          messages: [{ id: "m9", role: "assistant", content: "tail", parts: [] }],
+          sourceToken: "rev-1",
+          complete: false,
+          revisedMessages: [
+            { id: "m2", role: "assistant", content: "settled late", parts: [] },
+            { id: "m9", role: "assistant", content: "tail", parts: [] },
+          ],
+        };
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(provider, "session-a", undefined);
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(read.revisedMessages).toEqual([
+      { id: "m2", role: "assistant", content: "settled late", parts: [] },
+    ]);
   });
 });
 
@@ -536,10 +570,10 @@ describe("reviewer history pages", () => {
     });
   });
 
-  test("OpenCode envelopes page by their info id", async () => {
+  test("OpenCode envelopes page by their info id and ship as display messages", async () => {
     const messages = Array.from({ length: 600 }, (_, i) => ({
-      info: { id: `msg_${i}`, role: "assistant" },
-      parts: [],
+      info: { id: `msg_${i}`, role: "assistant", time: { created: 1_800_000_000_000 + i } },
+      parts: [{ id: `part_${i}`, type: "text", text: `row ${i}` }],
     }));
     const provider = {
       agent: "opencode",
@@ -549,14 +583,70 @@ describe("reviewer history pages", () => {
     } as unknown as BuildPipelineProvider;
     const read = await readReviewerTranscript(provider, "ses", undefined, { key });
     if (read.kind !== "snapshot" || !read.historyCursor) throw new Error("expected a cursor");
+    // The renderer has no OpenCode normalizer: the raw envelope never leaves.
+    expect(read.messages[0]).toEqual({
+      id: "msg_100",
+      role: "assistant",
+      content: "row 100",
+      parts: [{ type: "text", content: "row 100", sourcePartId: "part_100" }],
+      createdAt: new Date(1_800_000_000_100).toISOString(),
+    });
+    expect(read.bytes).toBe(bytes(read.messages));
+    const owner = { sessionKey: key, providerSessionId: "ses" };
+    const page = await readReviewerHistoryPage(provider, owner, read.historyCursor, { limit: 40 });
+    if (page.kind !== "page") throw new Error("expected a page");
+    expect(page.messages).toHaveLength(40);
+    expect(page.messages[0]).toMatchObject({ id: "msg_60", content: "row 60" });
+    expect(page.messages.every((message) => !("info" in (message as object)))).toBe(true);
+    expect(page.bytes).toBe(bytes(page.messages));
+    // The page's cursor still names a raw row, so the next page continues
+    // exactly where this one began.
+    if (!page.nextCursor) throw new Error("expected a cursor");
+    const next = await readReviewerHistoryPage(provider, owner, page.nextCursor, { limit: 100 });
+    if (next.kind !== "page") throw new Error("expected a page");
+    expect(next.messages).toHaveLength(60);
+    expect(next.messages[0]).toMatchObject({ id: "msg_0" });
+    expect(next.messages.at(-1)).toMatchObject({ id: "msg_59" });
+    expect(next.complete).toBe(true);
+  });
+
+  test("the compatibility tail normalizes OpenCode rows and keeps its cursor on the raw row", async () => {
+    // An id-less envelope gets a display id; the cursor must still name a row
+    // the next page's raw window search can find, or none at all.
+    const messages = [
+      ...Array.from({ length: 499 }, (_, i) => ({
+        info: { id: `msg_${i}`, role: "assistant" },
+        parts: [{ type: "text", text: `row ${i}` }],
+      })),
+      {
+        info: { id: "failed", role: "assistant", error: { name: "UnknownError", data: {} } },
+        parts: [],
+      },
+      { id: "flat", role: "assistant", content: "bridge row" },
+    ];
+    const provider = {
+      agent: "opencode",
+      async messages(_id: string, options?: { limit?: number }) {
+        return options?.limit ? messages.slice(-options.limit) : messages;
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(provider, "ses", undefined, { key });
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(read.fallback).toBe(true);
+    expect(read.messages).toHaveLength(500);
+    expect(read.messages.at(-2)).toMatchObject({ id: "error-opencode-failed", role: "assistant" });
+    expect(read.messages.at(-1)).toBe(messages.at(-1));
+    expect(read.messages[0]).toMatchObject({ id: "msg_1", content: "row 1" });
+    if (!read.historyCursor) throw new Error("expected a cursor");
     const page = await readReviewerHistoryPage(
       provider,
       { sessionKey: key, providerSessionId: "ses" },
       read.historyCursor,
     );
-    if (page.kind !== "page") throw new Error("expected a page");
-    expect((page.messages[0] as { info: { id: string } }).info.id).toBe("msg_0");
-    expect(page.complete).toBe(true);
+    expect(page).toMatchObject({ kind: "page", complete: true });
+    expect(page.kind === "page" ? page.messages : []).toEqual([
+      expect.objectContaining({ id: "msg_0", content: "row 0" }),
+    ]);
   });
 
   test("the joined fallback reads no more than a bounded-tail provider accepts", async () => {
@@ -590,7 +680,7 @@ describe("reviewer history pages", () => {
       cursor = page.nextCursor;
     }
     if (page?.kind !== "page") throw new Error("expected a page");
-    expect((page.messages[0] as { info: { id: string } }).info.id).toBe("msg_0");
+    expect(page.messages[0]).toMatchObject({ id: "msg_0" });
     // A full provider window may have hidden older history: not complete.
     expect(page).toMatchObject({ complete: false, truncated: true });
     expect(page.nextCursor).toBeUndefined();
@@ -640,4 +730,163 @@ describe("reviewer history pages", () => {
     expect(keyless.kind === "snapshot" ? keyless.historyCursor : "x").toBeUndefined();
     expect(keyless.kind === "snapshot" ? keyless.historyEpoch : "x").toBeUndefined();
   });
+});
+
+test("Multi Review adopts inline OpenCode cursors and pages beyond the retained cache", async () => {
+  const server = openCodeHistoryServer(220);
+  const stream = new OpenCodeStreamState();
+  stream.replaceMessages("owned-session", server.read(64), undefined, 64);
+  const source = openCodeTranscriptSource(stream, "owned-session", {
+    readMessages: async (limit, before) => server.read(limit, before),
+    recordUnknown: () => undefined,
+  });
+  let pages = 0;
+  const provider = {
+    agent: "opencode",
+    messages: async () => {
+      throw new Error("legacy read must not run");
+    },
+    transcriptSnapshot: async (
+      _id: string,
+      options: Parameters<typeof openCodeTranscriptSnapshot>[1],
+    ) => openCodeTranscriptSnapshot(source, options),
+    transcriptPage: async (_id: string, options: Parameters<typeof openCodeTranscriptPage>[1]) => {
+      pages++;
+      return openCodeTranscriptPage(source, options);
+    },
+  } as unknown as BuildPipelineProvider;
+  const owner = { sessionKey: "reviewer", providerSessionId: "owned-session" };
+  const read = await readReviewerTranscript(provider, owner.providerSessionId, undefined, {
+    key: owner.sessionKey,
+  });
+  if (read.kind !== "snapshot") throw new Error("expected snapshot");
+  const held = [...read.messages];
+  let cursor = read.historyCursor;
+  for (let guard = 0; cursor && guard < 10; guard++) {
+    const page = await readReviewerHistoryPage(provider, owner, cursor, { limit: 50 });
+    if (page.kind !== "page") throw new Error("expected page");
+    expect(page.fallback).toBe(false);
+    held.unshift(...page.messages);
+    cursor = page.nextCursor;
+  }
+  expect(pages).toBeGreaterThan(0);
+  expect((held[0] as { id: string }).id).toBe(openCodeMessageId(0));
+  expect(held).toHaveLength(220);
+});
+
+test.each([1.2, 3.8])(
+  "Multi Review accepts a %s MiB whole bridge row and continues older paging",
+  async (mib) => {
+    const history = Array.from({ length: 120 }, (_, index) => ({
+      id: `oversized-${index}`,
+      role: "assistant" as const,
+      content: "small",
+      parts:
+        index === 19
+          ? Array.from({ length: Math.floor((mib * 1024) / 4) }, (_, i) => ({
+              type: "text",
+              content: `${i}:${"x".repeat(4 * 1024)}`,
+            }))
+          : [],
+      createdAt: "now",
+    }));
+    const provider = {
+      agent: "codex",
+      messages: async () => {
+        throw new Error("legacy read must not run");
+      },
+      transcriptSnapshot: async () => {
+        const update = bridgeTranscriptSummaryUpdate(history, {
+          sessionIdentity: "s",
+          generation: "g",
+          contentEpoch: 1,
+          revision: 1,
+          complete: true,
+          pages: true,
+          limit: 100,
+          targetBytes: 512 * 1024,
+        });
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        return {
+          messages: update.value.messages,
+          complete: false,
+          historyCursor: update.value.historyCursor,
+          historyEpoch: "g:1",
+          representation: "summary",
+        };
+      },
+      transcriptPage: async (
+        _id: string,
+        options: { cursor: string; limit: number; targetBytes: number },
+      ) => {
+        const page = bridgeTranscriptPage(history, {
+          ...options,
+          generation: "g",
+          contentEpoch: 1,
+          complete: true,
+        });
+        if (page.status !== "page") return { status: "expired" };
+        return {
+          status: "page",
+          messages: page.messages,
+          historyCursor: page.nextCursor,
+          historyEpoch: "g:1",
+          complete: page.complete,
+          truncated: page.truncated,
+          representation: "summary",
+        };
+      },
+    } as unknown as BuildPipelineProvider;
+    const owner = { sessionKey: "reviewer", providerSessionId: "s" };
+    const read = await readReviewerTranscript(provider, "s", undefined, { key: owner.sessionKey });
+    if (read.kind !== "snapshot" || !read.historyCursor) throw new Error("expected cursor");
+    const first = await readReviewerHistoryPage(provider, owner, read.historyCursor, {
+      limit: 100,
+      targetBytes: 256 * 1024,
+    });
+    if (first.kind !== "page") throw new Error("expected page");
+    expect(first.messages).toEqual([history[19]]);
+    expect(first.complete).toBe(false);
+    const older = await readReviewerHistoryPage(provider, owner, first.nextCursor!, {
+      limit: 100,
+      targetBytes: 256 * 1024,
+    });
+    if (older.kind !== "page") throw new Error("expected page");
+    expect(older.messages).toEqual(history.slice(0, 19));
+    expect(older.complete).toBe(true);
+  },
+);
+
+test("OpenCode revised inline steps outside a byte-bounded reviewer tail retain display identities", async () => {
+  const server = openCodeHistoryServer(64, () => "x".repeat(80 * 1024));
+  const stream = new OpenCodeStreamState();
+  stream.replaceMessages("owned-session", server.read(64), undefined, 64);
+  const id = openCodeMessageId(1);
+  const part = server.messages[1]!.parts[0]!;
+  stream.apply({
+    type: "message.part.updated",
+    properties: { sessionID: "owned-session", part: { ...part, text: "settled late" } },
+  } as never);
+  const source = openCodeTranscriptSource(stream, "owned-session", {
+    readMessages: async (limit, before) => server.read(limit, before),
+    recordUnknown: () => undefined,
+  });
+  const provider = {
+    agent: "opencode",
+    messages: async () => [],
+    transcriptSnapshot: async (
+      _id: string,
+      options: Parameters<typeof openCodeTranscriptSnapshot>[1],
+    ) => openCodeTranscriptSnapshot(source, options),
+  } as unknown as BuildPipelineProvider;
+  const read = await readReviewerTranscript(provider, "owned-session", undefined);
+  if (read.kind !== "snapshot") throw new Error("expected snapshot");
+  expect(read.messages.some((row) => (row as { id: string }).id === id)).toBe(false);
+  expect(read.revisedMessages).toEqual([
+    expect.objectContaining({
+      id,
+      content: "settled late",
+      parts: [expect.objectContaining({ type: "text", content: "settled late" })],
+    }),
+  ]);
 });

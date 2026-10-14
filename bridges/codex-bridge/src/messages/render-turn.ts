@@ -17,6 +17,7 @@ import {
   CODEX_TIMELINE_ITEM_PREFIX,
   CODEX_TIMELINE_SUBAGENT_PREFIX,
   getCodexSpawnedAgentIdsInOrder,
+  isCodexSpawnTool,
   normalizeCodexCollabToolCallItem,
   reconcileCodexSubagentTimeline,
 } from "../codex-collaboration.js";
@@ -79,8 +80,29 @@ export interface TurnRenderState {
   subagentPathIds: Map<string, string | null | undefined>;
   /** Cached misses already retried by the final authoritative probe. */
   subagentTerminalPathRetries: Set<string>;
+  /**
+   * The assistant row each sub-agent's card belongs to, shared by every row of
+   * a turn. A row whose own item spawned the agent claims it outright; any
+   * other row naming it (a later wait or send) defers to whichever row showed
+   * it first, so one agent is one card per turn.
+   */
+  subagentOwners: Map<string, string>;
   /** When the rollout-transcript probe for sub-agent activity last ran. */
   subagentProbedAt: number;
+  /**
+   * The last render showed a sub-agent card or held an item that could give
+   * it one, so a later transcript probe may still change the row. True until
+   * the first render.
+   */
+  subagentActivity: boolean;
+  /**
+   * Every sub-agent the row shows has finished and every agent it spawned has
+   * its card, so only new lifecycle evidence (`subagentEvidenceVersion`) can
+   * move it again.
+   */
+  subagentSettled: boolean;
+  /** `TurnAccumulator.subagentEvidenceVersion` as of the last probe. */
+  subagentEvidenceVersion: number;
   fileChange: FileChangeDiffContext;
 }
 
@@ -106,7 +128,11 @@ export function createTurnRenderState(): TurnRenderState {
     subagentFingerprints: new Map(),
     subagentPathIds: new Map(),
     subagentTerminalPathRetries: new Set(),
+    subagentOwners: new Map(),
     subagentProbedAt: 0,
+    subagentActivity: true,
+    subagentSettled: false,
+    subagentEvidenceVersion: -1,
     fileChange: { baselines: new BaselineMap(), cache: new Map() },
   };
 }
@@ -127,6 +153,25 @@ export function beginTurnRenderState(previous: TurnRenderState | undefined): Tur
   return fresh;
 }
 
+/**
+ * Render state for the next assistant row of the **same** turn.
+ *
+ * Row-scoped state (timeline, completed-part and sub-agent caches) starts
+ * fresh; turn-scoped state is shared. That includes the per-item diff cache,
+ * deliberately not cleared as `beginTurn` would: a file change's diff is
+ * computed once, against the baseline before it, and the baseline is advanced
+ * to the change's result in the same step. Recomputing it for a row still
+ * rendering an earlier change would diff the file against itself.
+ */
+export function beginAssistantRowRenderState(previous: TurnRenderState): TurnRenderState {
+  const fresh = createTurnRenderState();
+  fresh.fileChange = previous.fileChange;
+  fresh.subagentPathIds = previous.subagentPathIds;
+  fresh.subagentTerminalPathRetries = previous.subagentTerminalPathRetries;
+  fresh.subagentOwners = previous.subagentOwners;
+  return fresh;
+}
+
 /** Frees a thread's render state; recoverable, since the rollout is authoritative. */
 export function releaseTurnRenderState(state: TurnRenderState): void {
   state.timelineOrder.length = 0;
@@ -136,7 +181,9 @@ export function releaseTurnRenderState(state: TurnRenderState): void {
   state.subagentFingerprints.clear();
   state.subagentPathIds.clear();
   state.subagentTerminalPathRetries.clear();
+  state.subagentOwners.clear();
   state.subagentProbedAt = 0;
+  state.subagentSettled = false;
   state.fileChange.baselines.clear();
   state.fileChange.cache.clear();
 }
@@ -291,6 +338,11 @@ export interface RenderTurnOptions {
    * probes, so the final published snapshot is never stale.
    */
   subagentProbeIntervalMs?: number;
+  /**
+   * Skip the sub-agent transcript probe, keeping the row's last snapshot. For
+   * a frozen row with no sub-agent evidence, where a probe can find nothing.
+   */
+  skipSubagentProbe?: boolean;
 }
 
 export interface SubagentPartsLoadOptions {
@@ -298,6 +350,12 @@ export interface SubagentPartsLoadOptions {
   turnStartedAt?: string;
   turnEndedAt?: string;
   items: EngineItem[];
+  /**
+   * Sub-agent lifecycle items from the turn's later rows. A child spawned in
+   * this row reports back through waits and activity beats that arrive while
+   * later responses stream; its card here still has to show their outcome.
+   */
+  followingItems?: EngineItem[];
   /** Per-turn cache; `has(path)` distinguishes a cached miss from no lookup. */
   childPathResolutions?: Map<string, string | null | undefined>;
   /** A terminal probe may retry each cached miss exactly once. */
@@ -426,7 +484,10 @@ export async function loadSubagentPartsFromTranscripts(
       : { transcriptQueries: dependencies.transcriptQueries ?? cachedTranscriptQueries }),
   });
   // Native collab items carry live agent status; fold it onto the transcript parts.
-  const reconciled = applyCodexCollabStateToSubagentParts(transcriptParts, options.items);
+  const reconciled = applyCodexCollabStateToSubagentParts(transcriptParts, [
+    ...options.items,
+    ...followingEvidenceFor(transcriptParts, options.items, options.followingItems ?? []),
+  ]);
   return reconciled.map((part) => ({
     type: "subagent" as const,
     content: part.content,
@@ -442,6 +503,172 @@ export async function loadSubagentPartsFromTranscripts(
       ? { subagentReasoningEffort: part.subagentReasoningEffort }
       : {}),
   }));
+}
+
+/**
+ * The parts of later rows' lifecycle items that report on agents this row
+ * already shows, narrowed to those agents.
+ *
+ * Narrowed so a later item can update this row's cards but never add one: a
+ * wait on several agents must not pull in an agent a later row spawned, and a
+ * spawn item is left out entirely because unidentified spawns are paired with
+ * transcript rows by position.
+ */
+function followingEvidenceFor(
+  transcriptParts: readonly { subagentId?: string }[],
+  items: readonly EngineItem[],
+  followingItems: readonly EngineItem[],
+): EngineItem[] {
+  if (followingItems.length === 0) return [];
+  const shown = new Set<string>();
+  for (const part of transcriptParts) if (part.subagentId) shown.add(part.subagentId);
+  for (const agentId of subagentIdsNamedBy(items)) shown.add(agentId);
+  if (shown.size === 0) return [];
+  const evidence: EngineItem[] = [];
+  for (const item of followingItems) {
+    if (item.type === "subagent_activity") {
+      if (shown.has(item.agent_thread_id)) evidence.push(item);
+      continue;
+    }
+    const collab = normalizeCodexCollabToolCallItem(item);
+    if (!collab || isCodexSpawnTool(collab.tool)) continue;
+    const receivers = (collab.receiver_thread_ids ?? []).filter((agentId) => shown.has(agentId));
+    if (receivers.length === 0) continue;
+    const states = Object.fromEntries(
+      Object.entries(collab.agents_states ?? {}).filter(([agentId]) => shown.has(agentId)),
+    );
+    evidence.push({ ...collab, receiver_thread_ids: receivers, agents_states: states });
+  }
+  return evidence;
+}
+
+/** Every agent id a row's own collaboration and activity items name. */
+function subagentIdsNamedBy(items: readonly EngineItem[]): Set<string> {
+  const named = new Set<string>();
+  for (const item of items) {
+    if (item.type === "subagent_activity") {
+      named.add(item.agent_thread_id);
+      continue;
+    }
+    const collab = normalizeCodexCollabToolCallItem(item);
+    if (!collab) continue;
+    for (const agentId of collab.receiver_thread_ids ?? []) named.add(agentId);
+    for (const agentId of Object.keys(collab.agents_states ?? {})) named.add(agentId);
+  }
+  return named;
+}
+
+/**
+ * True when a row's items could give it a sub-agent card: it spawned one, or
+ * names one no other row of the turn shows. A row that only waits on agents
+ * another row shows has nothing for a transcript probe to find.
+ */
+function rowMayShowSubagents(
+  items: readonly EngineItem[],
+  rowId: string,
+  owners: ReadonlyMap<string, string>,
+): boolean {
+  const ownedHere = (agentId: string) => (owners.get(agentId) ?? rowId) === rowId;
+  for (const item of items) {
+    if (item.type === "subagent_activity") {
+      if (ownedHere(item.agent_thread_id)) return true;
+      continue;
+    }
+    const collab = normalizeCodexCollabToolCallItem(item);
+    if (!collab) continue;
+    if (isCodexSpawnTool(collab.tool)) return true;
+    if ((collab.receiver_thread_ids ?? []).some(ownedHere)) return true;
+    if (Object.keys(collab.agents_states ?? {}).some(ownedHere)) return true;
+  }
+  return false;
+}
+
+/**
+ * True when every sub-agent card a row shows has finished and every agent it
+ * spawned has its card, so no probe can change it. A card still pending, a
+ * spawn still in flight, or one the probe has not found yet still can.
+ *
+ * A spawn that failed started no agent, so it waits for none. A spawn naming
+ * no agent (multi-agent v2 returns no id) is paired with a transcript card by
+ * position, which carries the agent's id instead, so it is matched by count:
+ * one card no named spawn accounts for. Requiring an id of it, or a card of a
+ * failed spawn, kept such a row probing for the rest of the turn.
+ */
+function subagentCardsSettled(
+  items: readonly EngineItem[],
+  cards: ReadonlyMap<string, NormalizedPart>,
+): boolean {
+  const shown = new Set<string>();
+  for (const card of cards.values()) {
+    if (card.toolState !== "success" && card.toolState !== "failure") return false;
+    if (card.subagentId) shown.add(card.subagentId);
+  }
+  const named = new Set<string>();
+  let unnamed = 0;
+  let spawns = 0;
+  for (const item of items) {
+    const collab = normalizeCodexCollabToolCallItem(item);
+    if (!collab || !isCodexSpawnTool(collab.tool)) continue;
+    spawns += 1;
+    if (collab.status === "failed") continue;
+    if (collab.status === "in_progress") return false;
+    const [agentId] = getCodexSpawnedAgentIdsInOrder([collab]);
+    if (agentId === undefined) unnamed += 1;
+    else if (shown.has(agentId)) named.add(agentId);
+    else return false;
+  }
+  let unclaimed = 0;
+  for (const card of cards.values()) {
+    if (!card.subagentId || !named.has(card.subagentId)) unclaimed += 1;
+  }
+  if (unclaimed < unnamed) return false;
+  // A row with no card yet settles only when every spawn it made failed.
+  return cards.size > 0 || spawns > 0;
+}
+
+function isSubagentLifecycleItem(item: EngineItem): boolean {
+  return item.type === "subagent_activity" || item.type === "collab_tool_call";
+}
+
+/**
+ * Keeps one card per agent across a turn's rows. A row spawning an agent
+ * claims it outright; a row merely naming one claims it only if no row has.
+ */
+function ownSubagentParts(
+  parts: NormalizedPart[],
+  items: readonly EngineItem[],
+  rowId: string,
+  owners: Map<string, string>,
+): NormalizedPart[] {
+  claimSpawnedSubagents(items, rowId, owners);
+  return parts.filter((part) => {
+    const agentId = part.subagentId;
+    if (!agentId) return true;
+    const owner = owners.get(agentId);
+    if (owner === undefined) owners.set(agentId, rowId);
+    return owner === undefined || owner === rowId;
+  });
+}
+
+function claimSpawnedSubagents(
+  items: readonly EngineItem[],
+  rowId: string,
+  owners: Map<string, string>,
+): void {
+  for (const agentId of getCodexSpawnedAgentIdsInOrder(items as EngineItem[])) {
+    if (agentId) owners.set(agentId, rowId);
+  }
+}
+
+/** Lifecycle items in the turn's rows after `segment`, for its spawned agents. */
+function followingLifecycleItems(turn: TurnAccumulator, segment?: AssistantSegment): EngineItem[] {
+  if (segment?.endIndex === undefined) return [];
+  const following: EngineItem[] = [];
+  for (let index = segment.endIndex; index < turn.itemOrder.length; index += 1) {
+    const item = turn.items.get(turn.itemOrder[index]!)?.item;
+    if (item && isSubagentLifecycleItem(item)) following.push(item);
+  }
+  return following;
 }
 
 function subagentEvidenceFingerprint(items: readonly EngineItem[]): string {
@@ -553,17 +780,23 @@ export async function renderTurn(
 ): Promise<RenderedTurn> {
   const load = options.loadSubagentParts ?? loadSubagentPartsFromTranscripts;
   const probeIntervalMs = options.subagentProbeIntervalMs ?? 0;
+  const rowId = options.segment?.assistantMessageId ?? turn.assistantMessageId;
   const shouldProbe =
-    probeIntervalMs <= 0 ||
-    turn.isTerminal() ||
-    Date.now() - options.state.subagentProbedAt >= probeIntervalMs;
+    !options.skipSubagentProbe &&
+    (probeIntervalMs <= 0 ||
+      turn.isTerminal() ||
+      Date.now() - options.state.subagentProbedAt >= probeIntervalMs);
   let subagentParts: NormalizedPart[] | undefined;
   if (shouldProbe) {
     // Collected only here: streaming renders arrive ~10x/second while the probe
     // runs every couple of seconds, so a snapshot taken unconditionally would be
     // built and thrown away on the vast majority of renders.
     let loadSnapshot = collectTurnItems(turn, options.segment);
+    const followingItems = followingLifecycleItems(turn, options.segment);
     options.state.subagentProbedAt = Date.now();
+    // Sampled before the load, so evidence arriving while it is awaited still
+    // reads as new to the next probe.
+    options.state.subagentEvidenceVersion = turn.subagentEvidenceVersion;
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const evidenceBefore = subagentEvidenceFingerprint(loadSnapshot.items);
@@ -572,6 +805,7 @@ export async function renderTurn(
           turnStartedAt: options.segment?.startedAt ?? turn.startedAt,
           ...(options.segment?.endedAt ? { turnEndedAt: options.segment.endedAt } : {}),
           items: loadSnapshot.items,
+          ...(followingItems.length > 0 ? { followingItems } : {}),
           ...(!options.loadSubagentParts
             ? {
                 childPathResolutions: options.state.subagentPathIds,
@@ -582,7 +816,12 @@ export async function renderTurn(
         });
         const latestSnapshot = collectTurnItems(turn, options.segment);
         if (subagentEvidenceFingerprint(latestSnapshot.items) === evidenceBefore) {
-          subagentParts = loaded;
+          subagentParts = ownSubagentParts(
+            loaded,
+            latestSnapshot.items,
+            rowId,
+            options.state.subagentOwners,
+          );
           break;
         }
         loadSnapshot = latestSnapshot;
@@ -600,6 +839,7 @@ export async function renderTurn(
     turn,
     options.segment,
   );
+  claimSpawnedSubagents(items, rowId, options.state.subagentOwners);
   // app-server's output schema is turn-scoped, so both commentary and draft
   // final answers can be schema-shaped. Provider-labelled commentary is made
   // readable by `agentMessageDisplayText`; keep only unlabelled/final drafts out
@@ -728,6 +968,11 @@ export async function renderTurn(
     )
     .map(agentMessageDisplayText)
     .at(-1);
+
+  options.state.subagentActivity =
+    options.state.subagentParts.size > 0 ||
+    rowMayShowSubagents(items, rowId, options.state.subagentOwners);
+  options.state.subagentSettled = subagentCardsSettled(items, options.state.subagentParts);
 
   return {
     parts,

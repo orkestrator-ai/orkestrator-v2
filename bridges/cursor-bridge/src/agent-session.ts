@@ -13,21 +13,28 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
-  Agent,
   type AgentOptions,
   type LocalAgentRunDocument,
-  type Run,
   type SDKAgent,
   type SDKAgentInfo,
   type ToolName,
 } from "@cursor/sdk";
-import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
-import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { schedulePersist } from "./persistence.js";
-import { finishTombstonesForAgent, hasTombstoneForAgent } from "./session-close.js";
+import {
+  cancelSurvivingRuns,
+  cursorAgentApi,
+  listAllRuns,
+  SessionConflictError,
+  useCursorAgentForTests,
+} from "./cursor-runs.js";
+import { newSessionState } from "./session-factory.js";
+import { finishTombstonesForAgent, hasTombstoneForAgent } from "./session-tombstones.js";
+
+export { cancelSurvivingRuns, newSessionState, SessionConflictError, useCursorAgentForTests };
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
-import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
+import { hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import {
   cursorMcpServers,
@@ -42,10 +49,12 @@ import {
   prewarmCursorWorkspace,
 } from "./sdk-runtime.js";
 import {
+  beginAssistantTurn,
   boundTranscript,
   boundTranscriptDuringStreaming,
   chargeTranscript,
   rewindTranscriptTo,
+  startTranscriptEpoch,
 } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
 import {
@@ -67,57 +76,6 @@ export class CredentialError extends Error {
     super(message);
     this.name = "CredentialError";
   }
-}
-
-export class SessionConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionConflictError";
-  }
-}
-
-let cursorAgent = Agent;
-
-export function useCursorAgentForTests(agent: typeof Agent): () => void {
-  const previous = cursorAgent;
-  cursorAgent = agent;
-  return () => {
-    cursorAgent = previous;
-  };
-}
-
-export function newSessionState(
-  clientSessionKey?: string,
-  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
-): SessionState {
-  return {
-    id: randomBytes(16).toString("hex"),
-    ...(policy ? { policy } : {}),
-    ...(clientSessionKey ? { clientSessionKey } : {}),
-    status: "idle",
-    messages: [],
-    droppedMessages: 0,
-    droppedParts: 0,
-    transcriptTruncated: false,
-    revision: 0,
-    structured: new Map(),
-    promptJournal: new Map(),
-    steerJournal: new Map(),
-    steerJournalBytes: 0,
-    activeSubagentDescriptors: new Map(),
-    subagentLimitExceeded: false,
-    todos: [],
-    composer: emptyComposer(),
-    agent: null,
-    dispatching: false,
-    promptSequence: 0,
-    openTextParts: new Map(),
-    uncheckedTranscriptBytes: 0,
-    currentTurnOutput: null,
-    lastAccessed: Date.now(),
-    observedMcpTools: new Set(),
-    health: new RuntimeHealthRecorder(),
-  };
 }
 
 /**
@@ -556,7 +514,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         assertSessionOpen(state);
       }
       try {
-        const resumed = await cursorAgent.resume(state.agentId, options);
+        const resumed = await cursorAgentApi().resume(state.agentId, options);
         await disposeIfClosed(state, resumed);
         state.agent = resumed;
         recordAttachedConfig();
@@ -575,7 +533,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       }
     }
 
-    const created = await cursorAgent.create({ ...options, name: "Orkestrator" });
+    const created = await cursorAgentApi().create({ ...options, name: "Orkestrator" });
     await disposeIfClosed(state, created);
     // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
     // state somehow lost its id), the replacement starts its cumulative token
@@ -932,7 +890,7 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
   const items: SDKAgentInfo[] = [];
   let cursor: string | undefined;
   do {
-    const page = await cursorAgent
+    const page = await cursorAgentApi()
       .list({
         runtime: "local",
         cwd: workingDirectory,
@@ -1101,25 +1059,6 @@ async function hydrateHistory(
   state.revision += 1;
 }
 
-async function listAllRuns(agentId: string): Promise<Run[]> {
-  const runs: Run[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await withTimeout(
-      cursorAgent.listRuns(agentId, {
-        runtime: "local",
-        cwd: workingDirectory,
-        limit: MAX_RESUME_ENTRIES,
-        ...(cursor ? { cursor } : {}),
-      }),
-      CATALOG_TIMEOUT_MS,
-    );
-    runs.push(...page.items);
-    cursor = page.nextCursor;
-  } while (cursor && runs.length < 2_000);
-  return runs;
-}
-
 /** Re-adopt a local run that survived a bridge restart. */
 async function recoverActiveRun(state: SessionState): Promise<void> {
   if (!state.agentId || state.activeRun || state.status === "running") return;
@@ -1138,6 +1077,7 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   state.activeRunCreatedAt = active.createdAt;
   state.status = "running";
   state.turnStartedAt = active.createdAt;
+  beginAssistantTurn(state);
   state.cancelTurn = () => active.cancel();
   state.revision += 1;
   const unsubscribe = active.onDidChangeStatus(() => {
@@ -1154,9 +1094,8 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       // turn was writing into, readers' absolute offsets — goes with it.
       state.messages = [];
       state.uncheckedTranscriptBytes = 0;
-      state.openTextParts.clear();
-      state.currentAssistantMessageId = undefined;
-      state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
+      beginAssistantTurn(state);
+      startTranscriptEpoch(state);
       await hydrateHistory(state);
       state.status = active.status === "error" ? "error" : "idle";
       state.error = active.error?.message;
@@ -1175,39 +1114,6 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       state.revision += 1;
     }
   })();
-}
-
-/**
- * Cancel any run of `agentId` still executing after the session that owned it
- * was closed by a previous bridge process. Never rejects.
- *
- * `unknown` means the store could not be read — not evidence of a live run.
- * `running` means one was found and did not acknowledge cancellation.
- */
-export async function cancelSurvivingRuns(
-  agentId: string,
-  cancelTimeoutMs: number,
-): Promise<"none" | "cancelled" | "running" | "unknown"> {
-  let runs: Run[];
-  try {
-    runs = await listAllRuns(agentId);
-  } catch {
-    return "unknown";
-  }
-  const running = runs.filter((run) => run.status === "running");
-  if (running.length === 0) return "none";
-  const stopped = await Promise.all(
-    running.map((run) =>
-      withTimeout(
-        Promise.resolve().then(() => run.cancel()),
-        cancelTimeoutMs,
-      ).then(
-        () => true,
-        () => false,
-      ),
-    ),
-  );
-  return stopped.every(Boolean) ? "cancelled" : "running";
 }
 
 function applyRecoveredStreamEvent(state: SessionState, event: unknown): void {
@@ -1229,13 +1135,25 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
   }
   if (!Array.isArray(body.steps) || body.steps.length === 0) return;
 
-  const parts: BridgeMessagePart[] = [];
-  const messageId = randomBytes(12).toString("hex");
-  let content = "";
+  // One row per model step, as the live stream writes them (see
+  // `translate.ts`). The record keeps no step boundaries, so a row ends where
+  // prose or reasoning follows a tool call: the model was called again with
+  // the call's result. A step that made only tool calls joins the one before.
+  let row = newHistoricRow();
+  // Whether this turn has produced a plan yet; see `pushHistoricRow`.
+  let planned = false;
   for (const step of body.steps) {
     if (!isObject(step) || !isObject(step.message)) continue;
+    const prose =
+      (step.type === "assistantMessage" || step.type === "thinkingMessage") &&
+      nonBlank(step.message.text);
+    if (prose && row.parts.some((part) => part.type === "tool-invocation")) {
+      planned = pushHistoricRow(state, row, planned);
+      row = newHistoricRow();
+    }
+    const { parts, messageId } = row;
     if (step.type === "assistantMessage" && nonBlank(step.message.text)) {
-      content += step.message.text;
+      row.content += step.message.text;
       parts.push({
         type: "text",
         content: step.message.text,
@@ -1289,12 +1207,38 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
       }
     }
   }
-  if (parts.length > 0) {
-    const planReview = parts.some(
+  pushHistoricRow(state, row, planned);
+}
+
+interface HistoricRow {
+  messageId: string;
+  parts: BridgeMessagePart[];
+  content: string;
+}
+
+function newHistoricRow(): HistoricRow {
+  return { messageId: randomBytes(12).toString("hex"), parts: [], content: "" };
+}
+
+/**
+ * Append one replayed step, returning whether the turn has produced a plan.
+ *
+ * Plan review is marked from the step that produced the plan to the end of its
+ * turn. A live plan-mode turn marks every step's row, and the tab offers the
+ * Approve and Build controls only while the newest assistant row is marked, so
+ * marking just the plan's own row lost them whenever the model said something
+ * after it — "The plan is ready." is a step of its own. The record keeps no
+ * mode, so the plan is the only evidence and rows before it stay unmarked.
+ */
+function pushHistoricRow(state: SessionState, row: HistoricRow, planned: boolean): boolean {
+  if (row.parts.length === 0) return planned;
+  const planReview =
+    planned ||
+    row.parts.some(
       (part) => part.type === "tool-invocation" && isCreatePlanToolName(part.toolName),
     );
-    pushMessage(state, "assistant", content, parts, messageId, { planReview });
-  }
+  pushMessage(state, "assistant", row.content, row.parts, row.messageId, { planReview });
+  return planReview;
 }
 
 function historicUserTexts(body: Record<string, unknown>): string[] {
@@ -1413,19 +1357,4 @@ function pushMessage(
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
-}
-
-async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Cursor history read timed out")), timeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

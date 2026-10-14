@@ -197,7 +197,7 @@ Commands run (all passed):
 - `mise run test:logged -- --name be-e12-all -- mise exec -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src --parallel=2 --only-failures`
 - `apps/backend/tests` (`recurring-baseline`, `standalone-ready`,
   `standalone` after `bun run --cwd apps/backend build`)
-- root `tests/unit/electron/commands-io-coverage.test.ts`,
+- root `apps/backend/tests/commands-io-coverage.test.ts`,
   `tests/unit/commands-runtime-state-load-order.test.ts`,
   `tests/unit/lib/backend-conditional-snapshots.test.ts`
 - `mise exec -- bun run --cwd apps/backend typecheck`, `mise run format`,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import {
   digestWithMessages,
   encodedArrayBytes,
@@ -7,6 +7,7 @@ import {
   encodedValue,
   reuseUnchangedMessages,
   sameEncoding,
+  tailDeletions,
 } from "./native-agent-projection-encoding.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
@@ -154,5 +155,21 @@ describe("changed transcript reads", () => {
         expect(messageSerializations).toBeLessThanOrEqual(history.length + 2);
       },
     );
+  });
+});
+
+describe("tail deletions", () => {
+  test("a row that aged out of the window's front is not a deletion", () => {
+    expect(tailDeletions(["m1", "m2", "m3"], ["m2", "m3", "m4"], true)).toEqual([]);
+  });
+
+  test("a row removed behind the oldest shared row is a deletion", () => {
+    expect(tailDeletions(["m1", "m2", "m3", "m4"], ["m1", "m2"], false)).toEqual(["m3", "m4"]);
+    expect(tailDeletions(["m1", "m2", "m3"], ["m2", "m4"], true)).toEqual(["m3"]);
+  });
+
+  test("a window that jumped past every held row deletes nothing while older rows exist", () => {
+    expect(tailDeletions(["m142"], ["m143", "m144"], true)).toEqual([]);
+    expect(tailDeletions(["m1", "m2"], ["m3"], false)).toEqual(["m1", "m2"]);
   });
 });

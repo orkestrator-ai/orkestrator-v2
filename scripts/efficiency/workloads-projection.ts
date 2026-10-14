@@ -70,10 +70,10 @@ async function loadModules(context: WorkloadContext): Promise<Modules> {
     "apps/backend/src/core/storage.ts",
   );
   const progressive = await context.load<{ bridgeTranscriptUpdate: Protocol }>(
-    "packages/protocol/src/progressive-transcript.ts",
+    "packages/protocol/src/node/progressive-transcript.ts",
   );
   const summary = await context.loadOptional<NonNullable<Modules["summary"]>>(
-    "packages/protocol/src/bridge-transcript-summary.ts",
+    "packages/protocol/src/node/bridge-transcript-summary.ts",
   );
   // Step 14: present only on trees that implement part-level patches.
   const patches = await context.loadOptional<{ NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION: 1 }>(

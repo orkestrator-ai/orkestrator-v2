@@ -40,10 +40,14 @@ Address every review issue.`;
         },
       ],
       [
+        // OpenCode entries arrive already normalized to the flat shape.
         "opencode",
         {
-          info: { id: "opencode-user", role: "user", time: { created: 1_800_000_000_000 } },
-          parts: [{ type: "text", text: handoff }],
+          id: "opencode-user",
+          role: "user",
+          content: handoff,
+          parts: [{ type: "text", content: handoff, sourcePartId: "part-1" }],
+          createdAt: "2027-01-15T08:00:00.000Z",
         },
       ],
     ] as const) {
@@ -220,30 +224,6 @@ quoted context
       { type: "text", content: "" },
       { type: "text", content: "Review complete" },
     ]);
-  });
-
-  test("reads OpenCode's info/parts envelope", () => {
-    const transcript = toPipelineTranscript(
-      [
-        {
-          info: {
-            id: "message-1",
-            role: "assistant",
-            time: { created: 1_800_000_000_000 },
-          },
-          parts: [{ type: "text", text: "All criteria pass" }],
-        },
-      ],
-      "opencode",
-      FALLBACK,
-    );
-
-    expect(transcript).toHaveLength(1);
-    expect(transcript[0]!.content).toBe("All criteria pass");
-    expect(transcript[0]!.parts[0]).toMatchObject({
-      type: "text",
-      content: "All criteria pass",
-    });
   });
 
   test("drops entries and parts it cannot understand instead of rendering them", () => {
@@ -740,66 +720,6 @@ quoted context
     expect(transcript.map((message) => message.id)).toEqual(["m2"]);
   });
 
-  test("anchors an OpenCode message with no id or time to its position", () => {
-    const entries = [
-      {
-        info: { role: "assistant" },
-        parts: [{ type: "text", text: "building" }],
-      },
-    ];
-
-    const first = toPipelineTranscript(entries, "opencode", FALLBACK);
-    const second = toPipelineTranscript(entries, "opencode", FALLBACK);
-
-    // OpenCode's normalizer mints a UUID and stamps "now" for these; both would
-    // change on every backend push and remount the row.
-    expect(first[0]!.id).toBe("pipeline-message-0");
-    expect(first[0]!.createdAt).toBe(FALLBACK);
-    expect(second[0]).toMatchObject({
-      id: first[0]!.id,
-      createdAt: first[0]!.createdAt,
-    });
-  });
-
-  test("survives an OpenCode timestamp that cannot be a date", () => {
-    // `new Date(value).toISOString()` throws a RangeError past the time clip,
-    // and this runs during render — a throw takes the whole tab down.
-    const transcript = toPipelineTranscript(
-      [
-        {
-          info: { id: "m1", role: "assistant", time: { created: 1e18 } },
-          parts: [{ type: "text", text: "still readable" }],
-        },
-        {
-          info: { id: "m2", role: "assistant", time: { created: Number.NaN } },
-          parts: [{ type: "text", text: "also readable" }],
-        },
-      ],
-      "opencode",
-      FALLBACK,
-    );
-
-    expect(transcript.map((message) => message.id)).toEqual(["m1", "m2"]);
-    expect(transcript.map((message) => message.createdAt)).toEqual([FALLBACK, FALLBACK]);
-    expect(transcript[0]!.content).toBe("still readable");
-  });
-
-  test("drops an OpenCode entry with nothing to render", () => {
-    const transcript = toPipelineTranscript(
-      [
-        { info: { id: "m1", role: "assistant", time: { created: 1 } }, parts: [] },
-        {
-          info: { id: "m2", role: "assistant", time: { created: 2 } },
-          parts: [{ type: "text", text: "kept" }],
-        },
-      ],
-      "opencode",
-      FALLBACK,
-    );
-
-    expect(transcript.map((message) => message.id)).toEqual(["m2"]);
-  });
-
   test("splits a bridge turn into timestamped sections and groups its tool activity", () => {
     // The generic branch shares the chat adapter, so one provider turn becomes
     // one row per text/activity section, each stamped from its own backend
@@ -868,53 +788,6 @@ quoted context
     ]);
   });
 
-  test("splits an OpenCode turn on its own part clocks", () => {
-    const transcript = toPipelineTranscript(
-      [
-        {
-          info: { id: "m1", role: "assistant", time: { created: 1_800_000_000_000 } },
-          parts: [
-            { id: "p1", type: "text", text: "Looking", time: { start: 1_800_000_005_000 } },
-            {
-              id: "p2",
-              type: "tool",
-              tool: "bash",
-              state: { status: "completed" },
-              time: { start: 1_800_000_020_000 },
-            },
-            { id: "p3", type: "text", text: "Finished", time: { start: 1_800_000_040_000 } },
-          ],
-        },
-      ],
-      "opencode",
-      FALLBACK,
-    );
-
-    expect(
-      transcript.map((message) => ({
-        id: message.id,
-        createdAt: message.createdAt,
-        partTypes: message.parts.map((part) => part.type),
-      })),
-    ).toEqual([
-      {
-        id: "m1",
-        createdAt: "2027-01-15T08:00:05.000Z",
-        partTypes: ["text"],
-      },
-      {
-        id: "m1:text-block:1",
-        createdAt: "2027-01-15T08:00:20.000Z",
-        partTypes: ["tool-group"],
-      },
-      {
-        id: "m1:text-block:2",
-        createdAt: "2027-01-15T08:00:40.000Z",
-        partTypes: ["text"],
-      },
-    ]);
-  });
-
   test("keeps a section that splitting leaves without renderable content out of the transcript", () => {
     // Splitting can isolate a part the renderer draws nothing for. The filter
     // runs after the split so an empty section never reaches the list.
@@ -938,24 +811,42 @@ quoted context
     expect(transcript[0]!.parts.map((part) => part.type)).toEqual(["text"]);
   });
 
-  test("routes on the envelope, not the pipeline's recorded agent", () => {
-    // A pipeline whose agent was recorded as codex can still hold an OpenCode
-    // snapshot, and vice versa, so each entry is detected on its own shape.
+  test("keeps image, compaction and retry rows with their own validated fields", () => {
     const transcript = toPipelineTranscript(
       [
         {
-          info: { id: "m1", role: "assistant", time: { created: 1 } },
-          parts: [{ type: "text", text: "from opencode" }],
+          id: "m1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "image",
+              content: "screenshot.png",
+              fileUrl: "data:image/png;base64,AAAA",
+              imageSource: "attachment",
+              filename: "screenshot.png",
+            },
+            { type: "image", content: "unknown source", imageSource: "telepathy" },
+            { type: "compaction", content: "", compactedTokensBefore: 12_000 },
+            { type: "retry", content: "rate limited", toolState: "success", retryAttempt: "2" },
+          ],
         },
-        { id: "m2", role: "assistant", content: "from a bridge" },
       ],
-      "codex",
+      "opencode",
       FALLBACK,
     );
 
-    expect(transcript.map((message) => message.content)).toEqual([
-      "from opencode",
-      "from a bridge",
+    expect(flattenedParts(transcript)).toEqual([
+      expect.objectContaining({
+        type: "image",
+        content: "screenshot.png",
+        fileUrl: "data:image/png;base64,AAAA",
+        imageSource: "attachment",
+        filename: "screenshot.png",
+      }),
+      expect.not.objectContaining({ imageSource: expect.anything() }),
+      expect.objectContaining({ type: "compaction", compactedTokensBefore: 12_000 }),
+      expect.not.objectContaining({ retryAttempt: expect.anything() }),
     ]);
   });
 
@@ -1172,59 +1063,6 @@ quoted context
     // pre-grouped part is a shape it cannot read. Dropping it here matches what
     // `normalizeClaudePart` does with it, rather than relying on that.
     expect(transcript[0]!.parts.map((part) => part.type)).toEqual(["text"]);
-  });
-
-  test("survives an OpenCode timestamp below the time clip", () => {
-    const transcript = toPipelineTranscript(
-      [
-        {
-          info: { id: "m1", role: "assistant", time: { created: -1e18 } },
-          parts: [{ type: "text", text: "still readable" }],
-        },
-      ],
-      "opencode",
-      FALLBACK,
-    );
-
-    // `Math.abs` is what makes this the same case as a far-future timestamp;
-    // a bare upper-bound check would let this one through to the RangeError.
-    expect(transcript[0]).toMatchObject({ id: "m1", createdAt: FALLBACK });
-  });
-
-  test("reads an OpenCode entry whose time is not a record at all", () => {
-    const transcript = toPipelineTranscript(
-      [
-        {
-          info: { id: "m1", role: "assistant", time: 1_800_000_000_000 },
-          parts: [{ type: "text", text: "still readable" }],
-        },
-      ],
-      "opencode",
-      FALLBACK,
-    );
-
-    expect(transcript[0]).toMatchObject({
-      id: "m1",
-      content: "still readable",
-      createdAt: FALLBACK,
-    });
-  });
-
-  test("keeps message order across mixed shapes", () => {
-    const transcript = toPipelineTranscript(
-      [
-        { id: "first", role: "user", content: "build it" },
-        {
-          info: { id: "second", role: "assistant", time: { created: 1 } },
-          parts: [{ type: "text", text: "building" }],
-        },
-        { id: "third", role: "assistant", content: "done" },
-      ],
-      "codex",
-      FALLBACK,
-    );
-
-    expect(transcript.map((message) => message.id)).toEqual(["first", "second", "third"]);
   });
 
   test("renders a muted, bounded auto-decline history entry without an answer", () => {

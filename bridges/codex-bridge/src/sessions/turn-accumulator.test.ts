@@ -155,17 +155,81 @@ describe("delta accumulation", () => {
       ).toBe(1);
     });
 
-    test("never reaches back into an already-frozen row", () => {
+    test("never reaches back above an earlier steer", () => {
       const turn = accumulator();
       turn.onItemCompleted(agentMessage("first", "first"));
       turn.onItemCompleted(agentMessage("second", "second"));
-      const first = turn.boundaryAfterItems({ followingItemIds: ["second"] });
-      turn.freezeAssistantSegment(first);
-      turn.startAssistantSegment("assistant-2", first);
+      const placement = turn.placeSteer({ followingItemIds: ["second"] });
+      expect(placement).toEqual({ kind: "split", boundary: 1 });
+      turn.freezeAssistantSegment(1);
+      turn.startAssistantSegment("assistant-2", 1);
 
-      // A second steer whose projection names an item from the frozen row above
-      // must not pull that row's contents back down into the live one.
-      expect(turn.boundaryAfterItems({ followingItemIds: ["first", "second"] })).toBe(first);
+      // A second steer whose projection names an item from the row above the
+      // first steer must not pull that row's contents below either steer.
+      expect(turn.boundaryAfterItems({ followingItemIds: ["first", "second"] })).toBe(1);
+    });
+  });
+
+  describe("placeSteer", () => {
+    const command = (id: string): EngineItem => ({
+      id,
+      type: "command_execution",
+      command: "bun test",
+      aggregated_output: "",
+      status: "completed",
+    });
+    const reasoning = (id: string): EngineItem => ({ id, type: "reasoning", text: "" });
+
+    test("goes above a row the next response opened while the steer was in flight", () => {
+      const turn = accumulator();
+      turn.onItemCompleted(reasoning("r1"));
+      turn.onItemCompleted(command("c1"));
+      // The steer cut the response off; the next one opened its own row first.
+      turn.startModelStep("assistant-2", "2026-10-14T10:00:01.000Z");
+      turn.onItemStarted(reasoning("r2"));
+      turn.onItemCompleted(command("c2"));
+      turn.startModelStep("assistant-3", "2026-10-14T10:00:02.000Z");
+      turn.onItemStarted(reasoning("r3"));
+
+      // Splitting the live row here would freeze it empty and leave
+      // `assistant-2` above the steer it followed.
+      expect(turn.placeSteer({ followingItemIds: ["r2", "c2", "r3"] })).toEqual({
+        kind: "before",
+        assistantMessageId: "assistant-2",
+      });
+      expect(turn.assistantMessageId).toBe("assistant-3");
+      expect(turn.assistantSegment().endIndex).toBeUndefined();
+      // A later steer cannot land above this one.
+      expect(turn.boundaryAfterItems({ followingItemIds: ["r1", "r3"] })).toBe(4);
+    });
+
+    test("goes above an empty live row rather than freezing it", () => {
+      const turn = accumulator();
+      expect(turn.placeSteer({})).toEqual({ kind: "before", assistantMessageId: "assistant-1" });
+    });
+
+    test("splits the live row when items in it came before the steer", () => {
+      const turn = accumulator();
+      turn.onItemCompleted(reasoning("r1"));
+      turn.onItemCompleted(agentMessage("m1", "before"));
+      turn.onItemCompleted(agentMessage("m2", "after"));
+      expect(turn.placeSteer({ followingItemIds: ["m2"] })).toEqual({
+        kind: "split",
+        boundary: 2,
+      });
+      expect(turn.placeSteer({})).toEqual({ kind: "split", boundary: 3 });
+    });
+
+    test("goes below a frozen row it would have to split", () => {
+      const turn = accumulator();
+      turn.onItemCompleted(reasoning("r1"));
+      turn.onItemCompleted(command("c1"));
+      turn.startModelStep("assistant-2", "2026-10-14T10:00:01.000Z");
+      turn.onItemStarted(reasoning("r2"));
+      expect(turn.placeSteer({ followingItemIds: ["c1", "r2"] })).toEqual({
+        kind: "before",
+        assistantMessageId: "assistant-2",
+      });
     });
   });
 
@@ -613,5 +677,174 @@ describe("turn lifecycle", () => {
     turn.onItemCompleted(agentMessage("c", "done"));
 
     expect(turn.ordered().map((entry) => entry.id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("one row per model response", () => {
+  const event = (kind: "item.started" | "item.completed", item: EngineItem) =>
+    ({ kind, threadId: "thread-1", turnId: "turn-1", item }) as const;
+  const command = (id: string): EngineItem => ({
+    id,
+    type: "command_execution",
+    command: "bun test",
+    aggregated_output: "",
+    status: "in_progress",
+  });
+  const reasoning = (id: string): EngineItem => ({ id, type: "reasoning", text: "" });
+
+  test("a reasoning or message item after a tool call opens the next response", () => {
+    const turn = accumulator();
+    turn.onItemStarted(reasoning("r1"));
+    // Commentary before the response's first tool call is the same response.
+    expect(turn.opensModelStep(event("item.started", agentMessage("m1", "")))).toBe(false);
+    turn.onItemStarted(agentMessage("m1", "Looking"));
+    turn.onItemStarted(command("c1"));
+    // A second call in the same response is not a boundary either.
+    expect(turn.opensModelStep(event("item.started", command("c2")))).toBe(false);
+    turn.onItemStarted(command("c2"));
+
+    expect(turn.opensModelStep(event("item.started", reasoning("r2")))).toBe(true);
+    expect(turn.opensModelStep(event("item.completed", agentMessage("m2", "Done")))).toBe(true);
+    // Deltas can introduce the item before its `item/started`.
+    expect(
+      turn.opensModelStep({
+        kind: "item.text.delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "m2",
+        delta: "Do",
+      }),
+    ).toBe(true);
+    expect(
+      turn.opensModelStep({
+        kind: "item.reasoning.delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "r2",
+        delta: "Hmm",
+        channel: "summary",
+        index: 0,
+      }),
+    ).toBe(true);
+    // A known item never opens a row again, whatever arrives for it.
+    expect(turn.opensModelStep(event("item.completed", agentMessage("m1", "Looking")))).toBe(false);
+
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:02.000Z");
+    turn.onItemStarted(reasoning("r2"));
+    expect(turn.assistantMessageId).toBe("assistant-2");
+    expect(turn.assistantSegment("assistant-1")).toMatchObject({
+      endIndex: 4,
+      endedAt: "2026-10-14T10:00:02.000Z",
+    });
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id)).toEqual([
+      "r1",
+      "m1",
+      "c1",
+      "c2",
+    ]);
+    expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["r2"]);
+    // The new row has no tool call yet, so its own message is not a boundary.
+    expect(turn.opensModelStep(event("item.started", agentMessage("m3", "")))).toBe(false);
+  });
+
+  test("never splits while a steer is splitting the row, or after the turn ended", () => {
+    const steered = accumulator();
+    steered.onItemStarted(command("c1"));
+    steered.freezeAssistantSegment();
+    expect(steered.opensModelStep(event("item.started", reasoning("r2")))).toBe(false);
+
+    const ended = accumulator();
+    ended.onItemStarted(command("c1"));
+    ended.complete("completed");
+    expect(ended.opensModelStep(event("item.started", reasoning("r2")))).toBe(false);
+  });
+
+  test("a late change moves only the row holding the item, however many rows follow", () => {
+    const turn = accumulator();
+    turn.onItemStarted(command("c1"));
+    for (let row = 2; row <= 12; row += 1) {
+      turn.startModelStep(`assistant-${row}`, "2026-10-14T10:00:00.000Z");
+      turn.onItemStarted(reasoning(`r${row}`));
+      turn.onItemStarted(command(`c${row}`));
+    }
+    const versions = () => turn.assistantSegmentsInOrder().map((segment) => segment.version);
+    const before = versions();
+
+    turn.onItemCompleted({ ...command("c1"), status: "completed" } as EngineItem);
+    turn.onCommandChanges("c1", { additions: 1, deletions: 0, files: [] });
+    const after = versions();
+
+    expect(after[0]).toBeGreaterThan(before[0]!);
+    expect(after.slice(1)).toEqual(before.slice(1));
+    expect(turn.assistantMessageIdForItem("c1")).toBe("assistant-1");
+    expect(turn.assistantMessageIdForItem("c7")).toBe("assistant-7");
+    expect(turn.assistantMessageIdForItem("missing")).toBeUndefined();
+  });
+
+  test("a raw patch result moves the row holding the call", () => {
+    const turn = accumulator();
+    startPatch(turn);
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:00.000Z");
+    turn.onItemStarted(reasoning("r2"));
+    turn.takeChangedFrozenRows();
+    const before = turn.assistantSegmentVersion("assistant-1");
+
+    turn.onDynamicToolOutput("call-patch", "Done!");
+
+    expect(turn.assistantSegmentVersion("assistant-1")).toBeGreaterThan(before);
+    expect(turn.takeChangedFrozenRows()).toEqual(["assistant-1"]);
+  });
+
+  test("a frozen row's late change is reported once, the live row's never", () => {
+    const turn = accumulator();
+    turn.onItemStarted(command("c1"));
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:00.000Z");
+    turn.onItemStarted(reasoning("r2"));
+    turn.onItemStarted(command("c2"));
+    expect(turn.takeChangedFrozenRows()).toEqual([]);
+
+    turn.onCommandOutputDelta("c1", "still going");
+    turn.onItemCompleted({ ...command("c1"), status: "completed" } as EngineItem);
+    turn.onCommandOutputDelta("c2", "live");
+    expect(turn.takeChangedFrozenRows()).toEqual(["assistant-1"]);
+    expect(turn.takeChangedFrozenRows()).toEqual([]);
+  });
+
+  test("the turn ending moves every frozen row still holding an unfinished call", () => {
+    const turn = accumulator();
+    turn.onItemStarted(command("c1"));
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:00.000Z");
+    turn.onItemStarted(reasoning("r2"));
+    turn.onItemCompleted({ ...command("c2"), status: "completed" } as EngineItem);
+    turn.startModelStep("assistant-3", "2026-10-14T10:00:01.000Z");
+    turn.onItemStarted(reasoning("r3"));
+    turn.takeChangedFrozenRows();
+
+    turn.complete("interrupted");
+    expect(turn.takeChangedFrozenRows()).toEqual(["assistant-1", "assistant-2"]);
+  });
+
+  test("a plan update after the plan's row is behind the live one lands in the live row", () => {
+    const turn = accumulator();
+    const plan = (step: string): EngineItem => ({
+      id: "plan-turn-1",
+      type: "todo_list",
+      items: [{ text: step, completed: false }],
+    });
+    turn.onItemUpdated(plan("first"));
+    turn.onItemUpdated(plan("first, revised"));
+    expect(turn.itemOrder).toEqual(["plan-turn-1"]);
+
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:00.000Z");
+    turn.onItemUpdated(plan("second"));
+    turn.onItemUpdated(plan("second, revised"));
+
+    // The first row keeps the plan as it stood when that response updated it.
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.item)).toEqual([
+      plan("first, revised"),
+    ]);
+    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.item)).toEqual([
+      { ...plan("second, revised"), id: "plan-turn-1:1" },
+    ]);
   });
 });

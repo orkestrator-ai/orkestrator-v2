@@ -15,7 +15,7 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { runCommandBuffer } from "./commands-dependencies.js";
+import { runCommandBuffer } from "./shell.js";
 import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
 import type { ContainerFileReader } from "./mcp-management/types.js";
 import { McpManagementService } from "./mcp-management/service.js";

@@ -96,6 +96,8 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | [environment-deletion-cleanup.md](plans/environment-deletion-cleanup.md) | Active | Implemented with automated verification: environment deletion now removes bridge state, merged local branches and late worktree writes, and a cleanup ledger plus reconciler retries failed steps. The isolated real-stack deletion run is outstanding. |
 | [orphaned-disk-state-cleanup.md](plans/orphaned-disk-state-cleanup.md) | Active | Disk state outside environment deletion: Turbo and Docker cache caps, dev-profile pruning, test temp leaks, pre-ledger workspace/branch sweeps, `disk:report`. Isolated real-stack pass outstanding. |
 | [recurring-processes/plan/00-index.md](improvements/recurring-processes/plan/00-index.md) | Active | Recurring-process efficiency plan. Steps 01–11 implemented; step 12 qualified on Linux with a live isolated-profile A/B. Open: live-provider/GitHub/macOS/iOS evidence and the deferred data-saving preference. Findings: [recurring-processes.md](imrovements/recurring-processes.md); baseline artifacts in [baseline/](improvements/recurring-processes/baseline/README.md). |
+| [2026-10-14/core-domain-folders.md](2026-10-14/core-domain-folders.md) | Active | Not started. Move `apps/backend/src/core/` prefix groups into domain folders with an explicit `index.ts`, one domain per PR, leaves first and `commands` last; lint-enforced. Domain metrics, slice procedure, branch-conflict handling. |
+| [2026-10-14/runtime-state-ownership.md](2026-10-14/runtime-state-ownership.md) | Active | Not started. Replace the 49 module-level bindings in `commands-runtime-state.ts` with a `BackendRuntime` owned through `CommandContext`, in four cluster steps; removes the test setter seams. Lands before the `commands` domain move. |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
 
@@ -109,11 +111,13 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 
 ## Todos
 
-These are the only unfinished `docs/todo/` files.
+These are the only unfinished `docs/todo/` files, plus dated lists of problems
+still to fix (`docs/<date>/`).
 
 | Document | Status | Notes |
 | --- | --- | --- |
 | [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Coordinator read-only adapters, turn-control gaps, and one live suite. |
+| [2026-10-14/README.md](2026-10-14/README.md) | Active | Everything left open after the OpenCode boundary cleanup: OpenCode default model ignores connectivity, tmux 3.8 breaks environment move, startup Claude login dialog blocks the app, fork loses its model, host-dependent test failures, wrong OpenCode auth status, plus cleanup follow-ups, decisions, flakes and watch items. |
 | [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.19.0`. |
 | [remote-stream-compression.md](todo/remote-stream-compression.md) | Deferred | Measure redundant payloads before changing compression defaults. |
 | [remote-client-data-saving-mode.md](todo/remote-client-data-saving-mode.md) | Deferred | Proposal only. Measure existing incremental reads first. |

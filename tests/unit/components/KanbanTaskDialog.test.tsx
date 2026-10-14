@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
-import type { Environment } from "@/types";
+import type { ClipboardImage } from "@/lib/native/clipboard";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -22,7 +22,11 @@ type KanbanTaskUpdates = Partial<
   >
 >;
 
-const startBuildMock = mock(async (): Promise<string | undefined> => "pipeline-1");
+type StartBuild = ReturnType<typeof realUseBuildPipeline.useBuildPipeline>["startBuild"];
+
+const startBuildMock = mock(
+  async (..._args: Parameters<StartBuild>): Promise<string | undefined> => "pipeline-1",
+);
 const navigateToBuildMock = mock(() => {});
 const getKanbanImageDataMock = mock(async () => "");
 const detectPrMock = mock(
@@ -65,12 +69,13 @@ const saveComposeDraftMock = mock(
   }),
 );
 const deleteComposeDraftMock = mock(async (_draftKey: string) => {});
-const readImageMock = mock(async () => {
+const readImageMock = mock(async (_pastedBlob?: Blob | null): Promise<ClipboardImage> => {
   throw new Error("no image");
 });
 
 const addTaskMock = mock(
-  async (_projectId: string, _title: string, _description: string) => "task-created",
+  async (_projectId: string, _title: string, _description: string): Promise<string | undefined> =>
+    "task-created",
 );
 const updateTaskMock = mock(async (_taskId: string, _updates: KanbanTaskUpdates) => {});
 const deleteTaskMock = mock(async (_taskId: string) => {});
@@ -119,7 +124,6 @@ const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useConfigStore } = await import("@/stores/configStore");
-const { useOpenCodeStore } = await import("@/stores/openCodeStore");
 const { useProjectStore } = await import("@/stores/projectStore");
 const { buildPipelineFixture } = await import("@/test/build-pipeline-fixture");
 const initialKanbanState = useKanbanStore.getState();
@@ -236,25 +240,6 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   } as KanbanTask;
 }
 
-function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
-  return {
-    id: "env-1",
-    projectId: "project-1",
-    name: "Environment 1",
-    branch: "feature/test",
-    containerId: "container-1",
-    status: "running",
-    prUrl: "https://github.com/org/repo/pull/1",
-    prState: "open",
-    hasMergeConflicts: false,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    networkAccessMode: "restricted",
-    order: 0,
-    environmentType: "containerized",
-    ...overrides,
-  };
-}
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((promiseResolve) => {
@@ -296,12 +281,7 @@ function resetStores() {
   useEnvironmentStore.setState({
     ...initialEnvironmentState,
     environments: [],
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
-    sessionActivated: new Set(),
   });
   // The build launcher reads its defaults and its model catalog from these, so
   // a test that seeds them must not leak into the next one.
@@ -318,7 +298,6 @@ function resetStores() {
       },
     ],
   });
-  useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useBuildPipelineStore.setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
@@ -1053,8 +1032,8 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("reports file-reader failures and resets the file input", async () => {
-    FileReader.prototype.readAsDataURL = function () {
-      this.onerror?.(new ProgressEvent("error"));
+    FileReader.prototype.readAsDataURL = function (this: FileReader) {
+      this.onerror?.(new ProgressEvent("error") as ProgressEvent<FileReader>);
     } as typeof FileReader.prototype.readAsDataURL;
     render(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
@@ -1331,20 +1310,16 @@ describe("KanbanTaskDialog", () => {
     launchBuild("Local", { Review: "Codex", PR: "OpenCode" });
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalled());
-    const [, environmentType, agent, options] = startBuildMock.mock.calls[0] as unknown as [
-      KanbanTask,
-      string,
-      string,
-      { steps: Record<string, { agent: string }> },
-    ];
+    const [, environmentType, agent, options] = startBuildMock.mock.calls[0]!;
+    const steps = options?.steps;
     expect(environmentType).toBe("local");
     // The pipeline agent stays the build step's harness even when review differs.
     expect(agent).toBe("claude");
-    expect(options.steps.build.agent).toBe("claude");
-    expect(options.steps.review.agent).toBe("codex");
-    expect(options.steps.verify.agent).toBe("claude");
-    expect(options.steps.pr.agent).toBe("opencode");
-    expect(options.steps["resolve-conflicts"].agent).toBe("claude");
+    expect(steps?.build?.agent).toBe("claude");
+    expect(steps?.review?.agent).toBe("codex");
+    expect(steps?.verify?.agent).toBe("claude");
+    expect(steps?.pr?.agent).toBe("opencode");
+    expect(steps?.["resolve-conflicts"]?.agent).toBe("claude");
   });
 
   test("reports a create-and-build that throws instead of leaving the launch stuck", async () => {
@@ -1699,24 +1674,12 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("never offers OpenCode models owned by another project", async () => {
-    useEnvironmentStore.setState({
-      environments: [makeEnvironment({ id: "env-other", projectId: "project-other" })],
-    });
-    useOpenCodeStore.setState({
-      models: new Map([
-        [
-          "env-other",
-          [
-            {
-              id: "openrouter/zeta",
-              name: "Zeta",
-              provider: "OpenRouter",
-              variants: [],
-            },
-          ],
-        ],
-      ]),
-      modelSource: new Map([["env-other", "server"]]),
+    getCachedOpenCodeModelCatalogMock.mockResolvedValueOnce({
+      schemaVersion: 2,
+      projectId: "project-other",
+      catalogVersion: "catalog-v1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      models: [{ id: "openrouter/zeta", name: "Zeta", provider: "OpenRouter", variants: [] }],
     });
 
     render(
@@ -1755,55 +1718,6 @@ describe("KanbanTaskDialog", () => {
     openLauncher();
     chooseLauncherPlatform("Build", "opencode");
     await waitFor(() => expect(launcherPicker("Build").textContent).toContain("Project Model"));
-  });
-
-  test("accepts live OpenCode catalog updates only from environments owned by the project", async () => {
-    useEnvironmentStore.setState({
-      environments: [
-        makeEnvironment({ id: "env-project", projectId: "project-1" }),
-        makeEnvironment({ id: "env-other", projectId: "project-other" }),
-      ],
-    });
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
-
-    openLauncher();
-    chooseLauncherPlatform("Build", "opencode");
-
-    await act(async () => {
-      useOpenCodeStore.setState({
-        models: new Map([
-          [
-            "env-project",
-            [
-              {
-                id: "openrouter/project-live",
-                name: "Project Live",
-                provider: "OpenRouter",
-                variants: [],
-              },
-            ],
-          ],
-          [
-            "env-other",
-            [
-              {
-                id: "openrouter/other-live",
-                name: "Other Live",
-                provider: "OpenRouter",
-                variants: [],
-              },
-            ],
-          ],
-        ]),
-        modelSource: new Map([
-          ["env-project", "server"],
-          ["env-other", "server"],
-        ]),
-      });
-    });
-
-    expect(launcherPicker("Build").textContent).toContain("Project Live");
-    expect(launcherPicker("Build").textContent).not.toContain("Other Live");
   });
 
   test("the launcher opens on the repository and project defaults", async () => {
@@ -1858,17 +1772,10 @@ describe("KanbanTaskDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalled());
-    const [, environmentType, agent, options] = startBuildMock.mock.calls[0] as unknown as [
-      KanbanTask,
-      string,
-      string,
-      {
-        steps: Record<string, { agent: string; model: string; reasoningEffort?: string }>;
-      },
-    ];
+    const [, environmentType, agent, options] = startBuildMock.mock.calls[0]!;
     expect(environmentType).toBe("local");
     expect(agent).toBe("codex");
-    expect(options.steps.build).toEqual({
+    expect(options?.steps?.build).toEqual({
       agent: "codex",
       model: "gpt-5.4-mini",
       reasoningEffort: "high",

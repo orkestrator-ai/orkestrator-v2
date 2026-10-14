@@ -426,4 +426,69 @@ describe("native agent remote projection synchronization", () => {
       },
     );
   });
+  test("pages a row larger than the page target back whole, not part-trimmed", async () => {
+    const hugeParts = Array.from({ length: 300 }, (_, index) => ({
+      type: "text",
+      content: `part-${index}:${"y".repeat(4 * 1024)}`,
+    }));
+    const messages = [
+      {
+        id: "prompt-1",
+        role: "user" as const,
+        content: "start",
+        parts: [],
+        createdAt: "2026-10-14T07:53:29.000Z",
+      },
+      {
+        id: "huge",
+        role: "assistant" as const,
+        content: "",
+        parts: hugeParts,
+        createdAt: "2026-10-14T07:53:34.000Z",
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        id: `after-${index}`,
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        content: `after ${index}`,
+        parts: [{ type: "text", content: `after ${index}` }],
+        createdAt: new Date(Date.parse("2026-10-14T10:17:25.000Z") + index * 1_000).toISOString(),
+      })),
+    ];
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({ status: "idle", messages, messagesComplete: true }),
+    });
+    await withService(
+      { prefix: "orkestrator-native-sync-huge-row-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-sync-huge-row",
+        };
+        await service.ensureSession(identity);
+        const first = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        });
+        if (first.status !== "snapshot") throw new Error("Expected sync snapshot");
+        expect(first.projection.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "after-0",
+          "after-1",
+          "after-2",
+          "after-3",
+        ]);
+        const page = await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: first.historyCursor!,
+          targetBytes: 512 * 1024,
+        });
+        const huge = page.messages.find((message) => (message as { id: string }).id === "huge") as
+          | { parts: unknown[] }
+          | undefined;
+        expect(huge?.parts).toHaveLength(300);
+      },
+    );
+  });
 });

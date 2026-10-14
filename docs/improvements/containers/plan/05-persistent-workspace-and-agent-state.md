@@ -160,7 +160,7 @@ survives reconstruction as unknown rather than unsent.
   through a new `volumes` ledger step.
 - **Decision.** One `state` volume mounted by sub-path (Engine 26+) rather than
   one volume per provider; older engines keep the legacy layout with a reason.
-- **Tests.** `tests/unit/electron/container-storage.test.ts`,
+- **Tests.** `apps/backend/tests/container-storage.test.ts`,
   `apps/backend/src/core/environment-cleanup.test.ts` (volume step). Live
   (Engine 29.7.2): helper init/verify/foreign/unknown-content refusal; C12 —
   tracked/untracked/ignored/binary files, modes, internal and external

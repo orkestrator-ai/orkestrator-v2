@@ -20,8 +20,6 @@ import {
   INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS,
   INTERACTION_MONITOR_MAX_OBSERVATIONS,
   INTERACTION_MONITOR_MAX_TRACKED_REQUESTS,
-  OPENCODE_MANUAL_PROMPT_CLAIM_MS,
-  OPENCODE_RECOVERY_MAX_CANDIDATES,
   PROVIDER_REPORTED_INTERACTION_GRACE_MS,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   isActiveBuildPhase,
@@ -62,7 +60,7 @@ type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
-type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
+type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
@@ -81,7 +79,6 @@ type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
-type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 type MailInjectDispatchOutcome = shared.MailInjectDispatchOutcome;
 export type NativeAgentServiceLayerTypes = [
@@ -110,7 +107,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   StorageService,
@@ -129,7 +126,6 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentActivityTransition,
   NativeAgentServiceOptions,
   AgentInteractionObservation,
-  OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
 
@@ -888,7 +884,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             if (!preparation.dispatch) {
               return {
                 dispatched: false as const,
-                ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
+                ...(preparation.notice ? { incompleteTurnNotice: preparation.notice } : {}),
               };
             }
             // Reuse the credential resolved for the warm-up attach when it
@@ -1180,89 +1176,6 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     }
   }
 
-  async claimOpenCodeManualPrompt(input: {
-    environmentId: string;
-    logicalSessionKey: string;
-    providerSessionId: string;
-    requestId: string;
-  }): Promise<void> {
-    this.assertAcceptingWork();
-    if (
-      !nonBlank(input.environmentId) ||
-      !nonBlank(input.logicalSessionKey) ||
-      !nonBlank(input.providerSessionId) ||
-      !nonBlank(input.requestId)
-    ) {
-      throw new Error("OpenCode manual prompt claim is invalid");
-    }
-    const key = nativeAgentSessionStorageKey(
-      input.environmentId,
-      "opencode",
-      input.logicalSessionKey,
-    );
-    const existing = this.openCodeManualPromptClaims.get(key);
-    if (this.openCodeRecoveryDispatches.has(key)) {
-      throw new Error("OpenCode automatic recovery is already being sent");
-    }
-    if (existing && existing.expiresAt > this.now() && existing.requestId !== input.requestId) {
-      throw new Error("Another OpenCode prompt is already being sent");
-    }
-    if (!existing && this.openCodeManualPromptClaims.size >= OPENCODE_RECOVERY_MAX_CANDIDATES) {
-      const oldest = this.openCodeManualPromptClaims.keys().next().value;
-      if (oldest) this.openCodeManualPromptClaims.delete(oldest);
-    }
-    const claim = {
-      providerSessionId: input.providerSessionId,
-      requestId: input.requestId,
-      expiresAt: this.now() + OPENCODE_MANUAL_PROMPT_CLAIM_MS,
-    };
-    // Publish before the first await so a recovery guard cannot pass while the
-    // durable identity check is in flight.
-    this.openCodeManualPromptClaims.set(key, claim);
-    try {
-      const durable = await this.storage.getNativeAgentSession(key);
-      if (durable?.providerSessionId !== input.providerSessionId) {
-        throw new Error("OpenCode manual prompt session no longer matches");
-      }
-      // The user is explicitly replacing the stalled turn. Remove any older
-      // automatic-recovery notice from the authoritative session snapshot so
-      // it cannot reappear after a renderer remount.
-      const cleared = await this.storage.setOpenCodeIncompleteTurnNotice(
-        key,
-        input.providerSessionId,
-        null,
-      );
-      if (!cleared) {
-        throw new Error("OpenCode manual prompt session no longer matches");
-      }
-    } catch (error) {
-      if (this.openCodeManualPromptClaims.get(key) === claim) {
-        this.openCodeManualPromptClaims.delete(key);
-      }
-      throw error;
-    }
-  }
-
-  releaseOpenCodeManualPrompt(input: {
-    environmentId: string;
-    logicalSessionKey: string;
-    providerSessionId: string;
-    requestId: string;
-  }): void {
-    const key = nativeAgentSessionStorageKey(
-      input.environmentId,
-      "opencode",
-      input.logicalSessionKey,
-    );
-    const claim = this.openCodeManualPromptClaims.get(key);
-    if (
-      claim?.providerSessionId === input.providerSessionId &&
-      claim.requestId === input.requestId
-    ) {
-      this.openCodeManualPromptClaims.delete(key);
-    }
-  }
-
   /**
    * Wake the durable queue worker after an intent-level queue mutation.
    *
@@ -1310,12 +1223,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     while (
       this.launchTasks.size > 0 ||
       this.queueTasks.size > 0 ||
-      this.openCodeRecoveryTasks.size > 0
+      this.turnRecovery.pendingTasks().length > 0
     ) {
       await Promise.allSettled([
         ...this.launchTasks.values(),
         ...this.queueTasks.values(),
-        ...this.openCodeRecoveryTasks.values(),
+        ...this.turnRecovery.pendingTasks(),
       ]);
     }
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
@@ -1334,9 +1247,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       }),
     );
     this.observations.clear();
-    this.openCodeRecoveryCandidates.clear();
-    this.openCodeManualPromptClaims.clear();
-    this.openCodeRecoveryDispatches.clear();
+    this.turnRecovery.clear();
     this.providerDispatchCounts.clear();
     this.providers.clear();
     this.providerConnections.clear();

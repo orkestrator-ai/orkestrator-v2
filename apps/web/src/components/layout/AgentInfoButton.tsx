@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   ArrowRight,
   ArrowRightLeft,
@@ -15,44 +23,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn, createSessionKey } from "@/lib/utils";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import {
-  compactClaudeSession,
-  forkClaudeSession,
-  getSession as getClaudeSession,
-  getSessionMessages as getClaudeSessionMessages,
-  rewindClaudeFiles,
-  stopClaudeBackgroundTask,
-} from "@/lib/claude-client";
-import {
-  compactOpenCodeSession,
-  forkOpenCodeSession,
-  getSessionMessages as getOpenCodeSessionMessages,
-  getSessionStatus as getOpenCodeSessionStatus,
-  revertOpenCodeSession,
-  shareOpenCodeSession,
-  unrevertOpenCodeSession,
-  unshareOpenCodeSession,
-} from "@/lib/opencode-client";
-import {
-  CodexForkError,
-  compactCodexSession,
-  forkCodexSession,
-  getCodexRuntimeHealth,
-  getSessionMessages as getCodexSessionMessages,
-  getSessionStatus as getCodexSessionStatus,
-  startCodexNativeReview,
-} from "@/lib/codex-client";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
   AGENT_PROVIDER_LABELS,
-  agentHandoffTranscriptDigest,
   composeAgentHandoffTransferMessages,
   createAgentHandoffSnapshot,
   forgetAgentHandoff,
@@ -61,6 +38,7 @@ import {
   type AgentProvider,
 } from "@/lib/agent-handoff";
 import {
+  adoptNativeAgentSession,
   deleteAgentHandoff,
   beginNativeAgentSignIn,
   forkNativeAgentSession,
@@ -75,12 +53,7 @@ import {
   updateNativeAgentControls,
 } from "@/lib/backend";
 import { useSystemUsage } from "@/hooks/useSystemUsage";
-import {
-  normalizeClaudeMessagesForDisplay,
-  normalizeCodexNativeMessage,
-  normalizeOpenCodeNativeMessage,
-  normalizeNativeMessages,
-} from "@/lib/chat/native-message-adapters";
+import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
@@ -117,8 +90,6 @@ interface ControlUpdateState {
   actionId: number;
   sessionIdentity: string;
 }
-
-const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
 
 /** Host-meter freshness requested while the agent-information popover is open. */
 export const AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS = 3_000;
@@ -179,10 +150,8 @@ import {
   Metric,
   SystemUsagePanel,
   UsagePanel,
-  codexLimitsFromHealth,
   describeRewindTarget,
   formatCount,
-  readOpenCodeShareUrl,
   summarizeRewindPreview,
 } from "./AgentInfoButton.panels";
 
@@ -220,7 +189,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const actionIdRef = useRef(0);
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
-  const shareVersionRef = useRef(0);
   const buildPipelineId =
     activeTab?.type === "claude-build" ? activeTab.buildTabData?.pipelineId : undefined;
   const buildPipeline = useBuildPipelineStore((state) =>
@@ -348,117 +316,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         activeSession?.provider === "codex" ||
         activeSession?.provider === "opencode"));
 
-  const claudeUsage = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.contextUsage.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const claudeRateLimits = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.rateLimits.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const openCodeUsage = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.contextUsage.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const codexUsage = useCodexStore((state) =>
-    activeSession?.provider === "codex"
-      ? state.contextUsage.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const claudeModel = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.selectedModel.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const openCodeModel = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.selectedModel.get(activeSession.environmentId)
-      : undefined,
-  );
-  const codexModel = useCodexStore((state) =>
-    activeSession?.provider === "codex"
-      ? state.selectedModel.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const claudeClient = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.clients.get(activeSession.environmentId)
-      : undefined,
-  );
-  const openCodeClient = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.clients.get(activeSession.environmentId)
-      : undefined,
-  );
-  const codexClient = useCodexStore((state) =>
-    activeSession?.provider === "codex"
-      ? state.clients.get(activeSession.environmentId)
-      : undefined,
-  );
-  const claudeSession = useClaudeStore((state) =>
-    activeSession?.provider === "claude" ? state.sessions.get(activeSession.sessionKey) : undefined,
-  );
-  const openCodeSession = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.sessions.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const codexSession = useCodexStore((state) =>
-    activeSession?.provider === "codex" ? state.sessions.get(activeSession.sessionKey) : undefined,
-  );
-  const claudeInit = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.sessionInitData.get(activeSession.environmentId)
-      : undefined,
-  );
-  const claudeAgent = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? state.selectedAgent.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const includeLocalSettings = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? (state.includeLocalSettings.get(activeSession.sessionKey) ?? false)
-      : false,
-  );
-  const promptSuggestionOptIn = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? (state.promptSuggestionOptIn.get(activeSession.sessionKey) ?? false)
-      : false,
-  );
-  const claudeTasks = useClaudeStore((state) =>
-    activeSession?.provider === "claude"
-      ? (state.backgroundTasks.get(activeSession.sessionKey) ?? EMPTY_CLAUDE_TASKS)
-      : EMPTY_CLAUDE_TASKS,
-  );
-  const openCodeHealth = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.runtimeHealth.get(activeSession.environmentId)
-      : undefined,
-  );
-  /*
-   * Todos and diffs belong to one session, but the environment-keyed snapshot
-   * is written by whichever OpenCode session reported last. The compatibility
-   * store mirrors each snapshot under the session key, so prefer that and fall
-   * back to the environment entry only until the first session-scoped write.
-   */
-  const openCodeSessionHealth = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.runtimeHealth.get(activeSession.sessionKey)
-      : undefined,
-  );
-  const openCodeAgent = useOpenCodeStore((state) =>
-    activeSession?.provider === "opencode"
-      ? state.selectedAgent.get(activeSession.sessionKey)
-      : undefined,
-  );
-
   const neutralContextUsage = neutralProjection?.contextUsage;
   const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
-  const neutralUsage: AgentInfoUsageSnapshot | undefined = neutralContextUsage
+  const usage: AgentInfoUsageSnapshot | undefined = neutralContextUsage
     ? {
         ...neutralContextUsage,
         usedTokens: neutralContextUsage.usedTokens,
@@ -474,58 +334,13 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
           : {}),
       }
     : undefined;
-  const legacyUsage: AgentInfoUsageSnapshot | undefined =
-    activeSession?.provider === "claude"
-      ? claudeUsage
-      : activeSession?.provider === "opencode"
-        ? openCodeUsage
-        : activeSession?.provider === "codex"
-          ? codexUsage
-          : undefined;
-  const usage: AgentInfoUsageSnapshot | undefined = legacyUsage
-    ? {
-        ...neutralUsage,
-        ...legacyUsage,
-        // The compatibility stores do not know the provider-neutral usage
-        // extensions. Keep their freshest context counters while retaining
-        // account windows and bounded per-turn rows from the projection.
-        ...(neutralUsage?.turns ? { turns: neutralUsage.turns } : {}),
-        ...(neutralUsage?.account ? { account: neutralUsage.account } : {}),
-        ...(neutralUsage?.permissionDenialDetails
-          ? { permissionDenialDetails: neutralUsage.permissionDenialDetails }
-          : {}),
-      }
-    : neutralUsage;
   const neutralRateLimits =
     neutralProjection?.rateLimits ?? neutralProjection?.contextUsage?.rateLimits;
-  const liveClaudeTasks = neutralProjection?.backgroundTasks ?? Object.values(claudeTasks);
-  const modelId =
-    (activeSession?.provider === "claude"
-      ? claudeModel
-      : activeSession?.provider === "opencode"
-        ? openCodeModel
-        : activeSession?.provider === "codex"
-          ? codexModel
-          : undefined) ?? neutralProjection?.composer?.selectedModelId;
+  const liveClaudeTasks = neutralProjection?.backgroundTasks ?? [];
+  const modelId = neutralProjection?.composer?.selectedModelId;
 
-  const currentSessionId =
-    (activeSession?.provider === "claude"
-      ? claudeSession?.sessionId
-      : activeSession?.provider === "opencode"
-        ? openCodeSession?.sessionId
-        : activeSession?.provider === "codex"
-          ? codexSession?.sessionId
-          : undefined) ??
-    neutralProjection?.sessionId ??
-    activeSession?.providerSessionId;
+  const currentSessionId = neutralProjection?.sessionId ?? activeSession?.providerSessionId;
   const currentSessionLoading =
-    (activeSession?.provider === "claude"
-      ? (claudeSession?.isLoading ?? false)
-      : activeSession?.provider === "opencode"
-        ? (openCodeSession?.isLoading ?? false)
-        : activeSession?.provider === "codex"
-          ? (codexSession?.isLoading ?? false)
-          : false) ||
     neutralProjection?.turn.phase === "running" ||
     neutralProjection?.turn.phase === "recovering" ||
     neutralProjection?.turn.phase === "cancelling";
@@ -538,45 +353,34 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     ? `${activeSession.provider}:${activeSession.sessionKey}:${currentSessionId ?? "pending"}`
     : null;
   const currentSessionIdentityRef = useRef(sessionIdentity);
-  currentSessionIdentityRef.current = sessionIdentity;
+  // Read only by action continuations, which always resume after a commit.
+  useLayoutEffect(() => {
+    currentSessionIdentityRef.current = sessionIdentity;
+  }, [sessionIdentity]);
+  /*
+   * One component instance serves every tab, so everything typed or latched
+   * for the previous session has to go when the active tab changes. `steerText`
+   * in particular is posted to `currentSessionId`: text composed for session A
+   * would otherwise be delivered to session B's active turn. Reset while
+   * rendering the new identity so no frame shows the previous session's state.
+   */
+  const [renderedSessionIdentity, setRenderedSessionIdentity] = useState(sessionIdentity);
+  if (renderedSessionIdentity !== sessionIdentity) {
+    setRenderedSessionIdentity(sessionIdentity);
+    setOpen(false);
+    setHandoffOpen(false);
+    setRuntimeNoticeDialogId(null);
+    setShareState({ sessionIdentity, value: false });
+    setSteerState({ sessionIdentity, value: "" });
+  }
   const busyAction = busyState?.sessionIdentity === sessionIdentity ? busyState.name : null;
   const steerText = steerState.sessionIdentity === sessionIdentity ? steerState.value : "";
+  // The projection's share URL is the backend's authoritative share state; the
+  // local latch only covers the window before the next projection arrives.
   const openCodeShared =
     neutralProjection?.shareUrl !== undefined
       ? neutralProjection.shareUrl !== null
       : shareState.sessionIdentity === sessionIdentity && shareState.value;
-
-  // Keyed on the session, not the `activeSession` object: that is memoised on
-  // activeTab, so depending on it refetches runtime health every time the user
-  // switches tabs within one session. AgentInfoButton.test pins the call count.
-  /* oxlint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    if (!open || activeSession?.provider !== "codex" || !codexClient || !currentSessionId) {
-      return;
-    }
-    let cancelled = false;
-    void getCodexRuntimeHealth(codexClient, currentSessionId)
-      .then((health) => {
-        if (cancelled) return;
-        if (activeSession) {
-          const limits = codexLimitsFromHealth(health);
-          const store = useCodexStore.getState();
-          const current = store.contextUsage.get(activeSession.sessionKey);
-          if (current && (limits.rateLimits.length > 0 || limits.credits)) {
-            store.setContextUsage(activeSession.sessionKey, {
-              ...current,
-              ...limits,
-              updatedAt: new Date().toISOString(),
-            });
-          }
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSession?.provider, codexClient, currentSessionId, open]);
-  /* oxlint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     if (!open || !activeSession || !currentSessionId) return;
@@ -677,7 +481,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       },
     };
     accountReaderRef.current = reader;
-    setAccountReadFailed(false);
     void refresh();
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
@@ -686,17 +489,27 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       invalidate();
       window.removeEventListener("focus", onFocus);
       if (accountReaderRef.current === reader) accountReaderRef.current = null;
+      // A failure belongs to this read cycle; the next open or identity starts clean.
+      setAccountReadFailed(false);
     };
   }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
 
-  const openForkTab = (
+  const openForkTab = async (
     sessionId: string,
     title: string | undefined,
     closeCurrentPanel: boolean,
+    controls?: NativeAgentControlUpdate,
   ) => {
     if (!activeTab || !activeSession) return;
     const id = createUuid();
+    await adoptNativeAgentSession({
+      environmentId: activeSession.environmentId,
+      agent: activeSession.provider,
+      logicalSessionKey: createSessionKey(activeSession.environmentId, id),
+      providerSessionId: sessionId,
+      controls,
+    });
     /*
      * Built field by field, never by spreading the source tab. `TabInfo`
      * carries one-shot bootstrap fields (`initialPrompt`, `initialCommands`,
@@ -755,103 +568,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     sourceSession: ActiveNativeSession,
     sourceSessionId: string,
   ): Promise<NativeMessage[]> => {
-    if (sourceSession.provider === "claude" && claudeClient) {
-      const status = await getClaudeSession(claudeClient, sourceSessionId);
-      if (!status) throw new Error("Claude session is unavailable");
-      if (status.status !== "idle") {
-        throw new Error("Wait for Claude to finish before continuing in another agent");
-      }
-      const messages = normalizeClaudeMessagesForDisplay(
-        await getClaudeSessionMessages(claudeClient, sourceSessionId, { throwOnError: true }),
-      );
-      const statusAfterRead = await getClaudeSession(claudeClient, sourceSessionId);
-      if (!statusAfterRead) throw new Error("Claude session is unavailable");
-      if (statusAfterRead.status !== "idle") {
-        throw new Error("Claude started working while its conversation was being transferred");
-      }
-      if (statusAfterRead.lastActivity !== status.lastActivity) {
-        throw new Error("Claude conversation changed while it was being transferred");
-      }
-      return messages;
-    }
-    if (sourceSession.provider === "opencode" && openCodeClient) {
-      const status = await getOpenCodeSessionStatus(openCodeClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!status) throw new Error("OpenCode session is unavailable");
-      if (status === "busy" || status === "retry") {
-        throw new Error("Wait for OpenCode to finish before continuing in another agent");
-      }
-      const messages = (
-        await getOpenCodeSessionMessages(openCodeClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeOpenCodeNativeMessage);
-      const statusAfterRead = await getOpenCodeSessionStatus(openCodeClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!statusAfterRead) throw new Error("OpenCode session is unavailable");
-      if (statusAfterRead === "busy" || statusAfterRead === "retry") {
-        throw new Error("OpenCode started working while its conversation was being transferred");
-      }
-      const messagesAfterRead = (
-        await getOpenCodeSessionMessages(openCodeClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeOpenCodeNativeMessage);
-      const finalStatus = await getOpenCodeSessionStatus(openCodeClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!finalStatus) throw new Error("OpenCode session is unavailable");
-      if (finalStatus === "busy" || finalStatus === "retry") {
-        throw new Error("OpenCode started working while its conversation was being transferred");
-      }
-      // OpenCode exposes no revision counter, so a second read is the only way
-      // to detect a turn that started and finished inside the read window.
-      // Compare digests rather than serializing both transcripts twice: these
-      // can be tens of megabytes and this runs on the main thread.
-      if (
-        agentHandoffTranscriptDigest(messagesAfterRead) !== agentHandoffTranscriptDigest(messages)
-      ) {
-        throw new Error("OpenCode conversation changed while it was being transferred");
-      }
-      return messagesAfterRead;
-    }
-    if (sourceSession.provider === "codex" && codexClient) {
-      const status = await getCodexSessionStatus(codexClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!status) throw new Error("Codex session is unavailable");
-      if (status.status !== "idle") {
-        throw new Error("Wait for Codex to finish before continuing in another agent");
-      }
-      const messages = (
-        await getCodexSessionMessages(codexClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeCodexNativeMessage);
-      const statusAfterRead = await getCodexSessionStatus(codexClient, sourceSessionId, {
-        throwOnError: true,
-      });
-      if (!statusAfterRead) throw new Error("Codex session is unavailable");
-      if (statusAfterRead.status !== "idle") {
-        throw new Error("Codex started working while its conversation was being transferred");
-      }
-      if (status.messageRevision !== undefined && statusAfterRead.messageRevision !== undefined) {
-        if (statusAfterRead.messageRevision !== status.messageRevision) {
-          throw new Error("Codex conversation changed while it was being transferred");
-        }
-        return messages;
-      }
-      /*
-       * `messageRevision` is optional: an older bridge or a malformed status
-       * payload drops it. Treating that as "unchanged" would fail open and
-       * transfer a torn snapshot silently, so re-read and compare instead.
-       */
-      const messagesAfterRead = (
-        await getCodexSessionMessages(codexClient, sourceSessionId, { throwOnError: true })
-      ).map(normalizeCodexNativeMessage);
-      if (
-        agentHandoffTranscriptDigest(messagesAfterRead) !== agentHandoffTranscriptDigest(messages)
-      ) {
-        throw new Error("Codex conversation changed while it was being transferred");
-      }
-      return messagesAfterRead;
-    }
     const identity = {
       environmentId: sourceSession.environmentId,
       agent: sourceSession.provider,
@@ -909,34 +625,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const forkCurrent = () =>
     runAction("fork", async ({ isCurrent }) => {
       if (!activeSession || !currentSessionId) return;
-      if (activeSession.provider === "claude" && claudeClient) {
-        const fork = await forkClaudeSession(claudeClient, currentSessionId);
-        openForkTab(fork.sessionId, fork.title, isCurrent());
-      } else if (activeSession.provider === "opencode" && openCodeClient) {
-        const fork = await forkOpenCodeSession(openCodeClient, currentSessionId);
-        openForkTab(fork.id, fork.title, isCurrent());
-      } else if (activeSession.provider === "codex" && codexClient) {
-        /*
-         * The bridge differentiates its refusals (404 missing, 409 running, 422
-         * not a fork point, 503 unavailable) and `CodexForkError` carries that
-         * body verbatim. The old single message blamed "an active or empty
-         * session" for all four, including a bridge that was simply down.
-         */
-        let fork: Awaited<ReturnType<typeof forkCodexSession>>;
-        try {
-          fork = await forkCodexSession(codexClient, currentSessionId);
-        } catch (error) {
-          throw error instanceof CodexForkError ? error : new Error("Failed to fork Codex session");
-        }
-        openForkTab(fork.sessionId, fork.title, isCurrent());
-      } else {
-        const fork = await forkNativeAgentSession({
-          environmentId: activeSession.environmentId,
-          agent: activeSession.provider,
-          logicalSessionKey: activeSession.sessionKey,
-        });
-        openForkTab(fork.sessionId, fork.title, isCurrent());
-      }
+      const fork = await forkNativeAgentSession({
+        environmentId: activeSession.environmentId,
+        agent: activeSession.provider,
+        logicalSessionKey: activeSession.sessionKey,
+      });
+      await openForkTab(fork.sessionId, fork.title, isCurrent(), fork.controls);
     });
 
   const continueIn = (
@@ -974,24 +668,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         sourceProvider: sourceSession.provider,
         destinationProvider: destination,
         sourceSessionId,
-        // The legacy stores answer for the three providers that have one; every
-        // other agent's title lives only on the projection, which is also the
-        // fallback while a legacy store has not loaded its session yet.
-        sourceTitle:
-          (sourceSession.provider === "claude"
-            ? claudeSession?.title
-            : sourceSession.provider === "opencode"
-              ? openCodeSession?.title
-              : sourceSession.provider === "codex"
-                ? codexSession?.title
-                : undefined) ?? neutralProjection?.title,
+        sourceTitle: neutralProjection?.title,
         sourceModel: modelId,
-        sourceAgent:
-          sourceSession.provider === "claude"
-            ? claudeAgent
-            : sourceSession.provider === "opencode"
-              ? openCodeAgent
-              : undefined,
         messages,
       });
       await persistAgentHandoff(handoff);
@@ -1014,21 +692,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const compactCurrent = () =>
     runAction("compact", async () => {
       if (!activeSession || !currentSessionId) return;
-      const succeeded =
-        activeSession.provider === "claude" && claudeClient
-          ? await compactClaudeSession(claudeClient, currentSessionId)
-          : activeSession.provider === "opencode" && openCodeClient
-            ? (await compactOpenCodeSession(openCodeClient, currentSessionId, openCodeModel), true)
-            : activeSession.provider === "codex" && codexClient
-              ? await compactCodexSession(codexClient, currentSessionId)
-              : (await performNativeAgentSessionAction({
-                  environmentId: activeSession.environmentId,
-                  agent: activeSession.provider,
-                  logicalSessionKey: activeSession.sessionKey,
-                  action: { kind: "compact", modelId },
-                }),
-                true);
-      if (!succeeded) throw new Error("The provider could not compact this session");
+      await performNativeAgentSessionAction({
+        environmentId: activeSession.environmentId,
+        agent: activeSession.provider,
+        logicalSessionKey: activeSession.sessionKey,
+        action: { kind: "compact", modelId },
+      });
       toast.success("Context compaction started");
     });
 
@@ -1037,58 +706,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     setRuntimeNoticeDialogId(null);
     setOpen(false);
   };
-
-  /*
-   * One component instance serves every tab, so everything typed or latched
-   * for the previous session has to go when the active tab changes. `steerText`
-   * in particular is posted to `currentSessionId`: text composed for session A
-   * would otherwise be delivered to session B's active turn.
-   */
-  useEffect(() => {
-    setOpen(false);
-    setHandoffOpen(false);
-    setRuntimeNoticeDialogId(null);
-    shareVersionRef.current += 1;
-    setShareState({ sessionIdentity, value: false });
-    setSteerState({ sessionIdentity, value: "" });
-  }, [sessionIdentity]);
-
-  /*
-   * `openCodeShared` is an optimistic flag; the server's session record is the
-   * truth. Re-reading it whenever the popover opens is what makes revocation
-   * reachable after a tab switch or an app restart — component state alone
-   * loses the fact that the conversation is published while the link stays
-   * live.
-   */
-  useEffect(() => {
-    if (!open || activeSession?.provider !== "opencode" || !openCodeClient || !currentSessionId) {
-      return;
-    }
-    let cancelled = false;
-    const shareVersion = shareVersionRef.current;
-    const requestedIdentity = sessionIdentity;
-    void readOpenCodeShareUrl(openCodeClient, currentSessionId)
-      .then((url) => {
-        if (
-          !cancelled &&
-          requestedIdentity !== null &&
-          currentSessionIdentityRef.current === requestedIdentity &&
-          shareVersionRef.current === shareVersion
-        ) {
-          // The provider snapshot is authoritative in both directions. A null
-          // URL means a formerly shared session was revoked elsewhere.
-          setShareState({ sessionIdentity: requestedIdentity, value: Boolean(url) });
-        }
-      })
-      .catch((error: unknown) => {
-        // A failed lookup must not clear the flag: that would hide "Stop
-        // sharing" for a conversation that is still published.
-        console.warn("[AgentInfoButton] Failed to read OpenCode share state:", error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSession?.provider, currentSessionId, open, openCodeClient, sessionIdentity]);
 
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
@@ -1230,69 +847,40 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   usage={usage}
                   modelId={modelId}
                   /*
-                   * Claude answers limit reads directly and its store holds the
-                   * authoritative snapshot, including an empty one. Every other
-                   * provider reports through the usage snapshot, falling back to
-                   * the neutral projection when the snapshot has no limits yet.
+                   * Claude's projection carries its quota windows as an
+                   * independent authoritative snapshot, including an empty one.
+                   * Every other provider reports through the usage snapshot,
+                   * falling back to the projection's windows when it has none.
                    */
                   rateLimits={
                     activeSession.provider === "claude"
-                      ? (claudeRateLimits ?? neutralRateLimits)
+                      ? neutralRateLimits
                       : (usage?.rateLimits ?? neutralRateLimits)
                   }
                 />
               </div>
 
-              {!isBuildStage &&
-              ((activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0) ||
-                (activeSession.provider === "opencode" &&
-                  (openCodeHealth?.agents.length ?? 0) > 0) ||
-                (neutralProjection?.composer?.executionProfiles?.length ?? 0) > 0) ? (
+              {!isBuildStage && neutralProjection?.composer?.executionProfiles?.length ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Execution profile
                   </div>
                   <select
                     disabled={neutralControlUpdatePending}
-                    value={
-                      neutralProjection?.composer?.selectedExecutionProfileId ??
-                      (activeSession.provider === "claude" ? claudeAgent : openCodeAgent) ??
-                      ""
-                    }
+                    value={neutralProjection.composer.selectedExecutionProfileId ?? ""}
                     onChange={(event) => {
-                      const value = event.target.value || undefined;
-                      if (neutralProjection) {
-                        void updateNeutralControls({ executionProfileId: value ?? null });
-                        return;
-                      }
-                      if (activeSession.provider === "claude") {
-                        useClaudeStore.getState().setSelectedAgent(activeSession.sessionKey, value);
-                      } else {
-                        useOpenCodeStore
-                          .getState()
-                          .setSelectedAgent(activeSession.sessionKey, value);
-                      }
+                      void updateNeutralControls({
+                        executionProfileId: event.target.value || null,
+                      });
                     }}
                     className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-sm"
                     aria-label="Execution profile"
                   >
                     <option value="">Provider default</option>
-                    {(neutralProjection?.composer?.executionProfiles?.length
-                      ? neutralProjection.composer.executionProfiles.map((profile) => ({
-                          name: profile.id,
-                          model: profile.modelId,
-                        }))
-                      : activeSession.provider === "claude"
-                        ? (claudeInit?.agents ?? [])
-                        : (openCodeHealth?.agents.filter(
-                            (agent) => agent.mode === "primary" || agent.mode === "all",
-                          ) ?? [])
-                    ).map((agent) => (
-                      <option key={agent.name} value={agent.name}>
-                        {agent.name}
-                        {("mode" in agent ? agent.modelId : agent.model)
-                          ? ` · ${"mode" in agent ? agent.modelId : agent.model}`
-                          : ""}
+                    {neutralProjection.composer.executionProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.id}
+                        {profile.modelId ? ` · ${profile.modelId}` : ""}
                       </option>
                     ))}
                   </select>
@@ -1315,22 +903,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
-                      disabled={neutralControlUpdatePending}
-                      checked={
-                        neutralProjection?.composer?.includeLocalSettings ?? includeLocalSettings
-                      }
+                      disabled={neutralControlUpdatePending || !neutralProjection}
+                      checked={neutralProjection?.composer?.includeLocalSettings ?? false}
                       onChange={(event) => {
-                        if (neutralProjection) {
-                          void updateNeutralControls({
-                            includeLocalSettings: event.target.checked,
-                          });
-                        } else
-                          useClaudeStore
-                            .getState()
-                            .setIncludeLocalSettings(
-                              activeSession.sessionKey,
-                              event.target.checked,
-                            );
+                        void updateNeutralControls({
+                          includeLocalSettings: event.target.checked,
+                        });
                       }}
                     />
                     Include .claude/settings.local.json
@@ -1338,21 +916,10 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
-                      disabled={neutralControlUpdatePending}
-                      checked={
-                        neutralProjection?.composer?.promptSuggestionsEnabled ??
-                        promptSuggestionOptIn
-                      }
+                      disabled={neutralControlUpdatePending || !neutralProjection}
+                      checked={neutralProjection?.composer?.promptSuggestionsEnabled ?? false}
                       onChange={(event) => {
-                        if (neutralProjection) {
-                          void updateNeutralControls({ promptSuggestions: event.target.checked });
-                        } else
-                          useClaudeStore
-                            .getState()
-                            .setPromptSuggestionOptIn(
-                              activeSession.sessionKey,
-                              event.target.checked,
-                            );
+                        void updateNeutralControls({ promptSuggestions: event.target.checked });
                       }}
                     />
                     Suggest a follow-up after each turn
@@ -1449,31 +1016,20 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("rewind", async () => {
-                            const target =
-                              claudeSession?.messages
-                                .filter((message) => message.role === "user")
-                                .at(-1) ??
-                              neutralMessages.filter((message) => message.role === "user").at(-1);
+                            const target = neutralMessages
+                              .filter((message) => message.role === "user")
+                              .at(-1);
                             if (!target?.id) throw new Error("No file checkpoint is available");
-                            const preview = claudeClient
-                              ? await rewindClaudeFiles(
-                                  claudeClient,
-                                  currentSessionId,
-                                  target.id,
-                                  true,
-                                )
-                              : (
-                                  await performNativeAgentSessionAction({
-                                    environmentId: activeSession.environmentId,
-                                    agent: activeSession.provider,
-                                    logicalSessionKey: activeSession.sessionKey,
-                                    action: {
-                                      kind: "rewind-files",
-                                      messageId: target.id,
-                                      dryRun: true,
-                                    },
-                                  })
-                                ).preview;
+                            const { preview } = await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: {
+                                kind: "rewind-files",
+                                messageId: target.id,
+                                dryRun: true,
+                              },
+                            });
                             /*
                              * This mutates the worktree, so the confirmation names
                              * the message it is anchored to and lists the files it
@@ -1502,16 +1058,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                               )
                             )
                               return;
-                            if (claudeClient) {
-                              await rewindClaudeFiles(claudeClient, currentSessionId, target.id);
-                            } else {
-                              await performNativeAgentSessionAction({
-                                environmentId: activeSession.environmentId,
-                                agent: activeSession.provider,
-                                logicalSessionKey: activeSession.sessionKey,
-                                action: { kind: "rewind-files", messageId: target.id },
-                              });
-                            }
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "rewind-files", messageId: target.id },
+                            });
                             toast.success(
                               fileCount === 0
                                 ? "Claude files rewound"
@@ -1534,26 +1086,15 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           className="justify-start gap-2"
                           onClick={() =>
                             void runAction("undo", async () => {
-                              const messageId =
-                                openCodeSession?.messages
-                                  .filter((message) => message.role === "user")
-                                  .at(-1)?.id ??
-                                neutralMessages.filter((message) => message.role === "user").at(-1)
-                                  ?.id;
-                              if (openCodeClient) {
-                                await revertOpenCodeSession(
-                                  openCodeClient,
-                                  currentSessionId,
-                                  messageId,
-                                );
-                              } else {
-                                await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "undo", messageId },
-                                });
-                              }
+                              const messageId = neutralMessages
+                                .filter((message) => message.role === "user")
+                                .at(-1)?.id;
+                              await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "undo", messageId },
+                              });
                               toast.success("OpenCode session reverted");
                             })
                           }
@@ -1576,17 +1117,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                   )
                                 )
                                   return;
-                                shareVersionRef.current += 1;
-                                const url = openCodeClient
-                                  ? await shareOpenCodeSession(openCodeClient, currentSessionId)
-                                  : (
-                                      await performNativeAgentSessionAction({
-                                        environmentId: activeSession.environmentId,
-                                        agent: activeSession.provider,
-                                        logicalSessionKey: activeSession.sessionKey,
-                                        action: { kind: "share" },
-                                      })
-                                    ).shareUrl;
+                                const { shareUrl: url } = await performNativeAgentSessionAction({
+                                  environmentId: activeSession.environmentId,
+                                  agent: activeSession.provider,
+                                  logicalSessionKey: activeSession.sessionKey,
+                                  action: { kind: "share" },
+                                });
                                 /*
                                  * The conversation is published the moment `share()`
                                  * resolves. Latch that first: every failure after this
@@ -1634,16 +1170,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           className="justify-start gap-2"
                           onClick={() =>
                             void runAction("redo", async () => {
-                              if (openCodeClient) {
-                                await unrevertOpenCodeSession(openCodeClient, currentSessionId);
-                              } else {
-                                await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "redo" },
-                                });
-                              }
+                              await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "redo" },
+                              });
                               toast.success("OpenCode revert undone");
                             })
                           }
@@ -1661,17 +1193,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                               void runAction(
                                 "unshare",
                                 async ({ isCurrent, sessionIdentity: actionIdentity }) => {
-                                  shareVersionRef.current += 1;
-                                  if (openCodeClient) {
-                                    await unshareOpenCodeSession(openCodeClient, currentSessionId);
-                                  } else {
-                                    await performNativeAgentSessionAction({
-                                      environmentId: activeSession.environmentId,
-                                      agent: activeSession.provider,
-                                      logicalSessionKey: activeSession.sessionKey,
-                                      action: { kind: "unshare" },
-                                    });
-                                  }
+                                  await performNativeAgentSessionAction({
+                                    environmentId: activeSession.environmentId,
+                                    agent: activeSession.provider,
+                                    logicalSessionKey: activeSession.sessionKey,
+                                    action: { kind: "unshare" },
+                                  });
                                   if (isCurrent()) {
                                     setShareState({
                                       sessionIdentity: actionIdentity,
@@ -1694,24 +1221,16 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={busyAction !== null || codexSession?.isLoading}
+                        disabled={busyAction !== null}
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("review", async () => {
-                            if (codexClient) {
-                              const started = await startCodexNativeReview(
-                                codexClient,
-                                currentSessionId,
-                              );
-                              if (!started) throw new Error("Codex native review could not start");
-                            } else {
-                              await performNativeAgentSessionAction({
-                                environmentId: activeSession.environmentId,
-                                agent: activeSession.provider,
-                                logicalSessionKey: activeSession.sessionKey,
-                                action: { kind: "review" },
-                              });
-                            }
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "review" },
+                            });
                             toast.success("Reviewing uncommitted changes");
                           })
                         }
@@ -1827,21 +1346,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           className="h-7 shrink-0 gap-1.5"
                           onClick={() =>
                             void runAction(`stop-${task.id}`, async () => {
-                              if (claudeClient) {
-                                const stopped = await stopClaudeBackgroundTask(
-                                  claudeClient,
-                                  currentSessionId,
-                                  task.id,
-                                );
-                                if (!stopped) throw new Error("Claude could not stop this task");
-                              } else {
-                                await stopNativeAgentBackgroundTask({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  taskId: task.id,
-                                });
-                              }
+                              await stopNativeAgentBackgroundTask({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                taskId: task.id,
+                              });
                             })
                           }
                         >
@@ -1973,67 +1483,33 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <Metric
                       label="MCP"
-                      value={String(
-                        neutralProjection?.runtime?.mcpServers ??
-                          claudeInit?.mcpServers.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
                     />
                     <Metric
                       label="Plugins"
-                      value={String(
-                        neutralProjection?.runtime?.plugins ?? claudeInit?.plugins.length ?? 0,
-                      )}
+                      value={String(neutralProjection?.runtime?.plugins ?? 0)}
                     />
                     <Metric
                       label="Commands"
-                      value={String(
-                        neutralProjection?.runtime?.commands ??
-                          claudeInit?.slashCommands?.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.commands ?? 0)}
                     />
                   </div>
                 ) : activeSession.provider === "opencode" ? (
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <Metric
                       label="MCP"
-                      value={String(
-                        neutralProjection?.runtime?.mcpServers ??
-                          openCodeHealth?.mcpServers.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
                     />
                     <Metric
                       label="Skills"
-                      value={String(
-                        neutralProjection?.runtime?.skills ?? openCodeHealth?.skills.length ?? 0,
-                      )}
+                      value={String(neutralProjection?.runtime?.skills ?? 0)}
                     />
                     <Metric
                       label="LSP"
-                      value={String(
-                        neutralProjection?.runtime?.lspServers ??
-                          openCodeHealth?.lspServers.length ??
-                          0,
-                      )}
+                      value={String(neutralProjection?.runtime?.lspServers ?? 0)}
                     />
-                    <Metric
-                      label="Todos"
-                      value={String(
-                        neutralProjection?.runtime?.todos ??
-                          (openCodeSessionHealth ?? openCodeHealth)?.todos?.length ??
-                          0,
-                      )}
-                    />
-                    <Metric
-                      label="Files"
-                      value={String(
-                        neutralProjection?.runtime?.files ??
-                          (openCodeSessionHealth ?? openCodeHealth)?.diffs?.length ??
-                          0,
-                      )}
-                    />
+                    <Metric label="Todos" value={String(neutralProjection?.runtime?.todos ?? 0)} />
+                    <Metric label="Files" value={String(neutralProjection?.runtime?.files ?? 0)} />
                   </div>
                 ) : (
                   // One panel for every platform, including Codex. Inventory,

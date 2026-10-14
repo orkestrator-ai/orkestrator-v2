@@ -1,6 +1,5 @@
 import { isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
 import {
-  HistoricalAssistantSegmentState,
   ThreadRuntimeState,
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
@@ -8,7 +7,6 @@ import {
   MAX_ORDERED_EVENT_BYTES_PER_THREAD,
   estimateOrderedEventBytes,
   messageSnapshotIntervalMs,
-  isSamePublishedPart,
   normalizedMessageSnapshotChars,
   DEFAULT_THREAD_IDLE_MS,
   DEFAULT_SESSION_RETENTION_MS,
@@ -35,16 +33,19 @@ import {
   CODEX_RESTARTED_MID_TURN_MESSAGE,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import { TurnAccumulator, type AssistantSegment } from "./sessions/turn-accumulator.js";
+import { TurnAccumulator } from "./sessions/turn-accumulator.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
 import {
   beginTurnRenderState,
   createTurnRenderState,
   releaseTurnRenderState,
-  renderTurn,
-  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
 } from "./messages/render-turn.js";
+import {
+  openModelResponseRow,
+  patchCommandChangePart,
+  publishAssistantRows,
+} from "./app-server-runtime-rows.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
 import { describeDiffBudget } from "./messages/diff-budget.js";
 import { getTranscriptCacheStats, type TranscriptCacheStats } from "./transcript-cache.js";
@@ -61,7 +62,7 @@ import {
   commandDidNotRun,
   recordCommandChanges,
 } from "./sessions/command-changes.js";
-import { hasMeasuredChanges } from "@orkestrator/protocol/command-change-journal";
+import { hasMeasuredChanges } from "@orkestrator/protocol/node/command-change-journal";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import { hydrateMessagesFromPersistedSession } from "./history/rollout.js";
@@ -74,24 +75,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 
 export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
-
-/** Apply a late measurement at any depth in a rendered subagent row. */
-export function patchCommandChangePart(
-  part: NormalizedPart,
-  itemId: string,
-  change: MeasuredWorkspaceChange,
-): NormalizedPart {
-  if (part.type === "tool-invocation" && part.toolUseId === itemId) {
-    return part.commandChanges === change ? part : { ...part, commandChanges: change };
-  }
-  if (!part.subagentActions) return part;
-  const actions = part.subagentActions.map((action) =>
-    patchCommandChangePart(action, itemId, change),
-  );
-  return actions.some((action, index) => action !== part.subagentActions?.[index])
-    ? { ...part, subagentActions: actions }
-    : part;
-}
+export { patchCommandChangePart } from "./app-server-runtime-rows.js";
 
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   /** Close admission fence shared with lazy thread reattachment. */
@@ -461,6 +445,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     state.orderedReconcilePending = false;
     releaseTurnRenderState(state.render);
     state.historicalAssistantSegments.clear();
+    state.releasedAssistantRows.clear();
     state.pendingEvents.clear();
     this.threadState.delete(threadId);
   }
@@ -611,6 +596,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // authoritative empty history that would overwrite a display tail.
       if (hydrated.readFailed) return;
       context.messages = hydrated.messages;
+      // Rows noted against the retained tail name nothing in the new history.
+      for (const sessionId of context.bridgeSessionIds) {
+        this.registry.getSession(sessionId)?.revisedRows?.clear();
+      }
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
@@ -660,6 +649,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       state = {
         render: createTurnRenderState(),
         historicalAssistantSegments: new Map(),
+        releasedAssistantRows: new Map(),
         pendingEvents: new Map(),
         publishedParts: [],
         orderedEventTail: Promise.resolve(),
@@ -699,7 +689,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     assistantMessage: { id: string; modelId?: string },
   ): void {
     state.historicalAssistantSegments.clear();
+    state.releasedAssistantRows.clear();
     state.render = beginTurnRenderState(state.render);
+    state.renderedRow = undefined;
     state.assistantMessageId = assistantMessage.id;
     state.publishedMessageId = assistantMessage.id;
     state.publishedParts = [];
@@ -930,11 +922,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         if (turn && turn.turnId === event.turnId) turn.markRunning(event.turnId);
         return;
       }
+      case "model.tool.called": {
+        const turn = context.activeTurn;
+        if (turn?.accepts(event)) turn.noteModelToolCall();
+        return;
+      }
       case "item.started":
       case "item.updated":
       case "item.completed": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
+        this.openModelResponseRow(context, turn, event);
         if (event.kind === "item.completed") {
           turn.onItemCompleted(event.item, event.completedAtMs);
           this.trackCommandChangeWindow(context, "completed", event.item);
@@ -959,6 +957,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "item.text.delta": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
+        this.openModelResponseRow(context, turn, event);
         turn.onTextDelta(event.itemId, event.delta);
         this.stateFor(threadId).coalescer.schedule(this.now());
         return;
@@ -966,6 +965,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "item.reasoning.delta": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
+        this.openModelResponseRow(context, turn, event);
         turn.onReasoningDelta(event.itemId, event.delta, event.channel, event.index);
         this.stateFor(threadId).coalescer.schedule(this.now());
         return;
@@ -1043,6 +1043,18 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       }
       default:
         return;
+    }
+  }
+
+  /** Gives the next model response a row of its own (see `openModelResponseRow`). */
+  protected openModelResponseRow(
+    context: ThreadContext,
+    turn: TurnAccumulator,
+    event: EngineEvent,
+  ): void {
+    const state = this.stateFor(context.threadId);
+    if (openModelResponseRow(context, state, turn, event, this.now())) {
+      this.bumpMessageRevision(context);
     }
   }
 
@@ -1161,6 +1173,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     const turn = context.activeTurn;
     const accumulated = turn?.onCommandChanges(itemId, change) ?? false;
     if (accumulated && !turn!.isTerminal()) {
+      // The next publish renders the row holding the command, tracking it
+      // again if it was past the bound (`app-server-runtime-rows.ts`).
       this.stateFor(threadId).coalescer.schedule(this.now());
       return;
     }
@@ -1207,7 +1221,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     if (state?.publishedMessageId === message.id) state.publishedParts = message.parts.slice();
     const historical = state?.historicalAssistantSegments.get(message.id);
     if (historical) historical.publishedParts = message.parts.slice();
-    this.bumpMessageRevision(context);
+    // Noted now, with the bump: the send below waits for the coalesced flush
+    // and can be dropped by an ordered-event overflow.
+    this.bumpMessageRevision(context, [message]);
 
     const target = message;
     const patch = {
@@ -1304,9 +1320,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       if (historical) {
         historical.publishedModelId = model;
         historical.publishedParts = message.parts.slice();
+        historical.announced = true;
       }
     }
-    this.bumpMessageRevision(context);
+    this.bumpMessageRevision(context, changed);
     for (const message of changed) {
       for (const sessionId of context.bridgeSessionIds) {
         this.options.emit({
@@ -1344,7 +1361,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   protected publishPersistedModelOverrides(context: ThreadContext): void {
     const changed = this.applyPersistedModelOverrides(context);
     if (changed.length === 0) return;
-    this.bumpMessageRevision(context);
+    this.bumpMessageRevision(context, changed);
     for (const message of changed) {
       for (const sessionId of context.bridgeSessionIds) {
         this.options.emit({
@@ -1818,140 +1835,25 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     })();
   }
 
-  /**
-   * True when re-rendering a frozen assistant row could produce a different
-   * result than the render already published for it.
-   *
-   * Two things can move a frozen row: one of its items mutated, or its
-   * sub-agent transcript probe is due. `renderTurn` resolves everything else
-   * from `completedItemParts` and the retained sub-agent map, so the output
-   * would be identical.
-   *
-   * Note this asks "has anything changed *since the last render*", not "can
-   * anything change from here". An item that completed a moment ago still owes
-   * one render even though it can never move again.
-   */
-  protected segmentNeedsRender(
-    turn: TurnAccumulator,
-    segment: AssistantSegment,
-    historical: HistoricalAssistantSegmentState,
-  ): boolean {
-    if (turn.isTerminal()) return true;
-    const probedAt = historical.render.subagentProbedAt;
-    if (probedAt === 0 || Date.now() - probedAt >= SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS) {
-      return true;
-    }
-    return (
-      turn.assistantSegmentVersion(segment.assistantMessageId) !== historical.renderedItemVersion
-    );
-  }
-
-  /** Re-renders the streaming assistant message and publishes a sparse update. */
+  /** Re-renders the active turn's assistant rows and publishes sparse updates. */
   protected async publishAssistantMessage(threadId: string): Promise<void> {
     const context = this.registry.getThread(threadId);
     const state = this.threadState.get(threadId);
     if (!context || !state) return;
     const turn = context.activeTurn;
     if (!turn) return;
-
-    let snapshotChars = 0;
-    for (const segment of turn.assistantSegmentsInOrder()) {
-      const message = context.messages.find((entry) => entry.id === segment.assistantMessageId);
-      if (!message) continue;
-      const isCurrent = segment.assistantMessageId === turn.assistantMessageId;
-      const historical = isCurrent
-        ? undefined
-        : state.historicalAssistantSegments.get(segment.assistantMessageId);
-      if (!isCurrent && !historical) continue;
-      const renderState = isCurrent ? state.render : historical!.render;
-      const publishedParts = isCurrent ? state.publishedParts : historical!.publishedParts;
-      const publishedModelId = isCurrent ? state.publishedModelId : historical!.publishedModelId;
-
-      // A frozen row that has not moved since its last render would produce
-      // byte-identical parts: every item resolves from `completedItemParts` and
-      // the sub-agent map is reused verbatim. Skipping it keeps a steered turn's
-      // publish tick proportional to the rows that are actually live rather than
-      // re-rendering every row of the turn ~10x/second.
-      if (!isCurrent && !this.segmentNeedsRender(turn, segment, historical!)) {
-        snapshotChars += normalizedMessageSnapshotChars(message);
-        continue;
-      }
-
-      const itemVersion = turn.assistantSegmentVersion(segment.assistantMessageId);
-      const rendered = await renderTurn(turn, {
-        threadId: context.threadId,
-        cwd: context.cwd ?? this.options.cwd,
-        state: renderState,
-        segment,
-        subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-      });
-      message.parts = rendered.parts;
-      message.content = rendered.content;
-      if (this.registry.recordAsyncQuestionMessages(context, message)) {
+    await publishAssistantRows(context, state, turn, {
+      cwd: context.cwd ?? this.options.cwd,
+      emit: (event) => this.options.emit(event),
+      bumpMessageRevision: (target, revised) => this.bumpMessageRevision(target, revised),
+      onRendered: (message) => {
+        if (!this.registry.recordAsyncQuestionMessages(context, message)) return;
         for (const sessionId of context.bridgeSessionIds) {
           const session = this.registry.getSession(sessionId);
           if (session) void this.persistSession(session);
         }
-      }
-      snapshotChars += normalizedMessageSnapshotChars(message);
-      // Sampled before the render, so an item that mutated while it was awaited
-      // still shows as pending work rather than being recorded as rendered.
-      if (historical) historical.renderedItemVersion = itemVersion;
-
-      // The identity half of this guard is what makes the first publish of any
-      // assistant message a whole snapshot. Without it a path that swaps the
-      // streaming message without resetting `publishedParts` emits a patch for a
-      // message the client has never seen, which it can only answer by
-      // refetching the entire transcript.
-      if (
-        (isCurrent && state.publishedMessageId !== message.id) ||
-        publishedModelId !== message.modelId
-      ) {
-        if (isCurrent) {
-          state.publishedMessageId = message.id;
-          state.publishedParts = message.parts.slice();
-          state.publishedModelId = message.modelId;
-        } else {
-          historical!.publishedParts = message.parts.slice();
-          historical!.publishedModelId = message.modelId;
-        }
-        message.revision = (message.revision ?? 0) + 1;
-        this.bumpMessageRevision(context);
-        for (const sessionId of context.bridgeSessionIds) {
-          this.options.emit({ type: "message.updated", sessionId, data: { message } });
-        }
-        continue;
-      }
-
-      const changedParts: { index: number; part: NormalizedPart }[] = [];
-      for (let index = 0; index < message.parts.length; index += 1) {
-        const part = message.parts[index];
-        if (part && !isSamePublishedPart(publishedParts[index], part)) {
-          changedParts.push({ index, part });
-        }
-      }
-      if (changedParts.length === 0 && message.parts.length === publishedParts.length) {
-        continue;
-      }
-
-      if (isCurrent) state.publishedParts = message.parts.slice();
-      else historical!.publishedParts = message.parts.slice();
-      message.revision = (message.revision ?? 0) + 1;
-      this.bumpMessageRevision(context);
-      const patch = {
-        messageId: message.id,
-        partCount: message.parts.length,
-        changedParts,
-        content: message.content,
-        createdAt: message.createdAt,
-        turnId: message.turnId,
-        revision: message.revision,
-      } satisfies MessagePatchEventData;
-      for (const sessionId of context.bridgeSessionIds) {
-        this.options.emit({ type: "message.patched", sessionId, data: patch });
-      }
-    }
-    state.lastPublishedSnapshotChars = snapshotChars;
+      },
+    });
   }
 
   protected emitStatus(context: ThreadContext): void {

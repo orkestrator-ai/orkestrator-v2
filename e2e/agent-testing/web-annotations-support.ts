@@ -7,7 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { STORAGE_DATABASE_FILE } from "@orkestrator/protocol/storage-database";
+import { STORAGE_DATABASE_FILE } from "@orkestrator/protocol/node/storage-database";
 import {
   WEB_ANNOTATION_EVIDENCE_CLOSE,
   WEB_ANNOTATION_EVIDENCE_OPEN,

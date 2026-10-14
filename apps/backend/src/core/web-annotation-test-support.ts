@@ -18,7 +18,7 @@ import {
 import {
   fixtureCaptureInput,
   fixtureDestination,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { PNG_SIGNATURE, crc32 } from "./web-annotation-assets.js";
 import type {
   CancelOutcome,

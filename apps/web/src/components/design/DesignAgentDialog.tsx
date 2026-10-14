@@ -22,7 +22,7 @@ import type { DesignProjection } from "@/stores/designStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
-import { designApi, designBackendKey, failureOf } from "./design-client";
+import { designApi, designBackendKey, failureOf } from "@/lib/design-client";
 import {
   boundDesignContextReference,
   buildDesignContextAnnotation,

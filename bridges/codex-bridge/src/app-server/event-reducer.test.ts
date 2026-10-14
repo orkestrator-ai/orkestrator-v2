@@ -654,7 +654,7 @@ describe("deltas", () => {
           status: "completed",
         },
       }),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ kind: "model.tool.called" })]);
   });
 
   test("malformed raw response items are dropped", () => {

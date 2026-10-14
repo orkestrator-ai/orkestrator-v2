@@ -12,7 +12,7 @@ import {
   connectPreviewWebSocket,
   PreviewWebSocketHandshakeError,
   type PreviewWebSocket,
-} from "@orkestrator/protocol/preview-websocket";
+} from "@orkestrator/protocol/node/preview-websocket";
 
 import {
   startPreviewFixture,

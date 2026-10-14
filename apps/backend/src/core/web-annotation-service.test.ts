@@ -11,7 +11,7 @@ import {
   fixtureAnnotation,
   fixtureCaptureInput,
   fixturePage,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { WebAnnotationChangeRing } from "./web-annotation-sync.js";
 import {
   ENV_A,

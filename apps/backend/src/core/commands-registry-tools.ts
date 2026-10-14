@@ -1,12 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
-import {
-  readAgentSkillFile,
-  scanAgentSkills,
-  commandExists,
-  homePath,
-  pathExists,
-} from "./commands-dependencies.js";
+import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
+import { commandExists, homePath, pathExists } from "./shell.js";
 import {
   asString,
   asAgentSkillProvider,

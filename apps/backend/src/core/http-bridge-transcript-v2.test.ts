@@ -3,8 +3,8 @@ import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
-} from "@orkestrator/protocol/bridge-transcript-summary";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import { HttpBridgeTranscriptCapabilities } from "./http-bridge-transcript-v2.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
@@ -123,6 +123,29 @@ describe("bridge transcript v2 negotiation", () => {
     expect(requests.map((request) => new URL(request.url).searchParams.get("version"))[0]).toBe(
       "2",
     );
+  });
+
+  test("revised rows from before the window reach the provider snapshot as summaries", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json(
+          bridgeTranscriptSummaryUpdate(messages, {
+            ...readOptions,
+            limit: 1,
+            targetBytes: 512 * 1024,
+            pages: true,
+            revisedMessageIds: ["m1", "prompt"],
+          }),
+        ),
+      codexConnection,
+    );
+    const snapshot = await runtime(provider).transcriptSnapshot!("session-1", summaryRead);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    // The window is the newest row; only the prompt before it was revised.
+    expect(snapshot.messages.map((entry) => (entry as { id: string }).id)).toEqual(["m1"]);
+    expect(snapshot.revisedMessages?.map((entry) => (entry as { id: string }).id)).toEqual([
+      "prompt",
+    ]);
   });
 
   test("an older bridge's v1 answer is used as-is and remembered", async () => {

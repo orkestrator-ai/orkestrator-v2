@@ -2,7 +2,8 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { NATIVE_AGENT_DISCOVERY_SECTIONS } from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
-import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
+import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
+import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import {
   asString,
   asRecord,
@@ -76,6 +77,9 @@ export function registerNativeAgentCommands(
           ? undefined
           : asNonBlankString(args.expectedProviderSessionId, "expectedProviderSessionId"),
       title: typeof args.title === "string" ? args.title : undefined,
+      ...(args.controls === undefined
+        ? {}
+        : { controls: asNativeAgentControlUpdate(args.controls, "controls") }),
       model: typeof args.model === "string" ? args.model : undefined,
       reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
       phase:

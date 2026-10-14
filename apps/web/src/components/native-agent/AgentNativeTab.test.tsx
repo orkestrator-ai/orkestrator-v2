@@ -158,6 +158,9 @@ const defaultAdoptNativeAgentSession = async (input: {
   agent: input.agent,
 });
 const adoptNativeAgentSessionMock = mock(defaultAdoptNativeAgentSession);
+const forkNativeAgentSessionMock = mock<typeof realBackend.forkNativeAgentSession>(async () => ({
+  sessionId: "fork-session",
+}));
 const beginNativeAgentSignInMock = mock(
   async (_input: { environmentId: string; agent: string; logicalSessionKey: string }) => ({
     url: "https://auth.example.test/login" as string | undefined,
@@ -368,6 +371,7 @@ mock.module("@/lib/backend", () => ({
   getNativeAgentModelCatalog: getNativeAgentModelCatalogMock,
   awaitBridgeReady: awaitBridgeReadyMock,
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
+  forkNativeAgentSession: forkNativeAgentSessionMock,
   beginNativeAgentSignIn: beginNativeAgentSignInMock,
   getNativeAgentAuthStatus: getNativeAgentAuthStatusMock,
   startAgentAccountLogin: startAgentAccountLoginMock,
@@ -448,6 +452,8 @@ afterEach(() => {
     authToken: "token",
   }));
   adoptNativeAgentSessionMock.mockClear();
+  forkNativeAgentSessionMock.mockReset();
+  forkNativeAgentSessionMock.mockImplementation(async () => ({ sessionId: "fork-session" }));
   beginNativeAgentSignInMock.mockClear();
   getNativeAgentAuthStatusMock.mockClear();
   getNativeAgentAuthStatusMock.mockImplementation(async () => null);
@@ -7598,6 +7604,37 @@ describe("AgentNativeTab", () => {
       expect(latestRenderedMessageActions.get("assistant-1")).toBe(firstAssistantAction);
       expect(nativeMessageRenderCounts.get("user-1")).toBe(firstUserRenders);
       expect(nativeMessageRenderCounts.get("assistant-1")).toBe(firstAssistantRenders);
+    });
+
+    test("in-tab OpenCode response forks adopt the source composer controls", async () => {
+      renderVirtualizedMessages = true;
+      const controls = {
+        modelId: "opencode-go/deepseek-v4-flash",
+        reasoningId: "high",
+        executionProfileId: "reviewer",
+      };
+      forkNativeAgentSessionMock.mockImplementation(async () => ({
+        sessionId: "opencode-fork",
+        controls,
+      }));
+      seedProjection({
+        composer: { selectedModelId: controls.modelId, selectedReasoningId: controls.reasoningId },
+      });
+      render(<AgentNativeTab tabId="opencode-source" data={identity("opencode")} isActive />);
+      const forkButton = await screen.findByRole("button", { name: /Fork.*response/i });
+      fireEvent.click(forkButton);
+      await waitFor(() =>
+        expect(adoptNativeAgentSessionMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agent: "opencode",
+            providerSessionId: "opencode-fork",
+            controls,
+          }),
+        ),
+      );
+      expect(forkNativeAgentSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "opencode", messageId: undefined }),
+      );
     });
 
     test("keeps a catalog-omitted Pi selection visible on the locked Pi picker", async () => {

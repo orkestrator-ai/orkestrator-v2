@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   lastAssistantModelRef,
-  openCodeComposerSelectionToPersist,
+  inferredComposerSelectionToPersist,
 } from "./native-agent-composer-selection.js";
 
 describe("lastAssistantModelRef", () => {
@@ -45,10 +45,10 @@ describe("lastAssistantModelRef", () => {
   });
 });
 
-describe("openCodeComposerSelectionToPersist", () => {
+describe("inferredComposerSelectionToPersist", () => {
   test("does not persist when host controls already have a model", () => {
     expect(
-      openCodeComposerSelectionToPersist({
+      inferredComposerSelectionToPersist({
         sessionControlsModelId: "opencode-go/deepseek-v4-flash",
         lastAssistantModelId: "opencode/nemotron-ultra-free",
         sessionModelId: "opencode/nemotron-ultra-free",
@@ -58,7 +58,7 @@ describe("openCodeComposerSelectionToPersist", () => {
 
   test("persists the last assistant model before OpenCode session.model", () => {
     expect(
-      openCodeComposerSelectionToPersist({
+      inferredComposerSelectionToPersist({
         lastAssistantModelId: "opencode-go/deepseek-v4-flash",
         lastAssistantReasoningId: "default",
         sessionModelId: "opencode/nemotron-ultra-free",
@@ -71,7 +71,7 @@ describe("openCodeComposerSelectionToPersist", () => {
 
   test("persists OpenCode session.model when no assistant model is known", () => {
     expect(
-      openCodeComposerSelectionToPersist({
+      inferredComposerSelectionToPersist({
         sessionModelId: "opencode-go/deepseek-v4-flash",
         sessionReasoningId: "default",
       }),

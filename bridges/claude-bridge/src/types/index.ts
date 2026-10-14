@@ -1,6 +1,7 @@
 // Type definitions for Claude Bridge Server
+import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
-import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
+import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transcript-window";
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
@@ -666,6 +667,12 @@ export interface SessionState {
   rewindInProgress?: boolean;
   /** True after durable deletion has claimed the session and before removal. */
   deleting?: boolean;
+  /**
+   * Rows this process changed most recently. A late update can land on a row
+   * newer ones have pushed out of the live transcript window; the transcript
+   * route sends those rows alongside the window so a reader refreshes them.
+   */
+  revisedRows?: RecentlyRevisedRows;
   /** Single in-flight persisted transcript read shared by mounts and prompts. */
   persistedHydration?: Promise<
     | {

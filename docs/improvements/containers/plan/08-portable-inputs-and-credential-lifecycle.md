@@ -140,7 +140,7 @@ the compatible image; it must never silently restore whole-home exposure.
   container. Refresh after enabling a provider is a rebuild, not a live
   copy-in. The Anthropic API key stays in the process environment
   (documented limitation).
-- **Tests.** `tests/unit/electron/portable-inputs.test.ts` (allowlist only,
+- **Tests.** `apps/backend/tests/portable-inputs.test.ts` (allowlist only,
   sentinels absent, symlink entries and ancestors refused, dotfile-linked
   root resolved, per-file and aggregate bounds, private modes, atomic
   revision, manifest without names, pruning, provider selection, entrypoint

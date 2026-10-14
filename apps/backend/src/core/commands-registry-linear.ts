@@ -6,7 +6,7 @@ import {
   postLinearCompletionComment,
   sanitizeLinearError,
   verifyLinearConnection,
-} from "./commands-dependencies.js";
+} from "./linear.js";
 import {
   asString,
   requireLinearApiKey,

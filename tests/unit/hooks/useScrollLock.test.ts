@@ -143,7 +143,7 @@ describe("useScrollLock", () => {
     });
 
     test("finds viewport with data-slot=scroll-area-viewport attribute", () => {
-      const { ref } = createMockScrollContainer({
+      createMockScrollContainer({
         scrollTop: 500,
         selector: "data-slot",
       });

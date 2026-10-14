@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fixtureEntry } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureEntry } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   THREAD_SUMMARY_LIMITS,
   buildWebAnnotationThreadSummary,

@@ -1,5 +1,5 @@
-import { runCommand } from "./commands-dependencies.js";
-import type { EnvironmentStatus } from "./commands-dependencies.js";
+import { runCommand } from "./shell.js";
+import type { EnvironmentStatus } from "./models.js";
 
 /**
  * The one primitive every container-facing command module needs.
@@ -9,7 +9,7 @@ import type { EnvironmentStatus } from "./commands-dependencies.js";
  * it there made each of them a back-edge into `commands-environment` and turned
  * the `commands-*` graph cyclic; a cycle in this group already had to be worked
  * around once (see the lazy scanner import in `commands-runtime-state`). This
- * module must therefore depend only on `commands-dependencies`.
+ * module must therefore not import any other `commands-*` module.
  */
 export async function dockerExec(
   containerId: string,

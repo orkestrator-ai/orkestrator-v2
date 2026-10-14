@@ -64,8 +64,9 @@ export function parseSimulatorArguments(
     return { deviceName: defaultDeviceName, help: true };
   }
   const deviceIndex = args.indexOf("--device");
-  if (deviceIndex >= 0 && args[deviceIndex + 1]) {
-    return { deviceName: args[deviceIndex + 1], help: false };
+  const deviceName = deviceIndex >= 0 ? args[deviceIndex + 1] : undefined;
+  if (deviceName) {
+    return { deviceName, help: false };
   }
   if (deviceIndex >= 0) throw new Error("Expected a simulator name after --device.");
   return { deviceName: defaultDeviceName, help: false };

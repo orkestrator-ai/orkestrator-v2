@@ -1,7 +1,7 @@
 import { DESIGN_EXPORT_NAME, DESIGN_EXPORT_PATH_MAX } from "./design-export-path";
 import { toast } from "sonner";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
-import { designApi, failureOf } from "./design-client";
+import { designApi, failureOf } from "@/lib/design-client";
 
 export const isDesignFilePath = (filePath: string) =>
   filePath.length <= DESIGN_EXPORT_PATH_MAX && DESIGN_EXPORT_NAME.test(filePath);

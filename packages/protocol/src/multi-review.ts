@@ -149,6 +149,15 @@ export interface MultiReviewReviewerTranscript {
    * pages the caller holds belong to another history and must be dropped.
    */
   historyEpoch?: string;
+  /**
+   * Rows from before {@link messages} that changed recently, newest change
+   * first. A row is one model response, so a late tool result can land on a
+   * row newer ones pushed out of the tail; a caller replaces its own copy of
+   * each (an earlier page it holds) and never inserts one it does not hold.
+   */
+  revisedMessages?: unknown[];
+  /** Changed recovery signal invalidates retained history, which remains pageable. */
+  historyReconciliationToken?: string;
   report?: StructuredReviewReport;
   error?: string;
   progressAt?: string;

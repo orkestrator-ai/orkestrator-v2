@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/storage-database";
+import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-database";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import {

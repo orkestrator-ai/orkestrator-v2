@@ -1,0 +1,252 @@
+import { expect, mock, test } from "bun:test";
+
+import { createCommandFixtures } from "./command-fixtures";
+
+const { createCommandRegistry, createContext, createEnvironment } = await createCommandFixtures();
+
+test("build pipeline point reads omit unchanged transcripts and return tail patches", async () => {
+  const environment = createEnvironment();
+  const { context } = createContext(environment);
+  const record = {
+    version: 2,
+    id: "pipeline-1",
+    projectId: environment.projectId,
+    environmentId: environment.id,
+    revision: 8,
+    updatedAt: new Date().toISOString(),
+    snapshot: {
+      id: "pipeline-1",
+      sessions: [
+        {
+          sessionKey: "session-1",
+          messageRevision: 3,
+          messages: [{ id: "m1" }, { id: "m2-old" }, { id: "m3" }],
+        },
+      ],
+    },
+  };
+  context.storage.getBuildPipeline = mock(async () => record);
+  // An unmigrated record: the storage read adapter serves its inline array.
+  context.storage.readBuildPipelineTranscript = mock(
+    async (
+      _pipelineId: string,
+      session: { messages?: unknown[]; messageRevision?: number },
+      window: { fromIndex?: number } = {},
+    ) => {
+      const messages = session.messages ?? [];
+      const fromIndex = Math.min(window.fromIndex ?? 0, messages.length);
+      return {
+        status: "found" as const,
+        messages: messages.slice(fromIndex),
+        startIndex: fromIndex,
+        messageCount: messages.length,
+        revision: session.messageRevision ?? 0,
+        complete: true,
+        substituted: false,
+      };
+    },
+  );
+  const commands = createCommandRegistry();
+
+  expect(
+    await commands.get("get_build_pipeline")?.(
+      {
+        pipelineId: record.id,
+        knownRevision: 8,
+      },
+      context,
+    ),
+  ).toEqual({ unchanged: true, revision: 8 });
+
+  expect(
+    await commands.get("get_build_pipeline")?.(
+      {
+        pipelineId: record.id,
+        knownRevision: 7,
+        knownSessions: {
+          "session-1": { revision: 2, count: 2 },
+        },
+      },
+      context,
+    ),
+  ).toMatchObject({
+    unchanged: false,
+    record: {
+      revision: 8,
+      snapshot: {
+        sessions: [{ sessionKey: "session-1", messageRevision: 3 }],
+      },
+    },
+    // The client's rows are from an older revision, so the rows before its
+    // tail come back too: a late result can have landed on any of them.
+    messagePatches: [
+      {
+        sessionKey: "session-1",
+        startIndex: 0,
+        revision: 3,
+        messages: [{ id: "m1" }, { id: "m2-old" }, { id: "m3" }],
+      },
+    ],
+  });
+
+  expect(
+    await commands.get("get_build_pipeline")?.(
+      {
+        pipelineId: record.id,
+        knownRevision: 7,
+        knownSessions: {
+          "session-1": { revision: 3, count: 3 },
+        },
+      },
+      context,
+    ),
+  ).toMatchObject({
+    unchanged: false,
+    record: {
+      revision: 8,
+      snapshot: {
+        sessions: [{ sessionKey: "session-1", messageRevision: 3 }],
+      },
+    },
+    messagePatches: [],
+  });
+
+  expect(
+    await commands.get("get_build_pipeline")?.(
+      {
+        pipelineId: record.id,
+        knownRevision: 7,
+        knownSessions: {
+          "session-1": { revision: 2, count: 99 },
+        },
+      },
+      context,
+    ),
+  ).toMatchObject({
+    unchanged: false,
+    messagePatches: [
+      {
+        sessionKey: "session-1",
+        startIndex: 0,
+        revision: 3,
+        messages: [{ id: "m1" }, { id: "m2-old" }, { id: "m3" }],
+      },
+    ],
+  });
+
+  // A plain read returns control state only: an unmigrated record's inline
+  // transcript is stripped rather than shipped (plan step 16).
+  expect(
+    await commands.get("get_build_pipeline")?.(
+      {
+        pipelineId: record.id,
+        knownRevision: "8",
+      },
+      context,
+    ),
+  ).toEqual({
+    ...record,
+    snapshot: {
+      id: "pipeline-1",
+      sessions: [{ sessionKey: "session-1", messageRevision: 3 }],
+    },
+  });
+
+  context.storage.getBuildPipeline = mock(async () => null);
+  expect(
+    await commands.get("get_build_pipeline")?.(
+      {
+        pipelineId: "missing",
+        knownRevision: 1,
+        knownSessions: {},
+      },
+      context,
+    ),
+  ).toBeNull();
+});
+
+test("build pipeline list reads return only changed records and retain deletion ids", async () => {
+  const environment = createEnvironment();
+  const { context } = createContext(environment);
+  const records = [
+    {
+      version: 2,
+      id: "pipeline-1",
+      projectId: environment.projectId,
+      environmentId: environment.id,
+      revision: 2,
+      updatedAt: new Date().toISOString(),
+      snapshot: { id: "pipeline-1" },
+    },
+    {
+      version: 2,
+      id: "pipeline-2",
+      projectId: environment.projectId,
+      environmentId: environment.id,
+      revision: 4,
+      updatedAt: new Date().toISOString(),
+      snapshot: { id: "pipeline-2" },
+    },
+  ];
+  context.storage.listBuildPipelines = mock(async () => records);
+  const commands = createCommandRegistry();
+
+  expect(
+    await commands.get("list_build_pipelines")?.(
+      {
+        projectId: environment.projectId,
+      },
+      context,
+    ),
+  ).toEqual(records);
+  expect(
+    await commands.get("list_build_pipelines")?.(
+      {
+        projectId: environment.projectId,
+        knownRevisions: [],
+      },
+      context,
+    ),
+  ).toEqual(records);
+  expect(
+    await commands.get("list_build_pipelines")?.(
+      {
+        projectId: environment.projectId,
+        knownRevisions: {
+          "pipeline-1": 2,
+          "pipeline-2": 3,
+          "pipeline-deleted": 7,
+        },
+      },
+      context,
+    ),
+  ).toEqual({
+    ids: ["pipeline-1", "pipeline-2"],
+    records: [records[1]],
+  });
+
+  // Summaries never carry transcript bodies, even for an unmigrated record.
+  context.storage.listBuildPipelines = mock(async () => [
+    {
+      ...records[0]!,
+      snapshot: { id: "pipeline-1", sessions: [{ sessionKey: "s", messages: [{ id: "m" }] }] },
+    },
+  ]);
+  expect(
+    await commands.get("list_build_pipelines")?.({ projectId: environment.projectId }, context),
+  ).toEqual([{ ...records[0]!, snapshot: { id: "pipeline-1", sessions: [{ sessionKey: "s" }] } }]);
+
+  context.storage.listBuildPipelines = mock(async () => []);
+  expect(
+    await commands.get("list_build_pipelines")?.(
+      {
+        projectId: environment.projectId,
+        knownRevisions: { "pipeline-deleted": 7 },
+      },
+      context,
+    ),
+  ).toEqual({
+    ids: [],
+    records: [],
+  });
+});

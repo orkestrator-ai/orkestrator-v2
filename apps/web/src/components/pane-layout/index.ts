@@ -1,5 +1,5 @@
 export { PaneTree } from "./PaneTree";
-export { PaneSplitContainer } from "./PaneSplitContainer";
+export { PaneSplitContainer } from "./PaneTree";
 export { MobilePaneSwitcher } from "./MobilePaneSwitcher";
 export { PaneLeafContainer } from "./PaneLeafContainer";
 export { DraggableTabBar } from "./DraggableTabBar";

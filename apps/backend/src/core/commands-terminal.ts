@@ -2,12 +2,10 @@ import {
   containerLifecycleSnapshot,
   parseContainerLifecycle,
 } from "@orkestrator/protocol/container-lifecycle";
-import { existsSync, path, createHash } from "./commands-dependencies.js";
-import type {
-  ClientEnvironment,
-  Environment,
-  PersistedLoopedReviewWorkflow,
-} from "./commands-dependencies.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import type { ClientEnvironment, Environment, PersistedLoopedReviewWorkflow } from "./models.js";
 import {
   terminalProcesses,
   terminalSessionConfigs,
@@ -56,7 +54,7 @@ import {
  * spread properties, so a field left in `client` is returned to the renderer
  * while the declared return type says it was removed. The
  * `get_environment_snapshots` case in
- * `tests/unit/electron/commands-registry-environments.test.ts` asserts the
+ * `apps/backend/tests/commands-registry-environments.test.ts` asserts the
  * absence of each one, because that is the only place the drift shows up.
  */
 export function toClientEnvironment(environment: Environment): ClientEnvironment {

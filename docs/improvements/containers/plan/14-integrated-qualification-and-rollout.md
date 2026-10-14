@@ -15,9 +15,9 @@ environments. This is a release gate in addition to each step's focused checks.
   [agent profile guide](../../../development/agent-testing.md).
 - [Docker/browser fixture tests](../../../../e2e/agent-testing/browser-gateway.spec.ts),
   [artifact sanitizer](../../../../e2e/agent-testing/artifact-sanitizer.ts).
-- [Environment lifecycle tests](../../../../tests/unit/electron/commands-registry-environments.test.ts),
-  [status/ownership tests](../../../../tests/unit/electron/commands-registry-environments-status.test.ts),
-  [Docker registry tests](../../../../tests/unit/electron/commands-registry-docker.test.ts),
+- [Environment lifecycle tests](../../../../apps/backend/tests/commands-registry-environments.test.ts),
+  [status/ownership tests](../../../../apps/backend/tests/commands-registry-environments-status.test.ts),
+  [Docker registry tests](../../../../apps/backend/tests/commands-registry-docker.test.ts),
   [firewall tests](../../../../tests/unit/firewall-policy.test.ts).
 
 Extend the existing isolated harness rather than creating a second uncontrolled
@@ -88,7 +88,7 @@ the intended entry points, run separately so each result belongs to one check:
 
 ```bash
 mise run test:logged -- --name container-lifecycle -- \
-  bun test ./tests/unit/electron/commands-registry-environments.test.ts \
+  bun test ./apps/backend/tests/commands-registry-environments.test.ts \
   --parallel=1 --only-failures
 
 mise run test:changed

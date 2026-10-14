@@ -325,7 +325,7 @@ measurements.
 Focused suites above pass (web, backend, protocol, Electron unit), web,
 backend and desktop typechecks pass. Aggregate results are recorded in the
 final commit message of this note. Known unrelated failure:
-`packages/protocol/src/preview-forward.test.ts` (two websocket-upgrade
+`packages/protocol/src/node/preview-forward.test.ts` (two websocket-upgrade
 tests time out at 5 s, also when run alone; no step 09 change touches preview
 forwarding or its imports).
 

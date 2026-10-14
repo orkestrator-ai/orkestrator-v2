@@ -1,6 +1,6 @@
 /**
  * Backend side of the bridge transcript v2 contract
- * (`packages/protocol/src/bridge-transcript-summary.ts`).
+ * (`packages/protocol/src/node/bridge-transcript-summary.ts`).
  *
  * Capabilities are learned from answers, never assumed: a bridge that predates
  * v2 ignores `version=2` and answers its v1 envelope, which is read as v1 and
@@ -14,10 +14,11 @@
  * Negative answers still expire, because a bridge can be upgraded in place.
  */
 import {
+  BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
   parseBridgeTranscriptDetailResponse,
   parseBridgeTranscriptPageResponse,
   parseBridgeTranscriptSummaryUpdate,
-} from "@orkestrator/protocol/bridge-transcript-summary";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   ProviderUnavailableError,
   type BridgeConnection,
@@ -33,8 +34,8 @@ import { assertOk, boundedJson, bridgeFetch } from "./http-bridge-transport.js";
 export const TRANSCRIPT_V2_NEGATIVE_TTL_MS = 10 * 60_000;
 /** A detail envelope: the 16 MiB image ceiling plus room for its JSON wrapper. */
 const DETAIL_RESPONSE_MAX_BYTES = 16 * 1024 * 1024 + 64 * 1024;
-/** A page envelope: its 1 MiB target plus an oversized final row's fallback. */
-const PAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+/** A page envelope: a lone row over the page target is sent whole, up to its ceiling. */
+const PAGE_RESPONSE_MAX_BYTES = BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES + 64 * 1024;
 const TRANSCRIPT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 type Feature = "summaries" | "details" | "pages";
@@ -82,7 +83,8 @@ function historyEpoch(generation: unknown, contentEpoch: unknown): string {
 
 /**
  * Map a parsed v2 summary snapshot onto the provider-neutral snapshot, the
- * same way the v1 envelope is mapped, plus the representation and cursor.
+ * same way the v1 envelope is mapped, plus the representation, the cursor and
+ * the revised rows from before the window.
  */
 function summarySnapshot(
   update: Extract<ReturnType<typeof parseBridgeTranscriptSummaryUpdate>, { status: "snapshot" }>,
@@ -107,6 +109,10 @@ function summarySnapshot(
     ...(value.capabilities.pages && value.historyCursor
       ? { historyCursor: value.historyCursor }
       : {}),
+    ...(value.historyReconciliationToken
+      ? { historyReconciliationToken: value.historyReconciliationToken }
+      : {}),
+    ...(value.revisedMessages ? { revisedMessages: value.revisedMessages } : {}),
   };
 }
 

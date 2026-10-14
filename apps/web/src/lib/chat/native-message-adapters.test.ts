@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type { NativeMessage } from "./native-message-types";
 import { buildPromptWithTranscriptAnnotations } from "./transcript-annotations";
 import {
@@ -18,10 +18,8 @@ import {
   normalizeClaudeMessages,
   normalizeClaudeMessagesForDisplay,
   normalizeClaudePart,
-  normalizeCodexNativeMessage,
   normalizeNativeMessage,
   normalizeNativeMessages,
-  normalizeOpenCodeNativeMessage,
   parseNativeAttachmentsFromContent,
   rowlessBackgroundTaskMessages,
   splitClaudeAssistantTextBlocks,
@@ -1686,8 +1684,8 @@ describe("native message adapters", () => {
       modelId: "provider/model",
     };
 
-    expect(normalizeCodexNativeMessage(message).modelId).toBe("provider/model");
-    expect(normalizeOpenCodeNativeMessage(message).modelId).toBe("provider/model");
+    expect(normalizeNativeMessage(message).modelId).toBe("provider/model");
+    expect(normalizeNativeMessage(message).modelId).toBe("provider/model");
   });
 
   test("propagates Claude model attribution to every timestamp-split row", () => {
@@ -1738,7 +1736,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeOpenCodeNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text"]);
     expect(normalized.parts[1]?.type).toBe("tool-group");
@@ -1760,7 +1758,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeOpenCodeNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["tool-group", "text"]);
     expect(normalized.parts[0]?.type).toBe("tool-group");
@@ -1798,9 +1796,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    expect(normalizeOpenCodeNativeMessage(message).parts.map((part) => part.type)).toEqual([
-      "text",
-    ]);
+    expect(normalizeNativeMessage(message).parts.map((part) => part.type)).toEqual(["text"]);
   });
 
   test("drops empty Claude reasoning parts during normalization", () => {
@@ -1833,7 +1829,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeOpenCodeNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["tool-group", "text"]);
     expect(normalized.parts[0]?.type).toBe("tool-group");
@@ -2195,7 +2191,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeCodexNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["subagent", "tool-group"]);
     expect(normalized.parts[0]?.type).toBe("subagent");
@@ -2220,7 +2216,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeCodexNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["text", "agent-group", "text"]);
     expect(normalized.parts[1]?.type).toBe("agent-group");
@@ -2246,7 +2242,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const normalized = normalizeCodexNativeMessage(message);
+    const normalized = normalizeNativeMessage(message);
 
     expect(normalized.parts.map((part) => part.type)).toEqual(["subagent", "text", "subagent"]);
   });
@@ -3426,9 +3422,9 @@ describe("normalization identity cache", () => {
   test("returns the identical normalized object for an unchanged source message", () => {
     const message = makeMessage();
 
-    const first = normalizeCodexNativeMessage(message);
-    const second = normalizeCodexNativeMessage(message);
-    const third = normalizeOpenCodeNativeMessage(message);
+    const first = normalizeNativeMessage(message);
+    const second = normalizeNativeMessage(message);
+    const third = normalizeNativeMessage(message);
 
     expect(second).toBe(first);
     // Codex and OpenCode share the provider-neutral normalizer, so the cache
@@ -3440,7 +3436,7 @@ describe("normalization identity cache", () => {
 
   test("returns a new normalized object when the source message object changes", () => {
     const message = makeMessage();
-    const first = normalizeCodexNativeMessage(message);
+    const first = normalizeNativeMessage(message);
 
     // Stores replace the message object on every update, so a changed message
     // is a new object and must miss the cache.
@@ -3448,7 +3444,7 @@ describe("normalization identity cache", () => {
       ...message,
       parts: [...message.parts, { type: "text", content: "More" }],
     };
-    const second = normalizeCodexNativeMessage(updated);
+    const second = normalizeNativeMessage(updated);
 
     expect(second).not.toBe(first);
     expect(second.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text", "text"]);
@@ -3852,6 +3848,33 @@ describe("coalesceAdjacentToolMessages", () => {
 
     expect(rows.map((row) => row.id)).toEqual(["plan", "tool"]);
     expect(rows[0]?.planReview).toBe(true);
+  });
+
+  test("merges the step rows of one plan-mode turn and keeps the flag", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("step-1", "2026-09-03T10:43:01.000Z", ["Read"], {
+        planReview: true,
+        turnId: "turn-1",
+      }),
+      toolMessage("step-2", "2026-09-03T10:43:20.000Z", ["Grep"], {
+        planReview: true,
+        turnId: "turn-1",
+      }),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["step-1"]);
+    expect(rows[0]?.planReview).toBe(true);
+    expect(rows[0]?.latestSourceMessageId).toBe("step-2");
+  });
+
+  test("does not merge an unflagged tool row into a plan-review row", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("tool", "2026-09-03T10:43:01.000Z", ["Read"]),
+      toolMessage("plan", "2026-09-03T10:43:20.000Z", ["Read"], { planReview: true }),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["tool", "plan"]);
+    expect(rows[1]?.planReview).toBe(true);
   });
 
   test("flattens and regroups adjacent agent activity", () => {

@@ -3,7 +3,7 @@
  *
  * OpenCode has no bridge process of ours: the backend watches `opencode serve`
  * over SSE, so this is the backend's copy of what each bridge does around its
- * shell calls (see `@orkestrator/protocol/workspace-change-probe`).
+ * shell calls (see `@orkestrator/protocol/node/workspace-change-probe`).
  *
  * OpenCode offers no pre-tool hook, only `message.part.updated` events after a
  * tool has started, so windows open in baseline mode: a snapshot is primed at
@@ -31,9 +31,9 @@ import {
   CommandChangeJournal,
   hasMeasuredChanges,
   MAX_JOURNAL_ENTRIES,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import { asRecord, nonEmptyString, setBoundedMapEntry } from "./agent-provider-runtime.js";
 import { collectRawOpenCodeSubagentIds } from "./opencode-messages.js";
 

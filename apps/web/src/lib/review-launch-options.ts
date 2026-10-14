@@ -3,12 +3,11 @@ import type {
   ReviewModelOption,
   ReviewTabType,
 } from "@/components/review/ReviewLaunchDialog";
-import type { ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeModel } from "@/lib/claude-types";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
-import { CODEX_MODELS } from "@/lib/codex-client";
+import { CODEX_MODELS } from "@/lib/codex-models";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import {
   isSelectableOpenCodeModelId,
@@ -89,9 +88,14 @@ export function includeMissingOpenCodeModels(
   return [...withoutPlaceholder, ...extras];
 }
 
-export function buildReviewModelCatalog(
-  environmentId: string | null | undefined,
-): ReviewModelCatalog {
+/**
+ * Model options every launcher starts from.
+ *
+ * OpenCode has no renderer-side live catalogue, so its entry is the unpinned
+ * `"default"` placeholder; launchers that know a project overlay the backend's
+ * durable OpenCode model cache on top of it.
+ */
+export function buildReviewModelCatalog(): ReviewModelCatalog {
   const liveClaudeModels = useClaudeStore.getState().models.map(claudeReviewModelOption);
   const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 
@@ -102,26 +106,6 @@ export function buildReviewModelCatalog(
     description: model.description,
     reasoningEfforts: [...(model.reasoningEfforts ?? ["medium", "high"])],
     supportsSpeed: true as const,
-  }));
-
-  const openCodeState = useOpenCodeStore.getState();
-  const liveOpenCodeModels =
-    environmentId === null
-      ? []
-      : environmentId
-        ? openCodeState.getModels(environmentId)
-        : Array.from(openCodeState.models.values())
-            .flat()
-            .filter(
-              (model, index, models) =>
-                models.findIndex((candidate) => candidate.id === model.id) === index,
-            );
-  const opencode = liveOpenCodeModels.map((model) => ({
-    id: model.id,
-    name: openCodeModelDisplayLabel(model.id, model.name),
-    providerLabel: model.provider,
-    description: model.provider,
-    reasoningEfforts: [...(model.variants ?? [])],
   }));
 
   const cachedAcpCatalog = useAgentModelCatalogStore.getState();
@@ -152,8 +136,7 @@ export function buildReviewModelCatalog(
         ? grok
         : [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
     pi: pi.length > 0 ? pi : [{ id: "default", name: "Pi default", reasoningEfforts: [] }],
-    opencode:
-      opencode.length > 0 ? opencode : [{ id: "default", name: "Default", reasoningEfforts: [] }],
+    opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
   };
 }
 

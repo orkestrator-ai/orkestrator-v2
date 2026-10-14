@@ -28,9 +28,13 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
-import { encodedJsonBytes, planOldestFirstTrim } from "@orkestrator/protocol/transcript-budget";
+import {
+  encodedJsonBytes,
+  planOldestFirstTrim,
+} from "@orkestrator/protocol/node/transcript-budget";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { terminalDisplayOutput } from "./acp-client-methods.js";
+import { rememberEvictedRows } from "./acp-rows.js";
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
 export const TRANSCRIPT_UPDATE_KINDS = new Set([
@@ -706,7 +710,7 @@ export function boundTranscript(state: SessionState): boolean {
   let truncatedCurrentMessage = false;
   if (state.messages.length > MAX_MESSAGES) {
     const removed = state.messages.length - MAX_MESSAGES;
-    state.messages.splice(0, removed);
+    rememberEvictedRows(state, state.messages.splice(0, removed));
     state.droppedMessages += removed;
     state.transcriptTruncated = true;
   }
@@ -721,7 +725,7 @@ export function boundTranscript(state: SessionState): boolean {
     }),
   });
   if (plan.droppedMessages > 0) {
-    state.messages.splice(0, plan.droppedMessages);
+    rememberEvictedRows(state, state.messages.splice(0, plan.droppedMessages));
     state.droppedMessages += plan.droppedMessages;
     state.transcriptTruncated = true;
   }

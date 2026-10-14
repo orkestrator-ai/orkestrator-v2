@@ -9,7 +9,7 @@ import {
   type WebAnnotationErrorDetail,
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureDestination } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureDestination } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import type { WebAnnotationService } from "./web-annotation-service.js";

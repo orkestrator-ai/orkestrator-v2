@@ -11,7 +11,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WEB_ANNOTATION_DEGRADED } from "@orkestrator/protocol/web-annotations";
-import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { WebAnnotationStorage } from "./web-annotation-storage.js";
 import { StorageDatabase } from "./storage-database.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";

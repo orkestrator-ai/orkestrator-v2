@@ -109,7 +109,7 @@ Head: `c2ca4a1cb719fc99a621e28cc061eb9a63da7ec6` (identical to `origin/main`; wo
 - Description: `setToken` clears agent-test sessions and calls `terminalWebSocket.revokeConnections()`, but never touches the SSE clients in `this.clients`. For a durable-token credential `scheduleCredentialExpiry` installs no timer (`gatewayCredentialExpiresAt` returns null), so a client holding the previous token keeps receiving every authoritative event after the operator rotates the token, which is exactly the leaked-credential scenario rotation exists for.
 - Evidence: gateway-base.ts:414-419 clears bootstraps/sessions and revokes WebSockets only; gateway-handlers.ts:263-269: `if (!this.gatewayCredentialMatches(credential)) { close(); return; } const expiresAt = ...; if (expiresAt === null) return;`. Reachable via `PUT /__orkestrator/gateway-settings`. Verified in source.
 - Suggestion: In `setToken`, after revoking WebSockets, iterate `this.clients` (and in-flight `proxyRequests`) and destroy any whose captured credential no longer matches; or register each stream's `close` in a set that `setToken` drains.
-- Verification: Extend `tests/unit/electron/gateway-events.test.ts` "closes active sockets on credential rotation" with an SSE client opened under the old token and assert it receives no events after `setToken`.
+- Verification: Extend `apps/backend/tests/gateway-events.test.ts` "closes active sockets on credential rotation" with an SSE client opened under the old token and assert it receives no events after `setToken`.
 
 ### 6. [P1][conf:85][correctness]
 #### Cursor bridge `GET /session/:id/usage` is unreachable; the request returns the whole-session snapshot
@@ -181,7 +181,7 @@ Head: `c2ca4a1cb719fc99a621e28cc061eb9a63da7ec6` (identical to `origin/main`; wo
 - Description: `readLoginToken` calls `JSON.parse` without try/catch, dereferences `parsed.token` (throws on a `null` body) and lets `RequestBodyTooLargeError` escape; `handleLogin` catches none of these, so the generic handler in `listen()` answers 500 with `error.message` and logs `[RemoteGateway] Request failed:`. This is pre-auth, trivially triggerable, and the JSC parse message can include body text (invariant 12). The same class of bug was explicitly fixed for `/invoke`.
 - Evidence: `const parsed = JSON.parse(body.toString("utf8")) as { token?: unknown }; return typeof parsed.token === "string" ? parsed.token : "";` with no guard; route dispatched before `authenticated()` at gateway-auth.ts:289-292.
 - Suggestion: Wrap the JSON branch in try/catch returning `""`, guard `parsed && typeof parsed === "object"`, and map `RequestBodyTooLargeError` to 413 and invalid bodies to the 401 login page, mirroring `handleInvoke`.
-- Verification: Add cases to `tests/unit/electron/gateway-auth.test.ts` for `{`, `null`, and an oversized JSON login body, asserting 401/413 and no error log line.
+- Verification: Add cases to `apps/backend/tests/gateway-auth.test.ts` for `{`, `null`, and an oversized JSON login body, asserting 401/413 and no error log line.
 
 ### 14. [P2][conf:80][error-handling]
 #### Malformed percent-encoding in the auth cookie throws `URIError` and surfaces as a pre-auth 500
@@ -316,7 +316,7 @@ Head: `c2ca4a1cb719fc99a621e28cc061eb9a63da7ec6` (identical to `origin/main`; wo
 - Description: The reader appends every chunk to `pending` and only trims on a `\n\n` delimiter. A remote backend (a separate trust domain from the local one) that streams bytes without a delimiter grows `pending` without limit in the main process, violating invariant 11. A single malformed `data:` line also throws out of the loop, tears the stream down and reconnects every 500 ms, re-emitting the connected event that triggers authoritative refetches.
 - Evidence: `pending += value; const messages = pending.split("\n\n"); pending = messages.pop() ?? "";` with no cap; reachable via `ConnectionManager.setScopeRemote` → `startRemoteListener` → `client.listen(...)` (connection-manager.ts:590-598).
 - Suggestion: Cap `pending` (e.g. 1 MiB) and abort/reconnect with a logged reason when exceeded; wrap the per-message `JSON.parse` so one bad frame is dropped rather than restarting the stream.
-- Verification: `tests/unit/electron/backend-process.test.ts` cases with a delimiter-less multi-MiB stream and with one malformed frame among valid ones.
+- Verification: `apps/desktop/tests/backend-process.test.ts` cases with a delimiter-less multi-MiB stream and with one malformed frame among valid ones.
 
 ### 29. [P2][conf:78][security]
 #### Renderer windows explicitly disable the Chromium sandbox although their preloads are self-contained bundles
@@ -324,7 +324,7 @@ Head: `c2ca4a1cb719fc99a621e28cc061eb9a63da7ec6` (identical to `origin/main`; wo
 - Symbol: createMainWindow (also toolchain-bootstrap-window.ts:114 and :176)
 - Description: `webPreferences` sets `sandbox: false`, overriding Electron's default (sandboxed since Electron 20; the repo pins `electron ^42`). The renderer displays untrusted agent/tool/markdown output, so a renderer-engine bug would yield an unsandboxed process. The preloads are bundled with `external: ["electron"]` and only use `contextBridge`/`ipcRenderer`/`process.platform`, all available in sandboxed preloads; browser previews already run with `sandbox: true` (browser-preview-manager.ts:297). No comment explains the exception. Other posture points (will-navigate, setWindowOpenHandler, openExternal scheme checks, IPC sender-frame gating) were verified as correct.
 - Evidence: `webPreferences: { preload: ..., contextIsolation: true, nodeIntegration: false, sandbox: false, ... }`.
-- Suggestion: Set `sandbox: true` on the three windows (or document the concrete reason it must stay off) and update `tests/unit/electron/window.test.ts:86`, which currently locks the disabled value in.
+- Suggestion: Set `sandbox: true` on the three windows (or document the concrete reason it must stay off) and update `apps/desktop/tests/window.test.ts:86`, which currently locks the disabled value in.
 - Verification: App launches, IPC round-trips work, and `window.test.ts` asserts `sandbox: true`.
 
 ### 30. [P2][conf:80][maintainability]
@@ -334,7 +334,7 @@ Head: `c2ca4a1cb719fc99a621e28cc061eb9a63da7ec6` (identical to `origin/main`; wo
 - Description: Both documents say the desktop supervisor "answers a backend exit by telling the user the application will close". The supervisor now keeps the app running, marks Local unavailable and shows a dialog asking the user to restart; there is no restart path. The invariant documentation therefore describes a blast radius that no longer exists.
 - Evidence: `onUnexpectedExit: (error) => { connectionManager?.markLocalBackendUnavailable(); ... dialog.showErrorBox(..., "Local work is unavailable. Remote windows remain connected; restart the application to recover Local."); }`.
 - Suggestion: Update the two doc sentences to describe the current behaviour (Local goes offline for the session, no automatic restart), or implement the restart the docs imply.
-- Verification: Docs match `tests/unit/electron/connection-manager.test.ts:174`, which already covers the actual behaviour.
+- Verification: Docs match `apps/desktop/tests/connection-manager.test.ts:174`, which already covers the actual behaviour.
 
 ### 31. [P2][conf:76][error-handling]
 #### Non-JSON error responses from a remote gateway surface as `SyntaxError` instead of HTTP failures

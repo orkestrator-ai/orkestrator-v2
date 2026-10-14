@@ -1,14 +1,13 @@
-import { describe, test, expect, beforeEach, mock } from "bun:test";
-import { render, screen } from "@testing-library/react";
-import type { EnvironmentStatus } from "../../../apps/web/src/types";
+import { describe, test, expect, mock } from "bun:test";
+import { render } from "@testing-library/react";
 
 // Mock the Tooltip components since they require a context
 mock.module("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) => (
+  TooltipTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>
   ),
-  TooltipContent: ({ children, side }: { children: React.ReactNode; side?: string }) => (
+  TooltipContent: ({ children }: { children: React.ReactNode; side?: string }) => (
     <div data-testid="tooltip-content">{children}</div>
   ),
 }));

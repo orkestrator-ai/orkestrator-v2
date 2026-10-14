@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { designAction, designApi, failureOf } from "./design-client";
+import { designAction, designApi, failureOf } from "@/lib/design-client";
 import {
   legacyLibraryPage,
   runDesignLifecycle,

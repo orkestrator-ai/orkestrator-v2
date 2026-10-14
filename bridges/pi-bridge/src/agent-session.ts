@@ -26,7 +26,6 @@ import type {
   NativeAgentCommandRefreshOutcome,
   NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
-import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   agentDirectory,
   CATALOG_TIMEOUT_MS,
@@ -63,7 +62,6 @@ import {
 } from "./pi-sdk.js";
 import {
   catalogReadFailed,
-  emptyComposer,
   hydrateComposer,
   reconcileComposerSelection,
   resolveModel,
@@ -73,8 +71,11 @@ import {
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { applySessionEvent } from "./translate.js";
-import { boundTranscript, chargeTranscript } from "./transcript.js";
+import { boundTranscript, chargeTranscript, forgetRevisedRows } from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
+import { newSessionState } from "./session-factory.js";
+
+export { newSessionState };
 import {
   clientSessionKeys,
   isObject,
@@ -244,42 +245,6 @@ export async function hydrateSessionComposer(
   });
   composerHydrations.set(state, operation);
   return operation;
-}
-
-export function newSessionState(
-  clientSessionKey?: string,
-  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
-): SessionState {
-  return {
-    id: randomBytes(16).toString("hex"),
-    ...(policy ? { policy } : {}),
-    ...(clientSessionKey ? { clientSessionKey } : {}),
-    status: "idle",
-    messages: [],
-    droppedMessages: 0,
-    droppedParts: 0,
-    transcriptTruncated: false,
-    revision: 0,
-    structured: new Map(),
-    promptJournal: new Map(),
-    steerJournal: new Map(),
-    pendingSteerDeliveries: [],
-    approvals: new Map(),
-    todos: [],
-    composer: emptyComposer(),
-    session: null,
-    dispatching: false,
-    promptSequence: 0,
-    openTextParts: new Map(),
-    toolInputs: new Map(),
-    uncheckedTranscriptBytes: 0,
-    queue: { steering: [], followUp: [] },
-    slashCommands: [],
-    commandCatalogue: { status: "stale", revision: 0 },
-    compacting: false,
-    lastAccessed: Date.now(),
-    health: new RuntimeHealthRecorder(),
-  };
 }
 
 /**
@@ -1320,15 +1285,19 @@ function resolveUserEntryId(
  */
 export function resetRenderedHistory(state: SessionState): void {
   state.messages = [];
-  // A different history now starts at index 0 again; old positions must expire.
+  // A different history now starts at index 0 again; old positions must expire,
+  // and so must the rows noted as revised against the old one.
   state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
+  forgetRevisedRows(state);
   state.droppedMessages = 0;
   state.droppedParts = 0;
   state.transcriptTruncated = false;
   state.openTextParts.clear();
   state.toolInputs.clear();
   state.pendingCommandChanges?.clear();
+  state.toolCallRows?.clear();
   state.currentAssistantMessageId = undefined;
+  state.turnOpenedAssistantRow = undefined;
   state.uncheckedTranscriptBytes = 0;
 }
 
@@ -1371,6 +1340,7 @@ function hydrateHistory(state: SessionState): void {
  */
 function appendHistoricNotice(
   state: SessionState,
+  entry: SessionEntry,
   part:
     | { type: "compaction"; content: string; compactedTokensBefore?: number }
     | {
@@ -1380,9 +1350,26 @@ function appendHistoricNotice(
       },
 ): void {
   const messageId = randomBytes(12).toString("hex");
-  pushMessage(state, "assistant", part.content, [
-    { ...part, sourcePartId: `${messageId}:0`, sourceMessageId: messageId } as BridgeMessagePart,
-  ]);
+  pushMessage(
+    state,
+    "assistant",
+    part.content,
+    [{ ...part, sourcePartId: `${messageId}:0`, sourceMessageId: messageId } as BridgeMessagePart],
+    entryCreatedAt(entry),
+    messageId,
+  );
+}
+
+/**
+ * When an entry was written, as a row's `createdAt`.
+ *
+ * A replayed row is one Pi entry, as a live row is one model response, so
+ * stamping it with the replay time would give a resumed session's every row
+ * the same moment.
+ */
+function entryCreatedAt(entry: SessionEntry): string {
+  const time = Date.parse(entry.timestamp);
+  return Number.isFinite(time) ? new Date(time).toISOString() : new Date().toISOString();
 }
 
 /**
@@ -1405,7 +1392,7 @@ function appendHistoricNotice(
 function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
   switch (entry.type) {
     case "compaction":
-      appendHistoricNotice(state, {
+      appendHistoricNotice(state, entry, {
         type: "compaction",
         content: entry.summary,
         compactedTokensBefore: entry.tokensBefore,
@@ -1413,7 +1400,7 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
       return;
     case "branch_summary":
       if (entry.summary) {
-        appendHistoricNotice(state, {
+        appendHistoricNotice(state, entry, {
           type: "status",
           content: `Branch summary: ${entry.summary}`,
           severity: "info",
@@ -1423,7 +1410,7 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     case "model_change": {
       const model = `${entry.provider}/${entry.modelId}`;
       if (model !== "/") {
-        appendHistoricNotice(state, {
+        appendHistoricNotice(state, entry, {
           type: "status",
           content: `Model changed to ${model}`,
           severity: "info",
@@ -1433,7 +1420,7 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     }
     case "thinking_level_change":
       if (entry.thinkingLevel) {
-        appendHistoricNotice(state, {
+        appendHistoricNotice(state, entry, {
           type: "status",
           content: `Thinking level changed to ${entry.thinkingLevel}`,
           severity: "info",
@@ -1454,7 +1441,7 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
 
   if (message.role === "user") {
     const text = readContentText(message.content);
-    if (text) pushMessage(state, "user", text, [], entry.id);
+    if (text) pushMessage(state, "user", text, [], entryCreatedAt(entry), entry.id);
     return;
   }
   if (message.role === "toolResult") {
@@ -1506,7 +1493,9 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
       });
     }
   }
-  if (parts.length > 0) pushMessage(state, "assistant", content, parts, messageId);
+  if (parts.length > 0) {
+    pushMessage(state, "assistant", content, parts, entryCreatedAt(entry), messageId);
+  }
 }
 
 /**
@@ -1553,6 +1542,7 @@ function pushMessage(
   role: "user" | "assistant",
   content: string,
   parts: BridgeMessagePart[],
+  createdAt: string,
   messageId = randomBytes(12).toString("hex"),
 ): void {
   const message: BridgeMessage = {
@@ -1570,7 +1560,7 @@ function pushMessage(
               sourceMessageId: messageId,
             },
           ],
-    createdAt: new Date().toISOString(),
+    createdAt,
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));

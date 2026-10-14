@@ -6,7 +6,7 @@ import {
   bridgeTranscriptPageRouteBody,
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import type { NormalizedMessage } from "./messages/types.js";
 
 /** The runtime reads the transcript routes use; neither touches liveness or attaches. */
@@ -25,6 +25,9 @@ export interface CodexTranscriptRuntime {
     freshness: "cached" | "current";
     complete: boolean;
   } | null;
+  /** Rows recently changed, newest first, for the summary's `revisedMessages`. */
+  getRevisedRowsOverflowVersion?(sessionId: string): number;
+  getRevisedMessageIds?(sessionId: string): readonly string[];
 }
 
 /**
@@ -59,6 +62,7 @@ export function codexTranscriptSource(
   const status = runtime.getStatus(sessionId, false);
   const cached = runtime.getCachedMessages(sessionId);
   if (!status || !cached) return undefined;
+  const revisedMessageIds = runtime.getRevisedMessageIds?.(sessionId);
   return {
     messages: cached.messages,
     sessionIdentity: sessionId,
@@ -68,6 +72,8 @@ export function codexTranscriptSource(
     complete: cached.complete,
     freshness: cached.freshness,
     title: status.title,
+    revisedRowsOverflowVersion: runtime.getRevisedRowsOverflowVersion?.(sessionId),
+    ...(revisedMessageIds?.length ? { revisedMessageIds } : {}),
   };
 }
 

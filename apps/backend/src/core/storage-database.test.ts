@@ -414,7 +414,8 @@ describe("StorageDatabase.updateStore", () => {
 
 describe("read-only store reader", () => {
   test("rebuilds every layout without opening the database for writing", async () => {
-    const { readStorageDatabaseStore } = await import("@orkestrator/protocol/storage-database");
+    const { readStorageDatabaseStore } =
+      await import("@orkestrator/protocol/node/storage-database");
     const directory = await dataDir();
     const db = database(directory);
     const values: Record<string, unknown> = {

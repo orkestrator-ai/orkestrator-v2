@@ -30,9 +30,9 @@ import {
   CommandChangeJournal,
   hasMeasuredChanges,
   parseMeasuredWorkspaceChange,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   MAX_RESUMABLE_SESSIONS,
   acpToolSourceStates,
@@ -43,12 +43,8 @@ import {
   type BridgeToolPart,
   type SessionState,
 } from "./acp-context.js";
-import {
-  commitToolPartMutation,
-  ensureAcpToolSource,
-  findToolPart,
-  renderAcpToolSource,
-} from "./acp-tools.js";
+import { commitToolPartMutation, ensureAcpToolSource, renderAcpToolSource } from "./acp-tools.js";
+import { findToolPart } from "./acp-rows.js";
 
 /** The slice of the probe this bridge drives; a test substitutes its own. */
 export type CommandChangeProbe = Pick<

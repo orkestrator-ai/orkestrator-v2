@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { fixturePreviewCapabilities } from "@orkestrator/protocol/preview-contract-fixtures";
+import { fixturePreviewCapabilities } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetPreviewServiceSyncForTests } from "@/stores/previewServiceStore";

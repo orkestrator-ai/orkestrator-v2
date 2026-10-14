@@ -3,7 +3,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
@@ -12,6 +11,8 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
+import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
 
 // Attachment cases allocate and encode tens of megabytes. Under the aggregate
 // suite that work can legitimately outlive Bun's generic five-second budget.
@@ -26,7 +27,6 @@ const {
 const defaultConfig = structuredClone(useConfigStore.getInitialState().config);
 const defaultClaudeModels = useClaudeStore.getInitialState().models;
 const defaultCodexModels = useCodexStore.getInitialState().models;
-const defaultOpenCodeModels = useOpenCodeStore.getInitialState().models;
 const invokeMock = invoke as ReturnType<typeof mock>;
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -64,6 +64,28 @@ function attachmentDataTransfer(files: File[], types: string[] = ["Files"]) {
 }
 
 const AGENT_MODEL_PICKER_NAME = "Agent, model and reasoning";
+
+/** Serves `models` as the durable OpenCode catalogue for `projectId`. */
+function mockOpenCodeCatalogCache(
+  projectId: string,
+  models: Array<{ id: string; name: string; provider: string; variants?: string[] }>,
+) {
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "get_opencode_model_catalog_cache") {
+      return Promise.resolve({
+        schemaVersion: 2,
+        projectId,
+        catalogVersion: "catalog-v1",
+        updatedAt: "2026-07-27T12:00:00.000Z",
+        models,
+      });
+    }
+    if (command === "get_opencode_model_preferences") {
+      return Promise.resolve({ recent: [], favorite: [], variant: {} });
+    }
+    return Promise.resolve(undefined);
+  });
+}
 
 function getAgentModelPicker() {
   return screen.getByRole("combobox", { name: AGENT_MODEL_PICKER_NAME });
@@ -119,7 +141,6 @@ describe("resolveAgentDefaults", () => {
     });
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
-    useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
     useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
@@ -169,7 +190,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("disables container creation and falls back to a local worktree without Docker", async () => {
-    const onCreate = mock(async () => {});
+    const onCreate = mock(async (_options: ClaudeOptions) => {});
     render(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />
@@ -186,7 +207,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("falls back to a local worktree when Docker stops while the dialog is open", async () => {
-    const onCreate = mock(async () => {});
+    const onCreate = mock(async (_options: ClaudeOptions) => {});
     const dialog = <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />;
     const view = render(
       <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
@@ -979,6 +1000,8 @@ describe("resolveAgentDefaults", () => {
       actionDefaults: { newProject: { platform: "claude" } },
     };
     config.repositories["project-1"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
       agentSettings: {
         actionDefaults: {
           newProject: { platform: "codex", model: "repo-codex", reasoningEffort: "high" },
@@ -1343,7 +1366,6 @@ describe("resolveAgentDefaults", () => {
     // model no OpenCode server knows and — because a one-shot launch option is
     // treated as authoritative downstream — suppress the user's own saved
     // OpenCode preferences. It has to submit as "no explicit choice".
-    useOpenCodeStore.setState({ models: new Map() });
     // No configured default either, so nothing real gets injected into the
     // catalog and the placeholder is genuinely all there is.
     const config = structuredClone(defaultConfig);
@@ -1402,7 +1424,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("omits reasoning choices when the selected model supports none", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     render(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
@@ -1575,8 +1596,8 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Default");
   });
 
-  test("offers live OpenCode models and a configured project variant", async () => {
-    useOpenCodeStore.getState().setModels("existing-env", [
+  test("offers cached OpenCode models and a configured project variant", async () => {
+    mockOpenCodeCatalogCache("project-opencode", [
       {
         id: "provider/model-a",
         name: "Model A",
@@ -1622,7 +1643,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(getAgentModelPicker().textContent).toContain("Model B");
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Model B"));
     expect(getAgentModelPicker().textContent).toContain("Deep");
     fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
@@ -1644,7 +1665,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("loads the project-scoped durable OpenCode catalog, switches models, resets an incompatible effort, and submits", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -1732,7 +1752,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("shows Orkestrator-owned OpenCode favorites in their configured order", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -1786,21 +1805,14 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("preserves the target agent effort when selecting a cross-platform favorite", async () => {
-    useOpenCodeStore.setState({
-      models: new Map([
-        [
-          "existing-env",
-          [
-            {
-              id: "provider/source",
-              name: "OpenCode Source",
-              provider: "Provider",
-              variants: ["deep"],
-            },
-          ],
-        ],
-      ]),
-    });
+    mockOpenCodeCatalogCache("cross-platform", [
+      {
+        id: "provider/source",
+        name: "OpenCode Source",
+        provider: "Provider",
+        variants: ["deep"],
+      },
+    ]);
     useCodexStore.setState({
       models: [
         {
@@ -1855,7 +1867,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(getAgentModelPicker().textContent).toContain("OpenCode Source");
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("OpenCode Source"));
     expect(getAgentModelPicker().textContent).toContain("Deep");
     openAgentModelPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
@@ -1878,70 +1890,7 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("prefers a live OpenCode catalog over the durable project cache", async () => {
-    useOpenCodeStore.setState({
-      models: new Map([
-        [
-          "live-environment",
-          [
-            {
-              id: "live/model",
-              name: "Live Model",
-              provider: "Live Provider",
-              variants: ["live"],
-            },
-          ],
-        ],
-      ]),
-    });
-    const config = structuredClone(defaultConfig);
-    config.global.agentSettings = {
-      ...config.global.agentSettings,
-      platforms: {
-        ...config.global.agentSettings?.platforms,
-        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
-      },
-    };
-    useConfigStore.setState({ config });
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "get_opencode_model_catalog_cache") {
-        return Promise.resolve({
-          schemaVersion: 2,
-          projectId: "live-project",
-          catalogVersion: "stale",
-          updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [
-            {
-              id: "cached/model",
-              name: "Cached Model",
-              provider: "Cached Provider",
-            },
-          ],
-        });
-      }
-      if (command === "get_opencode_model_preferences") {
-        return Promise.resolve({ recent: [], favorite: [], variant: {} });
-      }
-      return Promise.resolve(undefined);
-    });
-
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-        projectId="live-project"
-      />,
-    );
-    await selectAgentPlatform("OpenCode");
-    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Live Model"));
-    openAgentModelPicker();
-    expect(await screen.findByRole("menuitemradio", { name: /Live Model/ })).toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }) === null).toBe(true);
-  });
-
   test("does not read an unscoped durable catalog without a project id", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -1964,7 +1913,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("ignores a late cache response after the project changes", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -2027,7 +1975,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("clears a previous durable catalog when a repeated open returns empty", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -2101,7 +2048,6 @@ describe("resolveAgentDefaults", () => {
         }),
     },
   ])("keeps durable state empty for a $name cache payload", async ({ cacheResult }) => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = {
       ...config.global.agentSettings,
@@ -2137,7 +2083,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("augments the durable catalog with a missing configured OpenCode model and effort", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2213,7 +2158,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("augments an existing durable OpenCode model with a missing configured effort", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2271,7 +2215,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("keeps the durable catalog usable when loading favorites fails", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2325,7 +2268,6 @@ describe("resolveAgentDefaults", () => {
     { name: "non-object", preferences: "preferences" },
     { name: "null", preferences: null },
   ])("ignores a $name preferences payload", async ({ preferences }) => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     config.global.agentSettings = {
@@ -2374,7 +2316,6 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("keeps a model chosen before the durable catalog arrives", async () => {
-    useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     // A configured default is a real selectable entry before the cache lands,
@@ -3669,7 +3610,6 @@ describe("CreateEnvironmentDialog feature builds", () => {
     });
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
-    useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
     useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     mockReadImage.mockReset();
     mockReadImage.mockImplementation(() => Promise.reject(new Error("no image")));
@@ -3745,7 +3685,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("submits the ticket to the feature build handler instead of creating an environment", async () => {
     const onCreate = mock(async () => {});
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     const onOpenChange = mock(() => {});
     render(
       <CreateEnvironmentDialog
@@ -3766,7 +3706,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     expect(onCreate).not.toHaveBeenCalled();
-    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
     expect(request.projectId).toBe("project-1");
     expect(request.title).toBe("Dark mode toggle");
     expect(request.acceptanceCriteria).toBe("The preference survives a reload.");
@@ -3780,7 +3720,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("allows a description-only feature so the backend can generate its name", async () => {
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -3843,7 +3783,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -3882,7 +3822,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -3907,7 +3847,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
     expect(onCreateFeatureBuild.mock.calls[0]![0].images).toEqual([
       {
-        filename: thumbnail.getAttribute("alt"),
+        filename: thumbnail.getAttribute("alt")!,
         data: "QUJD",
       },
     ]);
@@ -3952,7 +3892,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreate = mock(async () => true);
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
     const image = new File(["image"], "reference.png", { type: "image/png" });
     const documentFile = new File(["notes"], "notes.txt", { type: "text/plain" });
@@ -3983,7 +3923,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreate = mock(async () => true);
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
     const promptFiles = Array.from(
       { length: 20 },
@@ -4059,7 +3999,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("omits retained prompt-only files when submitting a feature build", async () => {
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -4190,7 +4130,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -4306,7 +4246,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       },
     };
     useConfigStore.setState({ config });
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open
@@ -4340,7 +4280,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
     useConfigStore.setState({ config });
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open
@@ -4397,7 +4337,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   }
 
   test("reuses the request id when an unchanged create is retried", async () => {
-    const onCreateFeatureBuild = mock(async () => false);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
     render(
       <CreateEnvironmentDialog
         open
@@ -4414,15 +4354,15 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     // A response that never arrived is indistinguishable from one that was
     // lost, so the identical retry has to land on the same ticket.
     expect(second.requestId).toBe(first.requestId);
   });
 
   test("pins implicit reviewers and the request id across a late catalog refresh", async () => {
-    const onCreateFeatureBuild = mock(async () => false);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
     render(
       <CreateEnvironmentDialog
         open
@@ -4451,15 +4391,15 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     expect(second.reviewers).toEqual(first.reviewers);
     expect(second.steps).toEqual(first.steps);
     expect(second.requestId).toBe(first.requestId);
   });
 
   test("mints a new request id when the ticket is edited after a failed create", async () => {
-    const onCreateFeatureBuild = mock(async () => false);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
     render(
       <CreateEnvironmentDialog
         open
@@ -4480,14 +4420,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     expect(second.title).toBe("Dark mode toggle v2");
     expect(second.requestId).not.toBe(first.requestId);
   });
 
   test("mints a new request id for the next feature after one succeeds", async () => {
-    const onCreateFeatureBuild = mock(async () => true);
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
     render(
       <CreateEnvironmentDialog
         open
@@ -4508,8 +4448,8 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
 
-    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    const first = onCreateFeatureBuild.mock.calls[0]![0];
+    const second = onCreateFeatureBuild.mock.calls[1]![0];
     expect(second.title).toBe(first.title);
     expect(second.requestId).not.toBe(first.requestId);
   });
@@ -4531,7 +4471,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("offers a model per step behind Advanced, with two reviewers by default", async () => {
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open
@@ -4579,7 +4519,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
-    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
     expect((request.reviewers as unknown[]).length).toBe(2);
     expect((request.steps as Record<string, unknown>).verify).toEqual({
       agent: "claude",
@@ -4602,7 +4542,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       },
     };
     useConfigStore.setState({ config });
-    const onCreateFeatureBuild = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
         open

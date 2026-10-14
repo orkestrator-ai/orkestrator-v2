@@ -60,8 +60,9 @@ describe("useEnvironmentListSync", () => {
   test("does not register its own interval (resource-sync owns the periodic resync)", () => {
     // The hook used to run a second 60s interval on top of resource-sync's own
     // resync timer, refreshing every project twice per tick.
-    const setIntervalMock = mock((() => 1) as unknown as typeof setInterval);
-    globalThis.setInterval = setIntervalMock as typeof setInterval;
+    const setIntervalMock = mock(() => 1);
+    // A recording fake; it cannot model setInterval's DOM/Node overload set.
+    globalThis.setInterval = setIntervalMock as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());

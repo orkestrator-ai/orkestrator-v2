@@ -6,33 +6,31 @@ import {
   type ResourceChange,
   type ResourceManifestKind,
   type ScopedResourceSnapshotBatchEntry,
-} from "@orkestrator/protocol/resource-events";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import type { CommandContext } from "./commands-context.js";
-import {
-  parseStoredDesktopConnections,
   isResourceGeneration,
   isResourceManifestKind,
   isResourceSnapshotRevision,
-  parseUpdateObject,
-  runCommand,
-  isAgentPlatform,
+  type ResourceRevisionMap,
+} from "@orkestrator/protocol/resource-events";
+import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { CommandContext } from "./commands-context.js";
+import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
+import { parseUpdateObject } from "./storage.js";
+import { runCommand } from "./shell.js";
+import {
   fallbackReasoningId,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
   synthesizedOpenCodeAgentModel,
-} from "./commands-dependencies.js";
+} from "@orkestrator/protocol/native-agent";
 import type {
-  ResourceRevisionMap,
   AppConfig,
-  AgentModel,
-  AgentReasoningOption,
   ClaudeModelCatalogEntry,
   CodexModelCatalogEntry,
   OpenCodeModelCatalogEntry,
-} from "./commands-dependencies.js";
+} from "./models.js";
+import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import {
   configureTerminalHistoryRetention,
   pruneTerminalHistoryStorage,
@@ -50,7 +48,7 @@ import {
 } from "./coordinator-runtime.js";
 import { coordinatorProviderAllowed } from "./coordinator-providers.js";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
-import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
+import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   syncDiffStatsTracking,
   asString,

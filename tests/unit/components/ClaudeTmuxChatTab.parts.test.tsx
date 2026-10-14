@@ -1,16 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-import {
-  createClaudeTmuxStateKey,
-  useClaudeTmuxStore,
-  type TmuxQueuedMessage,
-} from "@/stores/claudeTmuxStore";
+import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
@@ -28,7 +24,7 @@ import * as realTmuxClient from "@/lib/claude-tmux-client";
 
 import * as realBackend from "@/lib/backend";
 
-import type { ClaudeMessage as ClaudeMessageType, ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeMessage as ClaudeMessageType, ClaudeModel } from "@/lib/claude-types";
 
 import * as realInteractiveTerminal from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 
@@ -36,21 +32,15 @@ import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 
 import * as realReactVirtuoso from "react-virtuoso";
 
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-
 import { mockReadImage } from "../../mocks/clipboard";
 
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 
-import type { Environment, FileCandidate } from "@/types";
+import type { ClaudeModelCatalogSnapshot, Environment, FileCandidate } from "@/types";
 
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
-import {
-  applyPromptQueueSnapshot,
-  promptQueueKey,
-  resetPromptQueueRevisions,
-} from "@/lib/prompt-queue-persistence";
+import { resetPromptQueueRevisions } from "@/lib/prompt-queue-persistence";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 
@@ -76,9 +66,11 @@ const virtuosoGetStateMock = mock((callback: (snapshot: any) => void) => {
   callback({ ranges: [], scrollTop: 0 });
 });
 
-const getFileTreeMock = mock(async () => []);
+const getFileTreeMock = mock(async (_containerId: string): Promise<realBackend.FileNode[]> => []);
 
-const getLocalFileTreeMock = mock(async () => []);
+const getLocalFileTreeMock = mock(
+  async (_worktreePath: string): Promise<realBackend.FileNode[]> => [],
+);
 
 const writeContainerFileMock = mock(async () => {});
 
@@ -94,13 +86,15 @@ const updateGlobalConfigMock = mock(async (global: any) => ({
   repositories: {},
 }));
 
-const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
-  environmentId,
-  models: useClaudeStore.getState().models,
-  source: "fallback" as const,
-  fetchedAt: "2026-07-25T12:00:00.000Z",
-  stale: false,
-}));
+const getClaudeModelCatalogMock = mock(
+  async (environmentId: string, _forceRefresh?: boolean): Promise<ClaudeModelCatalogSnapshot> => ({
+    environmentId,
+    models: useClaudeStore.getState().models,
+    source: "fallback",
+    fetchedAt: "2026-07-25T12:00:00.000Z",
+    stale: false,
+  }),
+);
 
 const getComposeDraftMock = mock(async () => null);
 
@@ -243,58 +237,40 @@ const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
   );
 });
 
-function publishTmuxQueueSnapshot(
-  sessionKey: string,
-  dispatchError?: {
-    requestId: string;
-    messageId: string;
-    messageFingerprint: string;
-    message: string;
-    failedAt: string;
-  },
-): void {
-  const store = useClaudeTmuxStore.getState();
-  const messages = store.getQueuedMessages(sessionKey);
-  applyPromptQueueSnapshot<TmuxQueuedMessage>(
-    {
-      agent: "claude-tmux",
-      getQueues: () => useClaudeTmuxStore.getState().messageQueue,
-      setQueue: (key, nextMessages) => {
-        const next = new Map(useClaudeTmuxStore.getState().messageQueue);
-        next.set(key, nextMessages);
-        useClaudeTmuxStore.setState({ messageQueue: next });
-      },
-      environmentIdFor: () => "env-1",
-    },
-    {
-      queueKey: promptQueueKey("claude-tmux", sessionKey),
-      environmentId: "env-1",
-      messages,
-      ...(dispatchError ? { dispatchError } : {}),
-      updatedAt: "2026-08-04T10:00:00.000Z",
-      revision: promptQueueRevision++,
-    },
-  );
-}
+// Status payloads carry only the fields each case exercises, plus the
+// observation generation the backend stamps alongside a status.
+type TmuxStatusFixture = Partial<realTmuxClient.TmuxStatus> & { observation_generation?: string };
 
-const startSessionMock = mock(async () => ({
-  tab_id: "tab-1",
-  environment_id: "env-1",
-  session_id: "session-1",
-  tmux_session: "orkestrator-env1-tab1",
-  running: true,
-  transcript_path: null,
-  resumed: false,
-  busy: false,
-  permission_mode: "bypassPermissions",
-  fast_mode: false,
-}));
+const startSessionMock = mock(
+  async (
+    _tabId: string,
+    _environmentId: string,
+    _options?: Parameters<typeof realTmuxClient.startSession>[2],
+  ): Promise<TmuxStatusFixture> => ({
+    tab_id: "tab-1",
+    environment_id: "env-1",
+    session_id: "session-1",
+    tmux_session: "orkestrator-env1-tab1",
+    running: true,
+    transcript_path: null,
+    resumed: false,
+    busy: false,
+    permission_mode: "bypassPermissions",
+    fast_mode: false,
+  }),
+);
 
-const getStatusMock = mock(async () => null);
+const getStatusMock = mock(
+  async (_tabId: string, _environmentId: string): Promise<TmuxStatusFixture | null> => null,
+);
 
-const getTranscriptMock = mock(async () => []);
+const getTranscriptMock = mock(
+  async (_tabId: string, _environmentId: string): Promise<realTmuxClient.TranscriptLine[]> => [],
+);
 
-const getPendingHooksMock = mock(async () => []);
+const getPendingHooksMock = mock(
+  async (_tabId: string, _environmentId: string): Promise<realTmuxClient.TmuxPendingHook[]> => [],
+);
 
 let subscribedHandler: ((event: realTmuxClient.TmuxEvent) => void) | null = null;
 
@@ -307,30 +283,52 @@ const subscribeMock = mock(async (handler: (event: realTmuxClient.TmuxEvent) => 
 
 const stopSessionMock = mock(async () => {});
 
-const interruptSessionMock = mock(async () => {});
+const interruptSessionMock = mock(async (_tabId: string, _environmentId?: string) => {});
 
-const capturePaneMock = mock(async () => "");
+const capturePaneMock = mock(async (_tabId?: string, _environmentId?: string) => "");
 
-const sendKeysMock = mock(async () => {});
+const sendKeysMock = mock(async (_tabId: string, _keys: string[], _environmentId?: string) => {});
 
-const answerSelectionPromptMock = mock(async () => {});
+const answerSelectionPromptMock = mock(
+  async (_tabId: string, _environmentId: string, _input: unknown) => {},
+);
 
-const replyHookMock = mock(async () => {});
+const replyHookMock = mock(
+  async (
+    _tabId: string,
+    _eventKind: realTmuxClient.HookEventKind,
+    _eventId: string,
+    _response: unknown,
+    _environmentId?: string,
+  ) => {},
+);
 
-const submitMock = mock(async () => {});
+const submitMock = mock(async (_tabId: string, _text: string, _environmentId?: string) => {});
 
-const switchModelMock = mock(async () => {});
+const switchModelMock = mock(async (_tabId: string, _model: string, _environmentId?: string) => {});
 
-const switchEffortMock = mock(async () => {});
+const switchEffortMock = mock(
+  async (_tabId: string, _effort: string, _environmentId?: string) => {},
+);
 
-const switchFastModeMock = mock(async () => {});
+const switchFastModeMock = mock(
+  async (_tabId: string, _fastMode: boolean, _environmentId?: string) => {},
+);
 
 const switchPlanModeMock = mock(
-  async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+  async (_tabId: string, planMode: boolean, _environmentId?: string): Promise<string> =>
     planMode ? "plan" : "bypassPermissions",
 );
 
-const answerPreToolUseMock = mock(async () => {});
+const answerPreToolUseMock = mock(
+  async (
+    _tabId: string,
+    _eventId: string,
+    _decision: "approve" | "block",
+    _reason?: string,
+    _environmentId?: string,
+  ) => {},
+);
 
 const listPreviousSessionsMock = mock(async () => [
   {
@@ -948,12 +946,7 @@ describe("ClaudeTmuxChatTab", () => {
       environments: [],
       isLoading: false,
       error: null,
-      workspaceReadyEnvironments: new Set(),
       deletingEnvironments: new Set(),
-      pendingSetupCommands: new Map(),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
-      sessionActivated: new Set(),
     });
     useUIStore.setState({ selectedEnvironmentId: "env-1" });
     seedPane("Run the audit");

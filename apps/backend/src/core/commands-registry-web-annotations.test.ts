@@ -6,7 +6,7 @@ import {
 import {
   fixtureCaptureInput,
   fixtureDestination,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
 import type { WebAnnotationService } from "./web-annotation-service.js";

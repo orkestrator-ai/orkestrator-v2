@@ -520,12 +520,18 @@ describe("prompt dispatch", () => {
     await waitFor(() => state.status !== "running");
     expect(state.messages[1]).toMatchObject({
       role: "assistant",
-      content: "Workingdone",
+      content: "Working",
       parts: [
         { type: "text", content: "Working" },
         { type: "tool-invocation", toolName: "read", toolUseId: "c1" },
-        { type: "text", content: "done" },
       ],
+    });
+    // The model answered after the call's result, so the run's final text is
+    // a later step's, on a row of its own.
+    expect(state.messages[2]).toMatchObject({
+      role: "assistant",
+      content: "done",
+      parts: [{ type: "text", content: "done" }],
     });
   });
 

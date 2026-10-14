@@ -32,12 +32,17 @@ export interface ListenOptions {
 export const NATIVE_EVENT_STREAM_READY_TIMEOUT_MS = 5_000;
 
 /**
- * Internal lifecycle notification emitted whenever the shared backend event
- * stream has established a fresh connection. Consumers must refetch
- * authoritative state because the transport intentionally has no replay
- * buffer and changes may have happened while it was disconnected.
+ * Synthesized by the transport (browser gateway or desktop client), never by
+ * the backend. It fires for the first fresh connection and whenever the
+ * gateway's replay ring could not cover a disconnect, so consumers must
+ * refetch authoritative state when they see it. A reconnect that was fully
+ * replayed does not fire it. Prefer `listenAuthoritative`, which makes the
+ * refetch part of the subscription.
  */
-export const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
+export {
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+} from "@orkestrator/protocol/gateway-event-stream";
 
 export async function listen<T>(
   event: string,

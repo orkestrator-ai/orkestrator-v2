@@ -27,7 +27,7 @@ import type {
   GitHubIssuesSnapshot,
   GitHubIssueStatus,
 } from "@/types/github";
-import type { CodexModel } from "@/lib/codex-client";
+import type { CodexModel } from "@/lib/codex-models";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";

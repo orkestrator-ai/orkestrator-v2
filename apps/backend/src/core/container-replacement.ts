@@ -16,11 +16,10 @@ import {
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RESOURCE_ROLE,
-  dockerOwnerNamespace,
-  runCommand,
-  shutdownClaudeStatePolling,
-  spawnCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand, spawnCommand } from "./shell.js";
+import { shutdownClaudeStatePolling } from "./tmux.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import {

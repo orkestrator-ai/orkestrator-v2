@@ -22,9 +22,6 @@ import { cn } from "@/lib/utils";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -130,34 +127,14 @@ export function DraggableTab({
   );
 
   /*
-   * Agent-assigned session title.
-   *
-   * The neutral projection is the source for every native provider — including
-   * Cursor and Grok, which never had a store of their own. The provider stores
-   * below remain as a fallback for surfaces that still write them (tmux), so a
-   * tab keeps its label if a projection has not been read yet.
+   * Agent-assigned session title. The neutral projection is the source for
+   * every native provider.
    */
-  const projectionSessionTitle = useNativeAgentProjectionStore((state) =>
+  const nativeSessionTitle = useNativeAgentProjectionStore((state) =>
     nativeAgentData
       ? state.projections.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title
       : undefined,
   );
-  const claudeSessionTitle = useClaudeStore((state) => {
-    if (nativeAgentData?.platform !== "claude") return undefined;
-    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
-  });
-  const codexSessionTitle = useCodexStore((state) => {
-    if (nativeAgentData?.platform !== "codex") return undefined;
-    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
-  });
-  const openCodeSessionTitle = useOpenCodeStore((state) => {
-    if (nativeAgentData?.platform !== "opencode") {
-      return undefined;
-    }
-    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
-  });
-  const nativeSessionTitle =
-    projectionSessionTitle ?? claudeSessionTitle ?? codexSessionTitle ?? openCodeSessionTitle;
   const workflowTitle = getWorkflowTabTitle(tab);
 
   // Get build pipeline title for claude-build tabs

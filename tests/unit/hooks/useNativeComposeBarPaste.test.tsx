@@ -3,9 +3,19 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { useRef } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
 import { mockToastError as toastError } from "../../mocks/sonner";
+import type { ClipboardImage } from "../../../apps/web/src/lib/native/clipboard";
+import type {
+  PastedImageAttachment,
+  PendingPastedImage,
+} from "../../../apps/web/src/hooks/useNativeComposeBarPaste";
 
-const mockWriteContainerFile = mock(async () => {});
-const mockWriteLocalFile = mock(async () => "/tmp/worktrees/env/.orkestrator/clipboard/test.png");
+const mockWriteContainerFile = mock(
+  async (_containerId: string, _filePath: string, _base64Data: string) => {},
+);
+const mockWriteLocalFile = mock(
+  async (_worktreePath: string, _filePath: string, _base64Data: string) =>
+    "/tmp/worktrees/env/.orkestrator/clipboard/test.png",
+);
 
 mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
@@ -42,7 +52,7 @@ const originalActiveElementDescriptor = Object.getOwnPropertyDescriptor(
   "activeElement",
 );
 const putImageData = mock(() => {});
-const onAttach = mock(() => {});
+const onAttach = mock((_attachment: PastedImageAttachment) => {});
 const consoleError = mock(() => {});
 
 function createDeferred<T>() {
@@ -107,7 +117,7 @@ async function expectPendingPasteToFinish(
   stage: PendingPasteStage,
   lifecycleChange: LifecycleChange,
 ) {
-  const read = createDeferred<ReturnType<typeof createImage>>();
+  const read = createDeferred<ClipboardImage>();
   const rgba = createDeferred<Uint8Array>();
   const size = createDeferred<{ width: number; height: number }>();
   const write = createDeferred<void>();
@@ -397,7 +407,7 @@ describe("useNativeComposeBarPaste", () => {
 
     await waitFor(() => expect(mockWriteLocalFile).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
-    expect(onAttach.mock.calls[0]?.[0].path).toBe(
+    expect(onAttach.mock.calls[0]![0].path).toBe(
       "/tmp/worktrees/env/.orkestrator/clipboard/second.png",
     );
   });
@@ -748,7 +758,7 @@ describe("useNativeComposeBarPaste", () => {
     });
 
     test("shows the gate the generated filename and nothing that needs the write", async () => {
-      const canAttachImage = mock(() => true);
+      const canAttachImage = mock((_attachment: PendingPastedImage) => true);
 
       const { getByTestId } = render(
         <HookHarness containerId="container-1" canAttachImage={canAttachImage} />,
@@ -758,7 +768,7 @@ describe("useNativeComposeBarPaste", () => {
       document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(canAttachImage).toHaveBeenCalledTimes(1));
-      const seen = canAttachImage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+      const seen = canAttachImage.mock.calls[0]![0];
       // No `path` or `id`: neither exists yet at gate time, so the descriptor
       // must not tempt callers into reading a value the attachment won't carry.
       expect(seen).toEqual({
@@ -767,7 +777,7 @@ describe("useNativeComposeBarPaste", () => {
       });
       // The name the gate saw is the name the attachment ends up with.
       await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
-      expect(onAttach.mock.calls[0]?.[0].name).toBe(seen.name);
+      expect(onAttach.mock.calls[0]![0].name).toBe(seen.name);
     });
 
     test("is not consulted when the caller provides no gate", async () => {

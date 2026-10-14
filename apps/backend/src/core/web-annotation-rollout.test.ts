@@ -6,7 +6,7 @@ import {
   parseWebAnnotationError,
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
-import { fixtureCaptureInput } from "@orkestrator/protocol/web-annotations-fixtures";
+import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
 import { WebAnnotationRollout } from "./web-annotation-rollout.js";

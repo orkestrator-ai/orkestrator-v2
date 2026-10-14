@@ -1,12 +1,12 @@
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
-import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
+import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   hasMeasuredChanges,
   parseMeasuredWorkspaceChange,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   isNativeAgentExecutionPolicy,
@@ -81,11 +81,8 @@ import {
   setGrokInterjectionJournal,
   type GrokInterjectionJournalEntry,
 } from "./grok-interjection.js";
-import {
-  indexActiveSubagentsFromTranscript,
-  boundedModelId,
-  restoreCursorTodosFromMessages,
-} from "./acp-tools.js";
+import { indexActiveSubagentsFromTranscript, restoreCursorTodosFromMessages } from "./acp-tools.js";
+import { boundedModelId } from "./acp-rows.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { restorePersistedCommands } from "./acp-commands.js";
 import {

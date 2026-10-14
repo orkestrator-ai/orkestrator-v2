@@ -1,7 +1,7 @@
 import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
@@ -22,6 +22,7 @@ import type {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
@@ -344,6 +345,27 @@ export interface SessionState {
   /** Durable signal for content/parts trimmed without dropping a whole message. */
   transcriptTruncated: boolean;
   /**
+   * Absolute index of the oldest message changed this turn while a newer one
+   * followed it. Each model response is a row of its own (see `acp-rows.ts`),
+   * so a late tool update can land on a row an incremental reader already
+   * holds; `messageWindow` re-sends from here. Cleared when a prompt starts and
+   * never persisted: a reader after a restart reads the whole window anyway.
+   */
+  mutatedMessageFloor?: number;
+  /**
+   * Tool calls whose rows `boundTranscript` evicted, so a late update cannot
+   * rebuild one as an empty part on the trailing row. Bounded by
+   * `MAX_EVICTED_TOOL_CALL_IDS`, oldest first. Never persisted.
+   */
+  evictedToolCallIds?: Set<string>;
+  /**
+   * Rows changed after a newer row followed them, newest first, for the v2
+   * transcript's `revisedMessages`: a late update can land on a row the live
+   * window no longer holds, and readers only re-read the window. Bounded by
+   * `RecentlyRevisedRows`; never persisted, so a restore starts without it.
+   */
+  revisedRows?: RecentlyRevisedRows;
+  /**
    * Vendor ACP wire (configOptions, Grok models._meta, Cursor modes) lives on
    * `sessionConfig.wire` only. Public HTTP snapshots expose `composer`.
    */
@@ -580,8 +602,8 @@ export const saturatedText = new WeakSet<BridgeMessage | BridgeMessagePart>();
 /**
  * Tool call ids whose parts a trim removed, per message.
  *
- * `applyToolCallUpdate` only searches the message's live parts, so a late update
- * for a trimmed call would otherwise rebuild it from that one patch: an empty
+ * `applyToolCallUpdate` only searches live parts, so a late update for a
+ * trimmed call would otherwise rebuild it from that one patch: an empty
  * `Tool call` part, appended *after* the notice that says those steps were
  * dropped, with none of the title or arguments the original carried.
  */
@@ -681,7 +703,15 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpSer
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const MAX_LINE_BYTES = 4 * 1024 * 1024;
-export const MAX_MESSAGES = 500;
+/**
+ * Rows retained in the rendered transcript.
+ *
+ * A row is one model response, not one turn, and a long turn produces
+ * hundreds of them; 500 would shed the start of a session after a couple of
+ * such turns. Rows are small, so the byte budget stays the binding bound, and
+ * both trim whole rows from the front.
+ */
+export const MAX_MESSAGES = 2_000;
 export const MAX_HISTORY_MESSAGE_IDS = 1_024;
 /**
  * The rendered-transcript display budget. Overridable only *downwards*, and
@@ -697,6 +727,21 @@ export const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
 );
 export const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_PARTS_PER_MESSAGE = 512;
+/**
+ * Parts after which new top-level content opens the next row, well short of
+ * `MAX_PARTS_PER_MESSAGE`. A provider without message ids that issues tool
+ * calls back to back, with no prose between, otherwise grows one row until
+ * the hard cap front-trims it (or fails a structured turn).
+ */
+export const SOFT_PARTS_PER_ROW = 256;
+/**
+ * Nested parts a row keeps for each call that launched them, matching the
+ * Claude bridge's `MAX_SUBAGENT_PARTS_PER_CALL` and the Cursor bridge's
+ * `MAX_CHILD_PARTS_PER_TASK`. The oldest go first; the launch card never does.
+ */
+export const MAX_CHILD_PARTS_PER_CALL = 128;
+/** Evicted tool call ids remembered per session (`SessionState.evictedToolCallIds`). */
+export const MAX_EVICTED_TOOL_CALL_IDS = 1_024;
 /**
  * A provider that attempts to exceed this bound is cancelled and every known
  * child is failed explicitly. Dropping one active child silently could make

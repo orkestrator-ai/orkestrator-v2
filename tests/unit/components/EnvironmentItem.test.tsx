@@ -237,8 +237,6 @@ beforeEach(() => {
     tabStates: {},
     containerStates: {},
     containerStateUpdatedAt: {},
-    containerRefCounts: {},
-    stateChangeCallbacks: new Map(),
   });
   useUIStore.setState({ selectedEnvironmentId: null });
   useEnvironmentStore.setState({ deletingEnvironments: new Set<string>() });
@@ -1191,8 +1189,8 @@ describe("EnvironmentItem mobile actions menu", () => {
     // two buttons named "test-env" and break every role+name lookup for a row.
     const named = screen.getAllByRole("button", { name: /test-env/ });
     expect(named).toHaveLength(1);
-    expect(named[0].getAttribute("role")).toBe("button");
-    expect(named[0].tagName).toBe("DIV");
+    expect(named[0]!.getAttribute("role")).toBe("button");
+    expect(named[0]!.tagName).toBe("DIV");
   });
 
   test("the trigger describes itself with the row name instead of naming itself after it", () => {

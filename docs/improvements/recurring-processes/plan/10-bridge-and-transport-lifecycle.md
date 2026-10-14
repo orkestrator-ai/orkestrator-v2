@@ -143,7 +143,7 @@ measurements exist yet (see Deferrals). Commits:
   joins the running shutdown. They are then removed.
 - The watchdog is the shared `startParentWatchdog`, called with each bridge's
   own 5 s interval (not the 15 s default). It now accepts injected
-  `IntervalTimers`; `packages/protocol/src/fake-intervals.ts` is the test clock.
+  `IntervalTimers`; `packages/protocol/src/testing/fake-intervals.ts` is the test clock.
 - `idle-detach.ts` in each bridge owns the sweep:
   - At most one pending detach per session. Shutdown awaits detaches already
     in flight.

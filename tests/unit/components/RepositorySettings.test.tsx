@@ -139,11 +139,10 @@ afterAll(() => {
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
-import { CODEX_MODELS } from "@/lib/codex-client";
+import { CODEX_MODELS } from "@/lib/codex-models";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
@@ -171,12 +170,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       containerResources: { cpuCores: 2, memoryGb: 4 },
       envFilePatterns: [".env"],
       allowedDomains: [],
-      defaultAgent: "claude",
-      opencodeModel: "opencode/grok-code",
-      codexModel: "gpt-5.3-codex",
-      codexReasoningEffort: "medium",
-      opencodeMode: "terminal",
-      claudeMode: "terminal",
       terminalAppearance: {
         fontFamily: "monospace",
         fontSize: 14,
@@ -196,7 +189,6 @@ function resetStores(config = makeConfig()) {
     error: null,
   });
   useClaudeStore.setState({ models: [] });
-  useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   useCodexStore.setState({ models: CODEX_MODELS });
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
 }
@@ -252,14 +244,6 @@ function getCancelButton() {
 
 function getMockSelects() {
   return screen.getAllByTestId("mock-select") as HTMLSelectElement[];
-}
-
-function getAgentGroup() {
-  return screen.getByRole("radiogroup", { name: "Default Agent" });
-}
-
-function getAgentRadio(name: string | RegExp) {
-  return within(getAgentGroup()).getByRole("radio", { name });
 }
 
 function getSavedConfig() {

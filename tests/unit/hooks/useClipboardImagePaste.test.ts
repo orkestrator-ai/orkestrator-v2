@@ -94,8 +94,8 @@ describe("processLocalClipboardPaste", () => {
 
     expect(result).toBe(true);
     expect(mockWriteLocalFile).toHaveBeenCalledTimes(1);
-    expect(mockWriteLocalFile.mock.calls[0][0]).toBe("/tmp/worktrees/env");
-    expect(mockWriteLocalFile.mock.calls[0][1]).toMatch(
+    expect(mockWriteLocalFile.mock.calls[0]![0]).toBe("/tmp/worktrees/env");
+    expect(mockWriteLocalFile.mock.calls[0]![1]).toMatch(
       /^\.orkestrator\/clipboard\/clipboard-.*\.png$/,
     );
     expect(onImageSaved).toHaveBeenCalledWith("/tmp/worktrees/env/.orkestrator/clipboard/test.png");
@@ -289,7 +289,7 @@ describe("processClipboardPaste", () => {
 
     expect(result).toBe(true);
     expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
-    expect(mockWriteContainerFile.mock.calls[0][0]).toBe("container-123");
+    expect(mockWriteContainerFile.mock.calls[0]![0]).toBe("container-123");
     expect(onImageSaved).toHaveBeenCalledWith("/workspace/.orkestrator/clipboard/test.png");
   });
 

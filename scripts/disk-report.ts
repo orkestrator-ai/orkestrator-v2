@@ -6,8 +6,8 @@ import process from "node:process";
 
 import { parseEnvironmentBranchNamespace } from "../apps/backend/src/core/commands-agent-support";
 import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
-import { defaultRuntimeProfileRoots } from "../packages/protocol/src/runtime-profile-status";
-import { readStorageDatabaseStore } from "../packages/protocol/src/storage-database";
+import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
+import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
 
 /**
  * Read-only inventory of the disk state Orkestrator work leaves behind, with

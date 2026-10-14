@@ -4,24 +4,24 @@
 - **Status:** resolved
 - **Date observed:** 2026-08-17
 - **Tests:**
-  - `Electron backend command registry > rolls back a local rename when push configuration fails` (`tests/unit/electron/commands-registry-environments.test.ts:1667`, assertion at `:1672`)
-  - `Electron backend command registry > advances the stored branch when a local rollback fails and the new branch is the only one left` (`tests/unit/electron/commands-registry-environments.test.ts:1709`, assertion at `:1717`)
-  - `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1408`, assertion at `:1418`)
-  - `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:634`, assertion at `:650`)
-  - `Electron backend command registry > verifies a PR against the trusted project and environment branches` (`tests/unit/electron/commands-registry-pr.test.ts`)
-  - `Electron backend command registry > reports a queued container PR as pending when the captured PR remains open` (`tests/unit/electron/commands-registry-pr.test.ts`)
-  - `Electron backend command registry > keeps the stored branch when a local rollback took effect but reported failure` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
-  - `Electron backend command registry > renames the running container git branch and advances stored branch` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
-  - `Electron backend command registry > advances storage after push configuration and container rollback both fail` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
-  - `Electron backend command registry > keeps the stored branch when a container rollback outcome cannot be established` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > rolls back a local rename when push configuration fails` (`apps/backend/tests/commands-registry-environments.test.ts:1667`, assertion at `:1672`)
+  - `Electron backend command registry > advances the stored branch when a local rollback fails and the new branch is the only one left` (`apps/backend/tests/commands-registry-environments.test.ts:1709`, assertion at `:1717`)
+  - `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`apps/backend/tests/commands-registry-terminal.test.ts:1408`, assertion at `:1418`)
+  - `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`apps/backend/tests/commands-registry-pr.test.ts:634`, assertion at `:650`)
+  - `Electron backend command registry > verifies a PR against the trusted project and environment branches` (`apps/backend/tests/commands-registry-pr.test.ts`)
+  - `Electron backend command registry > reports a queued container PR as pending when the captured PR remains open` (`apps/backend/tests/commands-registry-pr.test.ts`)
+  - `Electron backend command registry > keeps the stored branch when a local rollback took effect but reported failure` (`apps/backend/tests/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > renames the running container git branch and advances stored branch` (`apps/backend/tests/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > advances storage after push configuration and container rollback both fail` (`apps/backend/tests/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > keeps the stored branch when a container rollback outcome cannot be established` (`apps/backend/tests/commands-registry-environments-create.test.ts`)
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`, at `19a1001123b16a89e2a09324a0033ae9b26eb74f` on `agent-jsonl-acp`.
 - **Worker configuration:** The root group ran on its own with `--parallel=4`, not under `scripts/test-all.ts`. No other suite was running against this clone.
 - **Failure:** all four are Bun's generic `this test timed out after 5000ms`, at 5,004.99 ms, 5,004.18 ms, 5,002.52 ms and 5,017.16 ms respectively. Each is accompanied by an "Unhandled error between tests" block showing its fixture shim was already gone when the command finally ran:
   - the two environments cases logged `[ElectronBackend] Failed to rename local git branch: CommandFailedError: Command failed: git -C /var/folders/.../ork-electron-rename-repo-<suffix> branch -m -- old-branch review-oauth-flow`, then a post-timeout `git ... branch --show-current` against a temp repo directory that had already been torn down;
   - the terminal case reported `expect(received).toThrow(expected)`, expected substring `"Malformed"`, received `"Command failed: docker exec container-1 bash -lc ..."` (the full `get_git_status` script), i.e. the fake `docker` shim was no longer on `PATH`;
-  - the PR case reported `Expected promise that resolves / Received promise that rejected` at `commands-registry-pr.test.ts:650`, inside `withFakeGh` (`tests/unit/electron/command-fixtures.ts:1212`).
+  - the PR case reported `Expected promise that resolves / Received promise that rejected` at `commands-registry-pr.test.ts:650`, inside `withFakeGh` (`apps/backend/tests/command-fixtures.ts:1212`).
 - **Suite counts:** 3,724 passed, 1 skipped, 4 failed, 4 errors, 16,581 `expect()` calls; 3,729 tests across 178 files in 361.24 seconds. The four errors are the four "Unhandled error between tests" blocks above. The bridges group and the web, backend, desktop and acp-bridge typechecks all passed in the same validation round.
-- **Isolated rerun:** each owning file passed alone — `bun run test:logged -- --name rerun-env-alone -- bun test tests/unit/electron/commands-registry-environments.test.ts` -> exit 0 in 34.4 s; `... commands-registry-terminal.test.ts` -> exit 0 in 28.7 s; `... commands-registry-pr.test.ts` -> exit 0 in 34.8 s.
+- **Isolated rerun:** each owning file passed alone — `bun run test:logged -- --name rerun-env-alone -- bun test apps/backend/tests/commands-registry-environments.test.ts` -> exit 0 in 34.4 s; `... commands-registry-terminal.test.ts` -> exit 0 in 28.7 s; `... commands-registry-pr.test.ts` -> exit 0 in 34.8 s.
 - **Follow-up:** the identical whole-group command passed on a rerun later the same day, exit 0 in 161.9 s — under half the failing run's 361.24 s. The wall-clock gap is the useful part of that observation: the failing run was roughly 2.2x slower overall, which is consistent with host contention rather than with anything specific to these four cases.
 - **Related:** the "Command-registry Git fixture, deduplicated/admitted container starts, and process-launch coverage" row of the 2026-08-16 resolution sweep. That sweep raised the shared condition deadline to 10 s and gave several cases explicit budgets precisely because the shared helper's deadline had grown past Bun's 5 s default. These four cases wait on real `git`/`docker`/`gh` shims but carry **no** `ASYNC_TEST_BUDGET_MS`, so Bun's 5 s default still wins and reports a generic timeout instead of naming the condition.
 - **Hypothesis:** Same family as that sweep row rather than a new product defect — the change in flight touched only `bridges/acp-bridge`, which none of these files load. Under `--parallel=4` the real `git`/`docker`/`gh` shim processes under `$TMPDIR` are slow enough to exceed the 5 s outer budget; the timeout then interrupts the case mid-flight and its `finally` tears the shim down, which is what produces the trailing "command failed"/"promise rejected" errors *after* the timeout rather than before it. The log also shows repeated "killed 1 dangling process" lines around them. A recurrence should record how long the shim command actually took before any budget is raised: give each of the four an explicit `ASYNC_TEST_BUDGET_MS` so the named condition wins the race and the real latency is visible, rather than widening a tolerance against a generic timeout.
@@ -42,7 +42,7 @@
   trailing "Unhandled error between tests" for the same case. Suite counts:
   `3727 pass, 1 skip, 1 fail, 1 error. Ran 3729 tests across 178 files. [379.1s]`
   — again roughly 2.2x the passing run's wall clock. Isolated rerun
-  `bun run test:logged -- --name root-terminal-isolated -- bun test tests/unit/electron/commands-registry-terminal.test.ts`
+  `bun run test:logged -- --name root-terminal-isolated -- bun test apps/backend/tests/commands-registry-terminal.test.ts`
   → exit 0 in 31.7 s, and the same aggregate command passed at the follow-up
   commit in the same session (79.6 s, exit 0). The change in flight touched only
   the chat transcript, agent cards and background tasks, none of which this path

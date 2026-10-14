@@ -7,7 +7,7 @@ import {
   useOptionalTerminalContext,
   useTerminalContext,
   type CreateTabOptions,
-  type TerminalTabType,
+  type CreatableTabType,
 } from "../../../apps/web/src/contexts/TerminalContext";
 import type { AgentLaunchModeOverride } from "../../../apps/web/src/contexts";
 
@@ -43,7 +43,7 @@ describe("TerminalContext", () => {
     );
 
     const terminalWrite = async (_data: string) => {};
-    const createTab = (_type: TerminalTabType, _options?: CreateTabOptions) => {};
+    const createTab = (_type: CreatableTabType, _options?: CreateTabOptions) => true;
     const selectTab = (_index: number) => {};
     const closeActiveTab = () => {};
     const createFileTab = (_filePath: string) => {};

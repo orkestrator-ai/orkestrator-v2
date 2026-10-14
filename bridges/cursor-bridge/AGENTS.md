@@ -48,7 +48,9 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   removal before it answers success. Idle detach (`detachAgent`) is not a
   close and never sets the marker. A method the bridge does not serve on a
   session it *does* have answers 405, so a real gap cannot hide as a missing
-  session.
+  session. A close a previous process recorded but did not finish (a restored
+  tombstone) is finished by `src/session-tombstones.ts`, and resuming the same
+  conversation waits for it first.
 - `persistBarrier()` is a mandatory publication: it rejects when nothing
   reached disk, and prompt/steer dispatch, create, resume and identity-changing
   attach all wait for it. `schedulePersist()` is best-effort. Both share one
@@ -76,6 +78,42 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   parks against the sequence of the turn it meant to stop and is honoured the
   moment the handle exists; answering it as `cancelled` would tell the user a
   turn stopped while it carried on.
+
+## One row per model step
+
+The translator (`src/translate.ts`) writes each model step to a row of its
+own: a top-level `step-started` (or, failing that, `turn-ended`) ends the
+current assistant row, and the next content opens a new one lazily. A
+sub-agent's steps never split rows; its output stays on the row holding its
+launch card, and the per-child bounds apply to that row. Never fold a whole
+turn back into one row: a turn runs for hours, and a multi-megabyte row fits
+no transcript window, so readers can only show a trimmed copy and lose it once
+a newer row pushes it out of the live tail. A late result, shell output,
+progress line, image or compaction summary patches the row holding its call,
+found across the current turn's rows (`beginAssistantTurn` and the turn tags
+in `src/transcript.ts`), never a second card on the newest one. Mutating an
+older row must still bump `revision`, which is the transcript token readers
+compare. History hydration (`appendHistoricTurn`) has no step frames and
+starts a row wherever prose or reasoning follows a tool call, so a reload
+matches the live split; it marks `planReview` from the `create_plan` row to the
+end of that turn, because the tab offers Approve and Build only while the
+newest assistant row is marked.
+
+Those lookups must stay constant-time on a turn of thousands of rows: the
+turn's call index (`indexToolCall`, capped at `MAX_INDEXED_CALLS`), row
+ordinals and the cached turn start replace scans of the turn, and a scan
+remains only for what the index cannot answer. When the run's terminal text
+completes streamed prose, it extends the row holding that prose; any other
+terminal text is the final model call's, on a row of its own unless the row
+being written still ends in prose or reasoning. After `turn-ended` has
+closed that row, missing terminal prose opens a separate answer row (including
+for a reasoning-only final step); prefix completion still extends its prose row.
+
+Every in-place row change goes through `rowChanged` / `noteRowRevised`
+(`src/transcript.ts`), which note the row for `revisedMessageIds`, so a late
+update to a row outside the live window reaches readers through
+`revisedMessages`. `startTranscriptEpoch` (rewind, rebuilt history) clears the
+notes; a new change site must use the helper, not bump `revision` alone.
 
 ## Background sub-agents
 

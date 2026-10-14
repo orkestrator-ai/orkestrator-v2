@@ -24,7 +24,7 @@ import {
   fixtureCaptureInput,
   fixtureRequestsByState,
   fixtureTargets,
-} from "./web-annotations-fixtures.js";
+} from "./testing/web-annotations-fixtures.js";
 
 describe("web annotation request lifecycle", () => {
   test("identity transitions are idempotent for every state", () => {

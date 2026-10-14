@@ -1,7 +1,7 @@
 import {
   createBridgeDiagnostics,
   type CancellationReason,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 /**
  * Running one turn.
  *
@@ -431,6 +431,7 @@ function abandonStartup(
         state.dispatching = false;
         denyAllApprovals(state, "The turn ended before this tool call was approved.");
         state.currentAssistantMessageId = undefined;
+        state.turnOpenedAssistantRow = undefined;
         state.openTextParts.clear();
         state.toolInputs.clear();
         state.currentTurnUsage = undefined;

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DesignLibraryQuery } from "@orkestrator/protocol/design-operations";
-import { DesignClientError } from "./design-client";
+import { DesignClientError } from "@/lib/design-client";
 import type { DesignLibraryItem, DesignLibraryResult } from "./design-launch";
 import type { DesignOpenChoices } from "./design-open";
 import { DesignLibrary, type DesignLibraryClient } from "./DesignLibrary";

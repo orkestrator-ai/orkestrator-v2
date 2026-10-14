@@ -1,4 +1,4 @@
-import type { ClaudeBackgroundTask, ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeBackgroundTask, ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
@@ -621,7 +621,6 @@ function isMergeableToolPart(part: NativeMessagePart): boolean {
 
 function isToolOnlyAssistantMessage(message: NativeMessage): boolean {
   if (message.role !== "assistant") return false;
-  if (message.planReview === true) return false;
   if (message.content.trim().length > 0) return false;
   if (message.parts.length === 0) return false;
   if (!messageHasVisibleContent(message)) return false;
@@ -712,7 +711,14 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
       isToolOnlyAssistantMessage(message) &&
       isSameMinuteStamp(previous.createdAt, message.createdAt) &&
       previous.modelId === message.modelId &&
-      previous.turnId === message.turnId
+      previous.turnId === message.turnId &&
+      /*
+       * Every step row of a plan-mode turn carries the flag, so steps of one
+       * plan turn still merge. A flagged row never merges into an unflagged
+       * one: the merged row keeps the first row's flag, and the plan-review
+       * controls read it off the latest assistant row.
+       */
+      (previous.planReview === true) === (message.planReview === true)
     ) {
       merged[merged.length - 1] = mergeAdjacentToolMessages(previous, message);
       continue;
@@ -720,14 +726,6 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
     merged.push(message);
   }
   return merged;
-}
-
-export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
-  return normalizeNativeMessage(message);
-}
-
-export function normalizeCodexNativeMessage(message: NativeMessage): NativeMessage {
-  return normalizeNativeMessage(message);
 }
 
 /** Normalize ACP messages for Cursor and Grok below the shared tab boundary. */

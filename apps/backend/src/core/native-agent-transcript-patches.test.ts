@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { applyNativeAgentTranscriptDelta } from "@orkestrator/protocol/native-agent";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;

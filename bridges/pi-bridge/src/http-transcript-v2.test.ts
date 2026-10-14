@@ -14,7 +14,7 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import type { BridgeMessage, BridgeToolPart, SessionState } from "./state.js";
 
 // `config.ts` reads its environment once, at import; load the router after.
@@ -30,6 +30,7 @@ const { newSessionState, resetRenderedHistory } = await import("./agent-session.
 const { clientSessionKeys, sessions } = await import("./state.js");
 const { loadPersistedState, persistBarrier } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
+const { applyCommandChanges, applySessionEvent } = await import("./translate.js");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -161,6 +162,77 @@ describe("Pi v2 transcript summaries", () => {
       status: "unchanged",
       token: v1.token,
     });
+  });
+});
+
+describe("Pi revised rows before the live window", () => {
+  test("a late change to a row outside the window travels with the next snapshot", async () => {
+    const state = sessionWith([]);
+    state.status = "running";
+    const response = (text: string) => {
+      applySessionEvent(state, { type: "message_start", message: { role: "assistant" } });
+      applySessionEvent(state, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: text },
+      });
+      applySessionEvent(state, { type: "message_end", message: { role: "assistant" } });
+    };
+    response("Running it.");
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "slow-1",
+      toolName: "bash",
+      args: { command: "sleep 1" },
+    });
+    const early = state.messages[0]!;
+    // Later responses push the call's row out of a small window.
+    for (let index = 0; index < 10; index += 1) response(`response ${index}`);
+    const window = { limit: "4", version: "2" };
+    const before = await read(transcript(state, window));
+    expect(before.value.startIndex).toBeGreaterThan(0);
+    expect(before.value.messages.map((m: BridgeMessage) => m.id)).not.toContain(early.id);
+    const revisedCall = (body: Body) =>
+      body.value.revisedMessages
+        ?.find((m: BridgeMessage) => m.id === early.id)
+        ?.parts.find((part: { type: string }) => part.type === "tool-invocation");
+    // A row that only aged out is not revised: it changed while it was newest.
+    expect(revisedCall(before)).toBeUndefined();
+
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "slow-1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "done" }] },
+      isError: false,
+    });
+    const after = await read(transcript(state, { ...window, knownToken: before.token }));
+    expect(after.status).toBe("snapshot");
+    // Newest change first.
+    expect(after.value.revisedMessages[0].id).toBe(early.id);
+    expect(revisedCall(after)).toMatchObject({ toolUseId: "slow-1", toolState: "success" });
+
+    // A measured command change is a revision too.
+    const change = {
+      additions: 2,
+      deletions: 0,
+      files: [{ path: "a.ts", additions: 2, deletions: 0 }],
+    };
+    applyCommandChanges(state, "slow-1", change);
+    const measured = await read(transcript(state, { ...window, knownToken: after.token }));
+    expect(measured.status).toBe("snapshot");
+    expect(revisedCall(measured)).toMatchObject({ commandChanges: change });
+
+    // A replaced history names none of the rows noted against the old one,
+    // even when it renders a row with the same id.
+    resetRenderedHistory(state);
+    state.messages.push(
+      early,
+      ...Array.from({ length: 10 }, (_, index) => textMessage(`b${index}`)),
+    );
+    state.revision += 1;
+    const replaced = await read(transcript(state, window));
+    expect(replaced.value.startIndex).toBeGreaterThan(0);
+    expect(replaced.value.revisedMessages).toBeUndefined();
   });
 });
 

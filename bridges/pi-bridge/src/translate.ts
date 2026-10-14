@@ -14,7 +14,10 @@
  */
 import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { encodedJsonBytes, jsonStringContentBytes } from "@orkestrator/protocol/transcript-budget";
+import {
+  encodedJsonBytes,
+  jsonStringContentBytes,
+} from "@orkestrator/protocol/node/transcript-budget";
 import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { noteCommandOutput } from "./commands.js";
@@ -25,6 +28,7 @@ import {
   boundText,
   boundTranscriptDuringStreaming,
   chargeTranscript,
+  rowChanged,
 } from "./transcript.js";
 import {
   isObject,
@@ -127,6 +131,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
   switch (event.type) {
     case "message_start":
       if (!turnFramesWelcome(state)) break;
+      applyResponseBoundary(state, event.message);
       applyCommandOutput(state, event.message);
       applySteerDelivery(state, event.message);
       break;
@@ -211,6 +216,24 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
 }
 
 /**
+ * Close the current row when Pi starts a new model response.
+ *
+ * One row per model response, never one per turn. A turn can run for hours
+ * and thousands of parts; folded into a single row it grew past every
+ * transcript window, so readers could show only a front-trimmed copy and lost
+ * its start for good once newer rows pushed it out of the live tail. Pi emits
+ * a response's tool executions after its `message_end` and before the next
+ * response's `message_start`, so tool cards stay on the row of the response
+ * that requested them. The next row is opened lazily, so a response that
+ * fails before producing anything leaves no empty bubble.
+ */
+function applyResponseBoundary(state: SessionState, value: unknown): void {
+  if (!isObject(value) || value.role !== "assistant") return;
+  state.currentAssistantMessageId = undefined;
+  state.openTextParts.clear();
+}
+
+/**
  * Pi emits the queued steering instruction as an ordinary user message at the
  * safe-point where it joins the run. That event, not the HTTP request, owns the
  * permanent transcript row and the positive reconciliation record.
@@ -248,7 +271,7 @@ function applySteerDelivery(state: SessionState, value: unknown): void {
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /**
@@ -344,7 +367,7 @@ function applyTextDelta(state: SessionState, text: string, kind: "text" | "think
     message.content = appendBounded(message, message.content, text);
     chargeAppended(state, before, message.content);
   }
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /**
@@ -396,18 +419,26 @@ function applyToolExecution(
     isError: event.isError === true,
   });
 
-  const message = currentAssistantMessage(state);
+  // Pi 0.99: a call another tool made through `ctx.executeTool()` carries that
+  // tool's call id. The id is the whole link, so it is stamped once and kept.
+  const parentToolCallId =
+    nonBlank(event.parentToolCallId) && event.parentToolCallId !== toolCallId
+      ? event.parentToolCallId
+      : undefined;
+  const message = toolCallRow(
+    state,
+    event.type === "tool_execution_start",
+    toolCallId,
+    parentToolCallId,
+  );
   // A tool card is a discrete block, so the prose around it must not keep
   // growing behind it — otherwise text produced after the call is folded into
   // the paragraph that preceded it and appears above the card that caused it.
-  closeTextParts(state);
+  // A card on an earlier row interrupts nothing the current row is writing.
+  if (message.id === state.currentAssistantMessageId) closeTextParts(state);
   const part = upsertToolPart(state, message, toolCallId);
-
-  // Pi 0.99: a call another tool made through `ctx.executeTool()` carries that
-  // tool's call id. The id is the whole link, so it is stamped once and kept.
-  if (nonBlank(event.parentToolCallId) && event.parentToolCallId !== toolCallId) {
-    part.parentTaskUseId = event.parentToolCallId;
-  }
+  rememberToolCallRow(state, toolCallId, message.id);
+  if (parentToolCallId) part.parentTaskUseId = parentToolCallId;
   part.toolName = rendered.toolName;
   part.content = rendered.toolTitle
     ? boundText(rendered.toolTitle, MAX_TOOL_TITLE_BYTES)
@@ -446,7 +477,7 @@ function applyToolExecution(
   // repeatedly as it streams, and a duplicated screenshot in the transcript is
   // worse than one that appears a moment late.
   if (phase === "settled") appendToolResultImages(state, message, toolCallId, rendered.images);
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /** Measured changes held for cards not rendered yet; see `pendingCommandChanges`. */
@@ -468,11 +499,12 @@ export function applyCommandChanges(
   change: MeasuredWorkspaceChange,
 ): void {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    for (const part of state.messages[index]!.parts) {
+    const row = state.messages[index]!;
+    for (const part of row.parts) {
       if (part.type !== "tool-invocation" || part.toolUseId !== toolCallId) continue;
       part.commandChanges = change;
       chargeToolPart(state, part);
-      state.revision += 1;
+      rowChanged(state, row);
       return;
     }
   }
@@ -592,7 +624,7 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
     part.toolState = "failure";
     part.toolError = boundText(event.errorMessage, MAX_TOOL_TITLE_BYTES);
     chargeToolPart(state, part);
-    state.revision += 1;
+    rowChanged(state, message);
     return;
   }
 
@@ -618,7 +650,7 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
   };
   message.parts.push(part);
   chargeNewEntry(state, part);
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /** Open a retry row for the request that just failed. */
@@ -640,7 +672,7 @@ function applyRetryStart(state: SessionState, event: JsonObject): void {
   };
   message.parts.push(part);
   chargeNewEntry(state, part);
-  state.revision += 1;
+  rowChanged(state, message);
 }
 
 /**
@@ -652,7 +684,8 @@ function applyRetryStart(state: SessionState, event: JsonObject): void {
  */
 function applyRetryEnd(state: SessionState, event: JsonObject): void {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    const parts = state.messages[index]?.parts ?? [];
+    const row = state.messages[index]!;
+    const parts = row.parts;
     for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
       const part = parts[partIndex];
       if (part?.type !== "retry" || part.toolState !== "pending") continue;
@@ -660,7 +693,7 @@ function applyRetryEnd(state: SessionState, event: JsonObject): void {
       if (event.success !== true && nonBlank(event.finalError)) {
         part.content = boundText(event.finalError.trim(), MAX_TOOL_TITLE_BYTES);
       }
-      state.revision += 1;
+      rowChanged(state, row);
       return;
     }
   }
@@ -682,11 +715,11 @@ function applyThinkingLevel(state: SessionState, level: unknown): void {
 }
 
 /**
- * The assistant message this turn is writing into, created on first use.
+ * The row of the model response being written, created on first use.
  *
- * Deliberately lazy: a turn that produces nothing but tool calls still needs a
- * carrier, but a turn that fails before producing anything should not leave an
- * empty bubble in the transcript.
+ * Deliberately lazy: a response that produces nothing but tool calls still
+ * needs a carrier, but one that fails before producing anything should not
+ * leave an empty bubble in the transcript.
  */
 export function currentAssistantMessage(state: SessionState): BridgeMessage {
   const last = state.messages[state.messages.length - 1];
@@ -701,6 +734,7 @@ export function currentAssistantMessage(state: SessionState): BridgeMessage {
   };
   state.messages.push(message);
   state.currentAssistantMessageId = message.id;
+  state.turnOpenedAssistantRow = true;
   // Blocks belong to the message that opened them.
   state.openTextParts.clear();
   chargeNewEntry(state, message);
@@ -736,6 +770,61 @@ function openTextPart(
 function closeTextParts(state: SessionState): void {
   state.openTextParts.delete("text");
   state.openTextParts.delete("thinking");
+}
+
+/**
+ * Tool calls whose row is remembered. Far beyond one response's calls; past
+ * it the oldest entry goes, and a frame for that call lands on the current
+ * row, as every frame did before rows were split.
+ */
+const MAX_TRACKED_TOOL_CALL_ROWS = 1_024;
+
+/**
+ * The row a tool call's frame belongs to.
+ *
+ * An update or result goes to the row already holding the call, so a late
+ * frame never opens a second card. A start never does: it is a call's first
+ * frame, and a provider that reuses call ids across responses must get a new
+ * card on the current row, not have an old one rewritten. Otherwise a nested
+ * call goes to the row holding its parent, so the child renders beside it,
+ * and anything else to the current response's row.
+ */
+function toolCallRow(
+  state: SessionState,
+  starting: boolean,
+  toolCallId: string,
+  parentToolCallId: string | undefined,
+): BridgeMessage {
+  return (
+    (starting ? undefined : rowHoldingToolCall(state, toolCallId)) ??
+    (parentToolCallId ? rowHoldingToolCall(state, parentToolCallId) : undefined) ??
+    currentAssistantMessage(state)
+  );
+}
+
+function rowHoldingToolCall(state: SessionState, toolCallId: string): BridgeMessage | undefined {
+  const messageId = state.toolCallRows?.get(toolCallId);
+  if (!messageId) return undefined;
+  // Newest first: the row is almost always the current one or close to it.
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index]!;
+    if (message.id === messageId) return message;
+  }
+  // Trimmed from the transcript; its card is gone with it.
+  state.toolCallRows?.delete(toolCallId);
+  return undefined;
+}
+
+function rememberToolCallRow(state: SessionState, toolCallId: string, messageId: string): void {
+  const rows = (state.toolCallRows ??= new Map());
+  if (rows.get(toolCallId) === messageId) return;
+  // Re-inserted, so eviction drops the call that was started longest ago.
+  rows.delete(toolCallId);
+  if (rows.size >= MAX_TRACKED_TOOL_CALL_ROWS) {
+    const oldest = rows.keys().next();
+    if (!oldest.done) rows.delete(oldest.value);
+  }
+  rows.set(toolCallId, messageId);
 }
 
 function upsertToolPart(

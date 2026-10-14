@@ -108,6 +108,8 @@ export function mergeMultiReviewReviewerTranscript(
     truncated: _truncated,
     historyCursor: _historyCursor,
     historyEpoch: _historyEpoch,
+    revisedMessages: _revisedMessages,
+    historyReconciliationToken: _historyReconciliationToken,
     ...rest
   } = next;
   return {
@@ -116,6 +118,9 @@ export function mergeMultiReviewReviewerTranscript(
     ...(previous?.truncated ? { truncated: true } : {}),
     ...(previous?.historyCursor ? { historyCursor: previous.historyCursor } : {}),
     ...(previous?.historyEpoch ? { historyEpoch: previous.historyEpoch } : {}),
+    ...(previous?.historyReconciliationToken
+      ? { historyReconciliationToken: previous.historyReconciliationToken }
+      : {}),
   };
 }
 
@@ -127,6 +132,8 @@ function reviewerStateKey(snapshot: MultiReviewReviewerTranscript): string {
     truncated: _truncated,
     historyCursor: _historyCursor,
     historyEpoch: _historyEpoch,
+    revisedMessages: _revisedMessages,
+    historyReconciliationToken: _historyReconciliationToken,
     ...state
   } = snapshot;
   // Both sides are backend answers of the same shape, so key order matches.
@@ -158,6 +165,7 @@ export interface ReviewerHistoryState {
   cursor?: string;
   /** History epoch `earlier` and `cursor` belong to. */
   epoch?: string;
+  reconciliationToken?: string;
   /** Why no cursor is offered after following one. */
   end?: "complete" | "unavailable" | "retained-limit";
   /** Shown once when loaded pages had to be dropped. */
@@ -202,6 +210,9 @@ export function mergeReviewerHistory(
     earlier: [],
     ...(next.historyCursor ? { cursor: next.historyCursor } : {}),
     ...(next.historyEpoch ? { epoch: next.historyEpoch } : {}),
+    ...(next.historyReconciliationToken
+      ? { reconciliationToken: next.historyReconciliationToken }
+      : {}),
     ...(notice ? { notice } : {}),
   });
   if (history.earlier.length === 0 && !pageInFlight) {
@@ -209,6 +220,7 @@ export function mergeReviewerHistory(
     const same =
       history.cursor === next.historyCursor &&
       history.epoch === next.historyEpoch &&
+      history.reconciliationToken === next.historyReconciliationToken &&
       history.end === undefined;
     return { history: same ? history : adopt(history.notice), reset: false };
   }
@@ -216,14 +228,23 @@ export function mergeReviewerHistory(
   const combined = [...history.earlier, ...previousTail];
   const overlap =
     firstId === undefined ? -1 : combined.findIndex((message) => messageId(message) === firstId);
-  if (next.historyEpoch !== history.epoch || overlap < 0) {
+  if (
+    next.historyEpoch !== history.epoch ||
+    history.reconciliationToken !== next.historyReconciliationToken ||
+    overlap < 0
+  ) {
     return {
       history: adopt("Earlier messages were reloaded because the reviewer's history moved on."),
       reset: true,
     };
   }
-  const earlier = combined.slice(0, overlap);
-  if (earlier.length === history.earlier.length) return { history, reset: false };
+  const earlier = withRevisedRows(combined.slice(0, overlap), next.revisedMessages);
+  if (
+    earlier.length === history.earlier.length &&
+    earlier.every((message, index) => message === history.earlier[index])
+  ) {
+    return { history, reset: false };
+  }
   if (earlier.length > MAX_REVIEWER_EARLIER_MESSAGES) {
     // Dropping the oldest rows leaves nothing a cursor could continue from.
     return {
@@ -236,6 +257,30 @@ export function mergeReviewerHistory(
     };
   }
   return { history: { ...history, earlier }, reset: false };
+}
+
+/**
+ * Held rows with the backend's revised copies laid over them. A row is one
+ * model response, so a late tool result can land on a row the tail no longer
+ * carries; the copy this tab holds is replaced, and a revised row it does not
+ * hold is never inserted. Returns `rows` itself when nothing changed.
+ */
+function withRevisedRows(rows: unknown[], revised: readonly unknown[] | undefined): unknown[] {
+  if (!revised?.length) return rows;
+  const byId = new Map<string, unknown>();
+  for (const message of revised) {
+    const id = messageId(message);
+    if (id !== undefined && !byId.has(id)) byId.set(id, message);
+  }
+  let changed = false;
+  const next = rows.map((message) => {
+    const id = messageId(message);
+    const replacement = id === undefined ? undefined : byId.get(id);
+    if (replacement === undefined || replacement === message) return message;
+    changed = true;
+    return replacement;
+  });
+  return changed ? next : rows;
 }
 
 /**

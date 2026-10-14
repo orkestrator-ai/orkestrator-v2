@@ -43,19 +43,17 @@ import type {
   DockerAvailability,
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
+import { CommandFailedError, commandExists, runCommand } from "./shell.js";
 import {
-  CommandFailedError,
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_ENVIRONMENT_NAME,
   DOCKER_LABEL_OWNER,
-  dockerOwnerNamespace,
-  createEnvironment,
-  commandExists,
-  runCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { createEnvironment } from "./storage.js";
 import {
   asString,
   asOptionalString,

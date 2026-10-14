@@ -13,7 +13,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-base.ts` | `StorageService` primitives: `loadJson`/`saveJson` routing, `updateStore`, `serializeMutation`, `atomically` |
-| `packages/protocol/src/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
+| `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
 | `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
 
 ## What stays a file

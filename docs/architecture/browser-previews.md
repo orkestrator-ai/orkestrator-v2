@@ -204,7 +204,7 @@ token also revokes all preview access.
 5. Re-enable when ready. Clients get fresh access to the same `serviceId`.
    Nothing that was in flight is replayed.
 
-`tests/unit/electron/gateway-preview.test.ts` ("rollback drill") runs this
+`apps/backend/tests/gateway-preview.test.ts` ("rollback drill") runs this
 sequence against a real gateway.
 
 **Schema downgrade.** Older clients load saved service tabs

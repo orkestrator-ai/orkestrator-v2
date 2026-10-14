@@ -141,7 +141,7 @@ function publicTurnError(state: SessionState): string | undefined {
  * canonical nonnegative safe decimal, anything else is `null` (the retained
  * window). See `parseTranscriptFromIndex` in the protocol package.
  */
-export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/transcript-window";
+export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/node/transcript-window";
 
 /**
  * Liveness for the backend's activity sweep.

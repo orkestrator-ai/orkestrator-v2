@@ -10,22 +10,14 @@ import {
   BUILD_PIPELINE_AGENTS,
   LAUNCH_RETRY_MS,
   MAX_QUEUE_DISPATCH_ATTEMPTS,
-  OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
-  OPENCODE_RECOVERY_MAX_CANDIDATES,
-  OPENCODE_RECOVERY_RETRY_BASE_MS,
-  OPENCODE_RECOVERY_RETRY_CEILING_MS,
   PromptRejectedError,
   QUEUE_RETRY_BASE_MS,
   QUEUE_RETRY_CEILING_MS,
   aggregateAgentActivityState,
   assertValidPromptAttachments,
-  inspectOpenCodeIncompleteTurn,
-  isAgentTurnEndTransition,
   isEnvironmentReadyForAgents,
   nativeAgentSessionStorageKey,
   nonBlank,
-  openCodeIncompleteTurnRequestId,
-  openCodeTurnRecoveryPrompt,
   readProviderStatus,
   resolveAgentPlatformSettings,
   resolveStartupLaunchFromSettings,
@@ -55,7 +47,7 @@ type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
-type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
+type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
@@ -74,7 +66,6 @@ type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
-type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
@@ -102,7 +93,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentToolDetails,
   JsonSchema,
   Environment,
-  OpenCodeIncompleteTurnNotice,
+  IncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
   StorageService,
@@ -121,7 +112,6 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentActivityTransition,
   NativeAgentServiceOptions,
   AgentInteractionObservation,
-  OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
 
@@ -471,8 +461,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           this.activityRetryAt.delete(groupKey);
           this.observations.noteGroupObserved(groupKey, {
             settledIdle:
-              settledIdle &&
-              !group.some((session) => this.openCodeRecoveryCandidates.has(session.key)),
+              settledIdle && !group.some((session) => this.turnRecovery.hasCandidate(session.key)),
             wakeupQualified: this.observationWakeupQualified(first.agent, provider),
           });
         } catch (error) {
@@ -594,7 +583,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       return (
         observed?.providerSessionId === session.providerSessionId &&
         observed.state === "idle" &&
-        !this.openCodeRecoveryCandidates.has(session.key)
+        !this.turnRecovery.hasCandidate(session.key)
       );
     });
     if (!retained) return false;
@@ -765,24 +754,8 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         logicalSessionKey: session.logicalSessionKey,
       });
     }
-    /*
-     * First-idle inspection is the restart/reconnect snapshot path. Later
-     * candidates originate from exact turn-end edges, while a retained
-     * candidate is retried after transient provider or storage failures.
-     * Unattended workflows own their own turn lifecycle and remain excluded.
-     */
-    const openCodeInteractive =
-      session.agent === "opencode" &&
-      session.origin !== "build-pipeline" &&
-      session.origin !== "looped-review";
-    if (!openCodeInteractive || state !== "idle") {
-      this.openCodeRecoveryCandidates.delete(session.key);
-    } else {
-      if (previous === undefined || isAgentTurnEndTransition({ previousState: previous, state })) {
-        this.markOpenCodeRecoveryCandidate(session);
-      }
-      this.scheduleOpenCodeIncompleteTurnRecovery(session);
-    }
+    // Incomplete-turn recovery keys its candidates on these applied edges.
+    this.turnRecovery.noteActivity(session, state, previous);
     if (owner === "environment") {
       const sources = activityByEnvironment.get(session.environmentId) ?? {};
       sources[session.key] = {
@@ -823,251 +796,6 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         () => worker(),
       ),
     );
-  }
-
-  protected markOpenCodeRecoveryCandidate(session: PersistedNativeAgentSession): void {
-    const current = this.openCodeRecoveryCandidates.get(session.key);
-    if (current?.providerSessionId === session.providerSessionId) return;
-    if (!current && this.openCodeRecoveryCandidates.size >= OPENCODE_RECOVERY_MAX_CANDIDATES) {
-      const oldest = this.openCodeRecoveryCandidates.keys().next().value;
-      if (oldest) this.openCodeRecoveryCandidates.delete(oldest);
-    }
-    this.openCodeRecoveryCandidates.set(session.key, {
-      providerSessionId: session.providerSessionId,
-      attempts: 0,
-      retryAt: 0,
-    });
-  }
-
-  protected hasOpenCodeManualPromptClaim(session: PersistedNativeAgentSession): boolean {
-    const claim = this.openCodeManualPromptClaims.get(session.key);
-    if (!claim) return false;
-    if (claim.providerSessionId !== session.providerSessionId || claim.expiresAt <= this.now()) {
-      this.openCodeManualPromptClaims.delete(session.key);
-      return false;
-    }
-    return true;
-  }
-
-  protected hasNewerOpenCodeActivity(session: PersistedNativeAgentSession): boolean {
-    const observed = this.observedSessionActivity.get(session.key);
-    return observed?.providerSessionId === session.providerSessionId && observed.state !== "idle";
-  }
-
-  /** Coalesce concurrent idle observations onto one recovery pass per session. */
-  protected scheduleOpenCodeIncompleteTurnRecovery(session: PersistedNativeAgentSession): void {
-    const candidate = this.openCodeRecoveryCandidates.get(session.key);
-    if (
-      this.stopped ||
-      this.openCodeRecoveryTasks.has(session.key) ||
-      candidate?.providerSessionId !== session.providerSessionId ||
-      candidate.retryAt > this.now()
-    )
-      return;
-    const task = this.recoverOpenCodeIncompleteTurnOnce(session)
-      .then((result) => {
-        const latest = this.openCodeRecoveryCandidates.get(session.key);
-        if (latest?.providerSessionId !== session.providerSessionId) return;
-        if (result === "complete") {
-          this.openCodeRecoveryCandidates.delete(session.key);
-          return;
-        }
-        latest.retryAt =
-          result === "retry" ? this.now() + OPENCODE_RECOVERY_RETRY_BASE_MS : result.retryAt;
-      })
-      .catch((error) => {
-        const latest = this.openCodeRecoveryCandidates.get(session.key);
-        if (latest?.providerSessionId === session.providerSessionId) {
-          latest.attempts += 1;
-          latest.retryAt =
-            this.now() +
-            Math.min(
-              OPENCODE_RECOVERY_RETRY_CEILING_MS,
-              OPENCODE_RECOVERY_RETRY_BASE_MS * 2 ** Math.min(latest.attempts - 1, 8),
-            );
-        }
-        console.warn(
-          `[native-agent] OpenCode incomplete-turn recovery for ${session.environmentId} failed:`,
-          error instanceof Error ? error.name : "unknown error",
-        );
-      })
-      .finally(() => {
-        if (this.openCodeRecoveryTasks.get(session.key) === task) {
-          this.openCodeRecoveryTasks.delete(session.key);
-        }
-      });
-    this.openCodeRecoveryTasks.set(session.key, task);
-  }
-
-  /**
-   * Continue an OpenCode turn that ended incomplete, at most once per stall.
-   *
-   * The authoritative transcript is both the detector and the loop bound: the
-   * stalled shape (`unknown` finish, reasoning only, no error, no pending
-   * tools) must be present, and the fixed continuation prompt as the latest
-   * user turn means recovery already ran and stalled again — that turn is left
-   * for the user. A turn ended by a retryable provider error is continued the
-   * same way, after a backoff and within a small retry budget. Dispatch itself
-   * goes through the durable per-request-id journal, so a re-observed edge or
-   * a backend restart cannot double-send.
-   */
-  protected async recoverOpenCodeIncompleteTurnOnce(
-    session: PersistedNativeAgentSession,
-  ): Promise<"complete" | "retry" | { retryAt: number }> {
-    if (this.stopped) return "complete";
-    const environment = await this.storage.getEnvironment(session.environmentId);
-    if (
-      !environment ||
-      environment.deletionRequestedAt ||
-      !isEnvironmentReadyForAgents(environment)
-    ) {
-      return "complete";
-    }
-    // The mapping may have been replaced since the sweep observed the edge; a
-    // continuation must never reach a different provider session.
-    const durable = await this.storage.getNativeAgentSession(session.key);
-    if (durable?.providerSessionId !== session.providerSessionId) return "complete";
-
-    const provider = await this.observeProvider({
-      environmentId: session.environmentId,
-      agent: session.agent,
-      logicalSessionKey: session.logicalSessionKey,
-    });
-    if (!provider) return "retry";
-    if (this.hasOpenCodeManualPromptClaim(session)) return "retry";
-    const initialMessages = await provider.messages(session.providerSessionId, {
-      limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
-    });
-    if (this.stopped) return "complete";
-    const initialRecovery = inspectOpenCodeIncompleteTurn(initialMessages, {
-      historyComplete: initialMessages.length < OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
-      now: this.now(),
-    });
-    if (!initialRecovery) return "complete";
-    if (
-      initialRecovery.action === "continue" &&
-      initialRecovery.notBefore !== undefined &&
-      initialRecovery.notBefore > this.now()
-    ) {
-      return { retryAt: initialRecovery.notBefore };
-    }
-    const providerError = initialRecovery.reason === "provider-error";
-    let disposition: "complete" | "retry" = "complete";
-    let confirmedAssistantMessageId: string | undefined;
-    try {
-      await this.dispatchPromptInternal(
-        {
-          environmentId: session.environmentId,
-          agent: session.agent,
-          logicalSessionKey: session.logicalSessionKey,
-          origin: session.origin,
-          interactionPolicy: session.interactionPolicy,
-          prompt: openCodeTurnRecoveryPrompt(initialRecovery),
-          requestId: openCodeIncompleteTurnRequestId(initialRecovery.assistantMessageId),
-        },
-        async (lockedSession, lockedProvider) => {
-          if (this.stopped) return { dispatch: false };
-          if (
-            this.hasOpenCodeManualPromptClaim(lockedSession) ||
-            this.hasNewerOpenCodeActivity(lockedSession)
-          ) {
-            disposition = "retry";
-            return { dispatch: false };
-          }
-          const queue = await this.storage.getPromptQueue(
-            `${lockedSession.agent}\0${lockedSession.logicalSessionKey}`,
-          );
-          if (queue && (queue.messages.length > 0 || queue.inFlight !== undefined)) {
-            disposition = "retry";
-            return { dispatch: false };
-          }
-          const messages = await lockedProvider.messages(lockedSession.providerSessionId, {
-            limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
-          });
-          if (this.stopped) return { dispatch: false };
-          // Claims and queues may have appeared while the authoritative read was
-          // in flight. This final check is inside the durable dispatch lock.
-          if (
-            this.hasOpenCodeManualPromptClaim(lockedSession) ||
-            this.hasNewerOpenCodeActivity(lockedSession)
-          ) {
-            disposition = "retry";
-            return { dispatch: false };
-          }
-          const latestQueue = await this.storage.getPromptQueue(
-            `${lockedSession.agent}\0${lockedSession.logicalSessionKey}`,
-          );
-          if (
-            this.hasOpenCodeManualPromptClaim(lockedSession) ||
-            this.hasNewerOpenCodeActivity(lockedSession)
-          ) {
-            disposition = "retry";
-            return { dispatch: false };
-          }
-          if (
-            latestQueue &&
-            (latestQueue.messages.length > 0 || latestQueue.inFlight !== undefined)
-          ) {
-            disposition = "retry";
-            return { dispatch: false };
-          }
-          const recovery = inspectOpenCodeIncompleteTurn(messages, {
-            historyComplete: messages.length < OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
-            now: this.now(),
-          });
-          if (!recovery) return { dispatch: false };
-          if (recovery.assistantMessageId !== initialRecovery.assistantMessageId) {
-            disposition = "retry";
-            return { dispatch: false };
-          }
-          confirmedAssistantMessageId = recovery.assistantMessageId;
-          if (recovery.action === "exhausted") {
-            console.warn(
-              providerError
-                ? `[native-agent] OpenCode turn for ${session.environmentId} failed with a provider error again after automatic retries; leaving it for the user`
-                : `[native-agent] OpenCode turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
-            );
-            return {
-              dispatch: false,
-              notice: {
-                kind: "exhausted",
-                assistantMessageId: recovery.assistantMessageId,
-                updatedAt: new Date(this.now()).toISOString(),
-              },
-            };
-          }
-          console.warn(
-            providerError
-              ? `[native-agent] Retrying an OpenCode turn that failed with a provider error for ${session.environmentId}`
-              : `[native-agent] Continuing an incomplete OpenCode turn for ${session.environmentId}`,
-          );
-          // Publish synchronously after the last awaited guard. A direct/manual
-          // claim now fails until provider acceptance finishes, closing the
-          // otherwise unavoidable check-to-send gap.
-          this.openCodeRecoveryDispatches.add(lockedSession.key);
-          return {
-            dispatch: true,
-            model: recovery.modelId,
-            effort: recovery.variant,
-            executionAgent: recovery.agent,
-          };
-        },
-      );
-      return disposition;
-    } catch (error) {
-      if (confirmedAssistantMessageId) {
-        await this.storage
-          .setOpenCodeIncompleteTurnNotice(session.key, session.providerSessionId, {
-            kind: "failed",
-            assistantMessageId: confirmedAssistantMessageId,
-            updatedAt: new Date(this.now()).toISOString(),
-          })
-          .catch(() => false);
-      }
-      throw error;
-    } finally {
-      this.openCodeRecoveryDispatches.delete(session.key);
-    }
   }
 
   /**

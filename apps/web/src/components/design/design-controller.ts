@@ -32,7 +32,7 @@ import {
   getCanvasState,
   getCapabilities,
   getChanges,
-} from "./design-client";
+} from "@/lib/design-client";
 import { loadDrafts, saveDrafts } from "./design-drafts";
 
 export const DESIGN_CANVAS_CURSOR_CHECK_MS = 3_000;

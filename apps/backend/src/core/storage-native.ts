@@ -89,6 +89,7 @@ import {
   type NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import type { IncompleteTurnNotice } from "./models.js";
 import {
   isNativeAgentDisplayTail,
   type NativeAgentDisplayTail,
@@ -826,9 +827,8 @@ export abstract class StorageNative extends StorageReviews {
     dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
       dispatched: false;
       mailRefused?: true;
-      openCodeIncompleteTurnNotice?:
-        | PersistedNativeAgentSession["openCodeIncompleteTurnNotice"]
-        | null;
+      /** Recorded under the session's persisted notice field; `null` clears it. */
+      incompleteTurnNotice?: IncompleteTurnNotice | null;
     }>,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
   ): Promise<{
@@ -912,7 +912,7 @@ export abstract class StorageNative extends StorageReviews {
           this.announceNativeAgentRecord(updated);
           return { session: updated, dispatched: false };
         }
-        if (outcome.openCodeIncompleteTurnNotice === undefined) {
+        if (outcome.incompleteTurnNotice === undefined) {
           // A preparation refusal happens before provider.send. The durable
           // pending row was opened only to protect the provider side effect,
           // so retaining it here would park a request that was never sent and
@@ -934,10 +934,10 @@ export abstract class StorageNative extends StorageReviews {
         const updated: PersistedNativeAgentSession = {
           ...session,
           pendingDispatch: undefined,
-          ...(outcome.openCodeIncompleteTurnNotice === null
+          ...(outcome.incompleteTurnNotice === null
             ? { openCodeIncompleteTurnNotice: undefined }
             : {
-                openCodeIncompleteTurnNotice: outcome.openCodeIncompleteTurnNotice,
+                openCodeIncompleteTurnNotice: outcome.incompleteTurnNotice,
               }),
           updatedAt: nowIso(),
         };
@@ -1197,10 +1197,15 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  async setOpenCodeIncompleteTurnNotice(
+  /**
+   * Record or clear (`null`) a session's incomplete-turn notice. It is stored
+   * under the session's original `openCodeIncompleteTurnNotice` field so
+   * existing session files keep their notice.
+   */
+  async setIncompleteTurnNotice(
     key: string,
     providerSessionId: string,
-    notice: PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null,
+    notice: IncompleteTurnNotice | null,
   ): Promise<boolean> {
     if (
       !isNonBlankString(key) ||
@@ -1211,7 +1216,7 @@ export abstract class StorageNative extends StorageReviews {
           !["failed", "exhausted"].includes(notice.kind) ||
           !Number.isFinite(Date.parse(notice.updatedAt))))
     ) {
-      throw new Error("OpenCode incomplete-turn notice is invalid");
+      throw new Error("Incomplete-turn notice is invalid");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();

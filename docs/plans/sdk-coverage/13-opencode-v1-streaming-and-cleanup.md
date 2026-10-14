@@ -47,23 +47,29 @@ every path keeps its snapshot read as the authority, per the invariants.
 - [ ] Type the prompt payload: `parts` is `any[]` in
   `apps/web/src/lib/opencode-prompts.ts:186` and cast `as never` at
   `opencode-provider.ts:732`. Build it as the SDK's `Part` input union in
-  the backend; the renderer sends attachments, not parts.
+  the backend; the renderer sends attachments, not parts. (2026-10-14: the
+  renderer half is moot — `opencode-prompts.ts` was deleted with the rest of
+  the renderer OpenCode client; re-check the backend cast.)
 - [ ] `session.update` for titles (plan 09) and, if the v1 surface exposes
   the session permission ruleset, for plan 12. Record the finding either way.
-- [ ] Use `client.global.health` instead of the raw `fetch('/global/health')`
-  at `opencode-sessions.ts:67`.
+- [x] ~~Use `client.global.health` instead of the raw `fetch('/global/health')`
+  at `opencode-sessions.ts:67`.~~ Moot 2026-10-14: `opencode-sessions.ts` was
+  deleted; the renderer no longer talks to `opencode serve`.
 
 ### Dead code removal (renderer)
 
-- [ ] Delete `openCodeStore.pendingPermissions`/`addPendingPermission`/
+- [x] Done 2026-10-14: `openCodeStore`, `opencode-interactions.ts` and
+  `OpenCodeQuestionCard` are gone; the whole renderer OpenCode client was
+  unreachable and was removed. Original item:
+  Delete `openCodeStore.pendingPermissions`/`addPendingPermission`/
   `getPendingPermissionsForSession`, `replyToPermission`, and
   `subscribeToEvents` in `apps/web/src/lib/opencode-interactions.ts` (no
   production caller). Delete `OpenCodeQuestionCard` and its index export;
   the neutral `NativeAgentQuestionCard` is the live path. Move any
   behaviour worth keeping (multi-select exclusivity, draft persistence) into
   the neutral card if it is missing there.
-- [ ] Update `AGENTS.md`'s OpenCode component table and SSE list to match
-  what runs.
+- [x] Update `AGENTS.md`'s OpenCode component table and SSE list to match
+  what runs. (2026-10-14: deleted renderer files dropped from the tables.)
 
 ### Verification
 

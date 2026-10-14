@@ -1,5 +1,6 @@
-import type { BridgeTranscriptSource } from "@orkestrator/protocol/bridge-transcript-routes";
+import type { BridgeTranscriptSource } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import type { BridgeMessage, SessionState } from "./state.js";
+import { revisedRowIds, revisedRowsOverflowVersion } from "./transcript.js";
 
 /**
  * What every transcript route of one session reads right now.
@@ -26,5 +27,8 @@ export function piTranscriptSource(
     revision: state.revision,
     complete: !state.transcriptTruncated && state.droppedMessages === 0,
     title: state.title,
+    // Recently changed rows; the summary carries those before the live window.
+    revisedMessageIds: revisedRowIds(state),
+    revisedRowsOverflowVersion: revisedRowsOverflowVersion(state),
   };
 }

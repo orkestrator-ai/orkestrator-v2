@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import {
-  claudePlanApprovalDraftKey,
-  claudeQuestionDraftKey,
-  codexInteractionDraftKey,
-  openCodeQuestionDraftKey,
+  nativeAgentInteractionDraftKey,
+  nativeAsyncQuestionDraftKey,
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
   tmuxQuestionDraftKey,
@@ -69,10 +67,9 @@ describe("promptDraftStore", () => {
 
   test("namespaces drafts by provider, session, and request identity", () => {
     const keys = [
-      claudeQuestionDraftKey("session-a", "request-1"),
-      claudeQuestionDraftKey("session-b", "request-1"),
-      openCodeQuestionDraftKey("session-a", "request-1"),
-      codexInteractionDraftKey("session-a", "request-1"),
+      nativeAgentInteractionDraftKey("session-a", "request-1"),
+      nativeAgentInteractionDraftKey("session-b", "request-1"),
+      tmuxQuestionDraftKey("session-a", "request-1"),
     ];
 
     expect(new Set(keys).size).toBe(keys.length);
@@ -83,7 +80,9 @@ describe("promptDraftStore", () => {
   test("renderer restart reset drops every in-memory draft", () => {
     usePromptDraftStore
       .getState()
-      .setDraftValue(claudeQuestionDraftKey("session-a", "request-1"), "answers", [["unfinished"]]);
+      .setDraftValue(nativeAgentInteractionDraftKey("session-a", "request-1"), "answers", [
+        ["unfinished"],
+      ]);
 
     usePromptDraftStore.getState().reset();
     expect(usePromptDraftStore.getState().drafts.size).toBe(0);
@@ -99,10 +98,8 @@ describe("promptDraftStore", () => {
     const session = "session:/雪";
     const request = "request:%/🙂";
     const builders = [
-      claudeQuestionDraftKey,
-      claudePlanApprovalDraftKey,
-      openCodeQuestionDraftKey,
-      codexInteractionDraftKey,
+      nativeAgentInteractionDraftKey,
+      nativeAsyncQuestionDraftKey,
       tmuxQuestionDraftKey,
       tmuxPlanDraftKey,
       tmuxElicitationDraftKey,

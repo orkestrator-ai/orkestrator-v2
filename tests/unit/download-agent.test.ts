@@ -699,7 +699,7 @@ describe("download-agent", () => {
                   size: helperArchive.byteLength,
                   sha256: createHash("sha256").update(helperArchive).digest("hex"),
                 },
-                executable: { fileName: "codex-code-mode-host", ...digestOf(helper) },
+                executable: digestOf(helper),
               },
             ],
           },

@@ -26,7 +26,7 @@ import {
   PUBLIC_ENVIRONMENT_SETTINGS,
   PUBLIC_PROJECT_SETTINGS,
 } from "./public-api-resources.js";
-import { PUBLIC_API_FIXTURES } from "./public-api-fixtures.js";
+import { PUBLIC_API_FIXTURES } from "./testing/public-api-fixtures.js";
 
 describe("public action catalogue", () => {
   test("every mutation declares effects and every read declares none", () => {

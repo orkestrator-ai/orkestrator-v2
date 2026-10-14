@@ -1,6 +1,11 @@
 // Hook for managing terminal sessions with Electron backend
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, UnlistenFn } from "@/lib/native/events";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+  UnlistenFn,
+} from "@/lib/native/events";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
@@ -682,7 +687,7 @@ export function useTerminal({
         };
       }
 
-      let reconnectUnlisten: UnlistenFn | null = null;
+      const reconnectUnlisteners: UnlistenFn[] = [];
       const dispose = () => {
         if (disposed) return;
         disposed = true;
@@ -691,7 +696,7 @@ export function useTerminal({
           listenAbortControllerRef.current = null;
         }
         safelyUnlisten(outputUnlisten);
-        safelyUnlisten(reconnectUnlisten);
+        for (const unlisten of reconnectUnlisteners) safelyUnlisten(unlisten);
         if (reconciliationRetryTimer) clearTimeout(reconciliationRetryTimer);
         reconciliationRetryTimer = null;
       };
@@ -702,18 +707,22 @@ export function useTerminal({
       unlistenRef.current = dispose;
       try {
         if (replayOutputBuffer) {
-          reconnectUnlisten = await listen(
+          for (const event of [
             NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-            () => {
-              void reconcileSnapshot();
-            },
-            { signal: listenAbortController.signal },
-          );
-          // Disconnect may have disposed the partial attachment while the
-          // lifecycle listener registration was still awaiting its disposer.
-          if (disposed) {
-            safelyUnlisten(reconnectUnlisten);
-            reconnectUnlisten = null;
+            TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+          ]) {
+            const unlisten = await listen(
+              event,
+              () => {
+                void reconcileSnapshot();
+              },
+              { signal: listenAbortController.signal },
+            );
+            if (disposed) {
+              safelyUnlisten(unlisten);
+              break;
+            }
+            reconnectUnlisteners.push(unlisten);
           }
         }
       } catch (listenerError) {
@@ -965,9 +974,10 @@ export function useTerminal({
     return true;
   }, []);
 
-  // A failed write can leave the browser gateway's input queue closed until the
-  // session restarts, while output keeps streaming so the terminal still looks
-  // alive. Reconnecting is the only recovery, so the failure toast offers it.
+  // A failed write can leave the terminal input queue closed until the session
+  // restarts, while output keeps streaming so the terminal still looks alive.
+  // Reconnecting is the only recovery that works on every transport, so the
+  // failure toast offers it.
   //
   // `connect` refuses while a renderer-owned connection is already established,
   // so that session has to restart. Attach-only sessions are backend-owned,

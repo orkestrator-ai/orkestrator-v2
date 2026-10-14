@@ -1,4 +1,4 @@
-# `Electron backend command registry > backend-owned diff statistics` scans time out under aggregate load (`tests/unit/electron/commands-integration.test.ts`)
+# `Electron backend command registry > backend-owned diff statistics` scans time out under aggregate load (`apps/backend/tests/commands-integration.test.ts`)
 
 - **ID:** 0162
 - **Status:** open
@@ -10,7 +10,7 @@
   root and agent-support group ran next to the workspace and bridge groups)
   on a shared host at load average 30–41. The root group reported 766 passed
   and 2 failed.
-- **Isolated rerun:** `mise run test:logged -- --name root-diffstats -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures`
+- **Isolated rerun:** `mise run test:logged -- --name root-diffstats -- bun test ./apps/backend/tests/commands-integration.test.ts --parallel=1 --only-failures`
   passed.
 - **Hypothesis:** real git diff scans under heavy host contention exceed the
   generic five-second budget. The change under validation (bridge lifecycle,
@@ -28,7 +28,7 @@
 - **Original command:** `mise run test:logged -- --name full-tests-2 -- mise run test`;
   root group 4992 passed, 24 skipped, 19 failed, 3 errors across 253 files in
   390 seconds. The same suite earlier the same day did not fail these cases.
-- **Isolated rerun:** `bun test ./tests/unit/electron/commands-integration.test.ts`
+- **Isolated rerun:** `bun test ./apps/backend/tests/commands-integration.test.ts`
   passed 55 of 55.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.j4rNKa`.
 - The change under validation (disk usage reporting, worktree locations) adds
@@ -48,7 +48,7 @@
 - **Root-suite counts:** 5,047 total, 5,018 passed, 24 skipped, 5 failed. One of
   those failures was a new bounded-diagnostics assertion, corrected in this
   change; the other unrelated failure was a firewall fixture timeout.
-- **Isolated rerun:** `mise run test:logged -- --name isolate-diff-stats -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures`
+- **Isolated rerun:** `mise run test:logged -- --name isolate-diff-stats -- bun test ./apps/backend/tests/commands-integration.test.ts --parallel=1 --only-failures`
   passed in 30.5 seconds.
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.FOIo01/root-and-agent-support-tests.log.gz`.
 - **Hypothesis:** the same scan timeouts recur under aggregate contention;
@@ -68,7 +68,7 @@
 - **Test:** `computes counts for a tracked local environment and announces them`
   exceeded its five-second deadline at 5,812.47 ms.
 - **Isolated rerun:** the same GNU-tool PATH with
-  `mise run test:logged -- --name merge-diffstats-isolated -- bun test ./tests/unit/electron/commands-integration.test.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name merge-diffstats-isolated -- bun test ./apps/backend/tests/commands-integration.test.ts --parallel=1 --only-failures`
   passed unchanged (exit 0) in 24.6 seconds.
 - **Hypothesis:** the aggregate deadline failures match earlier observations;
   unchanged owning files pass alone. Contention may contribute, but the root

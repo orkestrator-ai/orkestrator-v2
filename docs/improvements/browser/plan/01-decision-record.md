@@ -117,7 +117,7 @@ named in each row. Timings are observations, not promises.
 
 | Prototype question | Result | Evidence |
 | --- | --- | --- |
-| Tunnel carries HTTP, streaming, and WS for one service only | Pass (loopback, one machine) | `apps/backend/src/preview-tunnel-server.test.ts`, `tests/unit/electron/preview-transport-manager.test.ts` |
+| Tunnel carries HTTP, streaming, and WS for one service only | Pass (loopback, one machine) | `apps/backend/src/preview-tunnel-server.test.ts`, `apps/desktop/tests/preview-transport-manager.test.ts` |
 | Tunnel cannot select another destination | Pass | tunnel tests: `OPEN` carrying host/port fields is rejected as malformed |
 | Cancellation and bounded backpressure | Pass (counters return to baseline) | tunnel and HTTP proxy tests |
 | Root URLs without rewriting | Pass | HTTP proxy and ingress tests serve `/`, `/assets/*`, `/api` unchanged |

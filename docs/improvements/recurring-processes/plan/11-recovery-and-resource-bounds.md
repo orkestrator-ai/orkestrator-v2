@@ -157,7 +157,7 @@ rows for their view.
 | Gap → conditional read | `useEnvironmentDiffStats.test.tsx` › a revision gap triggers one conditional read from the contiguous position |
 | Safety cadence | `resource-sync.test.ts` › ephemeral view safety checks (3 tests); `usePrMonitorService.test.tsx` › the resource-sync safety cadence runs a compact check… |
 | PR transitions | `usePrMonitorService.test.tsx` › a retried or re-delivered transition toasts once and a rehydrate never re-toasts (also asserts no client-side terminal mutation); › a replacement PR's merge is announced…; › a missed transition never prevents current state recovery |
-| Backend stamping | `tests/unit/backend/view-revisions.test.ts` (10 tests); `commands-state-sync.test.ts` › snapshot reads are stamped and answer compact conditional reads; `commands-integration.test.ts` › computes counts for a tracked local environment and announces them |
+| Backend stamping | `apps/backend/tests/view-revisions.test.ts` (10 tests); `commands-state-sync.test.ts` › snapshot reads are stamped and answer compact conditional reads; `commands-integration.test.ts` › computes counts for a tracked local environment and announces them |
 
 ### Checks
 

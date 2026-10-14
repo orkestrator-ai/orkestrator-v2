@@ -260,7 +260,7 @@ describe("development profile lifecycle primitives", () => {
   test("seeds catalogues from the production database and never into a profile database", async () => {
     const { Database } = await import("bun:sqlite");
     const { roots, profile, destinations } = await modelCacheFixture();
-    // The minimal on-disk shape the backend writes (see @orkestrator/protocol/storage-database).
+    // The minimal on-disk shape the backend writes (see @orkestrator/protocol/node/storage-database).
     const production = new Database(path.join(roots.productionDataDir, "orkestrator.sqlite"), {
       create: true,
     });

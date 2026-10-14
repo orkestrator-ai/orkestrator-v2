@@ -67,7 +67,7 @@ import {
   bridgeTranscriptRouteBody,
   bridgeTranscriptSubReadBody,
   isBridgeTranscriptSubRead,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { acpTranscriptSource } from "./acp-transcript-source.js";
 import { boundTranscript } from "./acp-transcript.js";
 import {
@@ -656,6 +656,10 @@ export async function route(
     state.status = "running";
     state.error = undefined;
     state.outputTruncated = false;
+    // The re-send floor spans one turn, so incremental reads stay incremental
+    // across a long session. A reader that skipped every poll between a late
+    // update and this prompt keeps its copy of that row until a full read.
+    state.mutatedMessageFloor = undefined;
     state.promptSequence += 1;
     const promptSequence = state.promptSequence;
     state.turnStartedAt = Date.now();

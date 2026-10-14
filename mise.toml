@@ -254,8 +254,13 @@ raw_args = true
 run = "bun scripts/efficiency/run.ts"
 
 [tasks.typecheck]
-description = "Typecheck every workspace package"
-run = "bunx turbo --cwd . run typecheck"
+description = "Typecheck every workspace package, the root and e2e tests, and repository scripts"
+run = [
+  "bunx turbo --cwd . run typecheck",
+  "bunx tsc --noEmit -p tests/tsconfig.json",
+  "bunx tsc --noEmit -p e2e/tsconfig.json",
+  "bunx tsc --noEmit -p e2e/agent-testing/tsconfig.json",
+]
 
 [tasks."disk:report"]
 description = "Report disk used by Orkestrator work, what is orphaned, and who cleans it (read-only)"
@@ -286,7 +291,7 @@ run = ["mise run format:check", "mise run lint", "mise run typecheck"]
 description = "Run live OpenCode compatibility checks"
 env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
 run = [
-  "bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts",
+  "bun test --cwd apps/backend src/core/opencode-live-compatibility.live.test.ts",
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
 ]
 

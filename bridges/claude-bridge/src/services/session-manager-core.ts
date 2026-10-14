@@ -46,6 +46,7 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
+import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
@@ -69,6 +70,21 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Store for active sessions
 export const sessions = new Map<string, SessionState>();
+
+// Every row change is published as one of these, so noting them here covers
+// each path that edits a row — including late updates to rows newer ones have
+// pushed out of the live transcript window (`SessionState.revisedRows`).
+eventEmitter.subscribe((event) => {
+  if (event.type !== "message.updated" && event.type !== "message.patched") return;
+  const data = event.data as { message?: { id?: unknown }; messageId?: unknown } | undefined;
+  const id = event.type === "message.updated" ? data?.message?.id : data?.messageId;
+  if (typeof id !== "string" || !event.sessionId) return;
+  const session = sessions.get(event.sessionId);
+  // The newest row is always inside the live window; only a row that changes
+  // once a newer one exists can be outside it.
+  if (!session || session.messages.at(-1)?.id === id) return;
+  (session.revisedRows ??= new RecentlyRevisedRows()).note(id);
+});
 
 /**
  * Monotonic id stamped on every turn that reaches the SDK.

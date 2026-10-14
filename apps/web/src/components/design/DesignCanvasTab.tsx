@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { invoke } from "@/lib/native/backend";
 import { pendingPreviewFrames, projectedFrames, type DesignIntent } from "@/stores/designStore";
 import {
   DesignCanvasContext,
@@ -28,7 +27,7 @@ import {
   type DesignFrameAction,
   type GeometryPatch,
 } from "./design-canvas-context";
-import { designApi, failureOf } from "./design-client";
+import { designApi, failureOf, importDesignDocument } from "@/lib/design-client";
 import { useDesignCanvas } from "./design-controller";
 import { selectionValidity, type DesignSelection } from "./design-selection";
 import { loadViewPrefs, saveViewPrefs } from "./design-view-prefs";
@@ -671,13 +670,13 @@ export function DesignCanvasTab({
     const last = projectionRef.current?.canvas;
     if (!last) return;
     try {
-      const copy = await invoke<{ id: string; name: string }>("design_import", {
+      const copy = await importDesignDocument(
         environmentId,
-        document: JSON.stringify({
+        JSON.stringify({
           ...last,
           name: `${last.name} (recovered r${last.revision})`.slice(0, 120),
         }),
-      });
+      );
       setAnnouncement(`Saved a recovery copy as “${copy.name}”`);
     } catch (reason) {
       reportError(reason);

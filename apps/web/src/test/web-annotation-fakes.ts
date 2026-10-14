@@ -35,7 +35,7 @@ import {
   fixtureDestination,
   fixtureEntry,
   fixtureRequest,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type {
   BrowserPreviewCaptureApi,
   BrowserPreviewCaptureEvent,

@@ -7,7 +7,7 @@ import { invoke } from "@/lib/native/backend";
 import { useDesignStore, type DesignIntent } from "@/stores/designStore";
 import { DesignCanvasContext, type DesignCanvasActions } from "./design-canvas-context";
 import { designController, resetDesignControllers } from "./design-controller";
-import { resetCapabilities } from "./design-client";
+import { resetCapabilities } from "@/lib/design-client";
 import { DesignFrameView } from "./DesignFrameView";
 import { DesignFrameBridge } from "./frame-bridge";
 

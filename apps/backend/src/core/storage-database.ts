@@ -4,7 +4,7 @@ import {
   STORAGE_DATABASE_FILE,
   assembleStoredValue,
   type StoredLayoutKind,
-} from "@orkestrator/protocol/storage-database";
+} from "@orkestrator/protocol/node/storage-database";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

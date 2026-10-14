@@ -77,14 +77,14 @@ claim that Git cleanliness proves the absence of valuable local data.
 ## Verification
 
 - [x] Extend lifecycle fixtures in
-  [commands-registry-environments.test.ts](../../../../tests/unit/electron/commands-registry-environments.test.ts)
-  and [status tests](../../../../tests/unit/electron/commands-registry-environments-status.test.ts):
+  [commands-registry-environments.test.ts](../../../../apps/backend/tests/commands-registry-environments.test.ts)
+  and [status tests](../../../../apps/backend/tests/commands-registry-environments-status.test.ts):
   omitted discard intent refuses destruction; removal failure retains identity;
   successful discard invalidates setup and re-prepares the checkout.
 - [x] Change the fake Docker test that accepts recreation after every removal
   failure. Model the actual occupied-name case instead of expecting success.
 - [x] Extend
-  [Docker registry tests](../../../../tests/unit/electron/commands-registry-docker.test.ts)
+  [Docker registry tests](../../../../apps/backend/tests/commands-registry-docker.test.ts)
   for assigned stopped containers, missing-ID/live-label containers, failed
   removal counts and assignment changes between preview and execution.
 - [x] Component/browser tests prove port edits cannot show a preservation
@@ -134,7 +134,7 @@ not claim to preserve data during an explicitly destructive reset.
   reference only on a definite "no such object" (or strict foreign owner),
   never on an unreachable daemon, timeout or permission failure.
 - **Tests.** `packages/protocol/src/container-lifecycle.test.ts`;
-  `tests/unit/electron/commands-registry-environments.test.ts` (implicit
+  `apps/backend/tests/commands-registry-environments.test.ts` (implicit
   intent refused, stale review conflicts, removal failure retains identity with
   an occupied-name fake, discard re-prepares and keeps the delegation base);
   `commands-registry-environments-status.test.ts` (daemon-down full sync);

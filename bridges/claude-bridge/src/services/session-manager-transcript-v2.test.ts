@@ -19,8 +19,9 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
+import { eventEmitter } from "./event-emitter.js";
 import sessionRoutes from "../routes/session.js";
 import { compressTranscriptReads } from "../routes/session-transcript.js";
 import type { NormalizedMessage, NormalizedPart, SessionState } from "../types/index.js";
@@ -163,6 +164,33 @@ describe("GET /session/:id/transcript?version=2", () => {
     );
     expect(unchanged.status).toBe("unchanged");
     expect(visits).toBe(0);
+  });
+});
+
+describe("revised rows before the live window", () => {
+  test("a published change to a row outside the window travels with the next snapshot", async () => {
+    const rows = Array.from({ length: 150 }, (_, index) => textMessage(`row-${index}`));
+    const session = sessionWith(rows);
+    const window = { limit: "100", targetBytes: String(512 * 1024), version: "2" };
+    const before = await read(transcriptPath(session.id, window));
+    expect(before.value.startIndex).toBe(50);
+    expect(before.value.revisedMessages).toBeUndefined();
+
+    // A late result lands on a row newer ones pushed out of the window.
+    const early = session.messages[3]!;
+    early.parts = [{ type: "text", content: "settled late" }];
+    markTranscriptChanged(session);
+    eventEmitter.emit({ type: "message.updated", sessionId: session.id, data: { message: early } });
+
+    const after = await read(transcriptPath(session.id, { ...window, knownToken: before.token }));
+    expect(after.status).toBe("snapshot");
+    expect(after.value.revisedMessages.map((m: NormalizedMessage) => m.id)).toEqual(["row-3"]);
+    expect(after.value.revisedMessages[0].parts[0].content).toBe("settled late");
+
+    // A new history names none of the rows noted against the old one.
+    resetTranscriptEpoch(session);
+    const reset = await read(transcriptPath(session.id, window));
+    expect(reset.value.revisedMessages).toBeUndefined();
   });
 });
 

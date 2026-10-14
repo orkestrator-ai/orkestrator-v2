@@ -77,11 +77,9 @@ describe("disk report", () => {
     const migrated = path.join(root, "migrated");
     await mkdir(migrated);
     const database = openBackendDatabase(migrated);
-    database.writeStore("environments", [{ id: "db-env", projectId: "p1", worktreePath: "/w" }]);
+    database.writeStore("environments", [{ id: "db-env", worktreePath: "/w" }]);
     database.close();
-    expect(readEnvironments(migrated)).toEqual([
-      { id: "db-env", projectId: "p1", worktreePath: "/w" },
-    ]);
+    expect(readEnvironments(migrated)).toEqual([{ id: "db-env", worktreePath: "/w" }]);
   });
 
   test("names transcript directories the way Claude Code does", () => {

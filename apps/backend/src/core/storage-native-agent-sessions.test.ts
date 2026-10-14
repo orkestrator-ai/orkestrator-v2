@@ -17,6 +17,7 @@ import {
   StorageService,
 } from "./storage.js";
 import { createNativeAgentDisplayTail } from "./native-agent-display-tails.js";
+import { sessionIncompleteTurnNotice } from "./models.js";
 import { STORAGE_DATABASE_FILE } from "./storage-database.js";
 import {
   hasStore,
@@ -1240,7 +1241,7 @@ describe("StorageService native agent sessions", () => {
       const skipped = await first.dispatchNativeAgentPromptOnce(
         input.key,
         "recovery-1",
-        async () => ({ dispatched: false, openCodeIncompleteTurnNotice: notice }),
+        async () => ({ dispatched: false, incompleteTurnNotice: notice }),
       );
       expect(skipped.dispatched).toBe(false);
       expect(skipped.session.dispatchedRequestIds).toBeUndefined();
@@ -1254,6 +1255,58 @@ describe("StorageService native agent sessions", () => {
       expect(accepted.dispatched).toBe(true);
       expect(accepted.session.openCodeIncompleteTurnNotice).toBeUndefined();
       expect(accepted.session.dispatchedRequestIds).toEqual(["manual-1"]);
+    });
+  });
+
+  test("keeps recovery notices under their original persisted field name", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const notice = {
+        kind: "failed" as const,
+        assistantMessageId: "assistant-1",
+        updatedAt: "2026-08-10T10:00:00.000Z",
+      };
+      expect(await first.setIncompleteTurnNotice(input.key, "provider-session", notice)).toBe(true);
+
+      // Older versions wrote this exact field into native-agent-sessions.json,
+      // and the legacy import carries their records over unchanged; a rename
+      // would drop the notices those records hold.
+      expect(
+        readStoredValue<Record<string, unknown>>(first.getDataDir(), SESSIONS_STORE)?.[input.key],
+      ).toMatchObject({ openCodeIncompleteTurnNotice: notice });
+      const restarted = new StorageService(first.getDataDir());
+      await restarted.init();
+      const session = await restarted.getNativeAgentSession(input.key);
+      expect(session?.openCodeIncompleteTurnNotice).toEqual(notice);
+      expect(session && sessionIncompleteTurnNotice(session)).toEqual(notice);
+
+      expect(await restarted.setIncompleteTurnNotice(input.key, "provider-session", null)).toBe(
+        true,
+      );
+      expect(
+        (await restarted.getNativeAgentSession(input.key))?.openCodeIncompleteTurnNotice,
+      ).toBeUndefined();
+    });
+  });
+
+  test("reads a recovery notice an older build wrote into the legacy session file", async () => {
+    const notice = {
+      kind: "exhausted" as const,
+      assistantMessageId: "assistant-legacy",
+      updatedAt: "2026-08-10T10:00:00.000Z",
+    };
+    const legacy = {
+      [input.key]: {
+        ...input,
+        providerSessionId: "legacy-provider-session",
+        openCodeIncompleteTurnNotice: notice,
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      },
+    };
+    await withLegacySessions(legacy, async (first) => {
+      const session = await first.getNativeAgentSession(input.key);
+      expect(session && sessionIncompleteTurnNotice(session)).toEqual(notice);
     });
   });
 

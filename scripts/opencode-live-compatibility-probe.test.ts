@@ -87,12 +87,14 @@ describe("local SDK and network discovery", () => {
     expect(port).toBeLessThanOrEqual(65_535);
   });
 
-  test("reads the SDK pin from the web application manifest", async () => {
+  test("reads the SDK pin from the backend manifest", async () => {
     const manifest = JSON.parse(
-      await readFile(join(import.meta.dir, "..", "apps", "web", "package.json"), "utf8"),
+      await readFile(join(import.meta.dir, "..", "apps", "backend", "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
 
-    expect(await readPinnedSdkVersion()).toBe(manifest.dependencies?.["@opencode-ai/sdk"]);
+    expect<string | undefined>(await readPinnedSdkVersion()).toBe(
+      manifest.dependencies?.["@opencode-ai/sdk"],
+    );
   });
 
   test("reads the version from the installed SDK package", async () => {

@@ -18,7 +18,7 @@ present in `GitFetchScheduler`, without sharing identities across isolated clone
 `commands-runtime-state.ts`, `commands-registry-terminal.ts`, and known mutation
 paths in `commands-registry-pr.ts` / `commands-servers.ts`.
 
-Existing local fetch tests are in `tests/unit/backend/git-fetch-scheduler.test.ts`.
+Existing local fetch tests are in `apps/backend/tests/git-fetch-scheduler.test.ts`.
 Extend focused container-command tests and add a real isolated container fixture
 test for behavior the command seam cannot prove.
 
@@ -305,7 +305,7 @@ bare remote, production scripts through `bash -c`, no Docker):
 
 **Command level:**
 
-- `tests/unit/electron/commands-registry-terminal.test.ts` (fake `docker`):
+- `apps/backend/tests/commands-registry-terminal.test.ts` (fake `docker`):
   five `get_git_status` reads, four of them manual refreshes, cost five
   status execs and one fetch exec.
 - `commands-integration.test.ts` "capped container scans" now counts status

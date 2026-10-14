@@ -3,7 +3,7 @@ import {
   DESKTOP_SUPERVISED_ENV,
   installProductionApplicationLogging,
   type InstalledApplicationLogging,
-} from "@orkestrator/protocol/application-logging";
+} from "@orkestrator/protocol/node/application-logging";
 import type { BackendOptions } from "./options.js";
 
 /**

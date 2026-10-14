@@ -48,7 +48,9 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   removal before it answers success. Idle detach (`detachAgent`) is not a
   close and never sets the marker. A method the bridge does not serve on a
   session it *does* have answers 405, so a real gap cannot hide as a missing
-  session.
+  session. A close a previous process recorded but did not finish (a restored
+  tombstone) is finished by `src/session-tombstones.ts`, and resuming the same
+  conversation waits for it first.
 - `persistBarrier()` is a mandatory publication: it rejects when nothing
   reached disk, and prompt/steer dispatch, create, resume and identity-changing
   attach all wait for it. `schedulePersist()` is best-effort. Both share one

@@ -4,20 +4,18 @@ import {
   isProjectHomeEnvironment,
 } from "./project-home-environment.js";
 import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import {
-  fs,
-  path,
-  createHash,
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
-  spawnCommand,
-  writeConfinedFile,
-  DOCKER_LABEL_OWNER,
-  runCommand,
-  workspaceFilePath,
-  resolveGitHubRepository,
-} from "./commands-dependencies.js";
-import type { Environment, PrState } from "./commands-dependencies.js";
+} from "@orkestrator/protocol/review-artifacts";
+import { spawnCommand, runCommand } from "./shell.js";
+import { writeConfinedFile, workspaceFilePath } from "./path-safety.js";
+import { DOCKER_LABEL_OWNER } from "./constants.js";
+import { resolveGitHubRepository } from "./github.js";
+import type { Environment, PrState } from "./models.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import {
   REVIEW_PACKAGE_FORMAT,

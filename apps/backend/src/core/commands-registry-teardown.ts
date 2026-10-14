@@ -1,10 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import {
-  isTabTeardownKind,
-  nativeAgentSessionStorageKey,
-  registerTmuxBackendCommands,
-} from "./commands-dependencies.js";
-import type { Environment } from "./commands-dependencies.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { registerTmuxBackendCommands } from "./tmux.js";
+import type { Environment } from "./models.js";
 import {
   terminalSessionIdsByStableKey,
   terminalStableKeysBySessionId,
@@ -25,6 +22,7 @@ import {
   fenceRetainingCloseSessionId,
   isNativeTabTeardownKind,
   unfenceTabTeardownSessionId,
+  isTabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
 
 export function registerTeardownCommands(

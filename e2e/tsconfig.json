@@ -3,7 +3,10 @@
   "compilerOptions": {
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "types": ["node", "@playwright/test"]
+    "types": ["node", "@playwright/test"],
+    "paths": {
+      "@/*": ["../apps/web/src/*"]
+    }
   },
   "include": ["**/*.ts", "**/*.tsx", "../apps/web/src/vite-env.d.ts"],
   "exclude": ["agent-testing"]

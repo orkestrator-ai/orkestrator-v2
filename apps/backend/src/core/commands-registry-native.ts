@@ -2,7 +2,8 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { NATIVE_AGENT_DISCOVERY_SECTIONS } from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
-import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
+import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
+import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import {
   asString,
   asRecord,

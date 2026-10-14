@@ -7,7 +7,7 @@ import {
 import {
   fixtureCaptureInput,
   fixtureDestination,
-} from "@orkestrator/protocol/web-annotations-fixtures";
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { CompileBriefInput } from "./web-annotation-contracts.js";
 import type { WebAnnotationService } from "./web-annotation-service.js";
 import {

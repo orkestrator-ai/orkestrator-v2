@@ -4,7 +4,7 @@
  * This order is a contract, not an implementation detail: the settings pane
  * reports it from the backend's own parallel implementation, so if the two
  * disagree the app tells the user it is signed in with a credential the bridge
- * would never reach for. `tests/unit/electron/cursor-sdk-bridge.test.ts` pins
+ * would never reach for. `apps/backend/tests/cursor-sdk-bridge.test.ts` pins
  * the backend half; this pins the bridge half.
  *
  * The credential runtime is injected directly so this owner never mutates

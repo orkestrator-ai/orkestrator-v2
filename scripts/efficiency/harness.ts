@@ -43,7 +43,7 @@ export interface WorkloadDefinition {
 export interface WorkloadContext {
   /** Repository root the workload imports from. */
   root: string;
-  /** Import a module relative to `root`. */
+  /** Import relative to `root`, including legacy protocol paths before the node/ move. */
   load<T = Record<string, unknown>>(relativePath: string): Promise<T>;
   /** Import when present, `undefined` when this root predates the module. */
   loadOptional<T = Record<string, unknown>>(relativePath: string): Promise<T | undefined>;
@@ -92,11 +92,27 @@ export interface EfficiencyReport {
 
 export function createContext(root: string): WorkloadContext {
   const resolved = path.resolve(root);
+  const modulePath = (relativePath: string): string => {
+    const current = path.join(resolved, relativePath);
+    if (existsSync(current)) return current;
+    // Historical roots predate the protocol node/ boundary. Resolve both
+    // layouts within the measured root; never borrow the harness's modules.
+    const prefix = "packages/protocol/src/node/";
+    if (relativePath.startsWith(prefix)) {
+      const legacy = path.join(
+        resolved,
+        "packages/protocol/src",
+        relativePath.slice(prefix.length),
+      );
+      if (existsSync(legacy)) return legacy;
+    }
+    return current;
+  };
   return {
     root: resolved,
-    load: async (relativePath) => import(path.join(resolved, relativePath)),
+    load: async (relativePath) => import(modulePath(relativePath)),
     loadOptional: async (relativePath) => {
-      const file = path.join(resolved, relativePath);
+      const file = modulePath(relativePath);
       return existsSync(file) ? import(file) : undefined;
     },
   };

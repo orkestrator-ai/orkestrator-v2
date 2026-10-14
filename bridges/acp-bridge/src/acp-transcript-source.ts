@@ -1,4 +1,4 @@
-import type { BridgeTranscriptSource } from "@orkestrator/protocol/bridge-transcript-routes";
+import type { BridgeTranscriptSource } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import type { BridgeMessage, SessionState } from "./acp-context.js";
 
 /**

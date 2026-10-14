@@ -26,7 +26,6 @@ import type {
   NativeAgentCommandRefreshOutcome,
   NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
-import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   agentDirectory,
   CATALOG_TIMEOUT_MS,
@@ -63,7 +62,6 @@ import {
 } from "./pi-sdk.js";
 import {
   catalogReadFailed,
-  emptyComposer,
   hydrateComposer,
   reconcileComposerSelection,
   resolveModel,
@@ -75,6 +73,9 @@ import { withTimeout } from "./timeout.js";
 import { applySessionEvent } from "./translate.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
+import { newSessionState } from "./session-factory.js";
+
+export { newSessionState };
 import {
   clientSessionKeys,
   isObject,
@@ -244,42 +245,6 @@ export async function hydrateSessionComposer(
   });
   composerHydrations.set(state, operation);
   return operation;
-}
-
-export function newSessionState(
-  clientSessionKey?: string,
-  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
-): SessionState {
-  return {
-    id: randomBytes(16).toString("hex"),
-    ...(policy ? { policy } : {}),
-    ...(clientSessionKey ? { clientSessionKey } : {}),
-    status: "idle",
-    messages: [],
-    droppedMessages: 0,
-    droppedParts: 0,
-    transcriptTruncated: false,
-    revision: 0,
-    structured: new Map(),
-    promptJournal: new Map(),
-    steerJournal: new Map(),
-    pendingSteerDeliveries: [],
-    approvals: new Map(),
-    todos: [],
-    composer: emptyComposer(),
-    session: null,
-    dispatching: false,
-    promptSequence: 0,
-    openTextParts: new Map(),
-    toolInputs: new Map(),
-    uncheckedTranscriptBytes: 0,
-    queue: { steering: [], followUp: [] },
-    slashCommands: [],
-    commandCatalogue: { status: "stale", revision: 0 },
-    compacting: false,
-    lastAccessed: Date.now(),
-    health: new RuntimeHealthRecorder(),
-  };
 }
 
 /**

@@ -196,7 +196,7 @@ describe("mise task surface", () => {
       // than a task name. Capture any trailing `<` so those stay recognisable
       // and drop them — a lookahead would backtrack into the shorter prefix.
       for (const match of text.matchAll(wrappedInvocation("mise"))) {
-        const task = match[1];
+        const task = match[1]!;
         if (task.includes("<")) continue;
         referenced += 1;
         expect(
@@ -244,7 +244,8 @@ describe("mise task surface", () => {
     for (const file of markdownFiles()) {
       const text = read(file);
       for (const match of text.matchAll(/\bbun run --cwd (\S+) ([\w:.-]+)/g)) {
-        const [, workspace, script] = match;
+        const workspace = match[1]!;
+        const script = match[2]!;
         referenced += 1;
         const manifest = JSON.parse(read(`${workspace}/package.json`)) as {
           scripts?: Record<string, string>;
@@ -270,7 +271,7 @@ describe("mise task surface", () => {
       for (const match of text.matchAll(wrappedInvocation("mise"))) {
         referenced += 1;
         expect(
-          tasks[match[1]]?.run,
+          tasks[match[1]!]?.run,
           `${file}:${lineNumberAt(text, match.index)} runs \`mise run ${match[1]}\``,
         ).toBeTruthy();
       }

@@ -1,7 +1,7 @@
 import {
   canonicalWorktreePath,
   assertWorktreePathUnlinked,
-} from "@orkestrator/protocol/worktree-paths";
+} from "@orkestrator/protocol/node/worktree-paths";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -14,7 +14,7 @@ import {
   normalizeRuntimeProfileId,
   type RuntimeFlavor,
   type RuntimeProfileRoots,
-} from "@orkestrator/protocol/runtime-profile-status";
+} from "@orkestrator/protocol/node/runtime-profile-status";
 
 export const DEV_PROFILE_SENTINEL = ".orkestrator-dev-profile";
 export const DEV_PROFILE_FORMAT_VERSION = 1;
@@ -57,7 +57,7 @@ export {
   type RuntimeProcessName,
   type RuntimeProfileRoots,
   type RuntimeStatusManifest,
-} from "@orkestrator/protocol/runtime-profile-status";
+} from "@orkestrator/protocol/node/runtime-profile-status";
 
 function shortHash(value: string, length = 12): string {
   return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, length);

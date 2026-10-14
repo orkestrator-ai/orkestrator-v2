@@ -1,5 +1,5 @@
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { runCommand } from "./commands-dependencies.js";
+import { runCommand } from "./shell.js";
 
 /**
  * Generation-bound container readiness and graceful drain.

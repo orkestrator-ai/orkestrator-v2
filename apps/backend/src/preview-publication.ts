@@ -11,7 +11,7 @@ import {
   PREVIEW_SESSION_COOKIE,
   PREVIEW_SESSION_PATH,
 } from "@orkestrator/protocol/preview-access";
-import { rejectPreviewUpgrade } from "@orkestrator/protocol/preview-forward";
+import { rejectPreviewUpgrade } from "@orkestrator/protocol/node/preview-forward";
 import {
   crossSiteViolation,
   pairsFromRaw,

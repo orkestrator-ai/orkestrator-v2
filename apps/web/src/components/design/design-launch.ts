@@ -10,7 +10,6 @@ import type {
   DesignReadiness,
   DesignRendererState,
 } from "@orkestrator/protocol/design-operations";
-import { invoke } from "@/lib/native/backend";
 import {
   classifyTransportError,
   DesignClientError,
@@ -18,7 +17,8 @@ import {
   designAction,
   failureOf,
   getCapabilities,
-} from "./design-client";
+  getLegacyDesignStatus,
+} from "@/lib/design-client";
 import type { DesignPlacement } from "./design-open";
 
 // ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ export interface DesignReadinessDeps {
 const defaultReadinessDeps: DesignReadinessDeps = {
   capabilities: () => getCapabilities(),
   readiness: (probe) => designApi.readiness(probe),
-  legacyStatus: () => invoke<{ ready: boolean; error?: string }>("design_status"),
+  legacyStatus: () => getLegacyDesignStatus(),
 };
 
 const UNKNOWN_RENDERER = {

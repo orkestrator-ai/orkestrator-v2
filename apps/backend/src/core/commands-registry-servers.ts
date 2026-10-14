@@ -6,9 +6,9 @@ import {
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { promises as fs } from "node:fs";
+import { randomBytes } from "node:crypto";
 import {
-  fs,
-  randomBytes,
   APP_SLUG,
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
@@ -19,14 +19,14 @@ import {
   OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
   resolveCodexMaxConcurrentThreads,
-  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
-  ORKESTRATOR_AGENT_MCP_URL_ENV,
-  homePath,
-  pathExists,
+} from "./constants.js";
+import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
+import { homePath, pathExists } from "./shell.js";
+import {
   isSelectableOpenCodeProvider,
   normalizeOpenCodeModelProviders,
-} from "./commands-dependencies.js";
-import type { ClaudeModelCatalogSnapshot } from "./commands-dependencies.js";
+} from "@orkestrator/protocol/native-agent";
+import type { ClaudeModelCatalogSnapshot } from "./models.js";
 import {
   CONTAINER_CURSOR_SDK_AUTH_FILE,
   cursorSdkStoredApiKey,

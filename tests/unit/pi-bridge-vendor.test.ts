@@ -62,7 +62,7 @@ describe("Pi bridge runtime vendoring", () => {
     const sourceModules = path.join(root, "source", "node_modules");
     const store = path.join(sourceModules, ".bun");
     const stagedModules = path.join(root, "staged", "node_modules");
-    const packages: FixturePackage[] = [
+    const packages: [FixturePackage, ...FixturePackage[]] = [
       {
         key: "entry@1.0.0",
         name: "entry",

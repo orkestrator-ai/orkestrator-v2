@@ -1,7 +1,7 @@
 import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";

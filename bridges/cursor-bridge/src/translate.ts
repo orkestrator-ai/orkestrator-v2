@@ -24,7 +24,10 @@ import {
 import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { recordObservedMcpTool } from "./mcp.js";
-import { jsonStringContentBytes, encodedJsonBytes } from "@orkestrator/protocol/transcript-budget";
+import {
+  jsonStringContentBytes,
+  encodedJsonBytes,
+} from "@orkestrator/protocol/node/transcript-budget";
 import { nextPartOrdinal } from "@orkestrator/protocol/transcript-part-ids";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {

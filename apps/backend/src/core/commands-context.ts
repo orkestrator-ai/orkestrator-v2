@@ -1,15 +1,12 @@
-import type {
-  AgentPlatform,
-  AgentToolConnection,
-  BuildPipelineService,
-  EnvironmentLifecycleTaskTracker,
-  JsonRecord,
-  LoopedReviewService,
-  MultiReviewService,
-  NativeAgentService,
-  StorageService,
-  FeaturePlanningService,
-} from "./commands-dependencies.js";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { BuildPipelineService } from "./build-pipeline-service.js";
+import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import type { JsonRecord, StorageService } from "./storage.js";
+import type { LoopedReviewService } from "./looped-review-service.js";
+import type { MultiReviewService } from "./multi-review-service.js";
+import type { NativeAgentService } from "./native-agent-service.js";
+import type { FeaturePlanningService } from "./feature-planning.js";
 import type {
   ControlMcpSettings,
   CoordinatorControlConnection,

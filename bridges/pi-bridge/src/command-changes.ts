@@ -17,9 +17,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   CommandChangeJournal,
   hasMeasuredChanges,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import { commandChangeJournalPath, workingDirectory } from "./config.js";
 import { schedulePersist } from "./persistence.js";
 import type { SessionState } from "./state.js";

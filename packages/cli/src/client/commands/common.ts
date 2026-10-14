@@ -7,7 +7,7 @@ import {
 import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
-import type { CommandContext, CommandOutcome, OptionSpec } from "../spec.js";
+import type { CommandContext, OptionSpec } from "../spec.js";
 import { observe, ObservationStopped, signalName } from "../wait.js";
 
 export const REQUEST_ID_OPTION: OptionSpec = {
@@ -297,14 +297,6 @@ export async function waitForEnvironment(
     }
     throw error;
   }
-}
-
-export function withConnection(
-  context: CommandContext,
-  outcome: CommandOutcome,
-  session?: ClientSession,
-): CommandOutcome {
-  return session ? { ...outcome, connection: session.identity } : outcome;
 }
 
 export { signalName };

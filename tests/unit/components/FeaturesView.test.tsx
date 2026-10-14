@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -262,12 +262,6 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function flushReconcileStart(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
-  });
-}
-
 function makeStory(overrides: Partial<FeatureStoryCard> = {}): FeatureStoryCard {
   return {
     id: "story-1",
@@ -330,11 +324,6 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
     environmentType: "containerized",
     ...overrides,
   };
-}
-
-function featurePlannerReply(text: string): string {
-  return `${text}
-<feature_planner_state>{"phase":"collecting","title":"My Feature","summary":""}</feature_planner_state>`;
 }
 
 function seedExistingCodexEnvironment(environment: Environment = makeEnvironment()) {
@@ -693,12 +682,7 @@ beforeEach(() => {
     environments: [],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
-    sessionActivated: new Set(),
   });
   useFeaturePlanStore.setState({ chatDrafts: new Map() });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });

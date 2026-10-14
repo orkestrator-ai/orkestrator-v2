@@ -132,7 +132,7 @@ verified and all displayed usage has an honest scope and freshness indicator.
   experiment inputs until step 13 measures workloads. Shared memory stays at
   the existing 1 GiB. A memory limit is not lowered on a live container close to
   its current use without confirmation.
-- **Tests.** `tests/unit/electron/container-resources.test.ts` (validation,
+- **Tests.** `apps/backend/tests/container-resources.test.ts` (validation,
   resolution, arguments, applied read-back incl. `<nil>`, memory units,
   unclamped multi-core CPU, unknown values, daemon capacity and rootless, disk
   kinds, sampler deduplication, owner scoping and daemon-unavailable);

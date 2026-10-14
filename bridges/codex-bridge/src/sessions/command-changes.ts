@@ -2,7 +2,7 @@
  * Line-change badges for shell commands: which calls to measure, where the
  * measurements live, and how they are laid back onto a transcript.
  *
- * The measuring itself is `@orkestrator/protocol/workspace-change-probe`. Codex
+ * The measuring itself is `@orkestrator/protocol/node/workspace-change-probe`. Codex
  * reports a command only once it is running — app-server has no hook that
  * holds one, and approvals are off in normal operation — so every window is
  * opened in the probe's baseline mode: the runtime primes a snapshot before
@@ -19,9 +19,9 @@ import { fileURLToPath } from "node:url";
 import {
   CommandChangeJournal,
   hasMeasuredChanges,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import type { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import type { EngineItem } from "../engine/types.js";
 import type { NormalizedMessage, NormalizedPart } from "../messages/types.js";
 

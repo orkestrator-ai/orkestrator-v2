@@ -4,7 +4,7 @@ import type { Environment, Project } from "../../../apps/web/src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
 import * as realBackend from "@/lib/backend";
-import * as realSonner from "sonner";
+import { mockToastError } from "../../mocks/sonner";
 import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 
@@ -12,7 +12,9 @@ const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
 const sortableState = { isDragging: false, dragPointerDown: mock(() => {}) };
 const openInBrowser = mock(async (_url: string) => {});
-const toastError = mock((_message: string) => undefined);
+// The preload already replaces sonner with shared spies; asserting on those
+// avoids a competing module mock that could leak into other suites.
+const toastError = mockToastError;
 
 mock.module("@dnd-kit/sortable", () => ({
   ...realSortableSnapshot,
@@ -47,11 +49,6 @@ mock.module("@/components/environments/EnvironmentItem", () => ({
 mock.module("@/lib/backend", () => ({
   ...realBackend,
   openInBrowser,
-}));
-
-mock.module("sonner", () => ({
-  ...realSonner,
-  toast: { ...realSonner.toast, error: toastError },
 }));
 
 const { SortableEnvironmentItem } =
@@ -101,7 +98,6 @@ describe("sortable sidebar items", () => {
     mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
     mock.module("@/components/environments/EnvironmentItem", () => realEnvironmentItemSnapshot);
     mock.module("@/lib/backend", () => realBackend);
-    mock.module("sonner", () => realSonner);
   });
 
   test("SortableEnvironmentItem applies selected and dragging treatments", () => {

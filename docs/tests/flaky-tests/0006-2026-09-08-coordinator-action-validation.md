@@ -9,19 +9,19 @@
   change; one was a pre-existing unbounded DOM assertion corrected in this
   change. Those three are deterministic defects, not flakes.
 - **`Electron backend command registry > rejects a local HEAD that git did not
-  report as a commit sha`**, `tests/unit/electron/commands-environment.test.ts`:
+  report as a commit sha`**, `apps/backend/tests/commands-environment.test.ts`:
   fixture `git commit -m base` exited with `signal: SIGKILL`, no output, with
   the case reported at 77.46ms. No cause established; this is not evidence that
   the command's Git validation failed.
 - **`remote gateway > closes an established event stream when its agent-test
-  session expires`**, `tests/unit/electron/gateway-auth.test.ts`: the harness
+  session expires`**, `apps/backend/tests/gateway-auth.test.ts`: the harness
   received the connected frame but could no longer find its registered client
   (`Gateway did not register the event-stream client`, 48.73ms). Early session
   expiry under aggregate scheduling is a hypothesis, not a confirmed cause.
 - **Isolated reruns:** both passed with exit 0 using
-  `bun run test:logged -- --name composite-root-git-isolated -- bun test ./tests/unit/electron/commands-environment.test.ts --parallel=2 --only-failures`
+  `bun run test:logged -- --name composite-root-git-isolated -- bun test ./apps/backend/tests/commands-environment.test.ts --parallel=2 --only-failures`
   (1.1s) and
-  `bun run test:logged -- --name composite-root-gateway-isolated -- bun test ./tests/unit/electron/gateway-auth.test.ts --parallel=2 --only-failures`
+  `bun run test:logged -- --name composite-root-gateway-isolated -- bun test ./apps/backend/tests/gateway-auth.test.ts --parallel=2 --only-failures`
   (0.8s).
 - **Failure evidence:** `/tmp/orkestrator-test-run.p4oV62/summary.json` and
   `/tmp/orkestrator-test-run.p4oV62/root-and-agent-support-tests.log.gz`.
@@ -45,10 +45,10 @@
 | Owning file | Exact test name | Failure / duration |
 | --- | --- | --- |
 | `tests/unit/pi-bridge-vendor.test.ts` | Pi bridge runtime vendoring > loads Pi's undeclared server import from the staged runtime closure | 30,000ms timeout / 30,004.20ms |
-| `tests/unit/electron/commands-integration.test.ts` | Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry | 5,000ms timeout / 6,722.09ms |
-| `tests/unit/electron/commands-registry-pr.test.ts` | Electron backend command registry > persists merge cleanup intent before dispatch and completes local cleanup in the backend | 5,000ms timeout / 7,295.39ms |
-| `tests/unit/electron/commands-registry-pr.test.ts` | Electron backend command registry > continues confirmed cleanup when persisting merged PR state fails once | 5,000ms timeout / 6,423.57ms |
-| `tests/unit/electron/commands-io-coverage.test.ts` | backend command I/O coverage > reports the HEAD and uncommitted paths of a local environment worktree | 5,000ms timeout / 5,001.20ms |
+| `apps/backend/tests/commands-integration.test.ts` | Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry | 5,000ms timeout / 6,722.09ms |
+| `apps/backend/tests/commands-registry-pr.test.ts` | Electron backend command registry > persists merge cleanup intent before dispatch and completes local cleanup in the backend | 5,000ms timeout / 7,295.39ms |
+| `apps/backend/tests/commands-registry-pr.test.ts` | Electron backend command registry > continues confirmed cleanup when persisting merged PR state fails once | 5,000ms timeout / 6,423.57ms |
+| `apps/backend/tests/commands-io-coverage.test.ts` | backend command I/O coverage > reports the HEAD and uncommitted paths of a local environment worktree | 5,000ms timeout / 5,001.20ms |
 | `apps/backend/src/core/commands-state-sync.test.ts` | initial prompt attachment command > accepts twenty attachments and rejects the twenty-first | 5,000ms timeout / 5,002.65ms |
 | `apps/backend/src/core/commands-state-sync.test.ts` | initial prompt attachment command > allocates a safe unique name for every hostile or colliding attachment name | 5,000ms timeout / 5,003.55ms |
 | `apps/backend/src/core/coordinator-service.test.ts` | project coordinator > retention never removes an open conversation | 5,000ms timeout / 5,250.71ms |
@@ -56,7 +56,7 @@
 
 - **Isolated reruns:** exit 0 for all three logged commands below. Each used
   one worker, so owning files ran separately, with no concurrent file pool:
-  - `bun run test:logged -- --name composite-timeout-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./tests/unit/electron/commands-integration.test.ts ./tests/unit/electron/commands-registry-pr.test.ts ./tests/unit/electron/commands-io-coverage.test.ts --parallel=1 --only-failures` (37.8s).
+  - `bun run test:logged -- --name composite-timeout-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./apps/backend/tests/commands-integration.test.ts ./apps/backend/tests/commands-registry-pr.test.ts ./apps/backend/tests/commands-io-coverage.test.ts --parallel=1 --only-failures` (37.8s).
   - `bun run test:logged -- --name composite-backend-timeout-owners -- bun test --cwd apps/backend src/core/commands-state-sync.test.ts src/core/coordinator-service.test.ts --parallel=1 --only-failures` (17.6s).
   - `bun run test:logged -- --name composite-acp-timeout-owner -- bun test ./bridges/acp-bridge/src/acp-http.test.ts --parallel=1 --only-failures` (10.1s).
 - **Evidence:** `/tmp/orkestrator-test-run.Cun1t8/summary.json` and its compressed

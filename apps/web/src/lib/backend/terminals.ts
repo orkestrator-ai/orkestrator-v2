@@ -15,6 +15,27 @@ import {
 export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
+export interface ClaudeTerminalStateSnapshot {
+  state: string;
+  occurredAt: string;
+}
+
+/**
+ * The persisted Claude tmux state for a container, or null when none has been
+ * observed. Live `claude-state-*` events only fire on change, so this is what a
+ * tab reads after the event stream reports it may have missed one.
+ */
+export async function getClaudeTerminalState(
+  containerId: string,
+): Promise<ClaudeTerminalStateSnapshot | null> {
+  const snapshot = await invoke<ClaudeTerminalStateSnapshot | null>("get_claude_terminal_state", {
+    containerId,
+  });
+  return snapshot && typeof snapshot.state === "string" && typeof snapshot.occurredAt === "string"
+    ? snapshot
+    : null;
+}
+
 export async function attachTerminal(
   containerId: string,
   cols: number,

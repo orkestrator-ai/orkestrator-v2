@@ -23,17 +23,30 @@ import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import * as tmux from "./tmux-commands.js";
+import { TmuxBackend } from "./tmux-backend.js";
 import * as pathSafety from "./path-safety.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
 
 const roots: string[] = [];
+const listTmuxSessions = mock(async (args: string[]) => {
+  expect(args).toEqual(["tmux", "list-sessions", "-F", "#{session_name}"]);
+  return { status: 1, stdout: "", stderr: "no sessions" };
+});
 let optionalLocks: string | undefined;
 beforeEach(() => {
   optionalLocks = process.env.GIT_OPTIONAL_LOCKS;
   // Watchers may run status while fixtures reset the index.
   process.env.GIT_OPTIONAL_LOCKS = "0";
+  // These fixtures own no tmux processes. Keep cleanup and hook restoration
+  // real, but use a known-empty inventory instead of the host's tmux sessions.
+  listTmuxSessions.mockClear();
+  const exec = TmuxBackend.prototype.exec;
+  spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (this: TmuxBackend, ...args) {
+    if (args[0][0] === "tmux") return listTmuxSessions(args[0]);
+    return exec.apply(this, args);
+  });
 });
 
 afterEach(async () => {
@@ -212,6 +225,28 @@ async function exists(target: string): Promise<boolean> {
 }
 
 describe("move_environment", () => {
+  test("moves with no tmux sessions or hook backups and preserves workspace settings", async () => {
+    const { root, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const settings = JSON.stringify({ permissions: { allow: ["Bash(ls:*)"] } });
+    await fs.mkdir(path.join(environment.worktreePath!, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(environment.worktreePath!, ".claude", "settings.local.json"),
+      settings,
+    );
+
+    const moved = await moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
+      sessionHomes: isolatedHomes(root),
+    });
+
+    expect(listTmuxSessions).toHaveBeenCalledTimes(1);
+    expect(await exists(environment.worktreePath!)).toBe(false);
+    expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(moved.worktreePath);
+    expect(
+      await fs.readFile(path.join(moved.worktreePath!, ".claude", "settings.local.json"), "utf8"),
+    ).toBe(settings);
+  });
+
   for (const forceCopy of [false, true]) {
     test(`moves every file and re-points git (${forceCopy ? "copy" : "rename"})`, async () => {
       const { root, projectPath, storage, context, startLocal } = await setup();

@@ -72,8 +72,8 @@ AppleDouble metadata with `COPYFILE_DISABLE=1` and an explicit archive format.
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
-| Workspace | Web, backend, desktop, public web, CLI, and protocol package tests | Turbo runs at most two package tasks; each package gets one Bun worker on a large host |
-| Root | Root tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget, up to three workers on a large host |
+| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more |
+| Root | Root renderer and repository-contract tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget: one worker on a large host, up to two on smaller ones |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
 
@@ -102,6 +102,32 @@ not part of `mise run test`; they require different fixtures and, for agent
 testing, an isolated running application profile. Select them using the table
 above and [agent-testing.md](agent-testing.md).
 
+## Where tests live
+
+Put a test in the package that owns the code it exercises, so it runs with that
+package's preload and is typechecked by that package's configuration:
+
+| Code under test | Test location | Runtime |
+| --- | --- | --- |
+| `apps/backend/src` | Beside the source, or `apps/backend/tests/` for multi-module integration suites and shared fixtures | Node-only preload |
+| `apps/desktop/electron` | `apps/desktop/tests/` (a few older suites sit beside the source) | Node-only preload |
+| `packages/*`, `bridges/*` | Beside the source | Node-only preload |
+| `apps/web/src` | Beside the source; older renderer suites remain under `tests/unit/` | Happy DOM and renderer mocks |
+| Repository scripts, release configuration, documentation and cross-package contracts | `tests/unit/` | Happy DOM and renderer mocks |
+
+The root `tests/` tree loads Happy DOM for every file. Happy DOM replaces
+`fetch`, `Response`, `AbortController` and the timer and microtask queues,
+and it reports errors thrown from its queues instead of letting them become
+uncaught exceptions. A server-side test there is not exercising the runtime the
+code ships in. `tests/unit/test-suite-ownership.test.ts` therefore rejects
+root tests that import backend or desktop sources.
+
+`mise run typecheck` covers every location: package tests through each
+package's typecheck script (`tsconfig.test.json` in the backend and desktop),
+root tests and `scripts/` through `tests/tsconfig.json`, and the browser and
+agent specs through the two `e2e` configurations. Test code uses the same
+strict options as the code it tests.
+
 ## Focused test commands
 
 The standard focused form uses `test:logged`, which also places the command
@@ -124,6 +150,12 @@ mise run test:logged -- --name web-example -- \
 mise run test:logged -- --name backend-example -- \
   bun test --cwd apps/backend \
   --preload ../../tests/setup-node.ts ./src/core/example.test.ts \
+  --parallel=1 --only-failures
+
+# Desktop test, likewise from its package directory
+mise run test:logged -- --name desktop-example -- \
+  bun test --cwd apps/desktop \
+  --preload ../../tests/setup-node.ts ./tests/example.test.ts \
   --parallel=1 --only-failures
 
 # One bridge test
@@ -531,13 +563,11 @@ shows real per-package test counts.
 
 Turbo runs each package script from that package's directory, and Bun reads
 `bunfig.toml` from the invocation directory without walking up to the repository
-root. Bridge test scripts therefore name the root preloads explicitly with
-`--preload ../../tests/register-dom.ts --preload ../../tests/setup.ts`. Dropping
-them is not a silent no-op: `tests/setup.ts` is what sets
-`CODEX_BRIDGE_NO_SERVER`, isolates the git configuration, and installs the
-bounded diagnostics, so without it the codex bridge suite binds a real port and
-fails. A unit test derives the expected flags from `bunfig.toml` so the two
-cannot drift.
+root. Backend, desktop, package and bridge test scripts therefore name the
+Node-only preload explicitly with `--preload ../../tests/setup-node.ts`.
+Dropping it is not a silent no-op: it is what sets `CODEX_BRIDGE_NO_SERVER`,
+isolates the git configuration, and installs the bounded diagnostics, so
+without it the codex bridge suite binds a real port and fails.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate
@@ -565,8 +595,8 @@ ports, drive happy-dom) rather than CPU, so it parallelizes well:
 - **Across groups** — `scripts/test-all.ts` runs the workspace, root, bridge and
   protocol groups concurrently, with bounded worker pools (`planWorkers`) so
   the three worker-consuming groups cannot oversubscribe a small CI runner.
-  Larger hosts give remaining capacity to the root long pole while keeping at
-  most two package tasks active. iOS is opt-in through `test:all` and runs
+  Larger hosts give each package task a second worker while keeping at most
+  two package tasks active; the root group takes the remainder. iOS is opt-in through `test:all` and runs
   last and alone because the simulator is a single shared resource.
 
 Group output streams to private bounded files while only a failure tail stays in

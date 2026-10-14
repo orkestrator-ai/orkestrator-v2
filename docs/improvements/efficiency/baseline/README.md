@@ -44,8 +44,22 @@ Other options: `--workloads a,c,j` selects workloads, `--repetitions n`
 (default 7) sets repetitions, `--out` overrides the report path, and
 `--fail-on-change` makes any counter difference exit 1. A full run takes about
 a minute and needs no provider, network, Docker or profile.
+
+Protocol modules moved into `packages/protocol/src/node/` are resolved inside
+the selected `--root`: the current path wins when present, otherwise the loader
+tries the legacy `packages/protocol/src/` path. Required and optional imports
+use the same resolution; a missing optional module remains unsupported, and an
+import failure is never hidden by a fallback to this checkout.
+
+Revalidated on macOS arm64 with Bun 1.4.3 on 2026-10-14: the full documented
+`e8fbf1d0` baseline and candidate commands completed all 10 workloads with stable
+counters. The baseline supports 34 of 38 cases (the four v2 route, summary and
+direct-page cases did not exist yet); the candidate supports all 38. Reports
+and the comparison are in `output/efficiency/review-fixes/` (ignored).
+
 `tests/unit/efficiency/harness.test.ts` keeps the fixtures deterministic and
-content-free and the delta accounting exact.
+content-free, the delta accounting exact, and required and optional module
+loading correct across current and historical layouts.
 
 ## Method
 

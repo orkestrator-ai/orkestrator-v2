@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { waitFor } from "@testing-library/react";
 import { webAnnotationPageKey } from "@orkestrator/protocol/web-annotations";
-import { fixturePage, fixtureRequest } from "@orkestrator/protocol/web-annotations-fixtures";
+import {
+  fixturePage,
+  fixtureRequest,
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   FakeWebAnnotationBackend,
   fixtureCapabilities,

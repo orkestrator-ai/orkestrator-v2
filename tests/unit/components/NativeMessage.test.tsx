@@ -238,7 +238,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "Copy this user prompt" }],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    render(<NativeMessage message={message} />);
     const bubble = screen.getByText("Copy this user prompt").closest(".rounded-xl") as HTMLElement;
     expect(bubble.textContent).not.toContain("12:00");
     expect(bubble.className).toContain("[&_.prose_p]:my-0");

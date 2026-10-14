@@ -1,7 +1,7 @@
 import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
-} from "@orkestrator/protocol/worktree-paths";
+} from "@orkestrator/protocol/node/worktree-paths";
 import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import {
   getWorktreeBaseDir,
@@ -62,22 +62,20 @@ import {
 } from "./recovery-copies.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
+import { promises as fs } from "node:fs";
+import { isIP } from "node:net";
+import path from "node:path";
+import { spawnPty } from "./pty.js";
 import {
-  fs,
-  isIP,
-  path,
-  spawnPty,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_OWNER,
   ORKESTRATOR_PROJECT_CONFIG,
-  dockerOwnerNamespace,
-  sanitizeBranchName,
-  sanitizeEnvironmentName,
-  pathExists,
-  runCommand,
-  shutdownClaudeStatePolling,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
+import { pathExists, runCommand } from "./shell.js";
+import { shutdownClaudeStatePolling } from "./tmux.js";
 import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
 import {
@@ -97,13 +95,10 @@ import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,
 } from "./project-home-environment.js";
-import type {
-  Environment,
-  EnvironmentStatus,
-  PtyProcess,
-  StorageService,
-  AgentToolConnection,
-} from "./commands-dependencies.js";
+import type { Environment, EnvironmentStatus } from "./models.js";
+import type { PtyProcess } from "./pty.js";
+import type { StorageService } from "./storage.js";
+import type { AgentToolConnection } from "./agent-tools.js";
 import { completeTerminalHistory, configureTerminalHistory } from "./terminal-history.js";
 import {
   terminalProcesses,

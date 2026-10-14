@@ -207,24 +207,24 @@ const findingPool = {
   issues: [
     {
       poolId: "issue-001",
-      ...fullyPopulatedReport.issues[0],
+      ...fullyPopulatedReport.issues[0]!,
     },
   ],
   coverageGaps: [
     {
       poolId: "gap-001",
-      ...fullyPopulatedReport.testCoverageGaps[0],
+      ...fullyPopulatedReport.testCoverageGaps[0]!,
     },
   ],
 } satisfies ReviewFindingPool;
 
 const reconciliation = {
-  newIssues: [fullyPopulatedReport.issues[1]],
+  newIssues: [fullyPopulatedReport.issues[1]!],
   issueUpdates: [
     {
       poolId: "issue-001",
       finding: {
-        ...fullyPopulatedReport.issues[0],
+        ...fullyPopulatedReport.issues[0]!,
         confidence: 98,
         evidence: "A second pass confirmed the ordering from a persisted snapshot.",
       },
@@ -584,7 +584,7 @@ describe("structured review report contract", () => {
     >;
 
     for (const section of STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.required) {
-      const schema = properties[section];
+      const schema = properties[section]!;
       expect(schema).toBeTruthy();
       const described = typeof schema.description === "string" && schema.description.length > 0;
       const childrenDescribed =

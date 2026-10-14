@@ -14,10 +14,9 @@ import {
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RESOURCE_ROLE,
-  dockerOwnerNamespace,
-  runCommand,
-  spawnCommand,
-} from "./commands-dependencies.js";
+} from "./constants.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { runCommand, spawnCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 
 /**

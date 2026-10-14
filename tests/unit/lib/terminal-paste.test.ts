@@ -46,7 +46,7 @@ describe("handleTerminalPaste", () => {
     });
 
     expect(mockProcessClipboardPaste).toHaveBeenCalledTimes(1);
-    expect(mockProcessClipboardPaste.mock.calls[0][0]).toBe("container-123");
+    expect(mockProcessClipboardPaste.mock.calls[0]![0]).toBe("container-123");
     expect(mockProcessLocalClipboardPaste).not.toHaveBeenCalled();
     expect(mockReadText).not.toHaveBeenCalled();
   });
@@ -61,7 +61,7 @@ describe("handleTerminalPaste", () => {
     });
 
     expect(mockProcessLocalClipboardPaste).toHaveBeenCalledTimes(1);
-    expect(mockProcessLocalClipboardPaste.mock.calls[0][0]).toBe("/tmp/worktrees/my-env");
+    expect(mockProcessLocalClipboardPaste.mock.calls[0]![0]).toBe("/tmp/worktrees/my-env");
     expect(mockProcessClipboardPaste).not.toHaveBeenCalled();
     expect(mockReadText).not.toHaveBeenCalled();
   });

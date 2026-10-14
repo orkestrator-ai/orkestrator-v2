@@ -204,4 +204,32 @@ describe("test suite ownership", () => {
     expect(mise).toContain("e2e/agent-testing/playwright.browser.config.ts");
     expect(mise).toContain("e2e/agent-testing/playwright.electron.config.ts");
   });
+
+  test("root tests import backend or desktop sources only as cross-package contracts", () => {
+    // The root tree runs under Happy DOM, which replaces fetch, Response, the
+    // abort classes and the timer queues, and swallows errors thrown from them.
+    // A backend or desktop suite belongs in its own package, where it runs on
+    // the platform it ships on and is typechecked with that package.
+    const crossPackageContracts = new Set([
+      "tests/unit/codex-bridge-environment.test.ts",
+      "tests/unit/components/GitHubCloneIntegration.test.tsx",
+      "tests/unit/components/SettingsPage.test.tsx",
+      "tests/unit/firewall-refresh.test.ts",
+      // Exercises backend normalization through the renderer's pipeline adapter.
+      "tests/unit/lib/opencode-pipeline-transcript.test.ts",
+      "tests/unit/migrate-copy.test.ts",
+      "tests/unit/test-host-isolation.test.ts",
+      "tests/unit/user-prompt-display-contract.test.ts",
+      "tests/unit/workspace-setup-preserve.test.ts",
+    ]);
+    const sourceImport =
+      /(?:from|import\(|mock\.module\()\s*["'](?:\.\.\/)+apps\/(?:backend|desktop)\//;
+    const misplaced = repositoryFiles("tests")
+      .filter((file) => /\.tsx?$/.test(file) && !crossPackageContracts.has(file))
+      .filter((file) => sourceImport.test(read(file)));
+
+    expect(misplaced).toEqual([]);
+    for (const file of crossPackageContracts)
+      expect(sourceImport.test(read(file)), file).toBe(true);
+  });
 });

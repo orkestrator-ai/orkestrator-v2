@@ -13,6 +13,7 @@ import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTerminalPaste from "@/lib/terminal-paste";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import type { TerminalOutputPayload } from "@/hooks/useTerminal";
+import type { TerminalPasteOptions } from "@/lib/terminal-paste";
 import { emitViewportChange, restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 
 const realXtermSnapshot = { ...realXterm };
@@ -125,10 +126,10 @@ const listenMock = mock(
 const unlistenMock = mock(() => {});
 const createInteractiveTerminalMock = mock(async () => "pty-1");
 const startInteractiveTerminalMock = mock(async () => {});
-const writeInteractiveTerminalMock = mock(async () => {});
+const writeInteractiveTerminalMock = mock(async (_terminalSessionId: string, _data: string) => {});
 const resizeInteractiveTerminalMock = mock(async () => {});
 const detachInteractiveTerminalMock = mock(async () => {});
-const handleTerminalPasteMock = mock(async () => {});
+const handleTerminalPasteMock = mock(async (_options: TerminalPasteOptions) => {});
 
 mock.module("@xterm/xterm", () => ({
   Terminal: MockTerminal,

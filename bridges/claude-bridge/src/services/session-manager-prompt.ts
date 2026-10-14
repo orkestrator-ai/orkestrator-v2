@@ -1,7 +1,7 @@
 import { observeClaudeMessage } from "./diagnostics.js";
 import { pluginStatusesFromInit } from "./init-plugins.js";
 import { reportUltracodeRuntime, requestsUltracode } from "./ultracode.js";
-import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
+import { createBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 import { query } from "@anthropic-ai/claude-agent-sdk";

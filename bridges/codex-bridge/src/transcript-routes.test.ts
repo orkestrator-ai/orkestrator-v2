@@ -13,7 +13,7 @@ import {
   type BridgeTranscriptContractAdapter,
   type ContractMessage,
   type ContractReader,
-} from "@orkestrator/protocol/bridge-transcript-contract";
+} from "@orkestrator/protocol/node/bridge-transcript-contract";
 import type { EngineTurnConfig } from "./engine/types.js";
 import type { NormalizedMessage } from "./messages/types.js";
 import { ThreadRegistry, type BridgeSession } from "./sessions/thread-registry.js";

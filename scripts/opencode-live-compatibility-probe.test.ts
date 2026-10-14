@@ -92,7 +92,9 @@ describe("local SDK and network discovery", () => {
       await readFile(join(import.meta.dir, "..", "apps", "backend", "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
 
-    expect(await readPinnedSdkVersion()).toBe(manifest.dependencies?.["@opencode-ai/sdk"]);
+    expect<string | undefined>(await readPinnedSdkVersion()).toBe(
+      manifest.dependencies?.["@opencode-ai/sdk"],
+    );
   });
 
   test("reads the version from the installed SDK package", async () => {

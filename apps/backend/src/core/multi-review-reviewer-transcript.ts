@@ -36,7 +36,7 @@ import {
   BRIDGE_DETAIL_LOCATOR_MAX_LENGTH,
   isBridgeDetailLocator,
   readBridgePartDetail,
-} from "@orkestrator/protocol/bridge-transcript-summary";
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import {
   DIRECT_HISTORY_CURSOR_MAX_LENGTH,

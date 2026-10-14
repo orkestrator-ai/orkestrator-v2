@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { BeginOptions } from "@orkestrator/protocol/workspace-change-probe";
+import type { BeginOptions } from "@orkestrator/protocol/node/workspace-change-probe";
 import { readCommandChanges, type CommandChangeProbe } from "./sessions/command-changes.js";
 import type { NormalizedPart } from "./messages/types.js";
 

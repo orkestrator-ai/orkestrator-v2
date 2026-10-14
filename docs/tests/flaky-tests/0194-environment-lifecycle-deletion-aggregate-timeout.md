@@ -11,12 +11,12 @@
   when remote branch deletion fails for a non-404 reason` (6,912 ms), and
   `retains the environment and process ownership when deletion cannot reap a
   server` (6,242 ms).
-- **File:** `tests/unit/electron/commands-registry-environments.test.ts`
+- **File:** `apps/backend/tests/commands-registry-environments.test.ts`
 - **Original command:** `mise run test:logged -- --name full-tests-2 -- mise run test`
   on macOS; root group 4992 passed, 24 skipped, 19 failed, 3 errors across 253
   files in 390 seconds.
 - **Failure:** each exceeded the five-second test timeout.
-- **Isolated rerun:** `bun test ./tests/unit/electron/commands-registry-environments.test.ts`
+- **Isolated rerun:** `bun test ./apps/backend/tests/commands-registry-environments.test.ts`
   passed 68 of 68. The first full run of the same tree earlier that day also
   passed these cases.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.j4rNKa`.
@@ -36,7 +36,7 @@ test was skipped, loosened, or changed to conceal the failure.
   44 upgrade (no change to the backend or this file); 1939 passed, 23 skipped,
   2 failed across 115 files in 261.6 seconds, with a host load average near 30
   from other concurrent agent runs.
-- **Isolated rerun:** `bun test tests/unit/electron/commands-registry-environments.test.ts`
+- **Isolated rerun:** `bun test apps/backend/tests/commands-registry-environments.test.ts`
   passed in 81.1 seconds under the same host load.
 
 ## Recurrence during merge conflict validation (2026-10-13)
@@ -56,7 +56,7 @@ test was skipped, loosened, or changed to conceal the failure.
   (5,531.92 ms), each exceeding its five-second deadline. The first timeout
   also produced a late missing-fixture `docker-rm.log` error after cleanup.
 - **Isolated rerun:** the same GNU-tool PATH with
-  `mise run test:logged -- --name merge-environments-isolated -- bun test ./tests/unit/electron/commands-registry-environments.test.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name merge-environments-isolated -- bun test ./apps/backend/tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
   passed unchanged (exit 0) in 31.1 seconds.
 - **Hypothesis:** the aggregate deadline failures match earlier observations;
   unchanged owning files pass alone. Contention may contribute, but the root

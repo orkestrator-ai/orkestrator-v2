@@ -1,4 +1,8 @@
-import { fs, os, path, runCommand, validateRelativeFilePath } from "./commands-dependencies.js";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runCommand } from "./shell.js";
+import { validateRelativeFilePath } from "./path-safety.js";
 
 /**
  * Staging for the files a project is configured to copy into a container.
@@ -6,7 +10,7 @@ import { fs, os, path, runCommand, validateRelativeFilePath } from "./commands-d
  * A leaf: `commands-containers` needs these and nothing else from
  * `commands-environment`, so hosting them there made the container module a
  * back-edge into the environment module. This file must not import any other
- * `commands-*` module beyond `commands-dependencies`.
+ * `commands-*` module.
  */
 
 export function normalizeConfiguredProjectFiles(filesToCopy: string[] | undefined): string[] {

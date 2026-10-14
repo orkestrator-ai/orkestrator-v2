@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
-import { toast } from "sonner";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import { useProjects } from "@/hooks/useProjects";
 import { useProjectStore } from "@/stores/projectStore";
 import * as native from "@/lib/native/backend";
@@ -242,8 +242,10 @@ for (const outcome of ["success", "error"] as const) {
       if (name === "add_project") return (await pending) as never;
       throw new Error(`Unexpected command: ${name}`);
     });
-    const success = spyOn(toast, "success").mockImplementation(() => "notice");
-    const error = spyOn(toast, "error").mockImplementation(() => "notice");
+    // The preload replaces sonner with these shared spies and clears them
+    // before every test, so they count only this test's toasts.
+    const success = mockToastSuccess;
+    const error = mockToastError;
     useProjectStore.setState({ projects: [], isLoading: false, error: null });
     try {
       const view = render(<CloneDialog onOpenChange={() => undefined} />);
@@ -271,8 +273,6 @@ for (const outcome of ["success", "error"] as const) {
     } finally {
       cleanup();
       transport.mockRestore();
-      success.mockRestore();
-      error.mockRestore();
       useProjectStore.setState({ projects: [], isLoading: false, error: null });
     }
   });

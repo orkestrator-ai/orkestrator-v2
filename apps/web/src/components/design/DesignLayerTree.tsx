@@ -18,7 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { designApi } from "./design-client";
+import { designApi } from "@/lib/design-client";
 import type { DesignFrameAction } from "./design-canvas-context";
 import {
   applyPage,

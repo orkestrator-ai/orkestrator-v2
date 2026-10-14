@@ -10,7 +10,7 @@ import type {
 import { emptyProjection, type DesignIntent, type DesignProjection } from "@/stores/designStore";
 import { useFilesPanelStore } from "@/stores";
 import type { FileNode } from "@/lib/backend";
-import { DesignClientError } from "./design-client";
+import { DesignClientError } from "@/lib/design-client";
 import type { DesignCanvasController } from "./design-controller";
 import { DesignExportDialog, type DesignExportApi } from "./DesignExportDialog";
 

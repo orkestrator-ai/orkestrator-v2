@@ -34,7 +34,7 @@ describe("monorepo orchestration scripts", () => {
         to: "backend/node_modules",
       }),
     );
-    expect(miseTasks()["verify:packaged-backend"].run).toBe(
+    expect(miseTasks()["verify:packaged-backend"]?.run).toBe(
       "bun scripts/verify-packaged-backend.ts",
     );
     expect(runtimeWorkflow).toContain("mise run build:all");
@@ -166,9 +166,9 @@ describe("monorepo orchestration scripts", () => {
     // publish is what stops a broken package reaching users unverified.
     const tasks = miseTasks();
 
-    expect(tasks["smoke:cli"].run).toBe("bun run --cwd packages/cli smoke:pack");
-    expect(tasks["publish:cli"].run).toContain("mise run smoke:cli");
-    expect(tasks["publish:cli"].run).toContain("bun publish --cwd packages/cli --access public");
+    expect(tasks["smoke:cli"]?.run).toBe("bun run --cwd packages/cli smoke:pack");
+    expect(tasks["publish:cli"]?.run).toContain("mise run smoke:cli");
+    expect(tasks["publish:cli"]?.run).toContain("bun publish --cwd packages/cli --access public");
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(
@@ -302,9 +302,9 @@ describe("monorepo orchestration scripts", () => {
 
   test("provides a changed-tests fast path without weakening the full suite", () => {
     const tasks = miseTasks();
-    expect(tasks.test.run).toBe("bun scripts/test-all.ts");
-    expect(tasks["test:changed"].run).toBe("bun scripts/test-all.ts");
-    expect(tasks["test:changed"].env).toEqual({ ORKESTRATOR_TEST_AFFECTED: "1" });
+    expect(tasks.test?.run).toBe("bun scripts/test-all.ts");
+    expect(tasks["test:changed"]?.run).toBe("bun scripts/test-all.ts");
+    expect(tasks["test:changed"]?.env).toEqual({ ORKESTRATOR_TEST_AFFECTED: "1" });
   });
 
   test("the component e2e project never claims the agent-testing suite", () => {
@@ -381,7 +381,7 @@ describe("monorepo orchestration scripts", () => {
     const tasks = miseTasks();
 
     expect(rootPackage.scripts).toBeUndefined();
-    expect(tasks["dev:ios"].run).toBe("bun scripts/run-ios-simulator.ts");
-    expect(tasks["test:ios"].run).toBe("bun scripts/test-ios.ts");
+    expect(tasks["dev:ios"]?.run).toBe("bun scripts/run-ios-simulator.ts");
+    expect(tasks["test:ios"]?.run).toBe("bun scripts/test-ios.ts");
   });
 });

@@ -87,7 +87,7 @@ measurement was performed.
 
 The failure was
 `remote gateway > closes an established event stream when its agent-test session expires`
-in [gateway-auth.test.ts](../../tests/unit/electron/gateway-auth.test.ts):
+in [gateway-auth.test.ts](../../apps/backend/tests/gateway-auth.test.ts):
 `Event stream never connected`, after 2,016 ms. The test sets expiry only
 40 ms ahead **before** opening the event stream, creating a plausible
 load-sensitive connection/expiry race. This is a hypothesis from inspection,
@@ -96,7 +96,7 @@ in a future fixture fix, while retaining the separate rejection-of-expired-auth
 coverage. Do not delete the expiry test to make this run green.
 
 The owning file then passed alone in 1.3 seconds with
-`mise run test:logged -- --name streamlining-gateway-auth -- bun test ./tests/unit/electron/gateway-auth.test.ts --parallel=1 --only-failures`.
+`mise run test:logged -- --name streamlining-gateway-auth -- bun test ./apps/backend/tests/gateway-auth.test.ts --parallel=1 --only-failures`.
 This supports treating the aggregate failure as a credible flake; it does not
 establish the exact cause or turn the failed aggregate into a passing run.
 
@@ -106,8 +106,8 @@ Representative file durations from this run's Bun timing profiles:
 | --- | ---: | --- |
 | `tests/unit/components/GlobalSettings.test.tsx` | 32.23 s | Repeated autosave waits |
 | `tests/unit/components/GlobalSettingsDefaults.test.tsx` | 10.13 s | Same autosave helper pattern |
-| `tests/unit/electron/tmux-session.test.ts` | 23.48 s | Mix of helpers, real parser and lifecycle checks |
-| `tests/unit/electron/commands-integration.test.ts` | 22.54 s | Command delegation plus real fixtures |
+| `apps/backend/tests/tmux-session.test.ts` | 23.48 s | Mix of helpers, real parser and lifecycle checks |
+| `apps/backend/tests/commands-integration.test.ts` | 22.54 s | Command delegation plus real fixtures |
 | `tests/unit/components/CreateEnvironmentDialog.test.tsx` | 21.52 s | Large UI suite, plus some pure helper cases |
 | `apps/web/src/components/terminal/PersistentTerminal.test.tsx` | 22.09 s | Bootstrap, retry and terminal lifecycle cases |
 | `apps/web/src/components/layout/ActionBar.test.tsx` | 17.43 s | Large action/control matrix |
@@ -321,7 +321,7 @@ took only 19 ms, so this is not the major performance win.
 
 ## 7. Narrow expensive integration fixtures selectively
 
-[command-fixtures.ts](../../tests/unit/electron/command-fixtures.ts)
+[command-fixtures.ts](../../apps/backend/tests/command-fixtures.ts)
 initializes a bare repository and working repository, configures identity,
 commits and pushes in `createGitWorktreeWithOrigin()`. The helper is used even
 by some broad delegation tests whose storage is otherwise mocked. Use an empty

@@ -1,4 +1,4 @@
-# `Electron backend command registry > retains a failed pending rename so a later backend start can retry it` (`tests/unit/electron/commands-environment.test.ts`)
+# `Electron backend command registry > retains a failed pending rename so a later backend start can retry it` (`apps/backend/tests/commands-environment.test.ts`)
 
 - **ID:** 0013
 - **Status:** open
@@ -11,7 +11,7 @@
   duration: 15.92 s).
 - **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
   and 2 between-test errors across 188 files in 97.17 s.
-- **Isolated rerun:** `bun test tests/unit/electron/commands-environment.test.ts
+- **Isolated rerun:** `bun test apps/backend/tests/commands-environment.test.ts
   --only-failures` -> 8 passed, 0 failed in 0.78 s.
 - **Hypothesis:** the polling deadline expired during the same aggregate run
   that starved several unrelated process-heavy tests. The isolated case settled

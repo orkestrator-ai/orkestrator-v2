@@ -1,7 +1,7 @@
 import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
-} from "@orkestrator/protocol/worktree-paths";
+} from "@orkestrator/protocol/node/worktree-paths";
 import { spawnSync } from "node:child_process";
 import { constants, type Stats } from "node:fs";
 import {

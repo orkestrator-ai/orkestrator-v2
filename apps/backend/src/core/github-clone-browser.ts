@@ -7,7 +7,7 @@ import {
   type GitHubCloneRepository,
   type GitHubCloneRepositoryList,
 } from "@orkestrator/protocol/github-clone";
-import { CommandFailedError, type runCommand } from "./commands-dependencies.js";
+import { CommandFailedError, type runCommand } from "./shell.js";
 import { conciseError } from "./commands-error-text.js";
 
 const GITHUB_HOST = "github.com";

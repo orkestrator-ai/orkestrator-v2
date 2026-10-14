@@ -73,13 +73,13 @@ function valueImports(file: string): string[] {
   for (const match of text.matchAll(
     /^\s*(?:import|export)\s+(?![\s\S]{0,10}?\btype\s)[^;]*?from\s+"(\.[^"]+)"/gm,
   )) {
-    const dep = resolveSpec(file, match[1]);
+    const dep = resolveSpec(file, match[1]!);
     if (dep) deps.push(dep);
   }
   for (const match of text.matchAll(
     /^\s*(?:import|export)\s+\*\s+(?:as\s+\w+\s+)?from\s+"(\.[^"]+)"/gm,
   )) {
-    const dep = resolveSpec(file, match[1]);
+    const dep = resolveSpec(file, match[1]!);
     if (dep) deps.push(dep);
   }
   return deps;

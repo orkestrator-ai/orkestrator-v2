@@ -1,5 +1,7 @@
-import type { ChildProcessWithoutNullStreams, DiffStatsService } from "./commands-dependencies.js";
-import { spawnCommand, terminateProcessTree } from "./commands-dependencies.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { DiffStatsService } from "./diff-stats-service.js";
+import { spawnCommand } from "./shell.js";
+import { terminateProcessTree } from "./process-tree.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   BRANCH_REF_EXISTS_SENTINEL,

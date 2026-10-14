@@ -405,7 +405,7 @@ describe("useFileMentions", () => {
       }),
     );
 
-    const created = result.current.createMention(files[0]);
+    const created = result.current.createMention(files[0]!);
 
     expect(created.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,

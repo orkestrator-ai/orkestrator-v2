@@ -45,8 +45,10 @@ function resizableCanvas(dataUrl: string) {
 
 function installCanvasFactory(canvases: HTMLCanvasElement[]) {
   let index = 0;
-  const createElement = mock(() => canvases[index++]);
-  document.createElement = createElement as typeof document.createElement;
+  const createElement = mock((_tagName: string) => canvases[index++]);
+  // Same assignment as `document.createElement = ...`; the fake cannot model
+  // createElement's tag-name overloads, so it is installed without a cast.
+  Object.assign(document, { createElement });
   return createElement;
 }
 

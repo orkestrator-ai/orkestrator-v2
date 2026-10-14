@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { spawnCommand } from "./commands-dependencies.js";
+import { spawnCommand } from "./shell.js";
 
 /**
  * Out-of-memory kills of this installation's containers, from Docker's event

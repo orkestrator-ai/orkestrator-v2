@@ -1,5 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import type { PrState } from "./commands-dependencies.js";
+import type { PrState } from "./models.js";
 import {
   asString,
   asFeaturePlanUpdates,

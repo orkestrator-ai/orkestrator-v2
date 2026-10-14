@@ -14,7 +14,7 @@ import {
 
 const RealFileReader = globalThis.FileReader;
 
-function pngBytes(width: number, height: number): Uint8Array {
+function pngBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(24);
   bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
   bytes.set([0x49, 0x48, 0x44, 0x52], 12);
@@ -24,7 +24,11 @@ function pngBytes(width: number, height: number): Uint8Array {
   return bytes;
 }
 
-function gifBytes(width: number, height: number, version: "87a" | "89a" = "89a"): Uint8Array {
+function gifBytes(
+  width: number,
+  height: number,
+  version: "87a" | "89a" = "89a",
+): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(10);
   bytes.set(
     version === "87a" ? [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] : [0x47, 0x49, 0x46, 0x38, 0x39, 0x61],
@@ -36,7 +40,7 @@ function gifBytes(width: number, height: number, version: "87a" | "89a" = "89a")
   return bytes;
 }
 
-function bmpBytes(width: number, height: number): Uint8Array {
+function bmpBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(26);
   bytes.set([0x42, 0x4d], 0);
   const view = new DataView(bytes.buffer);
@@ -45,7 +49,7 @@ function bmpBytes(width: number, height: number): Uint8Array {
   return bytes;
 }
 
-function jpegBytes(width: number, height: number): Uint8Array {
+function jpegBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array([
     0xff,
     0xd8,
@@ -66,7 +70,7 @@ function jpegBytes(width: number, height: number): Uint8Array {
   return bytes;
 }
 
-function jpegWithMarkerPrefix(width: number, height: number): Uint8Array {
+function jpegWithMarkerPrefix(width: number, height: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array([
     0xff,
     0xd8,
@@ -88,7 +92,7 @@ function jpegWithMarkerPrefix(width: number, height: number): Uint8Array {
   ]);
 }
 
-function webpExtendedBytes(width: number, height: number): Uint8Array {
+function webpExtendedBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(30);
   bytes.set([0x52, 0x49, 0x46, 0x46], 0);
   bytes.set([0x57, 0x45, 0x42, 0x50], 8);
@@ -103,7 +107,7 @@ function webpExtendedBytes(width: number, height: number): Uint8Array {
   return bytes;
 }
 
-function webpLosslessBytes(width: number, height: number): Uint8Array {
+function webpLosslessBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(30);
   bytes.set([0x52, 0x49, 0x46, 0x46], 0);
   bytes.set([0x57, 0x45, 0x42, 0x50], 8);
@@ -118,7 +122,7 @@ function webpLosslessBytes(width: number, height: number): Uint8Array {
   return bytes;
 }
 
-function webpLossyBytes(width: number, height: number): Uint8Array {
+function webpLossyBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(30);
   bytes.set([0x52, 0x49, 0x46, 0x46], 0);
   bytes.set([0x57, 0x45, 0x42, 0x50], 8);
@@ -330,7 +334,7 @@ describe("clipboard image validation", () => {
 
   test("validates direct native dimensions", () => {
     expect(validateClipboardImageDimensions(2, 3)).toEqual({ width: 2, height: 3 });
-    for (const dimensions of [
+    for (const [width, height] of [
       [NaN, 1],
       [1, NaN],
       [Infinity, 1],
@@ -340,7 +344,7 @@ describe("clipboard image validation", () => {
       [-1, 2],
       [1, 0],
     ] as const) {
-      expect(() => validateClipboardImageDimensions(...dimensions)).toThrow(
+      expect(() => validateClipboardImageDimensions(width, height)).toThrow(
         ClipboardImageValidationError,
       );
     }

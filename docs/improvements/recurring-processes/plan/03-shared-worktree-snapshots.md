@@ -18,7 +18,7 @@ tree changes are observable even when aggregate counts remain identical.
 - `commands-runtime-state.ts`, `commands-registry-terminal.ts`, `commands-files.ts`.
 - `packages/protocol/src/diff-stats.ts` and an additive file-snapshot contract.
 - `apps/web/src/hooks/useFilesPanel.ts`, `useEnvironmentDiffStats.ts` and their stores.
-- `tests/unit/backend/diff-stats-service.test.ts`, `worktree-watcher.test.ts`,
+- `apps/backend/tests/diff-stats-service.test.ts`, `worktree-watcher.test.ts`,
   `apps/web/src/hooks/useFilesPanel.test.tsx` and command-level file tests.
 
 ## Implementation tasks
@@ -262,7 +262,7 @@ revision rewind. Real Git (`worktree-snapshots-git.test.ts`, real linked
 worktree, real watcher, no `origin` so every fetch fails): a tracked edit that
 never touches the index, staging whose index lives outside the root, and a
 shared ref moving the baseline are each detected by watcher hints alone.
-Watcher/paths (`tests/unit/backend/worktree-watcher.test.ts`): change
+Watcher/paths (`apps/backend/tests/worktree-watcher.test.ts`): change
 classification, linked-worktree metadata coverage and qualification, metadata
 watch failure, main-checkout coverage, burst overflow, real `.git`
 resolution. Existing diff-stats, view-revision and metrics suites were updated

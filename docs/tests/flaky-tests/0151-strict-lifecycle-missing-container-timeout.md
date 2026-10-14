@@ -4,7 +4,7 @@
 - **Status:** open
 - **Date observed:** 2026-09-20
 - **Test:** `environment status and settings commands > strict lifecycle commands still repair an environment whose container is already gone`
-- **File:** `tests/unit/electron/commands-registry-environments-status.test.ts`
+- **File:** `apps/backend/tests/commands-registry-environments-status.test.ts`
 - **Original command:** `mise run test`
 - **Worker configuration:** Root group 3 workers; workspace and bridges 2 slots
   each; protocol 1 slot. Browser validation also ran on this host.
@@ -12,7 +12,7 @@
   an unhandled assertion after the fixture teardown.
 - **Suite counts:** Root group: 4344 passed, 2 skipped, 1 failed, 1 error;
   4347 tests across 203 files in 142.59s.
-- **Isolated rerun:** `mise run test:logged -- --name lifecycle-isolated -- bun test ./tests/unit/electron/commands-registry-environments-status.test.ts --parallel=1 --only-failures`
+- **Isolated rerun:** `mise run test:logged -- --name lifecycle-isolated -- bun test ./apps/backend/tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures`
   passed in 2.6s.
 - **Hypothesis:** The case performs several fake-Docker subprocess operations
   under the default five-second test budget. Aggregate contention can exhaust

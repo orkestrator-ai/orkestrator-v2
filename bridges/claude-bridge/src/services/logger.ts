@@ -3,7 +3,7 @@ import {
   bridgeDebugEnabled,
   readBridgeDebugFlag,
   createBufferedDebugLogger,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 
 /** Kept for standalone legacy configurations; the shared app flag takes precedence. */
 export const readDebugFlag = readBridgeDebugFlag;

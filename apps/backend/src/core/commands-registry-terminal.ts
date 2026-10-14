@@ -1,4 +1,4 @@
-import { canonicalWorktreePath } from "@orkestrator/protocol/worktree-paths";
+import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
@@ -7,27 +7,12 @@ import {
   beginEnvironmentMutation,
   beginWorktreeMutation,
 } from "./environment-replacement-fence.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { MAX_BASE64_PAYLOAD_BYTES } from "./path-safety.js";
 import {
-  CONTAINER_EVIDENCE_REMOVER,
-  CONTAINER_EVIDENCE_WRITER,
-  isAnnotationEvidencePath,
-  runContainerEvidenceScript,
-} from "./web-annotation-evidence-files.js";
-import {
-  path,
-  randomUUID,
-  pathExists,
-  readFileBase64,
-  readTextFile,
-  assertEditorTextFileSize,
-  decodeEditorTextFile,
-  spawnCommand,
-  writeFileBase64,
+  MAX_BASE64_PAYLOAD_BYTES,
   assertBase64PayloadWithinLimit,
   base64DecodedByteLength,
   MAX_BINARY_FILE_BYTES,
@@ -36,11 +21,29 @@ import {
   removeConfinedDirectory,
   validateRelativeFilePath,
   workspaceFilePath,
+} from "./path-safety.js";
+import {
+  CONTAINER_EVIDENCE_REMOVER,
+  CONTAINER_EVIDENCE_WRITER,
+  isAnnotationEvidencePath,
+  runContainerEvidenceScript,
+} from "./web-annotation-evidence-files.js";
+import path from "node:path";
+import {
+  pathExists,
+  readFileBase64,
+  readTextFile,
+  assertEditorTextFileSize,
+  decodeEditorTextFile,
+  spawnCommand,
+  writeFileBase64,
+  CommandFailedError,
+} from "./shell.js";
+import {
   INITIAL_PROMPT_STAGING_DIRECTORY,
   MAX_TOTAL_ATTACHMENT_BYTES,
-  CommandFailedError,
-} from "./commands-dependencies.js";
-import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
+} from "./prompt-attachments.js";
+import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { EnvironmentDiffStatsSnapshotOutcome } from "@orkestrator/protocol/diff-stats";
 import type {
   WorktreeReadStamp,

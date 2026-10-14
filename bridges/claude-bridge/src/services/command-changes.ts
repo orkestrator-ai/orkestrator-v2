@@ -5,7 +5,7 @@
  * about what it will write. So the bridge measures instead: a PreToolUse hook
  * holds the command until the worktree has been snapshotted, and a
  * PostToolUse hook snapshots it again and diffs the two (see
- * `@orkestrator/protocol/workspace-change-probe`). Edit-family calls open an
+ * `@orkestrator/protocol/node/workspace-change-probe`). Edit-family calls open an
  * unmeasured window so a Bash call running alongside one is reported as
  * approximate rather than charged with the edit.
  *
@@ -18,9 +18,9 @@ import type { HookCallback, HookCallbackMatcher } from "@anthropic-ai/claude-age
 import {
   CommandChangeJournal,
   hasMeasuredChanges,
-} from "@orkestrator/protocol/command-change-journal";
+} from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import { join } from "node:path";
 import type { NormalizedMessage } from "../types/index.js";
 import { claudeCommandChangesDir } from "./claude-home.js";

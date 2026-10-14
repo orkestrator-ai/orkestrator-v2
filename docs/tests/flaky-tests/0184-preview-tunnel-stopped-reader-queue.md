@@ -53,3 +53,13 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed, exit 0, in 0.8 seconds.
 - **Evidence:** `orkestrator-test-run.lgjNH5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `summary.json` in the macOS temporary directory.
 - **Hypothesis:** same intermittent queue-sampling failure as the previous observations. This run does not establish the root cause. No assertion, timeout or skip was changed.
+
+## Recurrence during architecture-review fixes (2026-10-14)
+
+- **Original command:** `CODEX_PROTOCOL_BINARY="$PWD/binaries/codex" mise run test:logged -- --name review-fixes-suite-pinned -- mise run test`, with the GNU-tool `PATH` prefix from the testing guide; macOS arm64, Bun 1.4.3.
+- **Worker configuration:** workspace/root/bridges/protocol used 2/3/2/1 slots; backend used one isolated Bun worker alongside the web package.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `574002` at line 279 (309.50 ms).
+- **Suite counts:** backend: 5,940 total, 5,924 passed, 15 skipped, 1 failed. Root/support, bridges and strict pinned-protocol verification passed. The 34 environment-move tests passed, including the stages after tmux quiesce.
+- **Isolated rerun:** `mise run test:logged -- --name preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.e8tyW1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.e8tyW1/summary.json`.
+- **Hypothesis:** this repeats the existing intermittent queue-sampling failure. The isolated pass does not establish its root cause. No assertion, timeout or skip was changed.

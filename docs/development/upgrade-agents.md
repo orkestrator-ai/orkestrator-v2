@@ -1054,7 +1054,7 @@ Run the cheap drift, downloader, and manager checks before live downloads:
 bun test tests/unit/version-drift.test.ts \
   tests/unit/download-agent.test.ts \
   tests/unit/verify-toolchain-artifacts.test.ts \
-  tests/unit/electron/toolchain-manager.test.ts \
+  packages/toolchain/src/manager.test.ts \
   tests/unit/bridge-packaging.test.ts --parallel
 ```
 

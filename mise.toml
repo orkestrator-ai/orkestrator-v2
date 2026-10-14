@@ -254,8 +254,13 @@ raw_args = true
 run = "bun scripts/efficiency/run.ts"
 
 [tasks.typecheck]
-description = "Typecheck every workspace package"
-run = "bunx turbo --cwd . run typecheck"
+description = "Typecheck every workspace package, the root and e2e tests, and repository scripts"
+run = [
+  "bunx turbo --cwd . run typecheck",
+  "bunx tsc --noEmit -p tests/tsconfig.json",
+  "bunx tsc --noEmit -p e2e/tsconfig.json",
+  "bunx tsc --noEmit -p e2e/agent-testing/tsconfig.json",
+]
 
 [tasks."disk:report"]
 description = "Report disk used by Orkestrator work, what is orphaned, and who cleans it (read-only)"

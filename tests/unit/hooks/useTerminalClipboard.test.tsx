@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 function createTerminal() {
-  let selectionCallback = () => undefined;
+  let selectionCallback: () => void = () => undefined;
   let keyHandler: ((event: KeyboardEvent) => boolean) | undefined;
   const terminal = {
     hasSelection: mock(() => true),
@@ -51,7 +51,11 @@ describe("useTerminalClipboard", () => {
     expect(fake.terminal.selectAll).toHaveBeenCalledTimes(1);
     expect(fake.terminal.focus).toHaveBeenCalledTimes(1);
     unmount();
-    expect(fake.terminal.onSelectionChange.mock.results[0]?.value.dispose).toHaveBeenCalledTimes(1);
+    const selectionSubscription = fake.terminal.onSelectionChange.mock.results[0];
+    if (selectionSubscription?.type !== "return") {
+      throw new Error("onSelectionChange did not return a subscription");
+    }
+    expect(selectionSubscription.value.dispose).toHaveBeenCalledTimes(1);
   });
 
   test("handles terminal clipboard shortcuts without overriding shell Ctrl+C", async () => {

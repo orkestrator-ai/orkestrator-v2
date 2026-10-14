@@ -1,4 +1,4 @@
-# `Electron backend command registry > renames the live local git branch and advances stored branch on success` (`tests/unit/electron/commands-registry-environments.test.ts`)
+# `Electron backend command registry > renames the live local git branch and advances stored branch on success` (`apps/backend/tests/commands-registry-environments.test.ts`)
 
 - **ID:** 0012
 - **Status:** resolved
@@ -11,7 +11,7 @@
 - **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
   and 2 between-test errors across 188 files in 97.17 s.
 - **Isolated rerun:** `bun test
-  tests/unit/electron/commands-registry-environments.test.ts --only-failures` ->
+  apps/backend/tests/commands-registry-environments.test.ts --only-failures` ->
   129 passed, 0 failed in 16.64 s.
 - **Hypothesis:** the full owning file already takes longer than the per-test
   timeout and launches many fake Git/Docker processes. Aggregate contention

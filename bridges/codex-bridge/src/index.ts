@@ -1,7 +1,7 @@
 import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
-} from "@orkestrator/protocol/bridge-diagnostics";
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/workspace-change-probe";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   WORKFLOW_RESULT_KINDS,
   workflowResultToolName,
@@ -20,7 +20,7 @@ import {
 import {
   boundTranscriptResponse,
   type TranscriptWindowMetadata,
-} from "@orkestrator/protocol/transcript-window";
+} from "@orkestrator/protocol/node/transcript-window";
 import { streamSSE } from "hono/streaming";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";

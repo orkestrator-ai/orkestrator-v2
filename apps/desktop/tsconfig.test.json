@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.electron.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "rootDir": "../.."
+  },
+  "include": ["tests/**/*.ts", "electron/**/*.test.ts"],
+  "exclude": []
+}

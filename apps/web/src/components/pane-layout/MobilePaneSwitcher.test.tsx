@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import type { PaneSplit } from "@/types/paneLayout";
 import { MULTI_REVIEW_LEGACY_FIX_TAB_TITLE } from "@orkestrator/protocol/multi-review";
-import { collectPaneLeaves, mobilePaneOptions } from "./PaneSplitContainer";
+import { collectPaneLeaves, mobilePaneOptions } from "./PaneTree";
 import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
 
 afterEach(cleanup);

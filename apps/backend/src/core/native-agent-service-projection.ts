@@ -104,7 +104,7 @@ import {
   type ProgressiveReadPhases,
 } from "./native-agent-progressive-metrics.js";
 import { readReadableHostFile } from "./path-safety.js";
-import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/bridge-transcript-summary";
+import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import {
   DirectHistoryPageCache,
   decodeHistoryCursor,

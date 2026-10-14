@@ -67,8 +67,8 @@ the real timer boundary and the reason for its duration.
 
 ## Part B: command/Git fixture selection
 
-Read [command-fixtures.ts](../../../../tests/unit/electron/command-fixtures.ts),
-[commands-integration.test.ts](../../../../tests/unit/electron/commands-integration.test.ts)
+Read [command-fixtures.ts](../../../../apps/backend/tests/command-fixtures.ts),
+[commands-integration.test.ts](../../../../apps/backend/tests/commands-integration.test.ts)
 and the command modules reached by each candidate.
 
 `createGitWorktreeWithOrigin()` creates a bare remote, initializes a working
@@ -107,7 +107,7 @@ mise run test:logged -- --name streamlining-validation-worker -- \
   ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures
 
 mise run test:logged -- --name streamlining-command-fixtures -- \
-  bun test ./tests/unit/electron/commands-integration.test.ts \
+  bun test ./apps/backend/tests/commands-integration.test.ts \
   --parallel=1 --only-failures
 ```
 

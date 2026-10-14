@@ -15,7 +15,7 @@ delivers. Produce repeatable measurements before selecting final intervals.
 
 - Backend entry/service owners from [the inventory](../../../imrovements/recurring-processes.md).
 - `apps/backend/src/gateway-support-core.ts` and existing gateway metrics.
-- `packages/protocol/src/bridge-diagnostics.ts` and existing bounded diagnostics.
+- `packages/protocol/src/node/bridge-diagnostics.ts` and existing bounded diagnostics.
 - `apps/backend/src/core/commands-runtime-state.ts`, `commands-files.ts`,
   `commands-pr-monitor.ts`, and native/workflow service boundaries.
 - `apps/web/src/lib/native/web-gateway.ts` and representative client hooks.

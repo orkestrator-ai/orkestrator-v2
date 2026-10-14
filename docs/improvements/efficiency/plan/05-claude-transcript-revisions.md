@@ -14,7 +14,7 @@ message contents. Every display-relevant mutation still invalidates that token.
 - [Session services](../../../../bridges/claude-bridge/src/services/session-manager-core.ts),
   prompt-stream, messages, persistence, lifecycle, background-tasks, and title/
   preference update sites.
-- [Shared token helper](../../../../packages/protocol/src/progressive-transcript.ts).
+- [Shared token helper](../../../../packages/protocol/src/node/progressive-transcript.ts).
 
 ## Implementation
 
@@ -81,7 +81,7 @@ Remaining limitations: see below
 
 ### What changed
 
-- `packages/protocol/src/progressive-transcript.ts`: the shared
+- `packages/protocol/src/node/progressive-transcript.ts`: the shared
   `bridgeTranscriptToken` now includes a digest of `title` and `freshness`
   (defaulting to `current`). Before, a title-only change was answered
   `unchanged` by every bridge that passes a revision (Codex, Cursor, Pi, ACP).

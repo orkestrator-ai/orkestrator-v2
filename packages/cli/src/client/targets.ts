@@ -12,7 +12,7 @@ import {
   defaultRuntimeProfileRoots,
   parseRuntimeStatusManifest,
   runtimeProfileStatusPath,
-} from "@orkestrator/protocol/runtime-profile-status";
+} from "@orkestrator/protocol/node/runtime-profile-status";
 import { assertPrivateFile, CliConfigStore, type SavedConnection } from "./config.js";
 import { CliError } from "./errors.js";
 

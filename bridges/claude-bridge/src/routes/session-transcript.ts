@@ -5,7 +5,7 @@ import {
   bridgeTranscriptPageRouteBody,
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
-} from "@orkestrator/protocol/bridge-transcript-routes";
+} from "@orkestrator/protocol/node/bridge-transcript-routes";
 import {
   getSessionMessages,
   hydratePersistedSessionMessages,

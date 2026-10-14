@@ -5,7 +5,7 @@
 - **Date observed:** 2026-09-17
 - **Test:** `fork_environment > falls back to the project checkout when a local
   worktree has vanished`
-- **File:** `tests/unit/electron/commands-environment-fork.test.ts:661`
+- **File:** `apps/backend/tests/commands-environment-fork.test.ts:661`
 - **Original command:** `mise run test`
 - **Worker configuration:** the repository runner's root and agent-support group,
   running concurrently with the workspace, bridges, and Codex protocol groups
@@ -14,7 +14,7 @@
   (the individual rejection reason was not retained; group duration: 111.0 s)
 - **Suite counts:** 4,274 total, 4,271 passed, 2 skipped, 1 failed, 1 error
 - **Isolated rerun:**
-  `mise exec -- bun test tests/unit/electron/commands-environment-fork.test.ts`
+  `mise exec -- bun test apps/backend/tests/commands-environment-fork.test.ts`
   → 24 passed, 0 failed in 2.77 s
 - **Hypothesis:** the failure is aggregate-only shared-state or teardown
   interference. The test uses the shared Electron command fixture's temporary

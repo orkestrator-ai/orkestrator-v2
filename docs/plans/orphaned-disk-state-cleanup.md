@@ -66,7 +66,7 @@ Not Orkestrator's, and outside this plan's scope:
 
 ### T1 — A test creates real worktrees in the user's workspaces root
 
-`tests/unit/electron/commands-integration.test.ts:2334` ("enables git's scan
+`apps/backend/tests/commands-integration.test.ts:2334` ("enables git's scan
 caches on a newly created worktree") calls `start_environment` without
 `context.worktreeDir`. `getWorktreeBaseDir`
 (`apps/backend/src/core/commands-environment.ts:386`) then falls back to
@@ -363,7 +363,7 @@ Where the code differs from, or adds to, the steps above:
 - **Test isolation (T1, O12).**
   - `tests/isolate-worktree-dir.ts` gives every preload a per-process
     `ORKESTRATOR_WORKTREE_DIR`.
-  - `tests/unit/electron/command-fixtures.ts` gives each test context its own
+  - `apps/backend/tests/command-fixtures.ts` gives each test context its own
     `worktreeDir`.
   - The same fixtures point `DOCKER_HOST` at a socket that does not exist
     unless `RUN_LIVE_DOCKER_TESTS=1`, so a test whose fake `docker` was

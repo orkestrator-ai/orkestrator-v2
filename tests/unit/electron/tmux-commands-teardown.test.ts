@@ -4,25 +4,47 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
 import {
   cleanupEnvironmentTmux,
-  RUNTIME_ROOT_PREFIX,
+  killEnvironmentTmuxSessions,
   tmuxSessionName,
 } from "../../../apps/backend/src/core/tmux";
-import { spawnSync } from "node:child_process";
+import { TmuxBackend } from "../../../apps/backend/src/core/tmux-backend";
 import { existsSync, promises as fs } from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
 
 import {
   createHandlers,
-  createTempDir,
   deferred,
-  encodeCwd,
   invoke,
   waitFor,
-  withFakeContainerTmuxRuntime,
   withFakeTmuxRuntime,
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux environment teardown", () => {
+  test("session reaping accepts an empty server but refuses ambiguous connection failures", async () => {
+    const backend = TmuxBackend.local("/unused-fixture");
+    const exec = spyOn(backend, "exec");
+    for (const [stderr, complete] of [
+      // An absent socket does not prove the server stopped: it may have been deleted.
+      ["error connecting to /private/tmp/tmux-501/default (No such file or directory)", false],
+      ["no server running on /tmp/tmux-501/default", true],
+      ["no sessions", true],
+      ["error connecting to /tmp/tmux-501/default (Permission denied)", false],
+      ["error connecting to /tmp/tmux-501/default (Connection refused)", false],
+      ["tmux: No such file or directory", false],
+    ] as const) {
+      exec.mockResolvedValue({ status: 1, stdout: "", stderr });
+      expect(await killEnvironmentTmuxSessions(backend, "fixture", [])).toEqual({
+        killed: [],
+        complete,
+      });
+      expect(exec).toHaveBeenLastCalledWith(["tmux", "list-sessions", "-F", "#{session_name}"]);
+    }
+    exec.mockRejectedValue(new Error("cannot spawn tmux"));
+    expect(await killEnvironmentTmuxSessions(backend, "fixture", [])).toEqual({
+      killed: [],
+      complete: false,
+    });
+  });
+
   test("environment teardown kills live sessions, restores settings and removes the runtime root", async () => {
     const handlers = createHandlers();
 

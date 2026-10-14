@@ -23,6 +23,7 @@ import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import * as tmux from "./tmux-commands.js";
+import { TmuxBackend } from "./tmux-backend.js";
 import * as pathSafety from "./path-safety.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
@@ -34,6 +35,21 @@ beforeEach(() => {
   optionalLocks = process.env.GIT_OPTIONAL_LOCKS;
   // Watchers may run status while fixtures reset the index.
   process.env.GIT_OPTIONAL_LOCKS = "0";
+  // These fixtures own no tmux processes. Keep the real cleanup and hook
+  // restoration, but never enumerate or stop the host's sessions. A known-empty
+  // server permits rename, copy, rollback and recovery assertions on any host.
+  const exec = TmuxBackend.prototype.exec;
+  spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (this: TmuxBackend, ...args) {
+    if (args[0][0] === "tmux") {
+      expect(args[0]).toEqual(["tmux", "list-sessions", "-F", "#{session_name}"]);
+      return Promise.resolve({
+        status: 1,
+        stdout: "",
+        stderr: "no sessions",
+      });
+    }
+    return exec.apply(this, args);
+  });
 });
 
 afterEach(async () => {

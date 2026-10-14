@@ -216,7 +216,7 @@ Remaining limitations: see below
 
 ```text
 - packages/protocol/src/node/bridge-transcript-contract.ts
-  (@orkestrator/protocol/bridge-transcript-contract): framework-free
+  (@orkestrator/protocol/node/bridge-transcript-contract): framework-free
   scenarios run by every bridge's v2 suite — large tool output leaves a
   detail reference whose detail returns the exact body; a detail read returns
   its own revision or expired/missing/invalid; pages join with no gaps at

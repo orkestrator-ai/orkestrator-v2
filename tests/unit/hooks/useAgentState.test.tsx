@@ -61,6 +61,20 @@ describe("useAgentState", () => {
     unmount();
   });
 
+  test("hydrates a late-mounted tab without a second connected event", async () => {
+    const callbacks = captureListeners();
+    invokeMock.mockResolvedValue({ state: "working", occurredAt: "2026-10-14T10:00:00.000Z" });
+    renderHook(() => useAgentState("container-1", "tab-1"));
+    await waitFor(() =>
+      expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working"),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("get_claude_terminal_state", {
+      containerId: "container-1",
+    });
+    expect(callbacks.has(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(true);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
   test("re-reads the persisted state when the event stream resyncs", async () => {
     const callbacks = captureListeners();
     invokeMock.mockImplementation(async (command: string, args: { containerId: string }) =>

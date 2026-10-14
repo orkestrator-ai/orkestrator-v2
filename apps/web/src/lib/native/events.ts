@@ -39,7 +39,10 @@ export const NATIVE_EVENT_STREAM_READY_TIMEOUT_MS = 5_000;
  * replayed does not fire it. Prefer `listenAuthoritative`, which makes the
  * refetch part of the subscription.
  */
-export { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
+export {
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+} from "@orkestrator/protocol/gateway-event-stream";
 
 export async function listen<T>(
   event: string,

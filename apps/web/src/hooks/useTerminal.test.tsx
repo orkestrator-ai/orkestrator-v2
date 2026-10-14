@@ -1,6 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+} from "@/lib/native/events";
 import * as realBackend from "@/lib/backend";
 import { mockToastError as toastErrorMock } from "../../../../tests/mocks/sonner";
 
@@ -786,7 +790,7 @@ describe("useTerminal reconnect behavior", () => {
     });
 
     await waitFor(() => expect(result.current.sessionId).toBe("env-1:setup"));
-    expect(callOrder).toEqual(["listen", "listen", "getSnapshot"]);
+    expect(callOrder).toEqual(["listen", "listen", "listen", "getSnapshot"]);
     expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
     expect(new TextDecoder().decode(received[0])).toBe("replayed setup output");
   });
@@ -796,7 +800,7 @@ describe("useTerminal reconnect behavior", () => {
       | ((event: { payload: { data: number[]; revision: number; generation: number } }) => void)
       | undefined;
     listenMock.mockImplementation(async (event, handler) => {
-      if (event !== NATIVE_EVENT_STREAM_CONNECTED_EVENT) liveHandler = handler;
+      if (event.startsWith("terminal-output-")) liveHandler = handler;
       return unlistenMock;
     });
     getTerminalOutputSnapshotMock.mockImplementation(async () => {
@@ -942,6 +946,53 @@ describe("useTerminal reconnect behavior", () => {
     expect(received).toEqual([]);
   });
 
+  it("recovers a quiet desktop terminal from its reconnect notification without authoritative resync", async () => {
+    let reconnectHandler: (() => void) | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT) {
+        reconnectHandler = () => handler({ payload: undefined });
+      }
+      return unlistenMock;
+    });
+    getTerminalOutputSnapshotMock
+      .mockResolvedValueOnce({
+        output: "before disconnect",
+        revision: 1,
+        generation: 4,
+      })
+      .mockResolvedValueOnce({
+        mode: "delta",
+        output: "\r\nmissed output",
+        revision: 2,
+        generation: 4,
+      });
+    const replayed: string[] = [];
+    const received: string[] = [];
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+        onReplay: (data) => replayed.push(new TextDecoder().decode(data)),
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    act(() => reconnectHandler?.());
+
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
+    expect(getTerminalOutputSnapshotMock).toHaveBeenLastCalledWith("session-old", {
+      revision: 1,
+      generation: 4,
+    });
+    expect(replayed).toEqual(["before disconnect", "\r\nmissed output"]);
+    expect(received).toEqual([]);
+  });
+
   it("replaces the view when a live event belongs to a new output generation", async () => {
     let outputHandler:
       | ((event: { payload: { data: number[]; revision: number; generation: number } }) => void)
@@ -998,7 +1049,7 @@ describe("useTerminal reconnect behavior", () => {
     listenMock.mockImplementation(async (event, handler) => {
       if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) {
         reconnectHandler = () => handler({ payload: undefined });
-      } else {
+      } else if (event.startsWith("terminal-output-")) {
         outputHandler = handler;
       }
       return unlistenMock;
@@ -1439,13 +1490,18 @@ describe("useTerminal reconnect behavior", () => {
     let listenIndex = 0;
     listenMock.mockImplementation(async (event, handler) => {
       const current = listenIndex++;
-      if (current === 2 && event.startsWith("terminal-output-")) {
+      if (current === 3 && event.startsWith("terminal-output-")) {
         newOutput.push(handler);
       }
       return (
-        [oldOutputUnlisten, oldReconnectUnlisten, newOutputUnlisten, newReconnectUnlisten][
-          current
-        ] ?? unlistenMock
+        [
+          oldOutputUnlisten,
+          oldReconnectUnlisten,
+          unlistenMock,
+          newOutputUnlisten,
+          newReconnectUnlisten,
+          unlistenMock,
+        ][current] ?? unlistenMock
       );
     });
     getTerminalOutputSnapshotMock.mockImplementation(async (sessionId: string) => {

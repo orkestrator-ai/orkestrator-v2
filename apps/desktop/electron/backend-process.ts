@@ -10,6 +10,7 @@ import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GatewayEventStreamState,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
   readSseStream,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
@@ -430,7 +431,14 @@ export class BackendHttpClient {
         });
         if (!response.ok || !response.body)
           throw new Error(`Backend event stream returned HTTP ${response.status}`);
+        if (signal.aborted) {
+          await response.body.cancel().catch(() => undefined);
+          return;
+        }
         backoff.connected();
+        // Terminal output is excluded from authoritative replay. Even a quiet
+        // caught-up reconnect must trigger exact snapshot recovery.
+        onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
         await readSseStream(response.body, signal, (frame) => {
           if (!frame.data) return;
           const message = stream.accept(frame.data, frame.id);

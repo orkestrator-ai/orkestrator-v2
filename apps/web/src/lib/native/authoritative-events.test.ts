@@ -35,16 +35,55 @@ describe("listenAuthoritative", () => {
     expect(released).toEqual(["changed", NATIVE_EVENT_STREAM_CONNECTED_EVENT]);
   });
 
-  test("releases the event listener when the resync subscription fails", async () => {
+  test("releases the resync listener when the event subscription fails", async () => {
     const released = mock(() => undefined);
     listenMock.mockImplementation(async (event: string) => {
-      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) throw new Error("no stream");
+      if (event === "changed") throw new Error("no stream");
       return released;
     });
     await expect(
       listenAuthoritative("changed", () => undefined, { onResync: () => undefined }),
     ).rejects.toThrow("no stream");
     expect(released).toHaveBeenCalledTimes(1);
+  });
+
+  test("defers resync during event readiness until the incremental listener is subscribed", async () => {
+    let resync!: () => void;
+    let ready!: (unlisten: () => void) => void;
+    const onResync = mock(() => undefined);
+    listenMock.mockImplementation((event: string, callback) => {
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) {
+        resync = callback;
+        return Promise.resolve(() => undefined);
+      }
+      return new Promise((resolve) => {
+        ready = resolve;
+      });
+    });
+    const subscription = listenAuthoritative("changed", () => undefined, { onResync });
+    for (let index = 0; index < 5; index += 1) await Promise.resolve();
+    resync();
+    resync();
+    expect(onResync).not.toHaveBeenCalled();
+    ready(() => undefined);
+    const unlisten = await subscription;
+    await Promise.resolve();
+    expect(onResync).toHaveBeenCalledTimes(1);
+    unlisten();
+    resync();
+    await Promise.resolve();
+    expect(onResync).toHaveBeenCalledTimes(1);
+  });
+
+  test("initial snapshot does not depend on a stream announcement for late subscribers", async () => {
+    const onResync = mock(() => undefined);
+    const unlisten = await listenAuthoritative("changed", () => undefined, {
+      onResync,
+      resyncOnSubscribe: true,
+    });
+    await Promise.resolve();
+    expect(onResync).toHaveBeenCalledTimes(1);
+    unlisten();
   });
 
   test("reports a failed refetch instead of leaving an unhandled rejection", async () => {
@@ -55,13 +94,20 @@ describe("listenAuthoritative", () => {
     });
     const logged = mock(() => undefined);
     console.error = logged;
+    let attempts = 0;
+    const recovered = mock(() => undefined);
     await listenAuthoritative("changed", () => undefined, {
       onResync: async () => {
-        throw new Error("snapshot unavailable");
+        attempts += 1;
+        if (attempts === 1) throw new Error("snapshot unavailable");
+        recovered();
       },
     });
     resync!({ payload: undefined });
     for (let index = 0; index < 5; index += 1) await Promise.resolve();
     expect(logged).toHaveBeenCalledTimes(1);
+    resync!({ payload: undefined });
+    for (let index = 0; index < 5; index += 1) await Promise.resolve();
+    expect(recovered).toHaveBeenCalledTimes(1);
   });
 });

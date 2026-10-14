@@ -155,6 +155,7 @@ function splitAtUtf8Boundaries(
 export class TerminalHttpInputBatcher {
   private readonly pending = new Map<string, PendingInput>();
   private readonly encoder = new TextEncoder();
+  private readonly reservations = new Map<string, number>();
 
   constructor(
     private readonly send: TerminalInputSender,
@@ -182,6 +183,39 @@ export class TerminalHttpInputBatcher {
     }
     if (!Number.isSafeInteger(maxTerminals) || maxTerminals < 1) {
       throw new RangeError("maxTerminals must be a positive integer");
+    }
+  }
+
+  /** Pins capacity for work not yet in the input queue, including lifecycle work. */
+  reserveTerminal(command: TerminalInputCommand, sessionId: string): () => void {
+    const key = this.keyFor(command, sessionId);
+    this.assertCapacity(key);
+    this.reservations.set(key, (this.reservations.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.reservations.get(key) ?? 1) - 1;
+      if (remaining > 0) this.reservations.set(key, remaining);
+      else this.reservations.delete(key);
+    };
+  }
+
+  private terminalCount(): number {
+    let count = this.pending.size;
+    for (const key of this.reservations.keys()) {
+      if (!this.pending.has(key)) count += 1;
+    }
+    return count;
+  }
+
+  private assertCapacity(key: string): void {
+    if (
+      !this.pending.has(key) &&
+      !this.reservations.has(key) &&
+      this.terminalCount() >= this.maxTerminals
+    ) {
+      throw new Error("Terminal input queue capacity reached; reconnect to the backend");
     }
   }
 
@@ -220,10 +254,10 @@ export class TerminalHttpInputBatcher {
     if (!state) {
       // Failed queues are fences and are never evicted to make room, so a
       // full map refuses the new terminal instead.
-      if (this.pending.size >= this.maxTerminals) {
-        return Promise.reject(
-          new Error("Terminal input queue capacity reached; reconnect to the backend"),
-        );
+      try {
+        this.assertCapacity(key);
+      } catch (error) {
+        return Promise.reject(error);
       }
       state = this.createState(request.command, request.sessionId);
       this.pending.set(key, state);
@@ -303,6 +337,7 @@ export class TerminalHttpInputBatcher {
     const key = this.keyFor(command, sessionId);
     let state = this.pending.get(key);
     if (!state) {
+      this.assertCapacity(key);
       state = this.createState(command, sessionId);
       this.pending.set(key, state);
     }
@@ -333,7 +368,7 @@ export class TerminalHttpInputBatcher {
       pendingInputs += state.waiters.size;
     }
     return {
-      terminals: this.pending.size,
+      terminals: this.terminalCount(),
       failedTerminals,
       queuedBytes,
       parkedBytes,

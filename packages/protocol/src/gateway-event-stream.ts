@@ -25,6 +25,8 @@
  * connection and whenever replay could not cover a disconnect.
  */
 export const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
+/** Desktop terminals recover output outside the authoritative replay ring on every open. */
+export const TERMINAL_EVENT_STREAM_CONNECTED_EVENT = "terminal-event-stream-connected";
 export const GATEWAY_CONNECTED_EVENT = "gateway.connected";
 export const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
 export const GATEWAY_CURSOR_EVENT = "gateway.cursor";
@@ -63,7 +65,8 @@ export function isGatewayTransportEvent(event: string): boolean {
     event === GATEWAY_CONNECTED_EVENT ||
     event === GATEWAY_RECONCILE_REQUIRED_EVENT ||
     event === GATEWAY_CURSOR_EVENT ||
-    event === NATIVE_EVENT_STREAM_CONNECTED_EVENT
+    event === NATIVE_EVENT_STREAM_CONNECTED_EVENT ||
+    event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT
   );
 }
 
@@ -220,7 +223,11 @@ export class GatewayEventStreamState {
       }
       return { kind: "control" };
     }
-    if (parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) return { kind: "control" };
+    if (
+      parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT ||
+      parsed.event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT
+    )
+      return { kind: "control" };
     return { kind: "event", event: parsed.event, payload: parsed.payload };
   }
 }

@@ -912,11 +912,12 @@ sleep 5
     const delivered = new Promise<void>((resolve) =>
       client.listen((event, payload) => {
         received.push({ event, payload });
-        if (received.length === 2) resolve();
+        if (event === "changed") resolve();
       }),
     );
     await delivered;
     expect(received).toEqual([
+      { event: "terminal-event-stream-connected", payload: undefined },
       { event: "native-event-stream-connected", payload: undefined },
       { event: "changed", payload: { ok: true } },
     ]);
@@ -1051,6 +1052,7 @@ sleep 5
         });
       });
       expect(events).toEqual([
+        { event: "terminal-event-stream-connected", payload: undefined },
         { event: "native-event-stream-connected", payload: undefined },
         { event: "large-snapshot", payload },
       ]);
@@ -1106,7 +1108,11 @@ sleep 5
       client.listen((event) => events.push(event));
       await secondAttempt;
       client.stopListening();
-      expect(events).toEqual(["native-event-stream-connected", "kept"]);
+      expect(events).toEqual([
+        "terminal-event-stream-connected",
+        "native-event-stream-connected",
+        "kept",
+      ]);
       expect(urls).toEqual([
         "http://127.0.0.1:34121/__orkestrator/events",
         "http://127.0.0.1:34121/__orkestrator/events?since=desktop1%3A1",

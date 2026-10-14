@@ -35,6 +35,33 @@ const request = (
 ): TerminalInputRequest => ({ command, sessionId, data });
 
 describe("TerminalHttpInputBatcher", () => {
+  test("failure fences cannot bypass terminal capacity", () => {
+    const batcher = new TerminalHttpInputBatcher(async () => {}, 0, 4, 4, 1000, 2, 2);
+    batcher.failQueue("terminal_write", "a", new Error("a failed"));
+    batcher.failQueue("terminal_write", "b", new Error("b failed"));
+    expect(() => batcher.failQueue("terminal_write", "c", new Error("c failed"))).toThrow(
+      "capacity reached",
+    );
+    expect(batcher.getStats()).toMatchObject({ terminals: 2, failedTerminals: 2 });
+    expect(batcher.hasFailed("terminal_write", "a")).toBe(true);
+    expect(batcher.hasFailed("terminal_write", "b")).toBe(true);
+  });
+
+  test("reserved lifecycle slots survive reset and exclude new terminals until released", async () => {
+    const batcher = new TerminalHttpInputBatcher(async () => {}, 0, 4, 4, 1000, 2, 1);
+    const release = batcher.reserveTerminal("terminal_write", "a");
+    batcher.reset("terminal_write", "a");
+    expect(() => batcher.reserveTerminal("terminal_write", "b")).toThrow("capacity reached");
+    await expect(batcher.enqueue(request("x", "b"))).rejects.toThrow("capacity reached");
+    batcher.failQueue("terminal_write", "a", new Error("lost response"));
+    release();
+    release();
+    expect(batcher.getStats()).toMatchObject({ terminals: 1, failedTerminals: 1 });
+    batcher.clearFailure("terminal_write", "a");
+    await batcher.enqueue(request("x", "b"));
+    expect(batcher.getStats().terminals).toBe(0);
+  });
+
   test("micro-batches printable typing and preserves exact order", async () => {
     const sent: string[] = [];
     const batcher = new TerminalHttpInputBatcher(async ({ data }) => {

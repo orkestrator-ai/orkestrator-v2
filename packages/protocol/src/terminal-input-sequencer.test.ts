@@ -143,6 +143,143 @@ describe("TerminalInputSequencer", () => {
     expect(sequencer.getStats()).toMatchObject({ pendingLifecycleOperations: 0, terminals: 0 });
   });
 
+  for (const command of ["start_terminal_session", "terminal_resize"]) {
+    for (const pipelined of [false, true]) {
+      for (const limit of ["count", "bytes"] as const) {
+        test(`${command}: bounds ${limit} before lifecycle completes (pipelined=${pipelined})`, async () => {
+          const held = deferred<unknown>();
+          const { log, sequencer } = harness("fence-until-start", {
+            runLifecycle: () => held.promise,
+            maxPendingInputs: limit === "count" ? 2 : 20,
+            maxBatchBytes: 4,
+            maxQueuedBytes: 4,
+            ...(pipelined
+              ? {
+                  pipelined: {
+                    active: () => true,
+                    send: () => {
+                      log.push("socket");
+                      return Promise.resolve();
+                    },
+                  },
+                }
+              : {}),
+          });
+          const lifecycle = outcome(sequencer.invoke(command, { sessionId: "s" }));
+          await tick();
+          const writes = Array.from({ length: limit === "count" ? 3 : 6 }, () =>
+            outcome(
+              sequencer.invoke("terminal_write", {
+                sessionId: "s",
+                data: limit === "count" ? "x" : "😀",
+              }),
+            ),
+          );
+          // All rejected before releasing the lifecycle, including accepted predecessors.
+          expect(
+            (await Promise.all(writes)).every((value) => value.includes("queue limit exceeded")),
+          ).toBe(true);
+          expect(sequencer.getStats()).toMatchObject({
+            pendingInputs: 0,
+            reservedInputBytes: 0,
+            failedTerminals: 1,
+          });
+          held.resolve(null);
+          expect(await lifecycle).toBe("ok");
+          expect(log).toEqual([]);
+          expect(
+            await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "z" })),
+          ).toContain("queue limit exceeded");
+          sequencer.dispose();
+        });
+      }
+    }
+  }
+
+  test("overflow issued before start executes remains fenced", async () => {
+    const { log, sequencer } = harness("fence-until-start", { maxPendingInputs: 1 });
+    const start = outcome(sequencer.invoke("start_terminal_session", { sessionId: "s" }));
+    const first = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "x" }));
+    const second = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "y" }));
+    expect(
+      (await Promise.all([first, second])).every((value) => value.includes("queue limit exceeded")),
+    ).toBe(true);
+    expect(await start).toBe("ok");
+    expect(sequencer.getStats().failedTerminals).toBe(1);
+    expect(log).toEqual(["start_terminal_session"]);
+    await sequencer.invoke("start_terminal_session", { sessionId: "s" });
+    expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "z" }))).toBe(
+      "ok",
+    );
+  });
+
+  test("disposal promptly releases writes waiting behind unresolved lifecycle work", async () => {
+    const held = deferred<unknown>();
+    const { log, sequencer } = harness("fence-until-start", { runLifecycle: () => held.promise });
+    const start = outcome(sequencer.invoke("start_terminal_session", { sessionId: "s" }));
+    await tick();
+    const write = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "held" }));
+    expect(sequencer.getStats()).toMatchObject({ pendingInputs: 1, reservedInputBytes: 4 });
+    sequencer.dispose(new Error("replaced"));
+    expect(await write).toBe("rejected: replaced");
+    expect(sequencer.getStats()).toMatchObject({ pendingInputs: 0, reservedInputBytes: 0 });
+    expect(await start).toBe("rejected: replaced");
+    await tick();
+    expect(sequencer.getStats()).toMatchObject({ terminals: 0, pendingLifecycleOperations: 0 });
+    held.resolve(null);
+    expect(log).toEqual([]);
+  });
+
+  for (const command of ["start_terminal_session", "terminal_resize"]) {
+    test(`${command}: reserves capacity before lifecycle execution and retains failure fences`, async () => {
+      const held = deferred<unknown>();
+      const calls: string[] = [];
+      const { sequencer } = harness("fence-until-start", {
+        maxTerminals: 2,
+        runLifecycle: ({ sessionId }) => {
+          calls.push(sessionId);
+          return held.promise;
+        },
+      });
+      const first = outcome(sequencer.invoke(command, { sessionId: "a" }));
+      const second = outcome(sequencer.invoke(command, { sessionId: "b" }));
+      expect(await outcome(sequencer.invoke(command, { sessionId: "c" }))).toContain(
+        "capacity reached",
+      );
+      expect(sequencer.getStats().terminals).toBe(2);
+      held.reject(new Error("lost response"));
+      expect(await Promise.all([first, second])).toEqual([
+        "rejected: lost response",
+        "rejected: lost response",
+      ]);
+      expect(await outcome(sequencer.invoke(command, { sessionId: "c" }))).toContain(
+        "capacity reached",
+      );
+      expect(sequencer.getStats()).toMatchObject({ terminals: 2, failedTerminals: 2 });
+      expect(calls).toEqual(["a", "b"]);
+      sequencer.dispose();
+    });
+  }
+
+  test("writes waiting behind a resize preserve issue order", async () => {
+    const held = deferred<unknown>();
+    const { log, sequencer } = harness("fence-until-start", { runLifecycle: () => held.promise });
+    const resize = sequencer.invoke("terminal_resize", { sessionId: "s" });
+    const writes = ["a", "b", "c"].map((data) =>
+      sequencer.invoke("terminal_write", { sessionId: "s", data }),
+    );
+    await tick();
+    expect(log).toEqual([]);
+    held.resolve(null);
+    await Promise.all([resize, ...writes]);
+    expect(log.join("").replaceAll("http:", "")).toBe("abc");
+    expect(sequencer.getStats()).toMatchObject({
+      terminals: 0,
+      pendingInputs: 0,
+      reservedInputBytes: 0,
+    });
+  });
+
   describe("pipelined input", () => {
     function pipelinedHarness(recovery: TerminalInputRecovery) {
       const acks: Deferred[] = [];
@@ -190,6 +327,20 @@ describe("TerminalInputSequencer", () => {
       acks[0]!.resolve();
       expect(await Promise.all([write, close])).toEqual(["ok", "ok"]);
       expect(log).toEqual(["socket:a", "detach_terminal"]);
+    });
+
+    test("resize drains only earlier acknowledgements and never waits on its own later writes", async () => {
+      const { log, sequencer, acks } = pipelinedHarness("rearm-on-lifecycle");
+      const first = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }));
+      const resize = outcome(sequencer.invoke("terminal_resize", { sessionId: "s" }));
+      const second = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "b" }));
+      await tick();
+      expect(log).toEqual(["socket:a"]);
+      acks[0]!.resolve();
+      await tick();
+      expect(log).toEqual(["socket:a", "terminal_resize", "socket:b"]);
+      acks[1]!.resolve();
+      expect(await Promise.all([first, resize, second])).toEqual(["ok", "ok", "ok"]);
     });
 
     test("falls back to HTTP when the channel cannot carry a write", async () => {

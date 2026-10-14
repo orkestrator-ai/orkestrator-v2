@@ -6,6 +6,7 @@ import {
   TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
   TERMINAL_HTTP_INPUT_MAX_TERMINALS,
   TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
+  TERMINAL_HTTP_INPUT_PARKED_CEILINGS,
   TerminalHttpInputBatcher,
   type TerminalInputCommand,
   type TerminalInputRequest,
@@ -112,7 +113,8 @@ const queueKey = (command: TerminalInputCommand, sessionId: string): string =>
  * The one ordering contract for terminal input, shared by every client
  * transport. Per terminal:
  *
- * - Input is delivered in issue order, batched and bounded by the batcher.
+ * - Input is reserved at issue time, delivered in order, and batched. The
+ *   reservation covers lifecycle waits and socket acknowledgements too.
  * - Resize and close wait for every write issued before them, including writes
  *   still waiting for room and pipelined writes awaiting acknowledgement.
  *   Writes issued after a lifecycle command wait for it.
@@ -129,9 +131,14 @@ export class TerminalInputSequencer {
   /** Outstanding pipelined acknowledgements a lifecycle command waits behind. */
   private readonly pipelinedAcks = new Map<string, Set<Promise<void>>>();
   private readonly closed = new Set<string>();
+  private readonly encoder = new TextEncoder();
+  private readonly lifecycleControllers = new Set<AbortController>();
   private readonly sendTimeoutMs: number;
   private readonly maxPendingLifecycleOperations: number;
   private readonly closedSessionMemory: number;
+  /** Reservations include writes waiting for lifecycle or socket acknowledgement. */
+  private readonly inputs = new Map<string, Set<{ bytes: number; controller: AbortController }>>();
+  private readonly overflowFailures = new Map<string, unknown>();
   private disposedReason: unknown = null;
   private disposed = false;
 
@@ -195,17 +202,31 @@ export class TerminalInputSequencer {
     this.disposed = true;
     this.disposedReason = reason;
     this.batcher.dispose(reason);
+    for (const controller of this.lifecycleControllers) controller.abort(reason);
+    for (const entries of this.inputs.values()) {
+      for (const entry of entries) entry.controller.abort(reason);
+    }
+    this.overflowFailures.clear();
   }
 
   /** Bounds usage, for tests and diagnostics. Carries no input. */
   getStats(): ReturnType<TerminalHttpInputBatcher["getStats"]> & {
     closedSessions: number;
     pendingLifecycleOperations: number;
+    reservedInputBytes: number;
   } {
     let pendingLifecycleOperations = 0;
     for (const count of this.lifecycleCounts.values()) pendingLifecycleOperations += count;
+    let pendingInputs = 0;
+    let reservedInputBytes = 0;
+    for (const entries of this.inputs.values()) {
+      pendingInputs += entries.size;
+      for (const entry of entries) reservedInputBytes += entry.bytes;
+    }
     return {
       ...this.batcher.getStats(),
+      pendingInputs,
+      reservedInputBytes,
       closedSessions: this.closed.size,
       pendingLifecycleOperations,
     };
@@ -229,16 +250,57 @@ export class TerminalInputSequencer {
     this.assertUsable();
     const key = queueKey(input.command, input.sessionId);
     if (this.closed.has(key)) throw new Error(TERMINAL_INPUT_CLOSED_MESSAGE);
-    if (this.options.pipelined?.active()) return this.writePipelined(input, key);
-    const lifecycle = this.lifecycleTails.get(key);
-    if (lifecycle) await lifecycle;
-    // Disposal can happen while this write waits behind a lifecycle barrier,
-    // before it has entered the batcher itself.
-    this.assertUsable();
-    await this.batcher.enqueue(input);
-    // A successful batched send is an explicit delivery verdict; an in-band
-    // refusal has already rejected above.
-    return { delivered: true };
+    const maxBytes = this.options.maxQueuedBytes ?? TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES;
+    const bytes = this.encoder.encode(input.data).byteLength;
+    if (bytes > maxBytes)
+      throw new RangeError(`Terminal input exceeds the ${maxBytes}-byte terminal queue limit`);
+    if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
+    const releaseTerminal = this.batcher.reserveTerminal(input.command, input.sessionId);
+    const entries =
+      this.inputs.get(key) ?? new Set<{ bytes: number; controller: AbortController }>();
+    let retainedBytes = 0;
+    for (const entry of entries) retainedBytes += entry.bytes;
+    if (
+      entries.size >= (this.options.maxPendingInputs ?? TERMINAL_HTTP_INPUT_MAX_PENDING_INPUTS) ||
+      retainedBytes + bytes > maxBytes * (1 + TERMINAL_HTTP_INPUT_PARKED_CEILINGS)
+    ) {
+      const error = new RangeError(
+        "Terminal input queue limit exceeded; restart the session before sending more input",
+      );
+      this.overflowFailures.set(key, error);
+      this.batcher.failQueue(input.command, input.sessionId, error);
+      for (const entry of entries) entry.controller.abort(error);
+      releaseTerminal();
+      throw error;
+    }
+    const entry = { bytes, controller: new AbortController() };
+    entries.add(entry);
+    this.inputs.set(key, entries);
+    const signal = entry.controller.signal;
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      cancel = () => reject(signal.reason);
+      signal.addEventListener("abort", cancel, { once: true });
+    });
+    // Register the cancellation race before running work, even for synchronous overflow.
+    const run = async () => {
+      if (this.options.pipelined?.active())
+        return this.writePipelined(input, key, signal, cancelled);
+      const lifecycle = this.lifecycleTails.get(key);
+      if (lifecycle) await Promise.race([lifecycle, cancelled]);
+      this.assertUsable();
+      signal.throwIfAborted();
+      await this.batcher.enqueue(input);
+      return { delivered: true as const };
+    };
+    try {
+      return await Promise.race([run(), cancelled]);
+    } finally {
+      signal.removeEventListener("abort", cancel);
+      entries.delete(entry);
+      if (entries.size === 0 && this.inputs.get(key) === entries) this.inputs.delete(key);
+      releaseTerminal();
+    }
   }
 
   /**
@@ -248,26 +310,32 @@ export class TerminalInputSequencer {
    * chaining writes on acknowledgements costs a round trip per character.
    * Sends are serialized; acknowledgements are merely tracked.
    */
-  private writePipelined(input: TerminalInputRequest, key: string): Promise<{ delivered: true }> {
-    const previousSend =
-      this.pipelinedSendTails.get(key) ?? this.lifecycleTails.get(key) ?? Promise.resolve();
+  private writePipelined(
+    input: TerminalInputRequest,
+    key: string,
+    signal: AbortSignal,
+    cancelled: Promise<never>,
+  ): Promise<{ delivered: true }> {
+    const lifecycle = this.lifecycleTails.get(key);
+    const previousSend = this.pipelinedSendTails.get(key) ?? lifecycle ?? Promise.resolve();
 
-    const send = previousSend
+    const send = Promise.race([previousSend, cancelled])
       .catch(() => undefined)
       .then(async () => {
+        signal.throwIfAborted();
         this.assertUsable();
-        const lifecycle = this.lifecycleTails.get(key);
-        if (lifecycle) await lifecycle.catch(() => undefined);
+        if (lifecycle) await Promise.race([lifecycle, cancelled]);
         this.assertUsable();
         const flushed = this.batcher.flush(input.command, input.sessionId);
         if (this.rearms) {
           // A latched HTTP failure must not veto a healthy channel; its
           // rejection has already reached whoever issued that write.
-          await flushed.catch(() => undefined);
+          await Promise.race([flushed.catch(() => undefined), cancelled]);
         } else {
-          await flushed;
+          await Promise.race([flushed, cancelled]);
         }
         this.assertUsable();
+        signal.throwIfAborted();
         const acknowledgement = this.options.pipelined?.send(input) ?? null;
         if (acknowledgement) {
           // The channel accepted this write, so the transport has recovered.
@@ -291,7 +359,7 @@ export class TerminalInputSequencer {
       if (this.pipelinedSendTails.get(key) === sendTail) this.pipelinedSendTails.delete(key);
     });
 
-    const acknowledged = send.then((result) => result?.acknowledgement);
+    const acknowledged = Promise.race([send.then((result) => result?.acknowledgement), cancelled]);
     const settled = acknowledged.then(
       () => undefined,
       () => undefined,
@@ -308,18 +376,6 @@ export class TerminalInputSequencer {
     return acknowledged.then(() => ({ delivered: true }));
   }
 
-  /**
-   * Waits for every pipelined write already issued for one terminal. One
-   * snapshot is enough: a write issued after the caller installed its
-   * lifecycle tail blocks on that tail, and one issued before it is already
-   * registered here.
-   */
-  private async drainPipelined(key: string): Promise<void> {
-    const outstanding = this.pipelinedAcks.get(key);
-    if (!outstanding || outstanding.size === 0) return;
-    await Promise.all(outstanding);
-  }
-
   private lifecycle(operation: TerminalLifecycleOperation): Promise<unknown> {
     try {
       this.assertUsable();
@@ -331,7 +387,17 @@ export class TerminalInputSequencer {
     if (pendingCount >= this.maxPendingLifecycleOperations) {
       return Promise.reject(new Error("Terminal lifecycle queue limit exceeded"));
     }
+    let releaseTerminal: () => void;
+    try {
+      releaseTerminal = this.batcher.reserveTerminal(operation.inputCommand, operation.sessionId);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (operation.kind === "start") this.overflowFailures.delete(key);
     const previous = this.lifecycleTails.get(key) ?? Promise.resolve();
+    // Snapshot at issue time. Later writes wait on this lifecycle and cannot
+    // become part of the acknowledgements it drains without forming a cycle.
+    const priorPipelined = Array.from(this.pipelinedAcks.get(key) ?? []);
 
     // Install the barrier before the first await, so writes issued after this
     // call wait behind resize/start and are rejected after close. The close
@@ -340,7 +406,9 @@ export class TerminalInputSequencer {
     if (operation.kind === "close") this.rememberClosed(key);
     if (operation.kind === "start") this.closed.delete(key);
 
-    const run = previous.catch(() => undefined).then(() => this.runOrdered(operation, key));
+    const run = previous
+      .catch(() => undefined)
+      .then(() => this.runOrdered(operation, key, priorPipelined));
     const tail = run.then(
       () => undefined,
       () => undefined,
@@ -348,6 +416,7 @@ export class TerminalInputSequencer {
     this.lifecycleCounts.set(key, pendingCount + 1);
     this.lifecycleTails.set(key, tail);
     void tail.finally(() => {
+      releaseTerminal();
       const remaining = (this.lifecycleCounts.get(key) ?? 1) - 1;
       if (remaining > 0) this.lifecycleCounts.set(key, remaining);
       else this.lifecycleCounts.delete(key);
@@ -356,7 +425,11 @@ export class TerminalInputSequencer {
     return run;
   }
 
-  private async runOrdered(operation: TerminalLifecycleOperation, key: string): Promise<unknown> {
+  private async runOrdered(
+    operation: TerminalLifecycleOperation,
+    key: string,
+    priorPipelined: Promise<void>[],
+  ): Promise<unknown> {
     // The transport may have been replaced while this command waited.
     this.assertUsable();
     const { inputCommand, sessionId } = operation;
@@ -365,10 +438,14 @@ export class TerminalInputSequencer {
       // A restart supersedes input queued against the previous incarnation, and
       // must not wait out a hung write to happen.
       this.batcher.reset(inputCommand, sessionId);
+      // Overflow may occur after start was issued but before this continuation runs.
+      if (this.overflowFailures.has(key)) {
+        this.batcher.failQueue(inputCommand, sessionId, this.overflowFailures.get(key));
+      }
       try {
         return await this.runWithDeadline(operation);
       } catch (error) {
-        if (!this.rearms) this.batcher.failQueue(inputCommand, sessionId, error);
+        if (!this.rearms && !this.disposed) this.batcher.failQueue(inputCommand, sessionId, error);
         throw error;
       }
     }
@@ -376,7 +453,7 @@ export class TerminalInputSequencer {
     // A failed write has already reported its own error. Resize and close must
     // still reach the backend, but never ahead of accepted input.
     await this.batcher.flush(inputCommand, sessionId).catch(() => undefined);
-    await this.drainPipelined(key);
+    await Promise.all(priorPipelined);
     // Disposal also rejects the flush. Do not turn that into a stale command
     // against the backend being replaced.
     this.assertUsable();
@@ -386,6 +463,7 @@ export class TerminalInputSequencer {
       // write failure would leave a terminal that streams output but refuses
       // every keystroke.
       if (operation.kind === "resize" && this.rearms) {
+        this.overflowFailures.delete(key);
         this.batcher.clearFailure(inputCommand, sessionId);
       }
       return result;
@@ -394,7 +472,7 @@ export class TerminalInputSequencer {
         // The terminal is still alive, so undo the provisional close rather
         // than rejecting its input for the lifetime of the client.
         if (operation.kind === "close") this.closed.delete(key);
-      } else if (operation.kind === "resize") {
+      } else if (operation.kind === "resize" && !this.disposed) {
         // A lost lifecycle response leaves terminal state uncertain too.
         this.batcher.failQueue(inputCommand, sessionId, error);
       }
@@ -402,13 +480,22 @@ export class TerminalInputSequencer {
     } finally {
       // Unconditional: whether or not the close landed, input queued against
       // the old session must not be delivered.
-      if (operation.kind === "close") this.batcher.reset(inputCommand, sessionId);
+      if (operation.kind === "close") {
+        this.overflowFailures.delete(key);
+        this.batcher.reset(inputCommand, sessionId);
+      }
     }
   }
 
   /** The deadline includes response decoding, even if the runner ignores abort. */
   private runWithDeadline(operation: TerminalLifecycleOperation): Promise<unknown> {
     const controller = new AbortController();
+    this.lifecycleControllers.add(controller);
+    let rejectAbort!: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+      rejectAbort = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", rejectAbort, { once: true });
+    });
     let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -419,10 +506,14 @@ export class TerminalInputSequencer {
         reject(error);
       }, this.sendTimeoutMs);
     });
-    const run = Promise.resolve().then(() =>
-      this.options.runLifecycle(operation, controller.signal),
-    );
-    return Promise.race([run, timeout]).finally(() => {
+    const run = Promise.resolve().then(() => {
+      this.assertUsable();
+      controller.signal.throwIfAborted();
+      return this.options.runLifecycle(operation, controller.signal);
+    });
+    return Promise.race([run, timeout, aborted]).finally(() => {
+      this.lifecycleControllers.delete(controller);
+      controller.signal.removeEventListener("abort", rejectAbort);
       if (timer) clearTimeout(timer);
     });
   }

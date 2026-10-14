@@ -7,13 +7,16 @@ import {
   terminalInputContractScenarios,
   type TerminalContractAdapter,
 } from "@orkestrator/protocol/terminal-input-contract-fixtures";
+import { SseFrameDecoder } from "@orkestrator/protocol/gateway-event-stream";
 import { createBrowserGatewayApi } from "./web-gateway";
 
 const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
+const originalEventSource = globalThis.EventSource;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   console.warn = originalWarn;
+  globalThis.EventSource = originalEventSource;
 });
 
 const browserTerminalAdapter: TerminalContractAdapter = {
@@ -82,3 +85,78 @@ describe("browser gateway event stream contract", () => {
     });
   }
 });
+
+/** Native retries preserve Last-Event-ID; a replaced source resumes via `since`. */
+function sameOriginAdapter(nativeRetry: boolean): EventStreamContractAdapter {
+  return {
+    start(server, observe, onEvent) {
+      console.warn = mock(() => undefined);
+      globalThis.fetch = mock(async () => new Response("{}")) as unknown as typeof fetch;
+      let attempt = 0;
+      const sources: ScriptedEventSource[] = [];
+      class ScriptedEventSource {
+        onopen: (() => void) | null = null;
+        onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
+        onerror: (() => void) | null = null;
+        readyState = 0;
+        lastEventId: string | null = null;
+        timer: ReturnType<typeof setTimeout> | null = null;
+        closed = false;
+        constructor(readonly url: string) {
+          sources.push(this);
+          this.timer = setTimeout(() => this.connect(), 0);
+        }
+        connect() {
+          if (this.closed) return;
+          // This models the browser-owned header taking priority over the URL's
+          // original query, which remains fixed across native retries.
+          const cursor =
+            this.lastEventId ?? new URL(this.url, "http://localhost").searchParams.get("since");
+          const connection = server(++attempt, cursor);
+          this.readyState = 1;
+          this.onopen?.();
+          const decoder = new SseFrameDecoder();
+          for (const chunk of connection.chunks) {
+            for (const frame of decoder.push(chunk)) {
+              if (frame.id) this.lastEventId = frame.id;
+              if (frame.data)
+                this.onmessage?.({ data: frame.data, lastEventId: this.lastEventId ?? "" });
+            }
+          }
+          if (connection.close && !this.closed) {
+            this.readyState = nativeRetry ? 0 : 2;
+            this.onerror?.();
+            if (nativeRetry) this.timer = setTimeout(() => this.connect(), 5);
+          }
+        }
+        close() {
+          this.closed = true;
+          this.readyState = 2;
+          if (this.timer) clearTimeout(this.timer);
+        }
+      }
+      globalThis.EventSource = ScriptedEventSource as unknown as typeof EventSource;
+      const api = createBrowserGatewayApi({ eventReconnectDelayMs: 5 });
+      const unlisten = observe.map((event) =>
+        api.listen(event, (payload: unknown) => onEvent(event, payload)),
+      );
+      return {
+        stop: () => {
+          unlisten.forEach((stop) => stop());
+          sources.forEach((source) => source.close());
+        },
+      };
+    },
+  };
+}
+
+for (const nativeRetry of [true, false]) {
+  describe(`same-origin EventSource contract (${nativeRetry ? "Last-Event-ID" : "since query"})`, () => {
+    for (const scenario of gatewayEventStreamContractScenarios) {
+      test(scenario.name, async () => {
+        const { actual, expected } = await scenario.run(sameOriginAdapter(nativeRetry));
+        expect(actual).toEqual(expected);
+      });
+    }
+  });
+}

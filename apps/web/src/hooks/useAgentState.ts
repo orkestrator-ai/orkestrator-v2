@@ -48,7 +48,9 @@ export function useAgentState(containerId: string | null, tabId: string): void {
       eventName,
       (event) => apply(event.payload.state, event.payload.occurred_at),
       {
+        resyncOnSubscribe: true,
         onResync: async () => {
+          if (disposed) return;
           const snapshot = await getClaudeTerminalState(containerId);
           if (snapshot) apply(snapshot.state, snapshot.occurredAt);
         },

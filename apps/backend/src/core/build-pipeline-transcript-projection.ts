@@ -140,12 +140,13 @@ export async function conditionalBuildPipelineRead(
     .map((session, index) => ({ session, index }))
     .sort((left, right) => rank(left.session) - rank(right.session) || right.index - left.index);
   const projectedRecord = withoutTranscriptBodies(record);
-  let remaining =
+  const responseAllowance =
     budgetBytes -
     Buffer.byteLength(
       JSON.stringify({ unchanged: false, record: projectedRecord, messagePatches: [] }),
       "utf8",
     );
+  let remaining = responseAllowance;
   const messagePatches: BuildPipelineMessagePatch[] = [];
   const defer = (sessionKey: string, revision: number) => {
     const patch: BuildPipelineMessagePatch = {
@@ -229,10 +230,30 @@ export async function conditionalBuildPipelineRead(
       // The store keeps what the provider returned; the renderer gets display
       // messages. One in, one out, so `startIndex`/`baseCount` still address
       // the client's copy. Measured after normalizing: that is what is sent.
-      const message = normalizeOpenCodeDisplayEntry(stored, nextIndex);
-      const bytes =
+      let message = normalizeOpenCodeDisplayEntry(stored, nextIndex);
+      let bytes =
         Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
         (patch.messages.length > 0 ? 1 : 0);
+      // A row that cannot fit even in an otherwise empty response must not
+      // fence all later history forever. Keep one raw index and make the
+      // display limitation explicit; the persisted provider body stays intact.
+      if (bytes > responseAllowance - patchOverhead) {
+        const display = isRecord(message) ? message : {};
+        message = {
+          id:
+            typeof display.id === "string"
+              ? display.id.slice(0, 512)
+              : `pipeline-message-${nextIndex}`,
+          role: display.role === "user" || display.role === "system" ? display.role : "assistant",
+          content:
+            "[Transcript entry omitted from display: its normalized body exceeds the response byte limit. The complete entry remains in the persisted transcript.]",
+          ...(typeof display.createdAt === "string"
+            ? { createdAt: display.createdAt.slice(0, 64) }
+            : {}),
+        };
+        bytes =
+          Buffer.byteLength(JSON.stringify(message), "utf8") + (patch.messages.length > 0 ? 1 : 0);
+      }
       if (bytes > allowance) break;
       patch.messages.push(message);
       allowance -= bytes;

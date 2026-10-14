@@ -3821,6 +3821,11 @@ describe("native agent and looped-review controller commands", () => {
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
             providerSessionId: "provider-new",
             expectedProviderSessionId: "provider-old",
+            controls: {
+              modelId: "opencode-go/deepseek-v4-flash",
+              reasoningId: "high",
+              executionProfileId: "reviewer",
+            },
             model: "provider/model",
             reasoningEffort: "high",
             executionProfileId: "plan",
@@ -3835,6 +3840,11 @@ describe("native agent and looped-review controller commands", () => {
           providerSessionId: "provider-new",
           expectedProviderSessionId: "provider-old",
           title: undefined,
+          controls: {
+            modelId: "opencode-go/deepseek-v4-flash",
+            reasoningId: "high",
+            executionProfileId: "reviewer",
+          },
           model: "provider/model",
           reasoningEffort: "high",
           phase: undefined,

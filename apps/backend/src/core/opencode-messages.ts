@@ -99,11 +99,11 @@ export function parseOpenCodeStructuredText(parts: unknown): unknown {
   return value;
 }
 
-function stringifyOpenCodeToolValue(value: unknown): string | undefined {
+function stringifyOpenCodeToolValue(value: unknown, limit = 200_000): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value === "string") return value.slice(0, 200_000);
+  if (typeof value === "string") return value.slice(0, limit);
   try {
-    return JSON.stringify(value, null, 2).slice(0, 200_000);
+    return JSON.stringify(value, null, 2).slice(0, limit);
   } catch {
     return "[unserializable tool value]";
   }
@@ -289,6 +289,8 @@ export function normalizeOpenCodeInteractiveMessage(
    * backend overlays what it measured here, on every read.
    */
   commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
+  /** Display reads have their own byte budget and retain complete tool bodies. */
+  toolValueLimit = 200_000,
 ): Record<string, unknown> | null {
   const envelope = asRecord(value);
   const info = asRecord(envelope?.info);
@@ -424,7 +426,7 @@ export function normalizeOpenCodeInteractiveMessage(
             : undefined;
     const isSubagent = toolName.toLowerCase() === "task" || toolName.toLowerCase() === "agent";
     const input = asRecord(state?.input) ?? undefined;
-    const toolOutput = stringifyOpenCodeToolValue(state?.output);
+    const toolOutput = stringifyOpenCodeToolValue(state?.output, toolValueLimit);
     const taskEnvelope = isSubagent ? openCodeTaskEnvelope(toolOutput) : {};
     const metadata = asRecord(state?.metadata) ?? asRecord(part.metadata);
     const subagentId = isSubagent
@@ -472,7 +474,9 @@ export function normalizeOpenCodeInteractiveMessage(
       ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
       ...(toolOutput === undefined ? {} : { toolOutput }),
-      ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
+      ...(state?.error === undefined
+        ? {}
+        : { toolError: stringifyOpenCodeToolValue(state.error, toolValueLimit) }),
       ...(toolDiff ? { toolDiff } : {}),
       ...(commandChange ? { commandChanges: commandChange } : {}),
       ...(isSubagent

@@ -1454,6 +1454,8 @@ export interface NativeAgentResumeEntry {
 
 export interface NativeAgentForkOutcome {
   sessionId: string;
+  /** Source composer selection to persist when adopting the new session. */
+  controls?: NativeAgentControlUpdate;
   title?: string;
   /** Provider-selected editable prompt when a fork begins before a user entry. */
   draft?: string;

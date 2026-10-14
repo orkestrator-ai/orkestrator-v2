@@ -90,7 +90,13 @@ export function normalizeOpenCodeDisplayEntry(value: unknown, index: number): un
 
   let normalized: Record<string, unknown> | null = null;
   try {
-    normalized = normalizeOpenCodeInteractiveMessage(envelope, index);
+    normalized = normalizeOpenCodeInteractiveMessage(
+      envelope,
+      index,
+      undefined,
+      undefined,
+      Number.MAX_SAFE_INTEGER,
+    );
   } catch {
     normalized = null;
   }

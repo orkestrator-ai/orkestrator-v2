@@ -1623,6 +1623,7 @@ describe("backend native agent and looped review wrappers", () => {
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       providerSessionId: "provider-new",
       expectedProviderSessionId: "provider-old",
+      controls: { modelId: "opencode-go/deepseek-v4-flash", reasoningId: "high" },
       model: "open-model",
       reasoningEffort: "medium",
       sessionMode: "build" as const,

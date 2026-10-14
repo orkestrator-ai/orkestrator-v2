@@ -340,6 +340,9 @@ export interface ProviderInteractiveSnapshot {
    */
   sessionModelId?: string;
   sessionReasoningId?: string;
+  /** Compact transcript evidence for body-free progressive state reads. */
+  lastAssistantModelId?: string;
+  lastAssistantReasoningId?: string;
   readiness?: NativeAgentReadiness;
   controls?: NativeAgentControlUpdate;
   providerRevision?: number;

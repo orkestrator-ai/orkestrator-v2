@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
-import { openCodeTranscriptSnapshot } from "./opencode-snapshots.js";
+import { openCodeTranscriptSnapshot, openCodeSessionStateSnapshot } from "./opencode-snapshots.js";
 
 function rawMessage(id: string): unknown {
   return { info: { id, role: "assistant", time: { created: 1 } }, parts: [] };
@@ -43,4 +43,29 @@ test("a read covering the retained history still seeds the stream cache", async 
   const display = input(OPEN_CODE_MESSAGE_HISTORY_LIMIT);
   await display.run();
   expect(display.replaced).toHaveLength(1);
+});
+
+test("body-free state snapshots carry last-assistant model and reasoning evidence", () => {
+  const snapshot = openCodeSessionStateSnapshot({
+    status: "idle",
+    revision: 3,
+    runtime: {},
+    notices: [],
+    messages: [
+      {
+        info: {
+          role: "assistant",
+          providerID: "opencode-go",
+          modelID: "deepseek-v4-flash",
+          variant: "high",
+        },
+        parts: [{ type: "text", text: "private body" }],
+      },
+      { info: { role: "user" }, parts: [] },
+    ],
+  });
+  expect(snapshot.lastAssistantModelId).toBe("opencode-go/deepseek-v4-flash");
+  expect(snapshot.lastAssistantReasoningId).toBe("high");
+  expect(JSON.stringify(snapshot)).not.toContain("private body");
+  expect("messages" in snapshot).toBe(false);
 });

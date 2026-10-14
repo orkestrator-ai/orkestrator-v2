@@ -37,6 +37,30 @@ function flattenedParts(messages: NativeMessage[]): NativeMessagePart[] {
 }
 
 describe("OpenCode pipeline transcripts through the backend boundary", () => {
+  test.each(["completed", "error"])(
+    "retains the complete tail of a long %s tool body through the renderer adapter",
+    (status) => {
+      const output = "x".repeat(200_001) + "OUTPUT_TAIL";
+      const error = "e".repeat(200_001) + "ERROR_TAIL";
+      const transcript = render([
+        {
+          info: { id: "long-log", role: "assistant" },
+          parts: [
+            {
+              id: "long-tool",
+              type: "tool",
+              tool: "bash",
+              state: { status, input: { command: "build" }, output, error },
+            },
+          ],
+        },
+      ]);
+      const tool = flattenedParts(transcript).find((part) => part.type === "tool-invocation");
+      expect(tool?.type === "tool-invocation" && tool.toolOutput).toBe(output);
+      expect(tool?.type === "tool-invocation" && tool.toolError).toBe(error);
+    },
+  );
+
   test("hides the initial pipeline handoff carried in an OpenCode envelope", () => {
     const handoff = `<orkestrator-handoff format="json-v2">
 review context that remains available to the agent

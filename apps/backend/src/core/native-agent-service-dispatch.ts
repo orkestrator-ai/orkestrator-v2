@@ -723,7 +723,21 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!resolved.provider.forkSession) {
       throw new Error(`${input.agent} does not support session forks`);
     }
-    return resolved.provider.forkSession(resolved.session.providerSessionId, input.messageId);
+    const projection = await this.getProjection(input);
+    const composer = projection?.composer;
+    const outcome = await resolved.provider.forkSession(
+      resolved.session.providerSessionId,
+      input.messageId,
+    );
+    return {
+      ...outcome,
+      controls: {
+        ...resolved.session.controls,
+        ...(composer?.selectedModelId ? { modelId: composer.selectedModelId } : {}),
+        ...(composer?.selectedReasoningId ? { reasoningId: composer.selectedReasoningId } : {}),
+        ...outcome.controls,
+      },
+    };
   }
 
   async performProjectionAction(

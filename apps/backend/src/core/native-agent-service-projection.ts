@@ -2666,11 +2666,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       stateSnapshot.controls,
       true,
       {
-        lastAssistantModelId: lastAssistant.modelId,
-        lastAssistantReasoningId: lastAssistant.reasoningId,
+        lastAssistantModelId: stateSnapshot.lastAssistantModelId ?? lastAssistant.modelId,
+        lastAssistantReasoningId:
+          stateSnapshot.lastAssistantReasoningId ?? lastAssistant.reasoningId,
         sessionModelId: stateSnapshot.sessionModelId,
         sessionReasoningId: stateSnapshot.sessionReasoningId,
-        persistSelection: true,
+        // A body-free OpenCode state view may see session.model before the
+        // stronger last-assistant evidence arrives with transcript hydration.
+        persistSelection:
+          !nativeAgentPlatformPolicy(input.agent).infersComposerSelection ||
+          !!(stateSnapshot.lastAssistantModelId ?? lastAssistant.modelId),
       },
     );
     const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);

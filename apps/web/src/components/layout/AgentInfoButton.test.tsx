@@ -12,6 +12,7 @@ import {
   nativeAgentCapabilities,
   type NativeAgentAccountUsageWindow,
   type NativeAgentControlUpdate,
+  type NativeAgentForkOutcome,
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -41,7 +42,7 @@ const mockNativeAction = mock<
     preview?: unknown;
   }>
 >(async () => ({ outcome: "applied" }));
-const mockNativeFork = mock<() => Promise<{ sessionId: string; title?: string }>>(async () => ({
+const mockNativeFork = mock<() => Promise<NativeAgentForkOutcome>>(async () => ({
   sessionId: "opencode-fork",
   title: "OpenCode fork title",
 }));
@@ -3337,6 +3338,38 @@ describe("AgentInfoButton session actions", () => {
       expect(isPopoverOpen()).toBe(false);
     },
   );
+
+  test("Agent Info adopts an OpenCode fork with the source model and reasoning controls", async () => {
+    seedNativeProjection("opencode", "opencode-session-1");
+    const controls = {
+      modelId: "opencode-go/deepseek-v4-flash",
+      reasoningId: "high",
+      executionProfileId: "reviewer",
+    };
+    mockNativeFork.mockImplementation(async () => ({
+      sessionId: "opencode-fork",
+      title: "Fork",
+      controls,
+    }));
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    const forked = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((entry) => entry.id !== TAB_ID)!;
+    expect(nativeInvokeMock).toHaveBeenCalledWith("adopt_native_agent_session", {
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: createSessionKey(ENVIRONMENT_ID, forked.id),
+      providerSessionId: "opencode-fork",
+      controls,
+    });
+    expect(forked.initialPrompt).toBeUndefined();
+  });
 
   test("names the fork tab after the provider when the fork has no title", async () => {
     seedClaudeProjection();

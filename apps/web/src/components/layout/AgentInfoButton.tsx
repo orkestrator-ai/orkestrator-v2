@@ -38,6 +38,7 @@ import {
   type AgentProvider,
 } from "@/lib/agent-handoff";
 import {
+  adoptNativeAgentSession,
   deleteAgentHandoff,
   beginNativeAgentSignIn,
   forkNativeAgentSession,
@@ -494,13 +495,21 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
 
-  const openForkTab = (
+  const openForkTab = async (
     sessionId: string,
     title: string | undefined,
     closeCurrentPanel: boolean,
+    controls?: NativeAgentControlUpdate,
   ) => {
     if (!activeTab || !activeSession) return;
     const id = createUuid();
+    await adoptNativeAgentSession({
+      environmentId: activeSession.environmentId,
+      agent: activeSession.provider,
+      logicalSessionKey: createSessionKey(activeSession.environmentId, id),
+      providerSessionId: sessionId,
+      controls,
+    });
     /*
      * Built field by field, never by spreading the source tab. `TabInfo`
      * carries one-shot bootstrap fields (`initialPrompt`, `initialCommands`,
@@ -621,7 +630,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         agent: activeSession.provider,
         logicalSessionKey: activeSession.sessionKey,
       });
-      openForkTab(fork.sessionId, fork.title, isCurrent());
+      await openForkTab(fork.sessionId, fork.title, isCurrent(), fork.controls);
     });
 
   const continueIn = (

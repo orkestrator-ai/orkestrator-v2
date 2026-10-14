@@ -237,6 +237,58 @@ describe("build pipeline transcript projection", () => {
     });
   });
 
+  test("oversized normalized legacy OpenCode rows declare a limitation and do not fence later history", async () => {
+    await withStorage(async (storage) => {
+      const { record } = await seed(storage);
+      const raw = [
+        {
+          info: { id: "legacy-large", role: "assistant" },
+          parts: [{ type: "text", text: "x".repeat(17 * 1024 * 1024) }],
+        },
+        {
+          info: { id: "after-large", role: "assistant" },
+          parts: [{ type: "text", text: "Later history" }],
+        },
+      ];
+      expect(Buffer.byteLength(JSON.stringify(raw))).toBeLessThan(
+        BUILD_PIPELINE_PATCH_BUDGET_BYTES,
+      );
+      const legacy: PipelineSession = {
+        phase: "build",
+        iteration: 0,
+        sessionKey: "legacy-large",
+        sdkSessionId: "sdk-large",
+        status: "idle",
+        startedAt: "2026-09-01T00:00:00.000Z",
+        label: "legacy",
+        messageRevision: 1,
+        messages: raw,
+      };
+      const legacyRecord = { ...record, snapshot: { sessions: [legacy], currentSessionIndex: 0 } };
+      const read = await conditionalBuildPipelineRead(storage, legacyRecord, { knownSessions: {} });
+      if (read.unchanged) throw new Error("expected patches");
+      expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThanOrEqual(
+        BUILD_PIPELINE_PATCH_BUDGET_BYTES,
+      );
+      const patch = read.messagePatches[0]!;
+      expect(patch.deferred).toBeUndefined();
+      expect(patch.messages).toHaveLength(2);
+      expect(patch.messages[0]).toMatchObject({
+        id: "legacy-large",
+        content: expect.stringContaining("omitted from display"),
+      });
+      expect(patch.messages[1]).toMatchObject({ id: "after-large", content: "Later history" });
+      expect(
+        await conditionalBuildPipelineRead(storage, legacyRecord, {
+          knownRevision: record.revision,
+          knownSessions: { "legacy-large": { revision: 1, count: 2 } },
+        }),
+      ).toEqual({ unchanged: true, revision: record.revision });
+      const persisted = await storage.readBuildPipelineTranscript("p1", legacy);
+      expect(persisted.status === "found" && persisted.messages[0]).toBe(raw[0]);
+    });
+  });
+
   test("continues paging a substituted generation from its own cursor", async () => {
     await withStorage(async (storage) => {
       const { record, build } = await seed(storage);

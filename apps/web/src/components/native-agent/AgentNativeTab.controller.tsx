@@ -1816,6 +1816,7 @@ export function SharedNativeAgentController({
             agent: platform,
             logicalSessionKey: forkSessionKey,
             providerSessionId: outcome.sessionId,
+            controls: outcome.controls,
           });
         }
         if (planned.kind === "prompt") {

@@ -21,6 +21,7 @@ import {
   type AgentInteractionProviderCapability,
   type AgentSessionProvider,
   type BridgeConnection,
+  type NativeAgentProviderEnvironment,
   type NativeAgentRuntimeProvider,
   type ProviderActivityState,
   type ProviderInteractiveSnapshot,
@@ -471,6 +472,36 @@ describe("NativeAgentService", () => {
         await expect(service.listProjectionModels(input)).resolves.toEqual([
           expect.objectContaining({ id: "opencode/kimi-k2.7" }),
         ]);
+      },
+    );
+  });
+
+  test("gives every provider creation site the live settings reader", async () => {
+    await withService(
+      { prefix: "orkestrator-native-provider-environment-" },
+      async ({ storage, service }) => {
+        // Whichever site creates the provider first (tab, activity observer or
+        // tab close) caches it for the tab, so none may pass less than another.
+        const environment = (
+          service as unknown as {
+            providerEnvironment(environmentId: string): NativeAgentProviderEnvironment;
+          }
+        ).providerEnvironment("env-1");
+        expect(environment).toMatchObject({
+          environmentId: "env-1",
+          dataDir: storage.getDataDir(),
+        });
+        expect(environment.loadConfig).toBeFunction();
+
+        const config = await storage.loadConfig();
+        await storage.saveConfig({
+          ...config,
+          global: { ...config.global, openCodeModelProviders: ["hpc-ai"] },
+        });
+        // Read per call, so a settings edit reaches an already-cached provider.
+        await expect(environment.loadConfig?.()).resolves.toMatchObject({
+          global: { openCodeModelProviders: ["hpc-ai"] },
+        });
       },
     );
   });

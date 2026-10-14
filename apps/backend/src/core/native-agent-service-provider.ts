@@ -218,13 +218,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       autoAnswerRequests: false,
       onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
-      environment: {
-        ...this.providerEnvironment(input.environmentId),
-        // Read per call rather than per provider: providers are cached for the
-        // life of a bridge connection, so a settings edit would otherwise not
-        // reach the model catalogue until the environment restarted.
-        loadConfig: () => this.storage.loadConfig(),
-      },
+      environment: this.providerEnvironment(input.environmentId),
     });
     this.cacheProvider(cacheKey, provider, connectionIdentity);
     return provider;
@@ -261,13 +255,18 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
    * derives platform-specific dependencies from it (per-environment on-disk
    * state under the backend data directory, for example). Every creation site
    * that can cache a tab's provider passes it: whichever one caches the
-   * provider serves the tab. Storage doubles without a data directory get no
-   * on-disk provider state.
+   * provider serves the tab, so the observer and tab-close paths must not pass
+   * less than the tab path does. Storage doubles without a data directory get
+   * no on-disk provider state.
    */
   protected providerEnvironment(environmentId: string): NativeAgentProviderEnvironment {
+    // Read per call rather than per provider: providers are cached for the
+    // life of a bridge connection, so a settings edit would otherwise not
+    // reach the model catalogue until the environment restarted.
+    const loadConfig = () => this.storage.loadConfig();
     return typeof this.storage.getDataDir === "function"
-      ? { environmentId, dataDir: this.storage.getDataDir() }
-      : { environmentId };
+      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig }
+      : { environmentId, loadConfig };
   }
 
   protected bridgeConnectionIdentity(connection: BridgeConnection): string {

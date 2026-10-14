@@ -1,5 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import path from "node:path";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import {

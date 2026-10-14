@@ -15,11 +15,9 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
-import { afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
+import { afterEach, jest } from "bun:test";
 
-import { spawnSync } from "node:child_process";
-
-import { existsSync, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 
 import os from "node:os";
 
@@ -27,61 +25,9 @@ import path from "node:path";
 
 import { setTimeout as delay } from "node:timers/promises";
 
-import {
-  agentMcpConfigJson,
-  agentToolConnectionTarget,
-  boundedInfoEventMessage,
-  buildTmuxPaneUpdate,
-  CLAUDE_STATE_POLL_INTERVAL_MS,
-  CLAUDE_STATE_READ_TIMEOUT_MS,
-  ClaudeStatePollManager,
-  claudeStateReadCommand,
-  cleanupEnvironmentTmux,
-  containerExecArgs,
-  fastModeFromPane,
-  fastModeRejectionFromPane,
-  InteractiveTmuxTerminalManager,
-  INTERACTIVE_SNAPSHOT_MAX_MS,
-  INTERACTIVE_SNAPSHOT_MIN_MS,
-  isDirectJsonlChild,
-  isMissingTmuxSessionError,
-  jsonlByMtimeFindCommand,
-  listLocalJsonlByMtime,
-  LIVENESS_CHECK_EVERY_TICKS,
-  parseTmuxSessionNames,
-  selectReapableTmuxSessions,
-  tmuxSessionNamePrefix,
-  newestJsonlFindCommand,
-  newestJsonlInDir,
-  parseFreshJsonlFindOutput,
-  parsePollSnapshotExecOutput,
-  parsePollSnapshotOutput,
-  parseTranscriptHeadOutput,
-  pollSnapshotScript,
-  probeThinkingDisplaySupport,
-  PREVIOUS_SESSION_STAT_CONCURRENCY,
-  registerTmuxBackendCommands,
-  RUNTIME_ROOT_PREFIX,
-  shutdownClaudeStatePolling,
-  tailFromOffsetCommand,
-  TMUX_HOOK_PAYLOAD_MAX_BYTES,
-  thinkingDisplayProbeArgs,
-  thinkingDisplayProbeIndicatesSupport,
-  TranscriptTail,
-  transcriptContainsSessionId,
-  transcriptHeadCommand,
-  tmuxSessionName,
-  type ExecOutput,
-} from "../src/core/tmux";
+import { registerTmuxBackendCommands, RUNTIME_ROOT_PREFIX } from "../src/core/tmux";
 
 import type { Environment } from "../src/core/models";
-
-import type { CommandContext } from "../src/core/commands";
-
-import {
-  tmuxSelectionPromptFingerprint,
-  type TmuxSelectionPrompt,
-} from "../../../packages/protocol/src/tmux-observation";
 
 export const tempDirs: string[] = [];
 

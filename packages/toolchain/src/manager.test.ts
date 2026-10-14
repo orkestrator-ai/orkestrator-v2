@@ -26,11 +26,7 @@ import {
   leaseActivatedToolchainSet,
   type ToolchainProgress,
 } from "./manager.js";
-import {
-  pinnedToolchainArtifacts,
-  type ToolchainArtifact,
-  type ToolchainCompanion,
-} from "./manifest.js";
+import { type ToolchainArtifact, type ToolchainCompanion } from "./manifest.js";
 
 const ZIP_FIXTURE = Buffer.from(
   "UEsDBAoAAAAAADMD8VyEaD1TIAAAACAAAAAEAAAAdG9vbCMhL2Jpbi9zaApwcmludGYgInRvb2wgMS4yLjNcbiIKUEsBAh4DCgAAAAAAMwPxXIRoPVMgAAAAIAAAAAQAAAAAAAAAAQABAECBAAAAAHRvb2xQSwUGAAAAAAEAAQAyAAAAQgAAAAAA",
@@ -2328,7 +2324,6 @@ describe("pinned desktop toolchain cache", () => {
   });
 
   test("rejects companion archives whose contents do not match the pinned manifest", async () => {
-    const dataDir = await createDataDir();
     const companionBody = COMPANION_BODY;
     const companionArchive = await tarGzip([{ name: "tool-host", body: companionBody }]);
     const base = companionArtifact(artifacts[0], companionArchive, companionBody);

@@ -254,14 +254,6 @@ function getMockSelects() {
   return screen.getAllByTestId("mock-select") as HTMLSelectElement[];
 }
 
-function getAgentGroup() {
-  return screen.getByRole("radiogroup", { name: "Default Agent" });
-}
-
-function getAgentRadio(name: string | RegExp) {
-  return within(getAgentGroup()).getByRole("radio", { name });
-}
-
 function getSavedConfig() {
   return mockUpdateRepositoryConfig.mock.calls[0]?.[1] as Record<string, unknown>;
 }

@@ -59,7 +59,7 @@ describe("useElapsedTimer", () => {
       const startTime = 1000000;
       dateNowSpy = spyOn(Date, "now").mockReturnValue(startTime);
 
-      const { result, rerender } = renderHook(
+      const { result } = renderHook(
         ({ isLoading, sessionId, loadingStartedAt }) =>
           useElapsedTimer(isLoading, sessionId, loadingStartedAt),
         { initialProps: { isLoading: true, sessionId: "session-1", loadingStartedAt: startTime } },

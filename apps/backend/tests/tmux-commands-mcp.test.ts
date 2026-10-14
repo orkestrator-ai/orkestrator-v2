@@ -1,17 +1,13 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands";
-import type { Environment } from "../src/core/models";
 import { cleanupEnvironmentTmux, RUNTIME_ROOT_PREFIX, tmuxSessionName } from "../src/core/tmux";
-import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
   createHandlers,
-  createTempDir,
   deferred,
-  encodeCwd,
   invoke,
   waitFor,
   withFakeContainerTmuxRuntime,

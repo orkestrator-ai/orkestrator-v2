@@ -15,133 +15,39 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
-
-import { EventEmitter } from "node:events";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 
 import {
   createServer,
   request as httpRequest,
   type IncomingHttpHeaders,
-  type IncomingMessage,
-  type OutgoingHttpHeaders,
   type Server,
   type ServerResponse,
 } from "node:http";
-
-import { connect as netConnect } from "node:net";
-
-import type { Duplex } from "node:stream";
 
 import os from "node:os";
 
 import path from "node:path";
 
-import { randomBytes } from "node:crypto";
-
 import {
   brotliCompressSync,
   brotliDecompressSync,
   constants as zlibConstants,
-  createGunzip,
   gunzipSync,
   gzipSync,
 } from "node:zlib";
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, expect, mock } from "bun:test";
 
 import { WebSocket } from "ws";
 
 import {
-  decodeTerminalBinaryFrame,
-  encodeTerminalBinaryFrame,
   parseTerminalWebSocketServerControlFrame,
-  TERMINAL_BINARY_FRAME_TYPE,
-  TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
-  TERMINAL_WEBSOCKET_CLOSE,
-  TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
-  TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
-  TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 
-import {
-  activeDynamicCompressionCount,
-  AggregateByteBudget,
-  allocateBufferedProxySource,
-  appendVary,
-  BoundedMetricMap,
-  browserPreviewDecodeSnapshot,
-  canAppendToProxySourceBuffer,
-  canBufferBodyChunk,
-  canStartDynamicCompression,
-  canTransformProxyRepresentation,
-  COMPRESSION_MIN_BYTES,
-  compressBody,
-  compressionModeForListener,
-  DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
-  DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES,
-  DynamicCompressionBufferBudget,
-  dynamicProxyCompressionBufferSnapshot,
-  type EventClientWriter,
-  eventMatchesSubscription,
-  GATEWAY_COMMAND_METRIC_MAP_LIMIT,
-  GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
-  GATEWAY_COMPRESSION_MODES,
-  GatewayMetricsStore,
-  canStartStaticFallbackCompression,
-  compressStaticFileWithinLimits,
-  isTailscaleAddress,
-  isCompressibleContentType,
-  isDynamicCompressionSizeEligible,
-  loadOrCreateGatewayToken,
-  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
-  MAX_BUFFERED_BODY_CHUNKS,
-  MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
-  MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
-  MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES,
-  MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES,
-  MAX_STATIC_FALLBACK_SOURCE_BYTES,
-  normalizeAcceptEncoding,
-  normalizeCacheControl,
-  normalizeContentEncoding,
-  normalizeContentType,
-  normalizeGatewayEventMetricKey,
-  normalizeHttpMethod,
-  normalizeHttpVersion,
-  normalizeMetricLabel,
-  normalizeNextHopProtocol,
-  negotiateEncoding,
-  OrkestratorGateway,
-  parseEventSubscriptionFilter,
-  parseGatewayCompressionMode,
-  parseStrictContentLengthHeader,
-  prepareCompressedBody,
-  readStaticFileWithinLimit,
-  recoverBodyResponseError,
-  releaseReservationOnResponseSettled,
-  resolveGatewayCompressionMode,
-  responseStatusCanHaveBody,
-  rewriteBrowserPreviewBody,
-  selectTailscaleBindAddress,
-  settlePreparedBodyResponse,
-  settleRewrittenProxyBodyResponse,
-  shouldAbandonBufferedProxyBody,
-  stripCodedContentHeaders,
-  stripTransformedRepresentationHeaders,
-  truncateUtf8,
-} from "../src/gateway";
-
-import {
-  DEFAULT_GATEWAY_REPLAY_MAX_BYTES,
-  GatewayEventReplay,
-  parseGatewayCursor,
-} from "../src/gateway-event-replay";
-
-import { createCommandRegistry } from "../src/core/commands";
-
-import { TerminalWebSocketGateway } from "../src/terminal-websocket-server";
+import { type EventClientWriter, OrkestratorGateway } from "../src/gateway";
 
 export const tempDirs: string[] = [];
 

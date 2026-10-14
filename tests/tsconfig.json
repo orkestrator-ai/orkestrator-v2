@@ -13,7 +13,13 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "moduleDetection": "force",
-    "paths": { "@/*": ["../apps/web/src/*"] }
+    "paths": {
+      "@/*": ["../apps/web/src/*"]
+    },
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true
   },
-  "include": ["**/*.ts", "**/*.tsx", "../apps/web/src/vite-env.d.ts"]
+  "include": ["**/*.ts", "**/*.tsx", "../scripts/**/*.ts", "../apps/web/src/vite-env.d.ts"]
 }

@@ -370,7 +370,7 @@ describe("fork_environment", () => {
   });
 
   test("rejects a container fork from a remote-only project when the commit is unpublished", async () => {
-    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const { remote } = await createGitWorktreeWithOrigin();
     const container = await cloneFromRemote(remote);
     await runGit(container, ["checkout", "-b", "feature/source"]);
     await fs.writeFile(path.join(container, "tracked.txt"), "container only\n");

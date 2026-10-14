@@ -20,7 +20,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 
 import { useUIStore } from "@/stores/uiStore";
 
-import { tmuxElicitationDraftKey, usePromptDraftStore } from "@/stores/promptDraftStore";
+import { usePromptDraftStore } from "@/stores/promptDraftStore";
 
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 
@@ -497,8 +497,7 @@ mock.module("react-virtuoso", () => ({
 
 const { ClaudeTmuxChatTab } = await import("@/components/claude/ClaudeTmuxChatTab");
 
-const { parseTmuxAgentObservation, parseTmuxSelectionPrompt } =
-  await import("@orkestrator/protocol/tmux-observation");
+const { parseTmuxAgentObservation } = await import("@orkestrator/protocol/tmux-observation");
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -524,13 +523,6 @@ const originalActiveElementDescriptor = Object.getOwnPropertyDescriptor(
 );
 
 const putImageDataMock = mock(() => {});
-
-function setActiveElement(element: Element) {
-  Object.defineProperty(document, "activeElement", {
-    configurable: true,
-    get: () => element,
-  });
-}
 
 function mockRunningTmuxStatus(pane = "") {
   getStatusMock.mockImplementation(async () => ({

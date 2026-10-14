@@ -1,16 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-import {
-  createClaudeTmuxStateKey,
-  useClaudeTmuxStore,
-  type TmuxQueuedMessage,
-} from "@/stores/claudeTmuxStore";
+import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
@@ -36,8 +32,6 @@ import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 
 import * as realReactVirtuoso from "react-virtuoso";
 
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-
 import { mockReadImage } from "../../mocks/clipboard";
 
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
@@ -46,11 +40,7 @@ import type { Environment, FileCandidate } from "@/types";
 
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
-import {
-  applyPromptQueueSnapshot,
-  promptQueueKey,
-  resetPromptQueueRevisions,
-} from "@/lib/prompt-queue-persistence";
+import { resetPromptQueueRevisions } from "@/lib/prompt-queue-persistence";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 
@@ -242,40 +232,6 @@ const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
     useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
   );
 });
-
-function publishTmuxQueueSnapshot(
-  sessionKey: string,
-  dispatchError?: {
-    requestId: string;
-    messageId: string;
-    messageFingerprint: string;
-    message: string;
-    failedAt: string;
-  },
-): void {
-  const store = useClaudeTmuxStore.getState();
-  const messages = store.getQueuedMessages(sessionKey);
-  applyPromptQueueSnapshot<TmuxQueuedMessage>(
-    {
-      agent: "claude-tmux",
-      getQueues: () => useClaudeTmuxStore.getState().messageQueue,
-      setQueue: (key, nextMessages) => {
-        const next = new Map(useClaudeTmuxStore.getState().messageQueue);
-        next.set(key, nextMessages);
-        useClaudeTmuxStore.setState({ messageQueue: next });
-      },
-      environmentIdFor: () => "env-1",
-    },
-    {
-      queueKey: promptQueueKey("claude-tmux", sessionKey),
-      environmentId: "env-1",
-      messages,
-      ...(dispatchError ? { dispatchError } : {}),
-      updatedAt: "2026-08-04T10:00:00.000Z",
-      revision: promptQueueRevision++,
-    },
-  );
-}
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",

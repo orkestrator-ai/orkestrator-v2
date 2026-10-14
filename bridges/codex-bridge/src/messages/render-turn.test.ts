@@ -576,8 +576,32 @@ describe("renderTurn", () => {
         status: "completed",
       },
     ]);
+    // Multi-agent v2 send_message/followup_task to an earlier turn's child
+    // surface only as activity beats.
+    await derive([
+      {
+        id: "send",
+        type: "subagent_activity",
+        activity: "interacted",
+        agent_thread_id: "child-v2",
+        agent_path: "/root/bot_fixes",
+      },
+      {
+        id: "done",
+        type: "subagent_activity",
+        activity: "completed",
+        agent_thread_id: "child-v2",
+        agent_path: "/root/bot_fixes",
+      },
+    ]);
 
-    expect(seen).toEqual([["child-1", "child-2"], undefined, undefined, ["child-wrapper"]]);
+    expect(seen).toEqual([
+      ["child-1", "child-2"],
+      undefined,
+      undefined,
+      ["child-wrapper"],
+      ["child-v2"],
+    ]);
   });
 
   test("maps transcript fields and folds live collaboration state with injected dependencies", async () => {

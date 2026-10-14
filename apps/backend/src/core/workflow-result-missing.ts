@@ -79,7 +79,7 @@ function looksLikeJsonObject(text: string): boolean {
  * response, and a turn often ends on rows that only called tools, so the text
  * can sit several rows back.
  */
-export const LAST_ASSISTANT_TEXT_READ_LIMIT = 16;
+export const LAST_ASSISTANT_TEXT_READ_LIMIT = 100;
 
 type TranscriptEntry = {
   role?: unknown;

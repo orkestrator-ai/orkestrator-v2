@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowResultReminderPrompt,
@@ -161,4 +162,26 @@ describe("lastAssistantText", () => {
     expect(lastAssistantText([{ role: "user", content: "only a prompt" }])).toBeUndefined();
     expect(lastAssistantText(undefined)).toBeUndefined();
   });
+});
+
+test("the production read bound finds same-turn JSON behind seventeen tool-only responses", () => {
+  const transcript = [
+    { role: "user", content: "review" },
+    { role: "assistant", content: '{"issues":[]}' },
+    ...Array.from({ length: 17 }, () => ({
+      role: "assistant",
+      content: "",
+      parts: [{ type: "tool-invocation", toolName: "read" }],
+    })),
+  ];
+  const finalText = lastAssistantText(transcript.slice(-LAST_ASSISTANT_TEXT_READ_LIMIT));
+  expect(finalText).toBe('{"issues":[]}');
+  expect(
+    workflowResultReminderPrompt({
+      resultLabel: "report",
+      toolName: "submit_review_report",
+      submission: "preparing",
+      finalText,
+    }),
+  ).toContain("You wrote the report as reply text");
 });

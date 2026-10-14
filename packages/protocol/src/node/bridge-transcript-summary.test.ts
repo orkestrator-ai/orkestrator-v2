@@ -478,6 +478,23 @@ describe("revised rows", () => {
     if (update.status !== "snapshot") throw new Error("expected a snapshot");
     const revised = update.value.revisedMessages as Message[];
     expect(revised).toHaveLength(BRIDGE_REVISED_MESSAGES_MAX);
+    expect(update.value.historyReconciliationToken).toBeDefined();
+    const streamed = bridgeTranscriptSummaryUpdate(
+      [...heavy.slice(0, -1), message("r149", [], "delta")],
+      { ...options, revision: 2, revisedMessageIds: ids },
+    );
+    if (streamed.status !== "snapshot") throw new Error("expected snapshot");
+    expect(streamed.value.historyReconciliationToken).toBe(update.value.historyReconciliationToken);
+    const changed = heavy.map((row) =>
+      row.id === "r49" ? { ...row, content: "revised again" } : row,
+    );
+    const late = bridgeTranscriptSummaryUpdate(changed, {
+      ...options,
+      revision: 3,
+      revisedMessageIds: ids,
+    });
+    if (late.status !== "snapshot") throw new Error("expected snapshot");
+    expect(late.value.historyReconciliationToken).not.toBe(update.value.historyReconciliationToken);
     const summarized = revised.find((entry) => entry.id === "r1")!;
     expect(summarized.parts[0]?.toolOutput).toBeUndefined();
   });
@@ -490,4 +507,35 @@ describe("revised rows", () => {
     if (update.status !== "snapshot") throw new Error("expected a snapshot");
     expect(update.value.revisedMessages).toBeUndefined();
   });
+});
+
+test("revised-row byte overflow invalidates retained history while keeping whole-row paging", () => {
+  const rows = Array.from({ length: 102 }, (_, index) =>
+    message(
+      `bytes-${index}`,
+      index < 2
+        ? Array.from({ length: 45 }, () => ({ type: "text", content: "x".repeat(4 * 1024) }))
+        : [],
+      "small",
+    ),
+  );
+  const update = bridgeTranscriptSummaryUpdate(rows, {
+    ...options,
+    revisedMessageIds: ["bytes-0", "bytes-1"],
+    pages: true,
+  });
+  if (update.status !== "snapshot") throw new Error("expected snapshot");
+  expect(update.value.revisedMessages).toHaveLength(1);
+  expect(update.value.historyReconciliationToken).toBeDefined();
+  const page = bridgeTranscriptPage(rows, {
+    generation: "g1",
+    contentEpoch: 3,
+    cursor: update.value.historyCursor!,
+    complete: true,
+    limit: 100,
+    targetBytes: 512 * 1024,
+  });
+  if (page.status !== "page") throw new Error("expected page");
+  expect(page.messages).toEqual(rows.slice(0, 2));
+  expect(page.complete).toBe(true);
 });

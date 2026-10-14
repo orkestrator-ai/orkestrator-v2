@@ -19,7 +19,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { applySessionUpdate } from "./acp-session.js";
-import { applyCursorTask, applyCursorUpdateTodos } from "./acp-tools.js";
+import { applyCursorTask, applyCursorUpdateTodos, syncActiveSubagentTool } from "./acp-tools.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { messageWindow } from "./acp-public.js";
 import { acpTranscriptSource } from "./acp-transcript-source.js";
@@ -423,7 +423,7 @@ describe("ACP transcript rows", () => {
     expect(rows(state)[1]).toEqual(["assistant", ["tool:bg", "tool:bg-child"]]);
   });
 
-  test("a new call reusing a running subagent's id gets its own card", () => {
+  test("a reused active subagent id retains its launch and settles on its late result", () => {
     const state = runningState();
     send(
       state,
@@ -440,9 +440,12 @@ describe("ACP transcript rows", () => {
     send(state, call("bg", { kind: "read", title: "Read notes.md", status: "pending" }));
 
     const cards = toolParts(state, "bg");
-    expect(cards).toHaveLength(2);
-    expect(cards[0]).toMatchObject({ content: "Background task" });
-    expect(cards[1]).toMatchObject({ content: "Read notes.md" });
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ content: "Background task", agentState: "active" });
+    expect(state.activeSubagentToolIds.has("bg")).toBe(true);
+    applyCursorTask(state, { toolCallId: "bg", status: "completed" });
+    expect(cards[0]).toMatchObject({ agentState: "finished" });
+    expect(state.activeSubagentToolIds.has("bg")).toBe(false);
   });
 
   test("does not rebuild a Cursor todo or task card for a call a trim removed", () => {
@@ -526,4 +529,73 @@ describe("ACP transcript rows", () => {
     expect(toolParts(state, "step-0")).toHaveLength(0);
     expect(state.messages.at(-1)).toBe(trailing);
   });
+});
+
+test("newest-row streaming never fills revised notes", () => {
+  const state = runningState();
+  send(state, text("start"));
+  for (let i = 0; i < 40; i++) send(state, text(" delta"));
+  expect(state.revisedRows?.ids() ?? []).toEqual([]);
+});
+
+test("a long whitespace-padded launch title compares its source rather than its rewritten card", () => {
+  const state = runningState();
+  const title = `  ${"background task ".repeat(100)}  `;
+  send(
+    state,
+    call("bg-long", {
+      title,
+      kind: "other",
+      rawInput: { _toolName: "task", run_in_background: true },
+      status: "completed",
+    }),
+  );
+  const launch = toolParts(state, "bg-long")[0]!;
+  launch.content = "rendered launch description";
+  startTurn(state, "next");
+  send(state, call("bg-long", { title, kind: "other", status: "completed" }));
+  expect(toolParts(state, "bg-long")).toEqual([launch]);
+  expect(state.activeSubagentToolIds.has("bg-long")).toBe(true);
+});
+
+test("synchronizing a duplicate card cannot settle the registered active launch", () => {
+  const state = runningState();
+  send(
+    state,
+    call("launch", {
+      kind: "other",
+      title: "Background task",
+      status: "completed",
+      rawInput: { _toolName: "task", run_in_background: true },
+    }),
+  );
+  const launch = toolParts(state, "launch")[0]!;
+  syncActiveSubagentTool(state, { ...launch, agentState: undefined, toolState: "success" });
+  expect(state.activeSubagentToolIds.has("launch")).toBe(true);
+  expect(launch.agentState).toBe("active");
+});
+
+test("late active subagent updates bypass a conflicting duplicate and finish their launch", () => {
+  const state = runningState();
+  send(
+    state,
+    call("launch", {
+      kind: "other",
+      title: "Background task",
+      status: "completed",
+      rawInput: { _toolName: "task", run_in_background: true },
+    }),
+  );
+  const launch = toolParts(state, "launch")[0]!;
+  startTurn(state, "next");
+  send(state, text("later"));
+  const duplicate = { ...launch, toolName: "read", agentState: undefined, content: "duplicate" };
+  state.messages.at(-1)!.parts.push(duplicate);
+  send(state, callUpdate("launch", { rawOutput: "progress" }));
+  expect(launch.toolOutput).toBe("progress");
+  expect(duplicate.toolOutput).not.toBe("progress");
+  expect(state.activeSubagentToolIds.has("launch")).toBe(true);
+  applyCursorTask(state, { toolCallId: "launch", status: "completed" });
+  expect(launch.agentState).toBe("finished");
+  expect(state.activeSubagentToolIds.has("launch")).toBe(false);
 });

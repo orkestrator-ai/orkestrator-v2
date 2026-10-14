@@ -105,7 +105,9 @@ ordinals and the cached turn start replace scans of the turn, and a scan
 remains only for what the index cannot answer. When the run's terminal text
 completes streamed prose, it extends the row holding that prose; any other
 terminal text is the final model call's, on a row of its own unless the row
-being written still ends in prose or reasoning.
+being written still ends in prose or reasoning. After `turn-ended` has
+closed that row, missing terminal prose opens a separate answer row (including
+for a reasoning-only final step); prefix completion still extends its prose row.
 
 Every in-place row change goes through `rowChanged` / `noteRowRevised`
 (`src/transcript.ts`), which note the row for `revisedMessageIds`, so a late

@@ -1,3 +1,6 @@
+import { TurnAccumulator } from "../sessions/turn-accumulator.js";
+import { reduceNotification } from "../app-server/event-reducer.js";
+import type { EngineEvent } from "../engine/types.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -143,4 +146,74 @@ describe("rollout rows", () => {
     expect(rows[2]?.parts.map((part) => part.toolUseId)).toEqual(["exec-1", "exec-2"]);
     expect(rows[3]?.parts).toEqual([{ type: "text", content: "Reviewed and tested." }]);
   });
+});
+
+test("live exec_command, repeated write_stdin, and request_user_input boundaries match rollout replay", async () => {
+  const records: object[] = [
+    { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+    { timestamp: at(0), type: "turn_context", payload: { turn_id: "turn-1" } },
+    message(0, "user", "Run it"),
+  ];
+  const turn = new TurnAccumulator({
+    threadId: "steps",
+    turnId: "turn-1",
+    engineGeneration: 1,
+    assistantMessageId: "live-0",
+  });
+  const boundaries: string[] = [];
+  for (let step = 0; step < 5; step++) {
+    const text = `response ${step}`;
+    records.push(reasoning(step * 3 + 1), message(step * 3 + 1, "assistant", text));
+    const event: EngineEvent = {
+      kind: "item.text.delta",
+      threadId: "steps",
+      turnId: "turn-1",
+      itemId: `a${step}`,
+      delta: text,
+    };
+    if (turn.opensModelStep(event)) turn.startModelStep(`live-${step}`, at(step * 3 + 1));
+    turn.onTextDelta(event.itemId, event.delta);
+    boundaries.push(turn.assistantMessageId);
+    if (step === 4) break;
+    const name = step === 0 ? "exec_command" : step === 3 ? "request_user_input" : "write_stdin";
+    records.push(
+      response(step * 3 + 2, {
+        type: "function_call",
+        call_id: `call-${step}`,
+        name,
+        arguments: "{}",
+      }),
+      response(step * 3 + 3, {
+        type: "function_call_output",
+        call_id: `call-${step}`,
+        output: "waiting",
+      }),
+    );
+    // Polls have terminalInteraction but no new commandExecution item.
+    const result = reduceNotification(
+      {
+        kind: "notification",
+        method:
+          step === 1 || step === 2
+            ? "item/commandExecution/terminalInteraction"
+            : "rawResponseItem/completed",
+        params: {
+          threadId: "steps",
+          turnId: "turn-1",
+          item: { type: "function_call", call_id: `call-${step}`, name, arguments: "{}" },
+        },
+      },
+      1,
+      "handle",
+    );
+    for (const reduced of result.events)
+      if (reduced.kind === "model.tool.called") turn.noteModelToolCall();
+  }
+  await writeRollouts(records);
+  const hydrated = await hydrateMessagesFromPersistedSession("steps");
+  const replayRows = hydrated.messages.filter((row) => row.role === "assistant");
+  expect(new Set(boundaries).size).toBe(replayRows.length);
+  expect(replayRows.map((row) => row.content)).toEqual(
+    Array.from({ length: 5 }, (_, i) => `response ${i}`),
+  );
 });

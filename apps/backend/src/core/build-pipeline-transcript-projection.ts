@@ -29,18 +29,6 @@ import { normalizeOpenCodeDisplayEntry } from "./opencode-display-transcript.js"
  */
 export const BUILD_PIPELINE_PATCH_BUDGET_BYTES = LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES;
 
-/**
- * Rows re-sent from before a client's tail when its copy is from an older
- * revision. A transcript row is one model response, so a late tool result or
- * subagent report lands on a row newer ones have already followed; a reader
- * patched from its last row only would keep the stale copy until it reloaded.
- * The store keeps no per-row history, so the most recent rows are re-sent
- * whole, within these bounds; a change further back reaches the reader on its
- * next full read.
- */
-export const BUILD_PIPELINE_REVISED_OVERLAP_MESSAGES = 16;
-export const BUILD_PIPELINE_REVISED_OVERLAP_BYTES = 256 * 1024;
-
 export interface BuildPipelineMessagePatch {
   sessionKey: string;
   baseRevision?: number;
@@ -197,50 +185,16 @@ export async function conditionalBuildPipelineRead(
       cursor.count <= read.messageCount &&
       (read.substituted
         ? cursor.revision === read.revision
-        : cursor.revision <= committed.revision);
+        : cursor.revision === committed.revision);
     if (read.status === "found" && !exactBase && tailStart > 0) {
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: 0,
         toIndex: 1,
       });
     }
-    /*
-     * The client's rows came from an older revision, so the rows before its
-     * tail may have changed under it (see BUILD_PIPELINE_REVISED_OVERLAP_*).
-     * Walk back from the tail one row at a time, never materializing more
-     * than the overlap bound. Only a revision change triggers this: the
-     * patch makes the client current, so the next read pages on from its
-     * tail. The overlap takes at most half of what this patch may carry,
-     * which keeps every read making progress under a tight budget.
-     */
-    const overlap: unknown[] = [];
-    if (read.status === "found" && exactBase && cursor!.revision !== read.revision) {
-      let overlapBytes = 0;
-      const limit = Math.max(0, cursor!.count - BUILD_PIPELINE_REVISED_OVERLAP_MESSAGES);
-      for (let index = read.startIndex - 1; index >= limit; index -= 1) {
-        const earlier = await reader.readBuildPipelineTranscript(record.id, session, {
-          fromIndex: index,
-          toIndex: index + 1,
-        });
-        if (
-          earlier.status !== "found" ||
-          earlier.startIndex !== index ||
-          earlier.substituted !== read.substituted ||
-          earlier.revision !== read.revision ||
-          earlier.messages[0] === undefined
-        ) {
-          break;
-        }
-        // Sent like every other row of the patch: as its display message,
-        // addressed by its raw index, and measured after normalizing.
-        const message = normalizeOpenCodeDisplayEntry(earlier.messages[0], index);
-        const bytes = Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") + 1;
-        if (overlapBytes + bytes > BUILD_PIPELINE_REVISED_OVERLAP_BYTES) break;
-        overlapBytes += bytes;
-        overlap.unshift(message);
-      }
-      if (overlapBytes > remaining / 2) overlap.length = 0;
-    }
+    // Without per-row change history a different revision cannot retain any
+    // prefix. Reconcile from zero, then page under that revision/count until
+    // all committed rows have arrived; never acknowledge stale held rows.
     if (read.status !== "found") {
       const unavailable: BuildPipelineMessagePatch = {
         sessionKey: session.sessionKey,
@@ -261,7 +215,7 @@ export async function conditionalBuildPipelineRead(
     const patch: BuildPipelineMessagePatch = {
       sessionKey: session.sessionKey,
       ...(exactBase ? { baseRevision: cursor!.revision, baseCount: cursor!.count } : {}),
-      startIndex: read.startIndex - overlap.length,
+      startIndex: read.startIndex,
       revision: read.substituted ? read.revision : committed.revision,
       messages: [],
       ...(read.complete ? {} : { complete: false as const }),
@@ -271,13 +225,6 @@ export async function conditionalBuildPipelineRead(
     const patchOverhead =
       Buffer.byteLength(JSON.stringify(patch), "utf8") + (messagePatches.length > 0 ? 1 : 0);
     let allowance = remaining - patchOverhead;
-    for (const message of overlap) {
-      const bytes =
-        Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
-        (patch.messages.length > 0 ? 1 : 0);
-      patch.messages.push(message);
-      allowance -= bytes;
-    }
     let nextIndex = read.startIndex;
     let candidate: TranscriptRead = read;
     while (candidate.status === "found" && nextIndex < candidate.messageCount) {

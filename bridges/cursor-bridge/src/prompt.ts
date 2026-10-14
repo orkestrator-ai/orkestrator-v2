@@ -802,7 +802,10 @@ function sumTurnUsage(
  * whole so a narrated turn still keeps `RunResult.result`: on the row being
  * written when that row still ends in prose or reasoning (the same call's tail
  * went missing), otherwise on a row of its own — after a tool call or a step
- * boundary the model was called again, and a row is one model call.
+ * boundary the model was called again, and a row is one model call. A
+ * top-level turn-ended also closes the current row: when its final step
+ * streamed only reasoning, missing terminal prose opens a separate answer
+ * row. Prefix completion still targets its earlier prose row.
  *
  * The comparison is against the whole turn's prose, not one row's: a turn
  * writes a row per model step, and the SDK's final text is the end of the

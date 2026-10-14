@@ -2051,3 +2051,18 @@ describe("context occupancy versus turn spend", () => {
     expect(usage?.maximumTokens).toBeUndefined();
   });
 });
+
+test("turn-ended followed by missing terminal prose gives a reasoning-only step a separate answer row", async () => {
+  const state = runningSession();
+  applyInteractionUpdate(state, { type: "thinking-delta", text: "reasoning" });
+  applyInteractionUpdate(state, { type: "turn-ended" });
+  const run = controlledRun();
+  const finished = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5000);
+  run.finish({ status: "finished", result: "final answer" });
+  await finished;
+  expect(state.messages.map((row) => row.parts.map((part) => part.type))).toEqual([
+    ["thinking"],
+    ["text"],
+  ]);
+  expect(state.messages[1]?.content).toBe("final answer");
+});

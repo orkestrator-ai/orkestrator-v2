@@ -374,6 +374,7 @@ export type EngineEvent = EngineEventMeta &
         turnId: string;
         reasoningEffort: string;
       }
+    | { kind: "model.tool.called"; threadId: string | null; turnId: string }
     | { kind: "turn.started"; threadId: string | null; turnId: string }
     | {
         kind: "item.started";

@@ -109,6 +109,9 @@ function summarySnapshot(
     ...(value.capabilities.pages && value.historyCursor
       ? { historyCursor: value.historyCursor }
       : {}),
+    ...(value.historyReconciliationToken
+      ? { historyReconciliationToken: value.historyReconciliationToken }
+      : {}),
     ...(value.revisedMessages ? { revisedMessages: value.revisedMessages } : {}),
   };
 }

@@ -1,3 +1,4 @@
+import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 /**
  * Bounded, conditional reads of one reviewer's transcript for its UI tab.
  *
@@ -37,6 +38,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import {
   BRIDGE_DETAIL_LOCATOR_MAX_LENGTH,
+  BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
   isBridgeDetailLocator,
   readBridgePartDetail,
 } from "@orkestrator/protocol/node/bridge-transcript-summary";
@@ -81,6 +83,8 @@ export type ReviewerTranscriptRead =
       /** History continuity epoch; set when the read was given a history key. */
       historyEpoch?: string;
       /** Rows before `messages` the provider says changed recently. */
+      /** Changed recovery signal invalidates retained history, which remains pageable. */
+      historyReconciliationToken?: string;
       revisedMessages?: unknown[];
     };
 
@@ -102,7 +106,9 @@ function reviewerRevisedMessages(
   const revised: unknown[] = [];
   let bytes = 0;
   for (const raw of snapshot.revisedMessages.slice(0, NATIVE_AGENT_REVISED_MESSAGES_MAX)) {
-    const message = snapshot.representation === "summary" ? displayMessage(raw) : raw;
+    const message = normalizeOpenCodeDisplayEntries([
+      snapshot.representation === "summary" ? displayMessage(raw) : raw,
+    ])[0];
     if (inTail.has(id(message))) continue;
     const size = Buffer.byteLength(JSON.stringify(message));
     if (bytes + size > MAX_REVIEWER_REVISED_BYTES) break;
@@ -286,7 +292,6 @@ export async function readReviewerTranscript(
        * joined fallback, which pages by message identity instead.
        */
       const direct =
-        snapshot.representation === "summary" &&
         snapshot.historyCursor &&
         snapshot.historyEpoch !== undefined &&
         typeof capable.transcriptPage === "function" &&
@@ -306,6 +311,14 @@ export async function readReviewerTranscript(
         });
     }
     const revisedMessages = reviewerRevisedMessages(snapshot, bounded.messages);
+    const heldIds = new Set(
+      [...bounded.messages, ...revisedMessages].map((row) => (row as { id?: unknown }).id),
+    );
+    const omitted =
+      snapshot.revisedMessages?.filter((row) => !heldIds.has((row as { id?: unknown }).id)) ?? [];
+    const historyReconciliationToken = omitted.length
+      ? revisedRowsReconciliationToken(0, [snapshot.historyReconciliationToken, ...omitted])
+      : snapshot.historyReconciliationToken;
     return {
       kind: "snapshot",
       messages: bounded.messages,
@@ -316,6 +329,7 @@ export async function readReviewerTranscript(
       ...(historyCursor ? { historyCursor } : {}),
       ...(history ? { historyEpoch } : {}),
       ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
+      ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
     };
   }
   // Compatibility path for providers without a bounded snapshot surface. The
@@ -574,11 +588,20 @@ export async function readReviewerHistoryPage(
     if (!page || page.status !== "page" || page.historyEpoch !== classified.epoch) {
       return EXPIRED_HISTORY;
     }
-    const messages = normalizeOpenCodeDisplayEntries(page.messages.map(displayMessage));
+    const messages = normalizeOpenCodeDisplayEntries(
+      page.representation === "summary" ? page.messages.map(displayMessage) : page.messages,
+    );
     const bytes = encodedBytes(messages);
     // The provider bounds its page; one that ignored the bound is refused
     // rather than trimmed, which would lose rows between two cursors.
-    if (messages.length > limit || bytes > targetBytes + PAGE_BYTE_SLACK) {
+    if (
+      messages.length > limit ||
+      bytes >
+        (messages.length === 1
+          ? Math.max(targetBytes, BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES)
+          : targetBytes) +
+          PAGE_BYTE_SLACK
+    ) {
       throw new Error("Reviewer history page exceeded its bound");
     }
     const encoded = page.historyCursor
@@ -656,7 +679,7 @@ export async function readReviewerHistoryPage(
     // the hard page ceiling, so a click always advances.
     bounded = boundReviewerTranscript(candidates.slice(-1), {
       maxMessages: 1,
-      maxBytes: MULTI_REVIEW_HISTORY_PAGE_MAX_TARGET_BYTES,
+      maxBytes: BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
     });
   }
   const start = end - bounded.messages.length;

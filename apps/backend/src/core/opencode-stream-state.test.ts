@@ -635,3 +635,39 @@ describe("OpenCodeStreamState history paging", () => {
     expect(first.historyEpoch("session")).not.toBe(before);
   });
 });
+
+test.each(["rejected", "throwing"])(
+  "a %s reconnect read cannot leave a stale gap baseline after stream recovery",
+  (failure) => {
+    const state = new OpenCodeStreamState();
+    const row = (id: string) => ({
+      info: { id, role: "assistant", time: { created: 1 } },
+      parts: [],
+    });
+    state.replaceMessages("session", [row("a"), row("b")], undefined, 2);
+    const epoch = state.historyEpoch("session");
+    state.markGap();
+    const version = state.eventVersion("session");
+    state.apply({
+      type: "session.status",
+      properties: { sessionID: "session", status: { type: "busy" } },
+    } as never);
+    if (failure === "rejected")
+      expect(state.replaceMessages("session", [row("stale")], version, 2)).toBe(false);
+    // A throwing read never reaches replacement. An unguarded reconcile recovers.
+    state.replaceMessages("session", [row("a"), row("b")], undefined, 2);
+    state.replaceMessages("session", [row("a"), row("b")], undefined, 2);
+    for (let i = 0; i < 70; i++)
+      state.apply({
+        type: "message.updated",
+        properties: { sessionID: "session", info: row(`new-${i}`).info },
+      } as never);
+    state.replaceMessages(
+      "session",
+      Array.from({ length: 64 }, (_, i) => row(`new-${i + 6}`)),
+      undefined,
+      64,
+    );
+    expect(state.historyEpoch("session")).toBe(epoch);
+  },
+);

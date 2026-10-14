@@ -1478,7 +1478,10 @@ export function useNativeAgentSession<TMessage = unknown>({
        */
       const previousEpoch =
         lastTranscriptViewRef.current?.historyEpoch ?? progressiveHistoryEpochRef.current;
-      const historyEpochChanged = previousEpoch !== value.historyEpoch;
+      const historyEpochChanged =
+        previousEpoch !== value.historyEpoch ||
+        lastTranscriptViewRef.current?.historyReconciliationToken !==
+          value.historyReconciliationToken;
       const evictionGeneration =
         useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
       const evicted = evictionGeneration !== progressiveHistoryEvictionRef.current;

@@ -169,7 +169,6 @@ const IGNORED_METHODS = new Set([
   "hook/completed",
   "item/autoApprovalReview/started",
   "item/autoApprovalReview/completed",
-  "item/commandExecution/terminalInteraction",
   "command/exec/outputDelta",
   "process/outputDelta",
   "process/exited",
@@ -537,6 +536,11 @@ export function reduceNotification(
       };
     }
 
+    case "item/commandExecution/terminalInteraction": {
+      if (!threadId || !turnId) return { events: [] };
+      return { events: [{ kind: "model.tool.called", threadId, turnId, ...base }] };
+    }
+
     case "rawResponseItem/completed": {
       if (!isRecord(params) || !threadId || !turnId || !isRecord(params.item)) {
         return { events: [] };
@@ -561,6 +565,12 @@ export function reduceNotification(
       }
       const callId = str(rawItem.call_id);
       if (!callId) return { events: [] };
+      const boundary =
+        payloadType === "function_call" ||
+        payloadType === "custom_tool_call" ||
+        payloadType === "local_shell_call"
+          ? [{ kind: "model.tool.called" as const, threadId, turnId, ...base }]
+          : [];
 
       if (payloadType === "custom_tool_call" && str(rawItem.name) === "apply_patch") {
         const startedAtMs = nonNegativeDateMs(params.startedAtMs);
@@ -600,7 +610,7 @@ export function reduceNotification(
         };
       }
 
-      return { events: [] };
+      return { events: boundary };
     }
 
     /**

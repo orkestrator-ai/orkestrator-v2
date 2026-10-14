@@ -2789,6 +2789,13 @@ describe("steering", () => {
       },
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
+    h.runtime.getRegistry().getSession(sessionId)!.localMessages.push({
+      id: "local-command",
+      role: "system",
+      content: "local command",
+      parts: [],
+      createdAt: "2000-01-01T00:00:00.000Z",
+    });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
       requestId: "req-original",
@@ -2804,7 +2811,13 @@ describe("steering", () => {
     notifyCommand(h, "c2");
     await h.drain();
 
-    expect(rowShapes((await h.runtime.getMessages(sessionId))!)).toEqual([
+    expect(
+      rowShapes(
+        h.runtime
+          .getCachedMessages(sessionId)!
+          .messages.filter((row) => row.id !== "local-command"),
+      ),
+    ).toEqual([
       ["user", "investigate"],
       ["assistant", ["thinking", "c1"]],
       ["user", "narrow it down"],
@@ -2840,6 +2853,13 @@ describe("steering", () => {
       }),
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
+    h.runtime.getRegistry().getSession(sessionId)!.localMessages.push({
+      id: "local-command",
+      role: "system",
+      content: "local command",
+      parts: [],
+      createdAt: "2000-01-01T00:00:00.000Z",
+    });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-original", attachments: [] });
     notifyReasoning(h, "r1");
     notifyCommand(h, "c1");
@@ -2862,7 +2882,13 @@ describe("steering", () => {
     );
     await h.drain();
 
-    expect(rowShapes((await h.runtime.getMessages(sessionId))!)).toEqual([
+    expect(
+      rowShapes(
+        h.runtime
+          .getCachedMessages(sessionId)!
+          .messages.filter((row) => row.id !== "local-command"),
+      ),
+    ).toEqual([
       ["user", "go"],
       ["assistant", ["thinking", "c1"]],
       ["user", "more"],

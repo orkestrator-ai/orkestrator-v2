@@ -210,6 +210,12 @@ export class TurnAccumulator {
    * displayed above that steer, so a later steer can never land there.
    */
   private steerFloor = 0;
+  private modelToolCalled = false;
+
+  /** Tool calls such as write_stdin/request_user_input need no rendered item. */
+  noteModelToolCall(): void {
+    this.modelToolCalled = true;
+  }
 
   /**
    * Bumped whenever a sub-agent lifecycle item (a spawn, wait or message to
@@ -742,6 +748,7 @@ export class TurnAccumulator {
     startedAt: string = new Date().toISOString(),
   ): void {
     this.assistantMessageId = assistantMessageId;
+    this.modelToolCalled = false;
     const segment: AssistantSegment = {
       assistantMessageId,
       startIndex: boundary,
@@ -790,6 +797,7 @@ export class TurnAccumulator {
     if (this.items.has(itemId) || this.isTerminal()) return false;
     const segment = this.assistantSegment();
     if (segment.endIndex !== undefined) return false;
+    if (this.modelToolCalled) return true;
     for (let index = segment.startIndex; index < this.itemOrder.length; index += 1) {
       const item = this.items.get(this.itemOrder[index]!)?.item;
       if (item && isClientToolCall(item)) return true;

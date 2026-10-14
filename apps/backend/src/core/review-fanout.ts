@@ -1349,7 +1349,14 @@ export class ReviewFanoutRunner {
       await finalUsage();
       const finalText = async () =>
         lastAssistantText(
-          await transcript.read(LAST_ASSISTANT_TEXT_READ_LIMIT).catch(() => undefined),
+          await transcript
+            .read(
+              Math.min(
+                LAST_ASSISTANT_TEXT_READ_LIMIT,
+                provider.messageReadLimit ?? LAST_ASSISTANT_TEXT_READ_LIMIT,
+              ),
+            )
+            .catch(() => undefined),
         );
       return this.recordStall(
         reviewer,

@@ -785,6 +785,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(transcript?.kind === "snapshot" && transcript.revisedMessages
         ? { revisedMessages: transcript.revisedMessages }
         : {}),
+      ...(transcript?.kind === "snapshot" && transcript.historyReconciliationToken
+        ? { historyReconciliationToken: transcript.historyReconciliationToken }
+        : {}),
       ...(reviewer.report ? { report: reviewer.report } : {}),
       ...(reviewer.error ? { error: reviewer.error } : {}),
       ...(reviewer.progressAt ? { progressAt: reviewer.progressAt } : {}),
@@ -3909,7 +3912,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           );
         }
         const finalText = await provider
-          .messages(session.providerSessionId, { limit: LAST_ASSISTANT_TEXT_READ_LIMIT })
+          .messages(session.providerSessionId, {
+            limit: Math.min(
+              LAST_ASSISTANT_TEXT_READ_LIMIT,
+              provider.messageReadLimit ?? LAST_ASSISTANT_TEXT_READ_LIMIT,
+            ),
+          })
           .then(lastAssistantText, () => undefined);
         throw new Error(
           missingWorkflowResultMessage({

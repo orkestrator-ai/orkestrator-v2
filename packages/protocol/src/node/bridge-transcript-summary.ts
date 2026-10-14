@@ -28,6 +28,7 @@
  * bridge that ignores `version=2` answers as `1`.
  */
 
+import { revisedRowsReconciliationToken } from "./revised-rows.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
@@ -519,6 +520,8 @@ export type BridgeTranscriptSummaryUpdate =
          * not hold, since its position is outside the window.
          */
         revisedMessages?: unknown[];
+        /** Changed omitted revisions require dropping retained pages and re-paging. */
+        historyReconciliationToken?: string;
         capabilities: BridgeTranscriptCapabilities;
       };
     };
@@ -528,6 +531,7 @@ export interface BridgeTranscriptSummaryOptions extends BridgeTranscriptReadOpti
   pages?: boolean;
   /** Ids of rows this bridge changed recently, newest first; see `revisedMessages`. */
   revisedMessageIds?: readonly string[];
+  revisedRowsOverflowVersion?: number;
 }
 
 /**
@@ -539,8 +543,8 @@ function revisedBeforeWindow(
   messages: readonly unknown[],
   startIndex: number,
   ids: readonly string[] | undefined,
-): unknown[] {
-  if (!ids?.length || startIndex === 0) return [];
+): { messages: unknown[]; omitted: unknown[] } {
+  if (!ids?.length || startIndex === 0) return { messages: [], omitted: [] };
   const wanted = new Set(ids);
   const found = new Map<string, unknown>();
   for (let index = 0; index < startIndex && found.size < wanted.size; index += 1) {
@@ -548,25 +552,25 @@ function revisedBeforeWindow(
     if (typeof id === "string" && wanted.has(id)) found.set(id, messages[index]);
   }
   const revised: unknown[] = [];
+  const omitted: unknown[] = [];
   let bytes = 0;
   for (const id of ids) {
-    if (revised.length >= BRIDGE_REVISED_MESSAGES_MAX) break;
     const message = found.get(id);
     if (message === undefined) continue;
     found.delete(id);
     const summary = summarizeBridgeMessage(message);
     const size = Buffer.byteLength(JSON.stringify(summary));
-    if (bytes + size > BRIDGE_REVISED_MESSAGES_MAX_BYTES) {
-      // Only a row too large for the whole budget is skipped in favour of the
-      // ones after it; otherwise the budget is spent, and summarizing the rest
-      // would be work no reader receives.
-      if (size > BRIDGE_REVISED_MESSAGES_MAX_BYTES) continue;
-      break;
+    if (
+      revised.length >= BRIDGE_REVISED_MESSAGES_MAX ||
+      bytes + size > BRIDGE_REVISED_MESSAGES_MAX_BYTES
+    ) {
+      omitted.push(summary);
+      continue;
     }
     bytes += size;
     revised.push(summary);
   }
-  return revised;
+  return { messages: revised, omitted };
 }
 
 function boundedInteger(value: number, maximum: number, fallback: number): number {
@@ -606,7 +610,12 @@ export function bridgeTranscriptSummaryUpdate(
   const startIndex = messages.length - bounded.messages.length;
   const omittedMessages = startIndex;
   const windowTruncated = bounded.messageWindow.truncated || omittedMessages > 0;
-  const revisedMessages = revisedBeforeWindow(messages, startIndex, options.revisedMessageIds);
+  const revised = revisedBeforeWindow(messages, startIndex, options.revisedMessageIds);
+  const revisedMessages = revised.messages;
+  const historyReconciliationToken = revisedRowsReconciliationToken(
+    options.revisedRowsOverflowVersion ?? 0,
+    revised.omitted,
+  );
   // Pages serve whole messages before `startIndex`. A part-trimmed head is
   // reported by `omittedParts` and is not something a page can restore.
   const historyCursor =
@@ -647,6 +656,7 @@ export function bridgeTranscriptSummaryUpdate(
       ...(options.title ? { title: options.title } : {}),
       ...(historyCursor ? { historyCursor } : {}),
       ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
+      ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
       capabilities: { details: true, pages: options.pages === true },
     },
   };
@@ -833,6 +843,10 @@ export function parseBridgeTranscriptSummaryUpdate(
       value.revisedMessages.length <= BRIDGE_REVISED_MESSAGES_MAX &&
       value.revisedMessages.every((message) => isRecord(message) && typeof message.id === "string")
         ? { revisedMessages: value.revisedMessages }
+        : {}),
+      ...(typeof value.historyReconciliationToken === "string" &&
+      value.historyReconciliationToken.length <= 128
+        ? { historyReconciliationToken: value.historyReconciliationToken }
         : {}),
       capabilities: {
         details: capabilities.details === true,

@@ -840,6 +840,10 @@ export abstract class AppServerRuntimeBase {
   }
 
   /** Rows recently changed for a session, newest first; see `BridgeSession.revisedRows`. */
+  getRevisedRowsOverflowVersion(sessionId: string): number {
+    return this.registry.getSession(sessionId)?.revisedRows?.overflowVersion ?? 0;
+  }
+
   getRevisedMessageIds(sessionId: string): readonly string[] {
     return this.registry.getSession(sessionId)?.revisedRows?.ids() ?? [];
   }

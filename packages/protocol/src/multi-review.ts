@@ -156,6 +156,8 @@ export interface MultiReviewReviewerTranscript {
    * each (an earlier page it holds) and never inserts one it does not hold.
    */
   revisedMessages?: unknown[];
+  /** Changed recovery signal invalidates retained history, which remains pageable. */
+  historyReconciliationToken?: string;
   report?: StructuredReviewReport;
   error?: string;
   progressAt?: string;

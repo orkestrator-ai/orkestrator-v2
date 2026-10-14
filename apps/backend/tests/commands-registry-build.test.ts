@@ -82,8 +82,6 @@ test("build pipeline point reads omit unchanged transcripts and return tail patc
     messagePatches: [
       {
         sessionKey: "session-1",
-        baseRevision: 2,
-        baseCount: 2,
         startIndex: 0,
         revision: 3,
         messages: [{ id: "m1" }, { id: "m2-old" }, { id: "m3" }],

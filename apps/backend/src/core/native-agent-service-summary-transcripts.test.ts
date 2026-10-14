@@ -79,6 +79,9 @@ function summaryProvider(history: {
       representation: "summary",
       ...(update.value.historyCursor ? { historyCursor: update.value.historyCursor } : {}),
       ...(update.value.revisedMessages ? { revisedMessages: update.value.revisedMessages } : {}),
+      ...(update.value.historyReconciliationToken
+        ? { historyReconciliationToken: update.value.historyReconciliationToken }
+        : {}),
     };
   };
   const transcriptDetail = async (
@@ -363,10 +366,20 @@ describe("revised rows before the window", () => {
         if (!view) throw new Error("expected the delta to apply");
         expect(view.revisedMessages).toEqual(revised);
 
+        // Ordinary streaming does not resend unchanged historical revisions.
+        history.messages[149] = { ...history.messages[149]!, content: "streamed delta" };
+        history.revision += 1;
+        const streaming = await read(second.token);
+        if (streaming.status !== "delta") throw new Error("expected delta");
+        expect(streaming.delta.revisedMessages).toEqual([]);
+        expect(Buffer.byteLength(JSON.stringify(streaming.delta))).toBeLessThan(
+          Buffer.byteLength(JSON.stringify(second.delta)),
+        );
+
         // Once the bridge stops naming the row, a delta's absence clears it.
         history.revised = [];
         history.revision += 1;
-        const third = await read(second.token);
+        const third = await read(streaming.token);
         if (third.status !== "delta") throw new Error(`expected a delta, got ${third.status}`);
         expect(third.delta.revisedMessages).toBeUndefined();
         expect(applyNativeAgentTranscriptDelta(view, third.delta)?.revisedMessages).toBeUndefined();
@@ -786,4 +799,88 @@ describe("direct history page cache", () => {
       },
     );
   });
+});
+
+test("a revised row exceeding the projection budget is skipped whole and signals paging recovery", async () => {
+  const huge = message(
+    "old-huge",
+    Array.from({ length: 100 }, (_, index) => ({
+      type: "text",
+      content: `${index}:${"x".repeat(4 * 1024)}`,
+    })),
+  );
+  const tail = message("tail");
+  const stub = createProviderStub("codex", {
+    transcriptSnapshot: async () => ({
+      messages: [tail],
+      complete: false,
+      historyEpoch: "e1",
+      revision: 1,
+      revisedMessages: [huge],
+    }),
+  });
+  await withService(
+    { prefix: "orkestrator-revised-oversized-", provider: async () => stub.provider },
+    async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "tab-1",
+      };
+      await service.ensureSession(identity);
+      const update = await service.getTranscriptUpdate({
+        ...identity,
+        viewVersion: 1,
+        liveWindow,
+        forceSnapshot: true,
+      });
+      if (update.status !== "snapshot") throw new Error("expected snapshot");
+      expect(update.value.revisedMessages).toBeUndefined();
+      expect(update.value.historyReconciliationToken).toBeDefined();
+      expect(update.value.messages.map((row) => (row as TestMessage).id)).toEqual(["tail"]);
+    },
+  );
+});
+
+test("a missed-revision delta supplies authoritative live ids for inactive remounts", async () => {
+  const history = {
+    messages: Array.from({ length: 150 }, (_, i) => message(`m${i}`)),
+    epoch: 1,
+    revision: 1,
+    revised: [] as string[],
+  };
+  const { stub } = summaryProvider(history);
+  await withService(
+    { prefix: "orkestrator-revision-overflow-", provider: async () => stub.provider },
+    async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "tab-1",
+      };
+      await service.ensureSession(identity);
+      const first = await service.getTranscriptUpdate({
+        ...identity,
+        viewVersion: 1,
+        liveWindow,
+        forceSnapshot: true,
+      });
+      if (first.status !== "snapshot") throw new Error("expected snapshot");
+      for (let i = 0; i < 40; i++)
+        history.messages[i] = { ...history.messages[i]!, content: "late revision" };
+      history.revised = Array.from({ length: 40 }, (_, i) => `m${i}`);
+      history.revision++;
+      const next = await service.getTranscriptUpdate({
+        ...identity,
+        viewVersion: 1,
+        liveWindow,
+        knownToken: first.token,
+      });
+      if (next.status !== "delta") throw new Error("expected delta");
+      expect(next.delta.historyReconciliationToken).toBeDefined();
+      expect(next.delta.liveMessageIds).toEqual(
+        first.value.messages.map((row) => (row as TestMessage).id),
+      );
+    },
+  );
 });

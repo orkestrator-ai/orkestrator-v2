@@ -423,6 +423,8 @@ export interface ProviderTranscriptSnapshot {
    * have pushed out of the window; readers replace their copies of these.
    */
   revisedMessages?: unknown[];
+  /** Changed recovery signal invalidates retained history, which remains pageable. */
+  historyReconciliationToken?: string;
 }
 
 /** One provider-served history page, positioned within a history epoch. */

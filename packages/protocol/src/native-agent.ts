@@ -1830,6 +1830,8 @@ export interface NativeAgentTranscriptView<TMessage = unknown> {
    * replaces its own copy of each and never inserts one it does not hold.
    */
   revisedMessages?: TMessage[];
+  /** Changed recovery signal invalidates retained history, which remains pageable. */
+  historyReconciliationToken?: string;
 }
 
 /** Bound on `revisedMessages`, per view and per delta. */
@@ -1945,8 +1947,10 @@ export interface NativeAgentTranscriptDelta<TMessage = unknown> {
   title?: string;
   messageWindow?: NativeAgentMessageWindow;
   providerRevision?: number;
-  /** Mirrors the view's `revisedMessages`, including their absence. */
+  /** Newly changed older rows since the base; absence clears transient notes. */
   revisedMessages?: TMessage[];
+  /** Changed recovery signal invalidates retained history, which remains pageable. */
+  historyReconciliationToken?: string;
 }
 
 export type NativeAgentTranscriptUpdate<TMessage = unknown> =
@@ -2329,6 +2333,9 @@ function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTrans
       (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096)) ||
     (candidate.messagePatches !== undefined &&
       !isNativeAgentMessagePatchList(candidate.messagePatches)) ||
+    (candidate.historyReconciliationToken !== undefined &&
+      (typeof candidate.historyReconciliationToken !== "string" ||
+        candidate.historyReconciliationToken.length > 128)) ||
     !isRevisedMessageList(candidate.revisedMessages)
   ) {
     return false;
@@ -2405,6 +2412,7 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
     ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),
     // Authoritative like the cursor: a delta without revised rows clears them.
     revisedMessages: delta.revisedMessages,
+    historyReconciliationToken: delta.historyReconciliationToken,
   };
 }
 
@@ -2449,6 +2457,9 @@ export function isNativeAgentTranscriptUpdate(
     (transcript.historyCursor !== undefined &&
       (typeof transcript.historyCursor !== "string" || transcript.historyCursor.length > 1_024)) ||
     (transcript.historyPaging !== undefined && transcript.historyPaging !== "direct") ||
+    (transcript.historyReconciliationToken !== undefined &&
+      (typeof transcript.historyReconciliationToken !== "string" ||
+        transcript.historyReconciliationToken.length > 128)) ||
     !isRevisedMessageList(transcript.revisedMessages)
   ) {
     return false;

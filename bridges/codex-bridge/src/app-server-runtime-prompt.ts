@@ -1362,11 +1362,16 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     context: ThreadContext,
   ): NormalizedMessage[] {
     if (session.localMessages.length === 0) return context.messages;
-    // Local commands can appear between model turns. Their timestamps are the
-    // only shared ordering key because they deliberately have no rollout item.
-    return [...context.messages, ...session.localMessages].sort((left, right) =>
+    // Context order is authoritative (steers can be inserted above already
+    // opened response rows). Only local commands need a timestamp merge.
+    const messages = [...context.messages];
+    for (const local of [...session.localMessages].sort((left, right) =>
       left.createdAt.localeCompare(right.createdAt),
-    );
+    )) {
+      const next = messages.findIndex((message) => message.createdAt > local.createdAt);
+      messages.splice(next < 0 ? messages.length : next, 0, local);
+    }
+    return messages;
   }
 
   protected threadHasActiveWork(context: ThreadContext): boolean {

@@ -1,6 +1,6 @@
 import type { BridgeTranscriptSource } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import type { BridgeMessage, SessionState } from "./state.js";
-import { revisedRowIds } from "./transcript.js";
+import { revisedRowIds, revisedRowsOverflowVersion } from "./transcript.js";
 
 /**
  * What every transcript route of one session reads right now.
@@ -27,5 +27,6 @@ export function cursorTranscriptSource(
     complete: !state.transcriptTruncated && state.droppedMessages === 0,
     // Recently changed rows; the summary carries those before the live window.
     revisedMessageIds: revisedRowIds(state),
+    revisedRowsOverflowVersion: revisedRowsOverflowVersion(state),
   };
 }

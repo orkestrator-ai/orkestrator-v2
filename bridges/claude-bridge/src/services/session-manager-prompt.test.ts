@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
 import { holdSdkPromptOpen } from "./session-manager-persistence.js";
 import {
+  createPromptStreamState,
   MAX_SUBAGENT_PARTS_PER_CALL,
   MAX_TRACKED_STREAM_ROWS,
 } from "./session-manager-prompt-stream.js";
@@ -5068,4 +5069,58 @@ describe("selected commands and local command results", () => {
     ]);
     expect(session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   });
+});
+
+test("an API response crossing a released-turn handoff adopts its existing row", () => {
+  const session = createSession("handoff-response");
+  track(session.id);
+  const first = createPromptStreamState(session, session.id, {
+    flushIntervalMs: 1000,
+    maxBlockIndex: 100,
+  });
+  first.applyPartialAssistantMessage({
+    type: "stream_event",
+    event: { type: "message_start", message: { id: "shared-api" } },
+  });
+  first.applyPartialAssistantMessage({
+    type: "stream_event",
+    event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+  });
+  first.applyPartialAssistantMessage({
+    type: "stream_event",
+    event: {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "partial" },
+    },
+  });
+  first.flushStreamedAssistantMessage();
+  const launch = session.messages.find((row) => row.id === "shared-api")!;
+  expect(launch.content).toBe("partial");
+  session.messages.push({
+    id: "next-user",
+    role: "user",
+    content: "continue",
+    parts: [],
+    createdAt: "now",
+  });
+  const next = createPromptStreamState(session, session.id, {
+    flushIntervalMs: 1000,
+    maxBlockIndex: 100,
+    toolTracker: first.toolTracker,
+  });
+  next.applyAssistantRecord({
+    apiMessageId: "shared-api",
+    uuid: "final-uuid",
+    isRoot: true,
+    contentBlockCount: 1,
+    orderedParts: [{ type: "text", value: "partial and final", blockOffset: 0 }],
+  });
+  expect(session.messages.filter((row) => row.id === "shared-api")).toEqual([launch]);
+  expect(launch.content).toBe("partial and final");
+  expect(launch.sdkUuid).toBe("final-uuid");
+  expect(session.messages.indexOf(launch)).toBeLessThan(
+    session.messages.findIndex((row) => row.id === "next-user"),
+  );
+  expect(session.revisedRows?.ids()).toContain("shared-api");
 });

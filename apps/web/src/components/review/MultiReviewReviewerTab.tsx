@@ -109,6 +109,7 @@ export function mergeMultiReviewReviewerTranscript(
     historyCursor: _historyCursor,
     historyEpoch: _historyEpoch,
     revisedMessages: _revisedMessages,
+    historyReconciliationToken: _historyReconciliationToken,
     ...rest
   } = next;
   return {
@@ -117,6 +118,9 @@ export function mergeMultiReviewReviewerTranscript(
     ...(previous?.truncated ? { truncated: true } : {}),
     ...(previous?.historyCursor ? { historyCursor: previous.historyCursor } : {}),
     ...(previous?.historyEpoch ? { historyEpoch: previous.historyEpoch } : {}),
+    ...(previous?.historyReconciliationToken
+      ? { historyReconciliationToken: previous.historyReconciliationToken }
+      : {}),
   };
 }
 
@@ -129,6 +133,7 @@ function reviewerStateKey(snapshot: MultiReviewReviewerTranscript): string {
     historyCursor: _historyCursor,
     historyEpoch: _historyEpoch,
     revisedMessages: _revisedMessages,
+    historyReconciliationToken: _historyReconciliationToken,
     ...state
   } = snapshot;
   // Both sides are backend answers of the same shape, so key order matches.
@@ -160,6 +165,7 @@ export interface ReviewerHistoryState {
   cursor?: string;
   /** History epoch `earlier` and `cursor` belong to. */
   epoch?: string;
+  reconciliationToken?: string;
   /** Why no cursor is offered after following one. */
   end?: "complete" | "unavailable" | "retained-limit";
   /** Shown once when loaded pages had to be dropped. */
@@ -204,6 +210,9 @@ export function mergeReviewerHistory(
     earlier: [],
     ...(next.historyCursor ? { cursor: next.historyCursor } : {}),
     ...(next.historyEpoch ? { epoch: next.historyEpoch } : {}),
+    ...(next.historyReconciliationToken
+      ? { reconciliationToken: next.historyReconciliationToken }
+      : {}),
     ...(notice ? { notice } : {}),
   });
   if (history.earlier.length === 0 && !pageInFlight) {
@@ -211,6 +220,7 @@ export function mergeReviewerHistory(
     const same =
       history.cursor === next.historyCursor &&
       history.epoch === next.historyEpoch &&
+      history.reconciliationToken === next.historyReconciliationToken &&
       history.end === undefined;
     return { history: same ? history : adopt(history.notice), reset: false };
   }
@@ -218,7 +228,11 @@ export function mergeReviewerHistory(
   const combined = [...history.earlier, ...previousTail];
   const overlap =
     firstId === undefined ? -1 : combined.findIndex((message) => messageId(message) === firstId);
-  if (next.historyEpoch !== history.epoch || overlap < 0) {
+  if (
+    next.historyEpoch !== history.epoch ||
+    history.reconciliationToken !== next.historyReconciliationToken ||
+    overlap < 0
+  ) {
     return {
       history: adopt("Earlier messages were reloaded because the reviewer's history moved on."),
       reset: true,

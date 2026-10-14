@@ -7,7 +7,6 @@ import { StorageService } from "./storage.js";
 import { BUILD_PIPELINE_TRANSCRIPT_DIRECTORY } from "./build-pipeline-transcript-store.js";
 import {
   BUILD_PIPELINE_PATCH_BUDGET_BYTES,
-  BUILD_PIPELINE_REVISED_OVERLAP_MESSAGES,
   conditionalBuildPipelineRead,
   withoutTranscriptBodies,
 } from "./build-pipeline-transcript-projection.js";
@@ -127,15 +126,12 @@ describe("build pipeline transcript projection", () => {
       });
       expect(stale.unchanged).toBe(false);
       if (stale.unchanged) return;
-      const overlapStart = 48 - BUILD_PIPELINE_REVISED_OVERLAP_MESSAGES;
       expect(stale.messagePatches).toEqual([
         {
           sessionKey: "build",
-          baseRevision: 2,
-          baseCount: 48,
-          startIndex: overlapStart,
+          startIndex: 0,
           revision: 3,
-          messages: messages(50, "build").slice(overlapStart),
+          messages: messages(50, "build"),
         },
       ]);
       expect(JSON.stringify(stale.record)).not.toContain("legacy-0");
@@ -144,7 +140,7 @@ describe("build pipeline transcript projection", () => {
 
   test("a change to an earlier row reaches a reader whose copy is from an older revision", async () => {
     await withStorage(async (storage) => {
-      const first = messages(30, "build");
+      const first = messages(50, "build");
       const session = await referencedSession(storage, "build", first, 1);
       const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
         id: "p1",
@@ -159,8 +155,8 @@ describe("build pipeline transcript projection", () => {
 
       // A late tool result lands on a step several rows back, and a new step
       // follows. Patching from the reader's last row only left the old copy.
-      const second = [...first, { id: "build-30", role: "assistant", text: "next" }];
-      second[25] = { ...(second[25] as object), text: "build:25 with its tool result" };
+      const second = [...first, { id: "build-50", role: "assistant", text: "next" }];
+      second[0] = { ...(second[0] as object), text: "build:0 with its tool result" };
       const updated = await referencedSession(storage, "build", second, 2);
       const next = await storage.saveBuildPipeline("p1", "proj-1", "", record.revision, {
         id: "p1",
@@ -174,7 +170,8 @@ describe("build pipeline transcript projection", () => {
       });
       if (read.unchanged) throw new Error("expected a patch");
       const patch = read.messagePatches[0]!;
-      expect(patch).toMatchObject({ baseRevision: 1, baseCount: 30, revision: 2 });
+      expect(patch).toMatchObject({ startIndex: 0, revision: 2 });
+      expect(patch.baseRevision).toBeUndefined();
       held = [...held.slice(0, patch.startIndex), ...patch.messages];
       expect(held).toEqual(second);
 
@@ -454,7 +451,8 @@ describe("build pipeline transcript projection", () => {
       });
       if (tail.unchanged) throw new Error("expected a patch");
       const patch = tail.messagePatches.find((candidate) => candidate.sessionKey === "oc")!;
-      expect(patch).toMatchObject({ baseCount: 3, startIndex: 0 });
+      expect(patch).toMatchObject({ startIndex: 0 });
+      expect(patch.baseCount).toBeUndefined();
       expect(patch.messages).toEqual([
         expect.objectContaining({ id: "oc-0", content: "opencode:0" }),
         { id: "opencode-message-1", role: "assistant", content: "", parts: [] },
@@ -466,5 +464,55 @@ describe("build pipeline transcript projection", () => {
       const stored = await storage.readBuildPipelineTranscript("p1", session);
       expect(stored.status === "found" && stored.messages).toEqual(raw);
     });
+  });
+});
+
+test("revision reconciliation pages every held row even beyond the old overlap byte cap", async () => {
+  await withStorage(async (storage) => {
+    const first = messages(50, "wide").map((row) => ({
+      ...(row as object),
+      content: "x".repeat(24 * 1024),
+    }));
+    const session = await referencedSession(storage, "wide", first, 1);
+    const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+      id: "p1",
+      phase: "building",
+      sessions: [session],
+      currentSessionIndex: 0,
+    });
+    const second = [...first, { id: "wide-50", role: "assistant", content: "new" }];
+    second[0] = { ...(second[0] as object), content: "late root result" };
+    second[36] = { ...(second[36] as object), content: "late overlap result" };
+    const updated = await referencedSession(storage, "wide", second, 2);
+    const next = await storage.saveBuildPipeline("p1", "proj-1", "", record.revision, {
+      id: "p1",
+      phase: "building",
+      sessions: [updated],
+      currentSessionIndex: 0,
+    });
+    let held: unknown[] = first;
+    let revision = 1;
+    for (let pass = 0; pass < 10; pass++) {
+      const read = await conditionalBuildPipelineRead(
+        storage,
+        next,
+        { knownSessions: { wide: { revision, count: held.length } } },
+        400 * 1024,
+      );
+      if (read.unchanged) throw new Error("expected a reconciliation patch");
+      const patch = read.messagePatches[0]!;
+      if (pass === 0) expect(patch.startIndex).toBe(0);
+      expect(patch.messages.length).toBeGreaterThan(0);
+      held = [...held.slice(0, patch.startIndex), ...patch.messages];
+      revision = patch.revision;
+      if (held.length === second.length) break;
+    }
+    expect(held).toEqual(second);
+    expect(
+      await conditionalBuildPipelineRead(storage, next, {
+        knownRevision: next.revision,
+        knownSessions: { wide: { revision, count: held.length } },
+      }),
+    ).toEqual({ unchanged: true, revision: next.revision });
   });
 });

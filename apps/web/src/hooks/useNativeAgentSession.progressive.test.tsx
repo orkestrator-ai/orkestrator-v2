@@ -2827,3 +2827,124 @@ describe("useNativeAgentSession progressive view", () => {
     expect(remount.result.current.projection?.messageWindow).toBeUndefined();
   });
 });
+
+test("revised-row overflow while inactive invalidates held history, stays stable on unchanged, and re-pages whole rows", async () => {
+  const old = Array.from({ length: 40 }, (_, i) => message(`older-${i}`, `old-${i}`));
+  const tail = [message("live-a"), message("live-b")];
+  transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
+  stateUpdates = [() => stateSnapshot("state-1")];
+  const session = renderHook(
+    ({ active }) =>
+      useNativeAgentSession<TestMessage>({
+        platform: "codex",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive: active,
+        enabled: true,
+      }),
+    { initialProps: { active: true } },
+  );
+  await waitFor(() => expect(session.result.current.projection?.messages).toHaveLength(42));
+  transcriptUpdates = [
+    () =>
+      truncatedTail("tail", tail, {
+        historyCursor: "recover-before-live",
+        historyPaging: "direct",
+      }),
+  ];
+  await act(async () => {
+    await session.result.current.refresh();
+  });
+  expect(session.result.current.projection?.messages).toHaveLength(42);
+  session.rerender({ active: false });
+  const updated = old.map((row, i) => message(row.id, `settled-${i}`));
+  transcriptUpdates = [
+    () =>
+      truncatedTail("revised", tail, {
+        historyCursor: "recover-before-live",
+        historyPaging: "direct",
+        revisedMessages: updated.slice(0, 32),
+        historyReconciliationToken: "missed-eight-rows",
+      }),
+  ];
+  stateUpdates = [() => stateSnapshot("state-2")];
+  session.rerender({ active: true });
+  await waitFor(() =>
+    expect(session.result.current.projection?.messages.map((row) => row.id)).toEqual([
+      "live-a",
+      "live-b",
+    ]),
+  );
+  // Unchanged polling must not resurrect the stale retained prefix.
+  await act(async () => {
+    await session.result.current.refresh();
+  });
+  expect(session.result.current.projection?.messages).toHaveLength(2);
+  messagePages = [() => ({ ...historyPage(updated), historyEpoch: "epoch-1" })];
+  await act(async () => {
+    await session.result.current.loadEarlierMessages();
+  });
+  expect(session.result.current.projection?.messages.slice(0, 40).map((row) => row.text)).toEqual(
+    updated.map((row) => row.text),
+  );
+  session.unmount();
+  transcriptUpdates = [
+    () =>
+      truncatedTail("revised", tail, {
+        historyCursor: "recover-before-live",
+        historyPaging: "direct",
+        historyReconciliationToken: "missed-eight-rows",
+      }),
+  ];
+  stateUpdates = [() => stateSnapshot("state-3")];
+  const remount = renderSession();
+  await waitFor(() => expect(remount.result.current.transcriptAvailability).toBe("current"));
+  expect(
+    remount.result.current.projection?.messages.some((row) => row.text.startsWith("old-")),
+  ).toBe(false);
+});
+
+test("an overflow delta trims a remount's reconstructed held view before accepting its revision", async () => {
+  const old = Array.from({ length: 40 }, (_, i) => message(`old-${i}`, "stale"));
+  const tail = [message("live-a"), message("live-b")];
+  transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
+  stateUpdates = [() => stateSnapshot("state-1")];
+  const first = renderSession();
+  await waitFor(() => expect(first.result.current.projection?.messages).toHaveLength(42));
+  transcriptUpdates = [
+    () => truncatedTail("tail", tail, { historyCursor: "recover", historyPaging: "direct" }),
+  ];
+  await act(async () => {
+    await first.result.current.refresh();
+  });
+  first.unmount();
+  transcriptUpdates = [
+    () => ({
+      viewVersion: 1,
+      status: "delta",
+      baseToken: "tail",
+      token: "overflow",
+      identity,
+      delta: {
+        messageUpserts: [],
+        liveMessageIds: ["live-a", "live-b"],
+        deletedMessageIds: [],
+        freshness: "current",
+        historyEpoch: "epoch-1",
+        historyComplete: false,
+        historyCursor: "recover",
+        historyPaging: "direct",
+        historyReconciliationToken: "missed-revisions",
+      },
+    }),
+  ];
+  stateUpdates = [() => stateSnapshot("state-2")];
+  const remount = renderSession();
+  await waitFor(() =>
+    expect(remount.result.current.projection?.messages.map((row) => row.id)).toEqual([
+      "live-a",
+      "live-b",
+    ]),
+  );
+  expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+});

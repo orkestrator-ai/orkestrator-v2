@@ -4,6 +4,7 @@ import type {
   NormalizedPart,
   SessionState,
 } from "../types/index.js";
+import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import { eventEmitter } from "./event-emitter.js";
@@ -126,6 +127,7 @@ interface StreamRow {
   /** Flattened view of `blocksByApiMessage`, in message order then block order. */
   orderedParts: OrderedPartEntry[];
   toolUseIds: Set<string>;
+  finalizedBlockCounts: Map<string, number>;
   modelId?: string;
   /**
    * The transcript uuid of the row's latest root record. The SDK emits one
@@ -145,6 +147,13 @@ interface StreamRow {
   published: boolean;
   publishedModelId?: string;
 }
+
+// Released turns and their successor share API message identity. The map is
+// bounded like each stream's row state and weakly owned by the session.
+const sessionStreamRows = new WeakMap<
+  SessionState,
+  { messages: NormalizedMessage[]; rows: Map<string, StreamRow> }
+>();
 
 export function createPromptStreamState(
   session: SessionState,
@@ -177,6 +186,12 @@ export function createPromptStreamState(
   // each one holds — a subagent's output renders inside the row holding the
   // call that started it, however many rows later it arrives.
   const rows: StreamRow[] = [];
+  let sharedState = sessionStreamRows.get(session);
+  if (!sharedState || sharedState.messages !== session.messages) {
+    sharedState = { messages: session.messages, rows: new Map() };
+    sessionStreamRows.set(session, sharedState);
+  }
+  const sharedRows = sharedState.rows;
   const rowByApiMessage = new Map<string, StreamRow>();
   const rowByToolUseId = new Map<string, StreamRow>();
   let currentRow: StreamRow | null = null;
@@ -189,7 +204,6 @@ export function createPromptStreamState(
   // Blocks of each API message already reconciled from non-streaming `assistant`
   // messages. Those messages don't carry the stream's block index, but they
   // arrive in block order, so the running count is the index of the next block.
-  const finalizedBlockCountByApiMessage = new Map<string, number>();
   // API message id of the stream currently being received (set by `message_start`).
   let currentStreamApiMessageId: string | null = null;
   // Fallback keys for messages that carry neither an API message id nor a uuid.
@@ -209,7 +223,6 @@ export function createPromptStreamState(
       if (rowByApiMessage.get(apiMessageId) !== row) continue;
       rowByApiMessage.delete(apiMessageId);
       parentTaskByApiMessage.delete(apiMessageId);
-      finalizedBlockCountByApiMessage.delete(apiMessageId);
     }
     for (const toolUseId of row.toolUseIds) {
       if (rowByToolUseId.get(toolUseId) === row) rowByToolUseId.delete(toolUseId);
@@ -218,6 +231,14 @@ export function createPromptStreamState(
   };
 
   const createRow = (key: string, modelId?: string): StreamRow => {
+    const shared = sharedRows.get(key);
+    if (shared && (!shared.message || session.messages.includes(shared.message))) {
+      rows.push(shared);
+      if (shared.message) rowOfMessage.set(shared.message, shared);
+      while (rows.length > MAX_TRACKED_STREAM_ROWS) forgetRow(rows.shift()!);
+      for (const id of shared.toolUseIds) rowByToolUseId.set(id, shared);
+      return shared;
+    }
     const row: StreamRow = {
       sequence: (rowSequence += 1),
       key,
@@ -225,11 +246,18 @@ export function createPromptStreamState(
       blocksByApiMessage: new Map(),
       orderedParts: [],
       toolUseIds: new Set(),
+      finalizedBlockCounts: new Map(),
       ...(modelId ? { modelId } : {}),
       anchor: session.messages.at(-1),
       publishedParts: [],
       published: false,
     };
+    sharedRows.set(key, row);
+    while (sharedRows.size > MAX_TRACKED_STREAM_ROWS) {
+      const oldest = sharedRows.keys().next().value;
+      if (oldest === undefined) break;
+      sharedRows.delete(oldest);
+    }
     rows.push(row);
     while (rows.length > MAX_TRACKED_STREAM_ROWS) {
       const oldest = rows.shift()!;
@@ -489,6 +517,9 @@ export function createPromptStreamState(
       if (row.modelId) row.message.modelId = row.modelId;
       if (row.sdkUuid) row.message.sdkUuid = row.sdkUuid;
     }
+    if (row.message && session.messages.at(-1) !== row.message) {
+      (session.revisedRows ??= new RecentlyRevisedRows()).note(row.message.id);
+    }
     markTranscriptChanged(session);
     emitRow(row);
   };
@@ -529,7 +560,7 @@ export function createPromptStreamState(
     // content block, all sharing `message.id`, so the running finalized-block
     // count gives each block its stream index.
     const blocks = getBlocks(row, messageKey);
-    const blockIndexBase = finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
+    const blockIndexBase = row.finalizedBlockCounts.get(messageKey) ?? 0;
     for (const part of record.orderedParts) {
       const blockIndex = blockIndexBase + (part.blockOffset ?? 0);
       const streamedPart = blocks.get(blockIndex);
@@ -543,7 +574,7 @@ export function createPromptStreamState(
         rowByToolUseId.set(part.value, row);
       }
     }
-    finalizedBlockCountByApiMessage.set(messageKey, blockIndexBase + record.contentBlockCount);
+    row.finalizedBlockCounts.set(messageKey, blockIndexBase + record.contentBlockCount);
     if (record.isRoot && record.modelId) row.modelId = record.modelId;
     if (record.isRoot && record.uuid) row.sdkUuid = record.uuid;
     dirtyRows.delete(row);

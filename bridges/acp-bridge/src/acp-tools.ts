@@ -8,17 +8,11 @@ import {
   MAX_CURSOR_TOOL_REPLAY_PROCESSES,
   MAX_LIVE_CURSOR_TOOL_REPLAYS_PER_TURN,
   MAX_REPLAY_RECONCILE_TOOLS,
-  MAX_TOOL_ARGUMENT_BYTES,
-  MAX_TOOL_DIFF_BYTES,
   MAX_TOOL_ID_BYTES,
-  MAX_TOOL_INLINE_FILE_BYTES,
   MAX_TOOL_NAME_BYTES,
-  MAX_TOOL_OUTPUT_BYTES,
-  MAX_TOOL_PATH_BYTES,
   MAX_TOOL_TITLE_BYTES,
   MAX_TRANSCRIPT_BYTES,
   CURSOR_TOOL_REPLAY_DELAY_MS,
-  RPC_TIMEOUT_MS,
   TRANSCRIPT_CHECK_INTERVAL_BYTES,
   AcpProcess,
   activeCursorToolReplays,
@@ -47,19 +41,15 @@ import {
   CURSOR_TODO_STATUSES,
 } from "./acp-context.js";
 import {
-  appendSaturating,
   boundTranscript,
   boundedString,
   boundedNullableString,
   boundedToolArguments,
   aggregateAcpToolDiffs,
-  contentText,
   failTranscriptLimit,
-  isTrimNotice,
   mapAcpToolState,
   rememberTrimmedToolCalls,
   trimPartsTo,
-  truncateDisplayText,
   turnRequiresCompleteOutput,
   toolArgumentPath,
   toolCallContentDiffs,
@@ -195,6 +185,25 @@ export function commitToolPartMutation(
   return true;
 }
 
+/** The registry owns its original launch even if a duplicate card exists. */
+function activeSubagentLaunch(
+  state: SessionState,
+  toolUseId: string,
+): { owner: BridgeMessage; part: BridgeToolPart } | undefined {
+  if (!state.activeSubagentToolIds.has(toolUseId)) return undefined;
+  for (const owner of state.messages) {
+    for (const part of owner.parts) {
+      if (
+        part.type === "tool-invocation" &&
+        part.toolUseId === toolUseId &&
+        part.agentState === "active"
+      )
+        return { owner, part };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Upsert a tool part from a `tool_call` / `tool_call_update` frame. Returns the
  * part once the update is committed, so the caller can follow the call's
@@ -220,7 +229,9 @@ export function applyToolCallUpdate(
   const parentTaskUseId = acpParentTaskUseId(update);
   const nestedUnder =
     parentTaskUseId && parentTaskUseId !== toolCallId ? parentTaskUseId : undefined;
-  let found = findToolPart(state, toolCallId, turnStartIndex(state));
+  let found =
+    activeSubagentLaunch(state, toolCallId) ??
+    findToolPart(state, toolCallId, turnStartIndex(state));
   if (
     !found &&
     (!isInitial ||
@@ -231,12 +242,27 @@ export function applyToolCallUpdate(
     if (
       earlier &&
       continuesAcrossTurns(state, earlier.part, isInitial) &&
-      !(isInitial && namesAnotherCall(update, earlier.part))
+      !(
+        isInitial &&
+        !state.activeSubagentToolIds.has(toolCallId) &&
+        namesAnotherCall(update, earlier.part)
+      )
     ) {
       found = earlier;
     }
   }
   let part = found?.part;
+  // Active ids belong to their launch until settlement. A differently named
+  // initial call is ambiguous reuse, not authority to replace that launch.
+  if (
+    part &&
+    isInitial &&
+    state.activeSubagentToolIds.has(toolCallId) &&
+    found !== undefined &&
+    state.messages.indexOf(found.owner) < turnStartIndex(state) &&
+    namesAnotherCall(update, part)
+  )
+    return part;
 
   // An evicted launch is settled through the authoritative registry instead
   // of being rebuilt as a context-free ghost part.
@@ -336,23 +362,31 @@ export function applyToolCallUpdate(
 }
 
 /**
+ * Whether a new `tool_call` reusing a running call's id is a different call.
+ * A resend repeats the call's title; an agent that reuses per-turn ids for
+ * new work names that work instead. An id still registered as active remains
+ * owned by its launch, so an ambiguous initial reuse cannot overwrite it.
+ */
+function namesAnotherCall(update: JsonObject, part: BridgeToolPart): boolean {
+  const title = boundedString(update.title, MAX_TOOL_TITLE_BYTES)?.trim();
+  return (
+    title !== undefined &&
+    title.length > 0 &&
+    title !==
+      boundedString(
+        acpToolSourceStates.get(part)?.title ?? part.toolTitle,
+        MAX_TOOL_TITLE_BYTES,
+      )?.trim()
+  );
+}
+
+/**
  * Whether a call found only in an earlier turn is still that call, rather
  * than an id the agent reused. Work still running is: an unsettled card a
  * late update completes, a background child, and a call nested under one.
  * A settled card is history, so an update for its id starts a card of its
  * own in the current turn instead of rewriting a finished one.
  */
-/**
- * Whether a new `tool_call` reusing a running call's id is a different call.
- * A resend repeats the call's title; an agent that reuses per-turn ids for
- * new work names that work instead, and must get a card of its own rather
- * than overwrite the running one.
- */
-function namesAnotherCall(update: JsonObject, part: BridgeToolPart): boolean {
-  const title = boundedString(update.title, MAX_TOOL_NAME_BYTES)?.trim();
-  return title !== undefined && title.length > 0 && title !== part.content;
-}
-
 function continuesAcrossTurns(
   state: SessionState,
   part: BridgeToolPart,
@@ -1089,6 +1123,8 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
       if (source) source.agentState = "failed";
     }
   } else {
+    const launch = activeSubagentLaunch(state, part.toolUseId);
+    if (launch && launch.part !== part) return;
     settleActiveSubagent(state, part.toolUseId);
   }
 }
@@ -1754,7 +1790,7 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   const isProgress = namedState === "progress";
   let agentState: "finished" | "failed" | undefined = isProgress ? undefined : namedState;
 
-  let found = findToolPart(state, toolCallId);
+  let found = activeSubagentLaunch(state, toolCallId) ?? findToolPart(state, toolCallId);
   const sourcePeek = found?.part ? acpToolSourceStates.get(found.part) : undefined;
   const spawnEcho =
     durationMs !== undefined &&

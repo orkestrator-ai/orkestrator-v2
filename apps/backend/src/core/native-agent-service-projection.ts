@@ -1,3 +1,4 @@
+import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import path from "node:path";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { fileURLToPath } from "node:url";
@@ -1757,7 +1758,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     });
     return {
       messageUpserts,
-      ...(sameIds(previousIds, currentIds) ? {} : { liveMessageIds: currentIds }),
+      ...(sameIds(previousIds, currentIds) &&
+      previous.historyReconciliationToken === current.historyReconciliationToken
+        ? {}
+        : { liveMessageIds: currentIds }),
       // Rows that only aged out of the window are not deletions: the client
       // keeps them, and pages back to anything it does not hold. Older history
       // exists whenever the view says so, including a provider that trimmed
@@ -1777,8 +1781,22 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...(current.providerRevision === undefined
         ? {}
         : { providerRevision: current.providerRevision }),
-      // Mirrors the view, absence included: a delta without them clears them.
-      ...(current.revisedMessages ? { revisedMessages: current.revisedMessages } : {}),
+      // A snapshot rehydrates all noted rows; a delta carries only revisions
+      // that changed since its base. Empty/absent lists clear transient notes,
+      // while the client's already-replaced history copies stay authoritative.
+      ...(current.historyReconciliationToken
+        ? { historyReconciliationToken: current.historyReconciliationToken }
+        : {}),
+      ...(current.revisedMessages
+        ? {
+            revisedMessages: current.revisedMessages.filter((message) => {
+              const previousRow = previous.revisedMessages?.find(
+                (row) => (row as { id: string }).id === (message as { id: string }).id,
+              );
+              return previousRow === undefined || !sameEncoding(previousRow, message);
+            }),
+          }
+        : {}),
     };
   }
 
@@ -2073,6 +2091,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       hydrationHoldingPreview &&
       snapshot.historyEpoch !== undefined &&
       previous?.value.historyEpoch === snapshot.historyEpoch &&
+      previous.value.historyReconciliationToken === snapshot.historyReconciliationToken &&
       previous.value.identity.providerSessionId === providerSessionId &&
       previous.value.identity.sourceGeneration === identity.sourceGeneration &&
       isNormalizedProgressiveMessage(previewHead) &&
@@ -2103,6 +2122,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (summary || snapshot.historyCursor !== undefined) {
         this.directHistoryPages.observeEpoch(sessionKey, providerSessionId, snapshot.historyEpoch);
       }
+    }
+    if (previous?.value.historyReconciliationToken !== snapshot.historyReconciliationToken) {
+      this.directHistoryPages.forgetSession(sessionKey);
     }
     const normalized = this.projectionMessages(
       sessionKey,
@@ -2135,6 +2157,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       snapshot.complete === false &&
       snapshot.historyEpoch !== undefined &&
       previous?.value.historyEpoch === snapshot.historyEpoch &&
+      previous.value.historyReconciliationToken === snapshot.historyReconciliationToken &&
       previous.value.identity.providerSessionId === providerSessionId &&
       previous.value.identity.sourceGeneration === identity.sourceGeneration &&
       previous.historyStartIndex !== undefined &&
@@ -2253,6 +2276,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
       summary ? { providerSessionId } : undefined,
     );
+    const deliveredRevisions = new Set(
+      [...normalized.messages, ...(revised ?? [])].map((row) => (row as { id: string }).id),
+    );
+    const omittedRevisions =
+      snapshot.revisedMessages?.filter(
+        (row) => !deliveredRevisions.has((row as { id: string }).id),
+      ) ?? [];
+    const historyReconciliationToken = omittedRevisions.length
+      ? revisedRowsReconciliationToken(0, [
+          snapshot.historyReconciliationToken,
+          ...omittedRevisions,
+        ])
+      : snapshot.historyReconciliationToken;
     const revisedById = new Map(
       (revised ?? []).map((message) => [(message as { id: string }).id, message] as const),
     );
@@ -2310,6 +2346,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         historyEpoch,
         historyComplete: complete,
         ...(revisedMessages?.length ? { revisedMessages } : {}),
+        ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
       },
       ...(boundedStartIndex === undefined
         ? {}

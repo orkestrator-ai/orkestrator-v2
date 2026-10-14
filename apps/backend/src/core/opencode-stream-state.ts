@@ -90,7 +90,7 @@ function baselineOf(messages: readonly unknown[] | undefined): GapBaseline {
  * still holds, or all of it when the read began at the session's first
  * message. OpenCode removes a suffix (a revert drops everything after its
  * point), so a removal always reaches into that overlap. A read sharing
- * nothing with the baseline proves nothing either way and counts as rewritten.
+ * nothing with the baseline cannot prove continuity and counts as rewritten.
  */
 function historyRewritten(
   baseline: readonly string[],
@@ -262,9 +262,9 @@ export class OpenCodeStreamState {
     const fromStart = requestedLimit !== undefined && messages.length < requestedLimit;
     if (state.gapBaseline) {
       this.verifyGap(state, messages, fromStart);
-      // A read fenced by the event version was taken after the stream came
-      // back, so events cover everything after it; any other read only moves
-      // the baseline forward.
+      // An unguarded read can happen during the outage, so check subsequent
+      // reads too. A guarded read, or the first transcript event applied to a
+      // current cache below, proves stream continuity has resumed.
       state.gapBaseline = expectedEventVersion === undefined ? baselineOf(messages) : undefined;
     }
     state.messages = [...messages];
@@ -298,6 +298,15 @@ export class OpenCodeStreamState {
   /** The epoch older-history page cursors for this session belong to. */
   historyEpoch(sessionId: string): string {
     return `opencode:${this.epochScope}:${this.session(sessionId).historyEpoch}`;
+  }
+
+  /** Revision-note sequence, including changes outside the cached window. */
+  revisedRowsVersion(sessionId: string): number {
+    return this.sessions.get(sessionId)?.revised?.version ?? 0;
+  }
+
+  revisedRowsOverflowVersion(sessionId: string): number {
+    return this.sessions.get(sessionId)?.revised?.overflowVersion ?? 0;
   }
 
   /** Messages OpenCode changed in place recently, newest change first. */
@@ -496,6 +505,9 @@ export class OpenCodeStreamState {
     if (!sessionId) return {};
     const state = this.session(sessionId);
     this.bumpEventVersion(state);
+    if (state.messagesCurrent && event.type.startsWith("message.")) {
+      state.gapBaseline = undefined;
+    }
 
     if (event.type === "session.status") {
       const statusRecord = asRecord(properties?.status);

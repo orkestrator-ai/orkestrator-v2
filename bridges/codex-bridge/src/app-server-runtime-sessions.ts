@@ -741,6 +741,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     while (index >= 0 && context.messages[index]!.id !== rowId) index -= 1;
     if (index >= 0) {
       context.messages.pop();
+      // Local command rows merge by timestamp. Match the response's clock so
+      // their stable sort preserves the steer's position above that response.
+      userMessage.createdAt = context.messages[index]!.createdAt;
       context.messages.splice(index, 0, userMessage);
     }
     this.bumpMessageRevision(context);

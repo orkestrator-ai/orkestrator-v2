@@ -24,6 +24,11 @@ export function acpTranscriptSource(
     complete: !state.transcriptTruncated && state.droppedMessages === 0,
     // Rows changed after newer ones followed them. Those already outside the
     // live window travel with the v2 summary as `revisedMessages`.
-    ...(state.revisedRows ? { revisedMessageIds: state.revisedRows.ids() } : {}),
+    ...(state.revisedRows
+      ? {
+          revisedMessageIds: state.revisedRows.ids(),
+          revisedRowsOverflowVersion: state.revisedRows.overflowVersion,
+        }
+      : {}),
   };
 }

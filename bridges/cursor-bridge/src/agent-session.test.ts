@@ -1,3 +1,4 @@
+import { noteRowRevised, revisedRowIds } from "./transcript.js";
 /**
  * Attaching, resuming, and replaying an existing agent's history.
  *
@@ -261,7 +262,10 @@ describe("rewindSessionHistory", () => {
       { runId: "run-3", turnNumber: 3, startCheckpointRef: "cp-3" },
     ];
 
+    noteRowRevised(state, "selected");
+    expect(revisedRowIds(state)).toEqual(["selected"]);
     await rewindSessionHistory(state, "selected");
+    expect(revisedRowIds(state)).toBeUndefined();
 
     expect(updatedAgent?.latestCheckpoint).toBe("cp-2");
     expect(deletedRunBatches).toEqual([["run-2", "run-3"]]);
@@ -1865,8 +1869,11 @@ describe("resumeSession", () => {
     expect(toolCount(state)).toBe(1);
     const inFlightBytes = state.uncheckedTranscriptBytes;
     expect(inFlightBytes).toBeGreaterThan(0);
+    noteRowRevised(state, state.messages[0]!.id);
+    expect(revisedRowIds(state)?.length).toBeGreaterThan(0);
     release();
     await state.recoveringRun;
+    expect(revisedRowIds(state)).toBeUndefined();
     expect(count(state, "start")).toBe(1);
     expect(count(state, "before steer")).toBe(1);
     expect(count(state, "redirect")).toBe(1);

@@ -172,6 +172,11 @@ export function rowChanged(state: SessionState, row: BridgeMessage): void {
   state.revision += 1;
 }
 
+/** Lost revision notes require retained-page reconciliation. */
+export function revisedRowsOverflowVersion(state: SessionState): number {
+  return revisedRows.get(state)?.overflowVersion ?? 0;
+}
+
 /** Recently changed row ids, newest first; undefined when there are none. */
 export function revisedRowIds(state: SessionState): string[] | undefined {
   const ids = revisedRows.get(state)?.ids();

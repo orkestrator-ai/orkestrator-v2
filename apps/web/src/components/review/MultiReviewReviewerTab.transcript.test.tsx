@@ -204,3 +204,27 @@ describe("revised reviewer rows", () => {
     expect(mergeReviewerHistory(history, [row("b")], next, false).history).toBe(history);
   });
 });
+
+test("missed reviewer revisions invalidate earlier rows and adopt a recoverable provider cursor", () => {
+  const history = {
+    earlier: Array.from({ length: 40 }, (_, i) => ({ id: `old-${i}`, content: "stale" })),
+    cursor: "old-cursor",
+    epoch: "e1",
+  };
+  const tail = [{ id: "live", content: "current" }];
+  const next = transcript({
+    messages: tail,
+    historyEpoch: "e1",
+    historyCursor: "reload-before-live",
+    historyReconciliationToken: "omitted-revisions",
+  });
+  const result = mergeReviewerHistory(history, tail, next);
+  expect(result.reset).toBe(true);
+  expect(result.history).toMatchObject({
+    earlier: [],
+    cursor: "reload-before-live",
+    epoch: "e1",
+    reconciliationToken: "omitted-revisions",
+  });
+  expect(mergeReviewerHistory(result.history, tail, next).reset).toBe(false);
+});

@@ -311,7 +311,7 @@ describe("OpenCode history paging", () => {
     expect(rowIds(deferred.messages)).toContain(openCodeMessageId(140));
   });
 
-  test("a server that ignores the cursor gets an empty final page, not the newest rows again", async () => {
+  test("a server that ignores the cursor expires explicitly", async () => {
     const server = openCodeHistoryServer(150);
     const cursor = (await snapshotOf(server)).historyCursor!;
     const page = await openCodeTranscriptPage(
@@ -322,7 +322,7 @@ describe("OpenCode history paging", () => {
       },
       { cursor, limit: 40, targetBytes: 512 * 1024 },
     );
-    expect(page).toMatchObject({ status: "page", messages: [], complete: true });
+    expect(page).toEqual({ status: "expired" });
     expect((page as { historyCursor?: string }).historyCursor).toBeUndefined();
   });
 
@@ -459,4 +459,23 @@ describe("OpenCode history paging", () => {
     expect(snapshot.historyEpoch).not.toBe(initial);
     expect(snapshot.historyEpoch).toBe(stream.historyEpoch("owned-session"));
   });
+});
+
+test("a mixed inclusive or ignored before response cannot claim history completion", async () => {
+  const server = openCodeHistoryServer(150);
+  const cursor = Buffer.from(
+    JSON.stringify({
+      id: server.messages[50]!.info.id,
+      time: server.messages[50]!.info.time.created,
+    }),
+  ).toString("base64url");
+  const page = await openCodeTranscriptPage(
+    {
+      historyEpoch: () => "epoch-1",
+      readMessages: async () => [server.messages[1]!, server.messages[149]!],
+      recordUnknown: () => undefined,
+    },
+    { cursor, limit: 40, targetBytes: 512 * 1024 },
+  );
+  expect(page).toEqual({ status: "expired" });
 });

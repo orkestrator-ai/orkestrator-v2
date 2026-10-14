@@ -922,6 +922,11 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         if (turn && turn.turnId === event.turnId) turn.markRunning(event.turnId);
         return;
       }
+      case "model.tool.called": {
+        const turn = context.activeTurn;
+        if (turn?.accepts(event)) turn.noteModelToolCall();
+        return;
+      }
       case "item.started":
       case "item.updated":
       case "item.completed": {

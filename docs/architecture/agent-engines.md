@@ -394,7 +394,8 @@ its own message, so a long turn outgrows the native live window by itself.
 verified against the 1.18.35 and pinned 1.19.0 servers, not a documented
 contract. Re-check it on every SDK bump; a server that rejects the cursor fails
 the page read with 400, and rows a server returns that are not strictly older
-than the cursor are dropped. Only a message OpenCode reported can name a
+than the cursor explicitly expire the page instead of claiming completion
+from a filtered window. Only a message OpenCode reported can name a
 cursor: not the stream's synthetic compaction row, nor a placeholder a part
 event created before its `message.updated`.
 

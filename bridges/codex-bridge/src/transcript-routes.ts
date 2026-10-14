@@ -26,6 +26,7 @@ export interface CodexTranscriptRuntime {
     complete: boolean;
   } | null;
   /** Rows recently changed, newest first, for the summary's `revisedMessages`. */
+  getRevisedRowsOverflowVersion?(sessionId: string): number;
   getRevisedMessageIds?(sessionId: string): readonly string[];
 }
 
@@ -71,6 +72,7 @@ export function codexTranscriptSource(
     complete: cached.complete,
     freshness: cached.freshness,
     title: status.title,
+    revisedRowsOverflowVersion: runtime.getRevisedRowsOverflowVersion?.(sessionId),
     ...(revisedMessageIds?.length ? { revisedMessageIds } : {}),
   };
 }

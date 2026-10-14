@@ -1,3 +1,4 @@
+import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import {
   boundedOpenCodeMessageHistory,
@@ -204,6 +205,8 @@ export interface OpenCodeTranscriptSource {
   readMessages: (limit: number, before?: string) => Promise<readonly unknown[]>;
   /** Messages OpenCode changed in place recently, newest change first. */
   revisedMessageIds?: () => readonly string[];
+  revisedRowsVersion?: () => number;
+  revisedRowsOverflowVersion?: () => number;
   replaceMessages: (messages: unknown[], requestedLimit: number) => void;
   title: () => string | undefined;
   recordUnknown: (type: string) => void;
@@ -222,6 +225,8 @@ export function openCodeTranscriptSource(
     currentMessagesFromStart: () => stream.currentMessagesFromStart(sessionId),
     historyEpoch: () => stream.historyEpoch(sessionId),
     revisedMessageIds: () => stream.revisedMessageIds(sessionId),
+    revisedRowsVersion: () => stream.revisedRowsVersion(sessionId),
+    revisedRowsOverflowVersion: () => stream.revisedRowsOverflowVersion(sessionId),
     replaceMessages: (messages, requestedLimit) =>
       stream.replaceMessages(sessionId, messages, undefined, requestedLimit),
     title: () => stream.title(sessionId),
@@ -324,6 +329,14 @@ export async function openCodeTranscriptSnapshot(
       commandChanges,
     );
     const title = input.title();
+    const shownIds = new Set(
+      [...groups.slice(start).flat(), ...revisedMessages].map((row) => row.id),
+    );
+    const omittedIds = input.revisedMessageIds?.().filter((id) => !shownIds.has(id)) ?? [];
+    const historyReconciliationToken = revisedRowsReconciliationToken(
+      input.revisedRowsOverflowVersion?.() ?? 0,
+      omittedIds.length ? [input.revisedRowsVersion?.() ?? revision, ...omittedIds] : [],
+    );
     return {
       messages: groups.slice(start).flat(),
       sourceToken,
@@ -333,6 +346,7 @@ export async function openCodeTranscriptSnapshot(
       historyEpoch: snapshotEpoch,
       ...(historyCursor ? { historyCursor } : {}),
       ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
+      ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
       ...(title ? { title } : {}),
     };
   } catch (error) {
@@ -386,10 +400,8 @@ function openCodeRevisedRows(
  * a removal that lands mid-read expires the cursor instead of serving a page
  * from the history it rewrote.
  *
- * Rows that are not strictly older than the cursor are dropped. A server that
- * ignored `before` would otherwise answer with the newest messages, which the
- * reader already holds, under a cursor that names the same page again; it
- * gets an empty, final page instead.
+ * Every row must be strictly older than the cursor. Mixed or repeated
+ * windows expire explicitly so a fresh read can recover continuity.
  */
 export async function openCodeTranscriptPage(
   input: Pick<
@@ -414,7 +426,10 @@ export async function openCodeTranscriptPage(
       {
         count: count + 1,
       },
-    ).filter((message) => olderThan(message, position));
+    );
+    // Inclusive or ignored cursors cannot prove completion. Reject the page
+    // instead of filtering rows and silently stranding older history.
+    if (read.some((message) => !olderThan(message, position))) return { status: "expired" };
     if (input.historyEpoch() !== historyEpoch) return { status: "expired" };
     const more = read.length > count;
     const candidates = read.slice(-count);

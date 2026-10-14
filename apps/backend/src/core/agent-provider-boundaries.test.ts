@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 
 const PROVIDER_SOURCE_FILES = [
@@ -17,6 +18,7 @@ const PROVIDER_SOURCE_FILES = [
   "opencode-messages.ts",
   "opencode-model-catalog.ts",
   "opencode-provider.ts",
+  "opencode-provider-environment.ts",
   "opencode-review-session-permissions.ts",
   "opencode-workflow-result-broker.ts",
   "opencode-session-lifecycle.ts",
@@ -44,6 +46,21 @@ describe("agent provider module boundaries", () => {
     expect(pipelineAdapter).not.toMatch(/@opencode-ai|\.\/opencode-|OpenCodeProvider/);
     expect(pipelineAdapter).not.toContain("interactiveSnapshot");
     expect(pipelineAdapter).not.toContain("modelCatalog");
+  });
+
+  test("keeps OpenCode wiring and policy out of the shared native-agent service", async () => {
+    // OpenCode-specific construction lives behind `createNativeAgentProvider`
+    // and its policy behind `native-agent-platform-policy.ts`; the shared
+    // service neither imports OpenCode modules nor branches on the platform.
+    const files = (await readdir(import.meta.dir)).filter(
+      (file) => /^native-agent-service-.*\.ts$/.test(file) && !file.endsWith(".test.ts"),
+    );
+    expect(files.length).toBeGreaterThan(0);
+    for (const filename of files) {
+      const contents = await source(filename);
+      expect(contents, filename).not.toMatch(/from "\.\/opencode-/);
+      expect(contents, filename).not.toMatch(/[!=]==\s*"opencode"/);
+    }
   });
 
   test("keeps neutral and provider modules independent of pipeline contracts", async () => {

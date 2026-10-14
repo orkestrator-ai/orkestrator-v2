@@ -304,8 +304,13 @@ below). Revisit the decision if that recurs. Until then, treat
 an HTTP one:
 
 - Shared native-agent code (`native-agent-service-*.ts`) does not branch on
-  `agent === "opencode"`. OpenCode-specific policy is reached through a
-  provider-neutral seam selected per platform.
+  `agent === "opencode"` or import `opencode-*` modules
+  (`agent-provider-boundaries.test.ts` enforces both). OpenCode-specific policy
+  is reached through a provider-neutral seam selected per platform, and the
+  service hands `createNativeAgentProvider` a neutral
+  `NativeAgentProviderEnvironment` (environment id, data directory, config
+  reader) from which `opencode-provider-environment.ts` derives OpenCode's
+  shell-change journals and model-provider allowlist.
 - The renderer does not talk to `opencode serve` and does not normalize
   OpenCode messages; it receives the same normalized projections and
   transcripts as every other platform.

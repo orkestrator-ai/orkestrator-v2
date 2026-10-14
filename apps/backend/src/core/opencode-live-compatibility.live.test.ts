@@ -1,25 +1,25 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { RESULT_SENTINEL } from "../../../../scripts/opencode-live-compatibility-probe";
+import { RESULT_SENTINEL } from "../../../../scripts/opencode-live-compatibility-probe.js";
 
 const liveTest = process.env.RUN_LIVE_OPENCODE_COMPATIBILITY === "1" ? test : test.skip;
 
 liveTest(
   "OpenCode CLI and the real v2 SDK complete a local server round trip",
   async () => {
-    const webManifest = JSON.parse(
+    const backendManifest = JSON.parse(
       await readFile(join(import.meta.dir, "..", "..", "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
-    const expectedVersion = webManifest.dependencies?.["@opencode-ai/sdk"];
+    const expectedVersion = backendManifest.dependencies?.["@opencode-ai/sdk"];
     expect(expectedVersion).toMatch(/^\d+\.\d+\.\d+$/);
     if (!expectedVersion) {
-      throw new Error("apps/web must pin @opencode-ai/sdk");
+      throw new Error("apps/backend must pin @opencode-ai/sdk");
     }
 
-    // The web test preload installs Happy DOM, whose browser fetch correctly
-    // rejects this cross-origin loopback request. Run the real CLI/SDK probe in
-    // a clean Bun process so it uses Bun's native server-side fetch instead.
+    // Run the probe exactly as its CLI entry point, in a clean Bun process: it
+    // owns `opencode serve` and the SIGTERM teardown that a test timeout relies
+    // on, and no test preload can reach its fetch or SDK client.
     const repoRoot = join(import.meta.dir, "..", "..", "..", "..");
     const probePath = join(repoRoot, "scripts", "opencode-live-compatibility-probe.ts");
     // A renamed probe would otherwise surface as an opaque non-zero exit.

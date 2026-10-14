@@ -286,7 +286,7 @@ run = ["mise run format:check", "mise run lint", "mise run typecheck"]
 description = "Run live OpenCode compatibility checks"
 env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
 run = [
-  "bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts",
+  "bun test --cwd apps/backend src/core/opencode-live-compatibility.live.test.ts",
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
 ]
 

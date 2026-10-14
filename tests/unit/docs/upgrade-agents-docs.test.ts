@@ -149,7 +149,8 @@ describe("agent upgrade runbook contracts", () => {
     // The Codex line was corrected while the line directly below it kept naming
     // a dependency the root manifest does not have.
     const opencodeSyncComment = dockerfile.match(/^#   OPENCODE_CLI_VERSION.*$/m)?.[0];
-    expect(opencodeSyncComment).toContain("apps/web/package.json");
+    // The backend is the only workspace that pins the SDK.
     expect(opencodeSyncComment).toContain("apps/backend/package.json");
+    expect(opencodeSyncComment).not.toContain("apps/web/package.json");
   });
 });

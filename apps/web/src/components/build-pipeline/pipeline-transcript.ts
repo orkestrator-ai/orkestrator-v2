@@ -25,7 +25,7 @@ import {
   normalizeClaudeMessagesForDisplay,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
-import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type {
   NativeAgentActivityPart,
   NativeAgentState,

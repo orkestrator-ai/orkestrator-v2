@@ -3,9 +3,9 @@ import type {
   ReviewModelOption,
   ReviewTabType,
 } from "@/components/review/ReviewLaunchDialog";
-import type { ClaudeModel } from "@/lib/claude-client";
+import type { ClaudeModel } from "@/lib/claude-types";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
-import { CODEX_MODELS } from "@/lib/codex-client";
+import { CODEX_MODELS } from "@/lib/codex-models";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";

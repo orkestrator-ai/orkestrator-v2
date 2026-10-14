@@ -63,7 +63,7 @@ import {
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
-import type { ClaudeEffortLevel } from "@/lib/claude-client";
+import type { ClaudeEffortLevel } from "@/lib/claude-types";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";

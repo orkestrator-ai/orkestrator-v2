@@ -6,8 +6,6 @@ import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
@@ -109,8 +107,6 @@ describe("DraggableTab title precedence", () => {
     cleanup();
     resetSortableMock();
     useSessionStore.setState({ sessions: new Map() });
-    useClaudeStore.setState({ sessions: new Map() });
-    useCodexStore.setState({ sessions: new Map() });
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -149,8 +145,10 @@ describe("DraggableTab title precedence", () => {
         ],
       ]),
     });
-    useClaudeStore.setState({
-      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never]]),
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
+      ]),
     });
 
     renderTab(tab, 2);
@@ -167,8 +165,10 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
 
-    useClaudeStore.setState({
-      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never]]),
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
+      ]),
     });
 
     renderTab(tab, 0);
@@ -186,8 +186,8 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
 
-    useCodexStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-fix"), { title: "Generated review title" } as never],
       ]),
     });
@@ -241,8 +241,8 @@ describe("DraggableTab title precedence", () => {
         ],
       ]),
     });
-    useClaudeStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-review"), { title: "Generated review title" } as never],
       ]),
     });
@@ -267,8 +267,8 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "PR",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useCodexStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-pr"), { title: "Prepare release pull request" } as never],
       ]),
     });
@@ -290,8 +290,8 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "PR",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useCodexStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-2", "tab-codex"), { title: "Wrong environment" } as never],
         [createSessionKey("env-1", "other-tab"), { title: "Wrong tab" } as never],
         [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
@@ -330,8 +330,8 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "Conflict",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useCodexStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
       ]),
     });
@@ -386,8 +386,8 @@ describe("DraggableTab title precedence", () => {
         ],
       ]),
     });
-    useCodexStore.setState({
-      sessions: new Map([
+    useNativeAgentProjectionStore.setState({
+      projections: new Map([
         [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
       ]),
     });
@@ -571,47 +571,6 @@ describe("DraggableTab title precedence", () => {
     expect(screen.queryByText("src/components/Foo/") === null).toBe(true);
   });
 
-  test("a Claude-native tab ignores a same-key Codex session title", () => {
-    // The ?? chain is projection ?? claude ?? codex, and each store selector is scoped
-    // to its own tab type. A stale Codex entry under the same key must never
-    // win over — or stand in for — the Claude title on a Claude tab.
-    const tab: TabInfo = {
-      id: "tab-a",
-      type: "agent-native",
-      displayTitle: "Review",
-      nativeAgentData: { platform: "claude", environmentId: "env-1" },
-    };
-    useClaudeStore.setState({
-      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Claude title" } as never]]),
-    });
-    useCodexStore.setState({
-      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never]]),
-    });
-
-    renderTab(tab, 0);
-
-    expect(screen.getByText("Claude 1 · Claude title")).toBeDefined();
-    expect(screen.queryByText("Codex title") === null).toBe(true);
-  });
-
-  test("a Claude-native tab with only a Codex title falls back to displayTitle", () => {
-    // Proves the Codex selector is type-scoped rather than key-scoped: with no
-    // Claude entry the chain yields undefined, not the Codex title.
-    const tab: TabInfo = {
-      id: "tab-a",
-      type: "agent-native",
-      displayTitle: "Review",
-      nativeAgentData: { platform: "claude", environmentId: "env-1" },
-    };
-    useCodexStore.setState({
-      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never]]),
-    });
-
-    renderTab(tab, 0);
-
-    expect(screen.getByText("Claude 1 · Review")).toBeDefined();
-  });
-
   test("build tabs use the pipeline task title", () => {
     seedPipeline("pipeline-1", "Add search");
 
@@ -689,8 +648,6 @@ describe("DraggableTab icons", () => {
     cleanup();
     resetSortableMock();
     useSessionStore.setState({ sessions: new Map() });
-    useClaudeStore.setState({ sessions: new Map() });
-    useCodexStore.setState({ sessions: new Map() });
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -819,8 +776,6 @@ describe("DraggableTab tooltip and context menu structure", () => {
     cleanup();
     resetSortableMock();
     useSessionStore.setState({ sessions: new Map() });
-    useClaudeStore.setState({ sessions: new Map() });
-    useCodexStore.setState({ sessions: new Map() });
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });

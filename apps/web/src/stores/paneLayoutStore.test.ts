@@ -7,8 +7,6 @@ const detachTerminal = mock(async (_sessionId: string) => {});
 const updateSessionStatus = mock(async (_sessionId: string, _status: string) => ({}));
 const teardownTab = mock(async (_input: unknown) => ({ completed: true }));
 const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => {});
-const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
-const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteAgentHandoff = mock(async (_handoffId: string, _environmentId: string) => true);
 const getAgentHandoff = mock(async (_handoffId: string) => null);
 const pruneAgentHandoffs = mock(
@@ -22,10 +20,6 @@ const realBackend = await import("@/lib/backend");
 const realBackendSnapshot = { ...realBackend };
 const realClaudeTmuxClient = await import("@/lib/claude-tmux-client");
 const realClaudeTmuxClientSnapshot = { ...realClaudeTmuxClient };
-const realClaudeClient = await import("@/lib/claude-client");
-const realClaudeClientSnapshot = { ...realClaudeClient };
-const realCodexClient = await import("@/lib/codex-client");
-const realCodexClientSnapshot = { ...realCodexClient };
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -55,21 +49,9 @@ mock.module("@/lib/claude-tmux-client", () => ({
   stopSession: stopTmuxSession,
 }));
 
-mock.module("@/lib/claude-client", () => ({
-  ...realClaudeClientSnapshot,
-  deleteSession: deleteClaudeSession,
-}));
-
-mock.module("@/lib/codex-client", () => ({
-  ...realCodexClientSnapshot,
-  deleteSession: deleteCodexSession,
-}));
-
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/claude-tmux-client", () => realClaudeTmuxClientSnapshot);
-  mock.module("@/lib/claude-client", () => realClaudeClientSnapshot);
-  mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
 });
 
 afterEach(() => {
@@ -85,9 +67,8 @@ const { loadAgentHandoff, rememberAgentHandoff, resetAgentHandoffCache } =
   await import("@/lib/agent-handoff");
 const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } =
   await import("./terminalSessionStore");
-const { useClaudeStore } = await import("./claudeStore");
-const { useCodexStore } = await import("./codexStore");
 const { useEnvironmentStore } = await import("./environmentStore");
+const { useNativeComposeStore } = await import("./nativeComposeStore");
 const { createTerminalKey, useTerminalPortalStore } = await import("./terminalPortalStore");
 const { createClaudeTmuxStateKey, useClaudeTmuxStore } = await import("./claudeTmuxStore");
 
@@ -101,16 +82,6 @@ function resetStores() {
     sessions: new Map(),
     composeDraftText: new Map(),
     composeDraftImages: new Map(),
-  });
-  useClaudeStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    messageQueue: new Map(),
-  });
-  useCodexStore.setState({
-    clients: new Map(),
-    sessions: new Map(),
-    messageQueue: new Map(),
   });
   useEnvironmentStore.setState({});
   useTerminalPortalStore.setState({
@@ -133,8 +104,6 @@ function resetStores() {
   teardownTab.mockClear();
   teardownTab.mockImplementation(async () => ({ completed: true }));
   stopTmuxSession.mockClear();
-  deleteClaudeSession.mockClear();
-  deleteCodexSession.mockClear();
   deleteAgentHandoff.mockClear();
   getAgentHandoff.mockClear();
   pruneAgentHandoffs.mockClear();
@@ -447,47 +416,27 @@ describe("paneLayoutStore tab cleanup", () => {
       ]),
     });
 
-    const claudeKey = createSessionKey("env-native", "claude-tab");
-    useClaudeStore.getState().setClient("env-native", {} as any);
-    useClaudeStore.getState().setSession(claudeKey, {
-      sessionId: "claude-session",
-      messages: [],
-      isLoading: true,
-    });
-
-    const codexKey = createSessionKey("env-native", "codex-tab");
-    useCodexStore.getState().setClient("env-native", {} as any);
-    useCodexStore.getState().setSession(codexKey, {
-      sessionId: "codex-session",
-      messages: [],
-      isLoading: true,
-    });
-
     usePaneLayoutStore.getState().removeTab("default", "claude-tab");
     usePaneLayoutStore.getState().removeTab("default", "codex-tab");
     usePaneLayoutStore.getState().removeTab("default", "opencode-tab");
 
+    // None of these keeps renderer session state; the backend resolves the
+    // provider session from its own persisted tab mapping.
     expect(teardownTab).toHaveBeenCalledWith({
       environmentId: "env-native",
       tabId: "claude-tab",
       kind: "claude-native",
-      sessionId: "claude-session",
     });
     expect(teardownTab).toHaveBeenCalledWith({
       environmentId: "env-native",
       tabId: "codex-tab",
       kind: "codex-native",
-      sessionId: "codex-session",
     });
-    // OpenCode has no renderer session state; the backend resolves the provider
-    // session from its own persisted tab mapping.
     expect(teardownTab).toHaveBeenCalledWith({
       environmentId: "env-native",
       tabId: "opencode-tab",
       kind: "opencode-native",
     });
-    expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
-    expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
   });
 
   test("closing a Pi native tab delegates Pi cleanup to the backend", () => {
@@ -543,14 +492,6 @@ describe("paneLayoutStore tab cleanup", () => {
     });
     const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-reset");
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-reset" });
-    const codexKey = createSessionKey("env-reset", "codex-tab");
-    useCodexStore.getState().setClient("env-reset", {} as any);
-    useCodexStore.getState().setSession(codexKey, {
-      sessionId: "codex-session",
-      messages: [],
-      isLoading: false,
-    });
-
     usePaneLayoutStore.getState().reset("env-reset");
 
     expect(teardownTab).toHaveBeenCalledTimes(3);
@@ -566,13 +507,11 @@ describe("paneLayoutStore tab cleanup", () => {
       tabId: "tmux-tab",
       kind: "claude-tmux",
     });
-    expect(teardownTab).toHaveBeenCalledWith(
-      expect.objectContaining({
-        environmentId: "env-reset",
-        tabId: "codex-tab",
-        sessionId: "codex-session",
-      }),
-    );
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-reset",
+      tabId: "codex-tab",
+      kind: "codex-native",
+    });
     expect(destroy).toHaveBeenCalledWith("browser-tab");
     expect(usePaneLayoutStore.getState().getAllTabs("env-reset")).toEqual([]);
   });
@@ -705,22 +644,6 @@ describe("paneLayoutStore tab cleanup", () => {
       persistentSessionId: "persistent-cleanup-errors",
     });
 
-    const claudeKey = createSessionKey("env-cleanup-errors", "claude-tab");
-    useClaudeStore.getState().setClient("env-cleanup-errors", {} as any);
-    useClaudeStore.getState().setSession(claudeKey, {
-      sessionId: "claude-cleanup-errors",
-      messages: [],
-      isLoading: true,
-    });
-
-    const codexKey = createSessionKey("env-cleanup-errors", "codex-tab");
-    useCodexStore.getState().setClient("env-cleanup-errors", {} as any);
-    useCodexStore.getState().setSession(codexKey, {
-      sessionId: "codex-cleanup-errors",
-      messages: [],
-      isLoading: true,
-    });
-
     teardownTab.mockRejectedValue(new Error("backend teardown unavailable"));
 
     const store = usePaneLayoutStore.getState();
@@ -731,16 +654,13 @@ describe("paneLayoutStore tab cleanup", () => {
 
     expect(usePaneLayoutStore.getState().getAllTabs("env-cleanup-errors")).toEqual([]);
     expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
-    expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
-    expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
     expect(consoleDebugSpy).toHaveBeenCalled();
   });
 
-  test("closing a native tab drops its drafts and selections, not just its session", () => {
+  test("closing a native tab drops its compose draft", () => {
     /**
-     * Cleanup used to call `clearQueue` + `setSession(null)` only, leaving the
-     * draft, model and attachments behind. Tab ids are UUIDs, so those entries
-     * were never reclaimed for the life of the process.
+     * Tab ids are UUIDs, so a draft left behind by a closed tab would never be
+     * reclaimed for the life of the process.
      */
     const tabs = [
       {
@@ -763,20 +683,18 @@ describe("paneLayoutStore tab cleanup", () => {
     const claudeKey = createSessionKey("env-leak", "claude-tab");
     const codexKey = createSessionKey("env-leak", "codex-tab");
 
-    useClaudeStore.getState().setDraftText(claudeKey, "claude draft");
-    useClaudeStore.getState().setSelectedModel(claudeKey, "opus");
-    useCodexStore.getState().setDraftText(codexKey, "codex draft");
-    useCodexStore.getState().setSelectedModel(codexKey, "gpt-5");
+    useNativeComposeStore.getState().updateDraft(claudeKey, { text: "claude draft" });
+    useNativeComposeStore.getState().updateDraft(codexKey, { text: "codex draft" });
+    expect(useNativeComposeStore.getState().drafts.has(claudeKey)).toBe(true);
+    expect(useNativeComposeStore.getState().drafts.has(codexKey)).toBe(true);
 
     const store = usePaneLayoutStore.getState();
     for (const tab of tabs) {
       store.removeTab("default", tab.id, "env-leak");
     }
 
-    expect(useClaudeStore.getState().getDraftText(claudeKey)).toBe("");
-    expect(useClaudeStore.getState().selectedModel.has(claudeKey)).toBe(false);
-    expect(useCodexStore.getState().getDraftText(codexKey)).toBe("");
-    expect(useCodexStore.getState().selectedModel.has(codexKey)).toBe(false);
+    expect(useNativeComposeStore.getState().drafts.has(claudeKey)).toBe(false);
+    expect(useNativeComposeStore.getState().drafts.has(codexKey)).toBe(false);
   });
 
   test("clears setup state and closes a child pane when its last tab is removed", () => {
@@ -1132,25 +1050,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
       ]),
     });
 
-    const seedNativeSession = (
-      tabId: string,
-      sessionId: string,
-      store: typeof useClaudeStore | typeof useCodexStore,
-    ) => {
-      const sessionKey = createSessionKey(environmentId, tabId);
-      store.getState().setClient(environmentId, {} as never);
-      store.getState().setSession(sessionKey, {
-        sessionId,
-        messages: [],
-        isLoading: true,
-      });
-      store.getState().setDraftText(sessionKey, "discard me");
-      store.getState().setSelectedModel(sessionKey, "model");
-      return sessionKey;
-    };
-    const claudeKey = seedNativeSession("removed-claude", "claude-session", useClaudeStore);
-    const codexKey = seedNativeSession("removed-codex", "codex-session", useCodexStore);
-
     const scopedTmuxKey = createClaudeTmuxStateKey(environmentId, "removed-tmux");
     const tmuxStore = useClaudeTmuxStore.getState();
     tmuxStore.setRunning(scopedTmuxKey, true, {
@@ -1192,10 +1091,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
       true,
     );
     expect(destroy).toHaveBeenCalledWith("removed-browser");
-    expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
-    expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
-    expect(useClaudeStore.getState().getDraftText(claudeKey)).toBe("");
-    expect(useCodexStore.getState().getDraftText(codexKey)).toBe("");
     expect(useClaudeTmuxStore.getState().getTab(scopedTmuxKey).running).toBe(false);
     expect(useClaudeTmuxStore.getState().getDraftText(scopedTmuxKey)).toBe("");
     expect(useClaudeTmuxStore.getState().getTab("removed-tmux").running).toBe(false);
@@ -1209,8 +1104,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
       }),
     );
     expect(stopTmuxSession).not.toHaveBeenCalled();
-    expect(deleteClaudeSession).not.toHaveBeenCalled();
-    expect(deleteCodexSession).not.toHaveBeenCalled();
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
   });
 

@@ -7,7 +7,6 @@ import * as realNativeMessage from "@/components/chat/NativeMessage";
 import * as realHooks from "@/hooks";
 import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
-import * as realCodexClient from "@/lib/codex-client";
 import * as realBackend from "@/lib/backend";
 import {
   stripFeaturePlannerStateBlocks,
@@ -20,7 +19,6 @@ import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores/projectStore";
 import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/lib/backend";
-import type { CodexClient, CodexMessage } from "@/lib/codex-client";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastWarning } from "../../mocks/sonner";
@@ -31,7 +29,6 @@ const realNativeMessageSnapshot = { ...realNativeMessage };
 const realHooksSnapshot = { ...realHooks };
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
-const realCodexClientSnapshot = { ...realCodexClient };
 const realBackendSnapshot = { ...realBackend };
 const defaultConfigSnapshot = structuredClone(useConfigStore.getState().config);
 
@@ -84,15 +81,6 @@ const retryPlanningMock = mock(
 const cancelPlanningMock = mock(async (_featureId: string) => true);
 const createEnvironmentMock = mock(async () => makeEnvironment());
 const startEnvironmentMock = mock(async () => undefined);
-const createClientMock = mock((baseUrl: string, authToken?: string): CodexClient => ({
-  baseUrl,
-  authToken,
-}));
-const checkHealthMock = mock(async () => true);
-const createSessionMock = mock(async () => ({ sessionId: "session-new" }));
-const getSessionStatusMock = mock(async () => ({ status: "idle" as const }));
-const getSessionMessagesMock = mock(async () => [] as CodexMessage[]);
-const sendPromptMock = mock(async () => true);
 const getEnvironmentMock = mock(async () => null as Environment | null);
 const updateEnvironmentAgentSettingsMock = mock(async (environmentId: string) =>
   makeEnvironment({ id: environmentId }),
@@ -228,15 +216,6 @@ mock.module("@/hooks/useEnvironments", () => ({
     startEnvironment: startEnvironmentMock,
   }),
 }));
-mock.module("@/lib/codex-client", () => ({
-  ...realCodexClientSnapshot,
-  checkHealth: checkHealthMock,
-  createClient: createClientMock,
-  createSession: createSessionMock,
-  getSessionStatus: getSessionStatusMock,
-  getSessionMessages: getSessionMessagesMock,
-  sendPrompt: sendPromptMock,
-}));
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getEnvironment: getEnvironmentMock,
@@ -259,7 +238,6 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useBuildPipeline", () => realUseBuildPipelineSnapshot);
   mock.module("@/hooks/useEnvironments", () => realUseEnvironmentsSnapshot);
-  mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
@@ -288,28 +266,6 @@ async function flushReconcileStart(): Promise<void> {
   await act(async () => {
     await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
   });
-}
-
-/**
- * Transcript reads recorded for one session id.
- *
- * `getSessionMessagesMock` is module level and live feature sends deliberately
- * survive unmounts (see AGENTS.md), so a bare `not.toHaveBeenCalled()` also sees
- * work leaked from earlier tests and fails at random under `--parallel`. Seeding
- * a unique `codexSessionId` and filtering on it keeps the "this conversation was
- * never hydrated" assertion exact without that coupling.
- */
-function messageReadsFor(sessionId: string): unknown[][] {
-  return getSessionMessagesMock.mock.calls.filter(
-    (call) => (call as unknown as unknown[])[1] === sessionId,
-  );
-}
-
-/** Status reads recorded for one session id. See {@link messageReadsFor}. */
-function statusReadsFor(sessionId: string): unknown[][] {
-  return getSessionStatusMock.mock.calls.filter(
-    (call) => (call as unknown as unknown[])[1] === sessionId,
-  );
 }
 
 function makeStory(overrides: Partial<FeatureStoryCard> = {}): FeatureStoryCard {
@@ -372,17 +328,6 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
     networkAccessMode: "restricted",
     order: 0,
     environmentType: "containerized",
-    ...overrides,
-  };
-}
-
-function makeCodexMessage(overrides: Partial<CodexMessage> = {}): CodexMessage {
-  return {
-    id: "codex-message-1",
-    role: "assistant",
-    content: "Codex response",
-    parts: [],
-    createdAt: NOW,
     ...overrides,
   };
 }
@@ -687,18 +632,6 @@ beforeEach(() => {
   createEnvironmentMock.mockImplementation(async () => makeEnvironment());
   startEnvironmentMock.mockClear();
   startEnvironmentMock.mockImplementation(async () => undefined);
-  createClientMock.mockClear();
-  createClientMock.mockImplementation((baseUrl, authToken) => ({ baseUrl, authToken }));
-  checkHealthMock.mockClear();
-  checkHealthMock.mockResolvedValue(true);
-  createSessionMock.mockClear();
-  createSessionMock.mockImplementation(async () => ({ sessionId: "session-new" }));
-  getSessionStatusMock.mockClear();
-  getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
-  getSessionMessagesMock.mockClear();
-  getSessionMessagesMock.mockImplementation(async () => []);
-  sendPromptMock.mockClear();
-  sendPromptMock.mockImplementation(async () => true);
   getEnvironmentMock.mockClear();
   getEnvironmentMock.mockImplementation(async () => null);
   updateEnvironmentAgentSettingsMock.mockClear();

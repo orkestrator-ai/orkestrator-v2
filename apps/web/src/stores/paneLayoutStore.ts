@@ -21,9 +21,7 @@ import {
   createSessionKey as createTerminalSessionKey,
 } from "./terminalSessionStore";
 import { useTerminalPortalStore } from "./terminalPortalStore";
-import { useClaudeStore } from "./claudeStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore";
-import { useCodexStore } from "./codexStore";
 import { useNativeComposeStore } from "./nativeComposeStore";
 import * as backend from "@/lib/backend";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
@@ -364,46 +362,19 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
   if (sessionData) sessionStore.removeSession(sessionKey);
 }
 
-function cleanupClaudeNativeTab(envId: string, tabId: string) {
-  const store = useClaudeStore.getState();
-  const sessionKey = createSessionKey(envId, tabId);
-  const session = store.sessions.get(sessionKey);
-  // Drops every session-keyed map for this tab, not just the queue and session:
-  // tab ids are UUIDs, so anything left behind is never reclaimed.
-  store.clearSession(sessionKey);
+/**
+ * Claude, Codex and OpenCode keep no renderer-side session state; the backend
+ * resolves the provider session from its own persisted tab mapping.
+ */
+function cleanupBackendNativeTab(
+  envId: string,
+  tabId: string,
+  kind: "claude-native" | "codex-native" | "opencode-native",
+  label: string,
+) {
   void backend
-    .teardownTab({
-      environmentId: envId,
-      tabId,
-      kind: "claude-native",
-      sessionId: session?.sessionId,
-    })
-    .catch((err) => reportNativeTabTeardownFailure(envId, "Claude", err));
-}
-
-function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
-  // OpenCode keeps no renderer-side session state; the backend resolves the
-  // provider session from its own persisted tab mapping.
-  void backend
-    .teardownTab({ environmentId: envId, tabId, kind: "opencode-native" })
-    .catch((err) => reportNativeTabTeardownFailure(envId, "OpenCode", err));
-}
-
-function cleanupCodexNativeTab(envId: string, tabId: string) {
-  const store = useCodexStore.getState();
-  const sessionKey = createSessionKey(envId, tabId);
-  const session = store.sessions.get(sessionKey);
-  // Drops every session-keyed map for this tab, not just the queue and session:
-  // tab ids are UUIDs, so anything left behind is never reclaimed.
-  store.clearSession(sessionKey);
-  void backend
-    .teardownTab({
-      environmentId: envId,
-      tabId,
-      kind: "codex-native",
-      sessionId: session?.sessionId,
-    })
-    .catch((err) => reportNativeTabTeardownFailure(envId, "Codex", err));
+    .teardownTab({ environmentId: envId, tabId, kind })
+    .catch((err) => reportNativeTabTeardownFailure(envId, label, err));
 }
 
 function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
@@ -446,9 +417,10 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   if (tab.type === "agent-native") {
     useNativeComposeStore.getState().clearDraft(createSessionKey(envId, tab.id));
     const platform = getNativeAgentData(tab)?.platform;
-    if (platform === "claude") cleanupClaudeNativeTab(envId, tab.id);
-    else if (platform === "opencode") cleanupOpenCodeNativeTab(envId, tab.id);
-    else if (platform === "codex") cleanupCodexNativeTab(envId, tab.id);
+    if (platform === "claude") cleanupBackendNativeTab(envId, tab.id, "claude-native", "Claude");
+    else if (platform === "opencode")
+      cleanupBackendNativeTab(envId, tab.id, "opencode-native", "OpenCode");
+    else if (platform === "codex") cleanupBackendNativeTab(envId, tab.id, "codex-native", "Codex");
     else if (platform === "cursor" || platform === "grok" || platform === "pi")
       cleanupSharedNativeTab(envId, tab);
     return;
@@ -482,13 +454,7 @@ function cleanupLocalTabResources(envId: string, containerId: string | null, tab
     return;
   }
 
-  const sessionKey = createSessionKey(envId, tab.id);
-  if (tab.type === "agent-native") {
-    const platform = getNativeAgentData(tab)?.platform;
-    if (platform === "claude") useClaudeStore.getState().clearSession(sessionKey);
-    else if (platform === "codex") useCodexStore.getState().clearSession(sessionKey);
-    return;
-  }
+  // Native agent tabs keep no renderer-owned session state to reclaim.
   if (tab.type === "claude-tmux") {
     const store = useClaudeTmuxStore.getState();
     store.resetTab(createClaudeTmuxStateKey(envId, tab.id));

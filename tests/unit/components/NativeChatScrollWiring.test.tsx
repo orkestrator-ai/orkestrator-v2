@@ -3,7 +3,6 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realHooks from "@/hooks";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useClaudeStore } from "@/stores/claudeStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
@@ -144,15 +143,6 @@ describe("native chat scroll wiring", () => {
       setupScriptsRunning: new Set(),
     });
 
-    useClaudeStore.setState({
-      clients: new Map(),
-      sessions: new Map(),
-      pendingQuestions: new Map(),
-      pendingPlanApprovals: new Map(),
-      messageQueue: new Map(),
-      draftText: new Map(),
-      attachments: new Map(),
-    });
     useClaudeTmuxStore.setState({
       tabs: new Map(),
       attachments: new Map(),

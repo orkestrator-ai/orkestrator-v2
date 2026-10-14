@@ -14,14 +14,14 @@ import type {
   TmuxSelectionPrompt,
 } from "@orkestrator/protocol/tmux-observation";
 import type { HookEventKind, TranscriptLine, TranscriptContent } from "@/lib/claude-tmux-client";
-import {
-  ERROR_MESSAGE_PREFIX,
-  type ClaudeEffortLevel,
-  type ClaudeMessage,
-  type ClaudeMessagePart,
-  type QuestionInfo,
-  type ToolDiffMetadata,
-} from "@/lib/claude-client";
+import type {
+  ClaudeEffortLevel,
+  ClaudeMessage,
+  ClaudeMessagePart,
+  QuestionInfo,
+  ToolDiffMetadata,
+} from "@/lib/claude-types";
+import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import type { FileMention } from "@/types";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import { filePathFromToolInput, toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";

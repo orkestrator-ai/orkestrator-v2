@@ -40,7 +40,7 @@
   rescans first, the explicit refresh or the watcher; neutering
   `refresh_environment_diff_stats` leaves it passing on the watcher alone. That
   is deliberate - `refresh` forcing a scan is isolated in
-  `tests/unit/backend/diff-stats-service.test.ts:458`, and the suppression
+  `apps/backend/tests/diff-stats-service.test.ts:458`, and the suppression
   behaviour above is covered at line 212 of the same file.
 - **Test budget:** the test now carries `ASYNC_TEST_BUDGET_MS`, like the other
   tests in the file that await the wait helper twice. Without it, two 3-second

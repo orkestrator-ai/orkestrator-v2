@@ -1,0 +1,359 @@
+import { describe, expect, mock, test } from "bun:test";
+import {
+  createOrkestratorElectronApi,
+  exposeActiveConnectionGateway,
+  type IpcRendererLike,
+} from "../electron/preload-api";
+
+function createIpcMock() {
+  const listeners = new Map<string, (event: unknown, name: string, payload: unknown) => void>();
+  const invoke = mock(async (channel: string, ...args: unknown[]) => ({ channel, args }));
+  const on = mock(
+    (channel: string, listener: (event: unknown, name: string, payload: unknown) => void) => {
+      listeners.set(channel, listener);
+    },
+  );
+  const ipc = { invoke, on } as IpcRendererLike;
+  return {
+    ipc,
+    invoke,
+    on,
+    emit(channel: string, name: string, payload: unknown) {
+      listeners.get(channel)?.({}, name, payload);
+    },
+  };
+}
+
+describe("preload API factory", () => {
+  test("exposes the active remote gateway from the synchronous bootstrap snapshot", () => {
+    const exposeInMainWorld = mock(() => undefined);
+    const sendSync = mock(() => ({
+      activeConnectionId: "remote-1",
+      connections: [
+        {
+          id: "local",
+          name: "Local",
+          address: null,
+          kind: "local",
+          active: false,
+          requiresToken: false,
+        },
+        {
+          id: "remote-1",
+          name: "Desk",
+          address: "https://desk.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    }));
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync })).toBe(true);
+    expect(sendSync).toHaveBeenCalledWith("orkestrator:connections:list-sync");
+    expect(exposeInMainWorld).toHaveBeenCalledWith("orkestratorGateway", {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://desk.example",
+    });
+  });
+
+  test("does not expose a gateway for Local or malformed bootstrap snapshots", () => {
+    const exposeInMainWorld = mock(() => undefined);
+    expect(
+      exposeActiveConnectionGateway(
+        { exposeInMainWorld },
+        {
+          sendSync: () => ({
+            activeConnectionId: "local",
+            connections: [
+              {
+                id: "local",
+                name: "Local",
+                address: null,
+                kind: "local",
+                active: true,
+                requiresToken: false,
+              },
+            ],
+          }),
+        },
+      ),
+    ).toBe(false);
+    expect(
+      exposeActiveConnectionGateway(
+        { exposeInMainWorld },
+        { sendSync: () => ({ activeConnectionId: "local" }) },
+      ),
+    ).toBe(false);
+    expect(exposeInMainWorld).not.toHaveBeenCalled();
+  });
+
+  test("routes backend commands through the invoke IPC channel", async () => {
+    const { ipc, invoke } = createIpcMock();
+    const api = createOrkestratorElectronApi(ipc);
+    expect(api.isolatedViewState).toBe(true);
+
+    await expect(api.invoke("get_projects")).resolves.toEqual({
+      channel: "orkestrator:invoke",
+      args: ["get_projects", {}],
+    });
+    await expect(api.invoke("get_environment", { environmentId: "env-1" })).resolves.toEqual({
+      channel: "orkestrator:invoke",
+      args: ["get_environment", { environmentId: "env-1" }],
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  test("subscribes and unsubscribes renderer event callbacks by event name", () => {
+    const { ipc, emit, on } = createIpcMock();
+    const api = createOrkestratorElectronApi(ipc);
+    const firstHandler = mock(() => undefined);
+    const secondHandler = mock(() => undefined);
+
+    const unlistenFirst = api.listen("environment-updated", firstHandler);
+    api.listen("other-event", secondHandler);
+
+    expect(on).toHaveBeenCalledWith("orkestrator:event", expect.any(Function));
+    emit("orkestrator:event", "environment-updated", { id: "env-1" });
+    emit("orkestrator:event", "other-event", { id: "other" });
+
+    expect(firstHandler).toHaveBeenCalledWith({ id: "env-1" });
+    expect(secondHandler).toHaveBeenCalledWith({ id: "other" });
+
+    unlistenFirst();
+    emit("orkestrator:event", "environment-updated", { id: "env-2" });
+    expect(firstHandler).toHaveBeenCalledTimes(1);
+  });
+
+  test("maps native utility APIs to their IPC channels", async () => {
+    const { ipc } = createIpcMock();
+    const api = createOrkestratorElectronApi(ipc);
+
+    await expect(api.clipboard.readText()).resolves.toEqual({
+      channel: "orkestrator:clipboard:read-text",
+      args: [],
+    });
+    await expect(api.clipboard.writeText("copy")).resolves.toEqual({
+      channel: "orkestrator:clipboard:write-text",
+      args: ["copy"],
+    });
+    await expect(api.clipboard.readImage()).resolves.toEqual({
+      channel: "orkestrator:clipboard:read-image",
+      args: [],
+    });
+    await expect(api.clipboard.writeImage("data:image/png;base64,abc")).resolves.toEqual({
+      channel: "orkestrator:clipboard:write-image",
+      args: ["data:image/png;base64,abc"],
+    });
+    await expect(api.shell.openExternal("https://example.com/docs")).resolves.toEqual({
+      channel: "orkestrator:shell:open-external",
+      args: ["https://example.com/docs"],
+    });
+    await expect(api.permissions.getMacOsStatus()).resolves.toEqual({
+      channel: "orkestrator:permissions:macos-status",
+      args: [],
+    });
+    await expect(api.permissions.openMacOsSettings("full-disk-access")).resolves.toEqual({
+      channel: "orkestrator:permissions:open-macos-settings",
+      args: ["full-disk-access"],
+    });
+    await expect(api.permissions.openMacOsSettings("photos")).resolves.toEqual({
+      channel: "orkestrator:permissions:open-macos-settings",
+      args: ["photos"],
+    });
+    await expect(api.permissions.openMacOsSettings("media-library")).resolves.toEqual({
+      channel: "orkestrator:permissions:open-macos-settings",
+      args: ["media-library"],
+    });
+    await expect(api.webClient.getStatus()).resolves.toEqual({
+      channel: "orkestrator:web-client:get-status",
+      args: [],
+    });
+    await expect(api.webClient.setEnabled(false)).resolves.toEqual({
+      channel: "orkestrator:web-client:set-enabled",
+      args: [false],
+    });
+    await expect(api.webClient.resetServe()).resolves.toEqual({
+      channel: "orkestrator:web-client:reset-serve",
+      args: [],
+    });
+    await expect(api.webClient.getTokenSettings()).resolves.toEqual({
+      channel: "orkestrator:web-client:get-token-settings",
+      args: [],
+    });
+    await expect(api.webClient.setToken("replacement-token-123456")).resolves.toEqual({
+      channel: "orkestrator:web-client:set-token",
+      args: ["replacement-token-123456"],
+    });
+    await expect(api.connections.list()).resolves.toEqual({
+      channel: "orkestrator:connections:list",
+      args: [],
+    });
+    await expect(api.connections.probe("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:probe",
+      args: ["remote-1"],
+    });
+    await expect(
+      api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" }),
+    ).resolves.toEqual({
+      channel: "orkestrator:connections:connect",
+      args: [{ address: "https://desk.example", token: "gateway-token-123456" }],
+    });
+    await expect(
+      api.connections.updateToken("remote-1", "replacement-token-123456"),
+    ).resolves.toEqual({
+      channel: "orkestrator:connections:update-token",
+      args: ["remote-1", "replacement-token-123456"],
+    });
+    await expect(api.connections.rename("remote-1", "Studio Mac")).resolves.toEqual({
+      channel: "orkestrator:connections:rename",
+      args: ["remote-1", "Studio Mac"],
+    });
+    await expect(api.connections.use("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:use",
+      args: ["remote-1"],
+    });
+    await expect(api.connections.forget("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:forget",
+      args: ["remote-1"],
+    });
+    await expect(api.connections.openWindow("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:open-window",
+      args: ["remote-1"],
+    });
+    await expect(api.process.exit(7)).resolves.toEqual({
+      channel: "orkestrator:process:exit",
+      args: [7],
+    });
+    await expect(api.process.restart()).resolves.toEqual({
+      channel: "orkestrator:process:restart",
+      args: [],
+    });
+    await expect(api.window.startDragging()).resolves.toEqual({
+      channel: "orkestrator:window:start-dragging",
+      args: [],
+    });
+    await expect(api.window.setZoomFactor(1.5)).resolves.toEqual({
+      channel: "orkestrator:window:set-zoom-factor",
+      args: [1.5],
+    });
+    const bounds = { x: 10, y: 20, width: 640, height: 480 };
+    await expect(
+      api.browserPreview.attach({
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        bounds,
+        visible: true,
+      }),
+    ).resolves.toEqual({
+      channel: "orkestrator:browser-preview:attach",
+      args: [{ tabId: "browser-1", url: "http://localhost:3000/", bounds, visible: true }],
+    });
+    await expect(api.browserPreview.setBounds("browser-1", bounds)).resolves.toEqual({
+      channel: "orkestrator:browser-preview:set-bounds",
+      args: ["browser-1", bounds],
+    });
+    await expect(api.browserPreview.setVisible("browser-1", false)).resolves.toEqual({
+      channel: "orkestrator:browser-preview:set-visible",
+      args: ["browser-1", false],
+    });
+    await expect(
+      api.browserPreview.navigate("browser-1", "http://localhost:4000/"),
+    ).resolves.toEqual({
+      channel: "orkestrator:browser-preview:navigate",
+      args: ["browser-1", "http://localhost:4000/"],
+    });
+    await expect(api.browserPreview.goBack("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:go-back",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.goForward("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:go-forward",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.reload("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:reload",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.openDevTools("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:open-devtools",
+      args: ["browser-1"],
+    });
+    expect("startAnnotation" in api.browserPreview).toBe(false);
+    expect("getAnnotationStatus" in api.browserPreview).toBe(false);
+    expect("cancelAnnotation" in api.browserPreview).toBe(false);
+    const capture = api.browserPreview.capture;
+    expect(Object.keys(capture).sort()).toEqual(
+      [
+        "acknowledgePendingCapture",
+        "cancelCapture",
+        "captureResponsiveSet",
+        "clearPins",
+        "discardPendingCapture",
+        "dismissExpiredCaptureNotices",
+        "getCaptureCapabilities",
+        "getCaptureStatus",
+        "getPinResults",
+        "listExpiredCaptureNotices",
+        "listPendingCaptures",
+        "readPendingCapture",
+        "recordPendingCaptureReceipt",
+        "replacePendingCaptureImage",
+        "showOnPage",
+        "showPins",
+        "startCapture",
+      ].sort(),
+    );
+    const captureId = "capture-0f8fad5b-d9cb-469f-a165-70867728950e";
+    const ack = { captureId, annotationId: "annotation-1", backendCaptureId: "capture-b1" };
+    const pins = { tabId: "browser-1", pins: [] };
+    const start = { tabId: "browser-1", mode: "element" as const, environmentId: "env-1" };
+    const showOnPage = {
+      tabId: "browser-1",
+      pin: {
+        annotationId: "annotation-1",
+        number: 1,
+        route: "/",
+        target: { kind: "page" as const, label: "Whole page" },
+      },
+    };
+    const responsive = { tabId: "browser-1", environmentId: "env-1", widths: [390, 1280] };
+    const calls: Array<[Promise<unknown>, string, unknown[]]> = [
+      [capture.startCapture(start), "capture-start", [start]],
+      [capture.getCaptureStatus("browser-1"), "capture-status", ["browser-1"]],
+      [capture.cancelCapture("browser-1"), "capture-cancel", ["browser-1"]],
+      [capture.listPendingCaptures(), "capture-pending-list", []],
+      [capture.readPendingCapture(captureId), "capture-pending-read", [captureId]],
+      [
+        capture.replacePendingCaptureImage(captureId, { imageDataUrl: null, manualRegions: 1 }),
+        "capture-pending-replace-image",
+        [captureId, { imageDataUrl: null, manualRegions: 1 }],
+      ],
+      [capture.acknowledgePendingCapture(ack), "capture-pending-ack", [ack]],
+      [capture.discardPendingCapture(captureId), "capture-pending-discard", [captureId]],
+      [capture.showPins(pins), "capture-pins-show", [pins]],
+      [capture.clearPins("browser-1"), "capture-pins-clear", ["browser-1"]],
+      [capture.getCaptureCapabilities!(), "capture-capabilities", []],
+      [capture.recordPendingCaptureReceipt!(ack), "capture-pending-receipt", [ack]],
+      [capture.listExpiredCaptureNotices!(), "capture-expired-list", []],
+      [
+        capture.dismissExpiredCaptureNotices!([captureId]),
+        "capture-expired-dismiss",
+        [[captureId]],
+      ],
+      [capture.getPinResults!("browser-1"), "capture-pins-results", ["browser-1"]],
+      [capture.showOnPage!(showOnPage), "capture-show-on-page", [showOnPage]],
+      [capture.captureResponsiveSet!(responsive), "capture-responsive-set", [responsive]],
+    ];
+    for (const [call, channel, args] of calls) {
+      await expect(call).resolves.toEqual({
+        channel: `orkestrator:browser-preview:${channel}`,
+        args,
+      });
+    }
+    await expect(api.browserPreview.destroy("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:destroy",
+      args: ["browser-1"],
+    });
+  });
+});

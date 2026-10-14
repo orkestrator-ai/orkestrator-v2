@@ -19,8 +19,8 @@ change after this plan was written.
 | Layer | Existing suite/area to extend | New behaviors |
 | --- | --- | --- |
 | Protocol | `tests/unit/protocol-browser-preview.test.ts`, protocol package tests | New records, limits, provenance, target unions, transition validation. |
-| Inspector | `tests/unit/electron/browser-preview-annotation-script.test.ts` | Selection-only runtime, traversal bounds, injection resistance, target modes. |
-| Native capture | `tests/unit/electron/browser-preview-manager.test.ts`, IPC/adapter coverage | Coherent capture, pending spool, acknowledgement, restart, scaling. |
+| Inspector | `apps/desktop/tests/browser-preview-annotation-script.test.ts` | Selection-only runtime, traversal bounds, injection resistance, target modes. |
+| Native capture | `apps/desktop/tests/browser-preview-manager.test.ts`, IPC/adapter coverage | Coherent capture, pending spool, acknowledgement, restart, scaling. |
 | Browser UI | `apps/web/src/components/browser/BrowserTab.test.tsx`, new annotation components | Trusted editor, panels, destination, conflict/error states, keyboard flow. |
 | Legacy persistence | `apps/web/src/lib/draft-persistence.test.ts`, compose store tests | Migration, dirty-draft reconciliation, unchanged transcript annotations. |
 | Prompt preparation | Browser/transcript annotation tests plus new backend brief tests | Trusted intent, inert evidence, deterministic byte budgets, immutable revisions. |

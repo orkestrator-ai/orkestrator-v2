@@ -28,8 +28,8 @@ connection scheduling can consume its entire authenticated lifetime.
 
 Read:
 
-- [gateway-auth.test.ts](../../../../tests/unit/electron/gateway-auth.test.ts)
-- [gateway-test-harness.ts](../../../../tests/unit/electron/gateway-test-harness.ts)
+- [gateway-auth.test.ts](../../../../apps/backend/tests/gateway-auth.test.ts)
+- [gateway-test-harness.ts](../../../../apps/backend/tests/gateway-test-harness.ts)
 - [gateway-handlers.ts](../../../../apps/backend/src/gateway-handlers.ts)
 - [gateway-auth.ts](../../../../apps/backend/src/gateway-auth.ts)
 - [flake index](../../../tests/flaky-tests/0000-index.md)
@@ -75,7 +75,7 @@ callback without brittle interception; its runtime effect needs separate review.
 
 ```bash
 mise run test:logged -- --name streamlining-gateway-auth -- \
-  bun test ./tests/unit/electron/gateway-auth.test.ts \
+  bun test ./apps/backend/tests/gateway-auth.test.ts \
   --parallel=1 --only-failures
 ```
 

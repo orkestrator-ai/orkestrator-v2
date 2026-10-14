@@ -129,7 +129,7 @@ limits are enforced independently and missing diagnostic output is explicit.
   SIGHUP, drains to EOF); all six bridge/server launches use it where present.
   New runtimes get Docker's `local` log driver (10 MiB × 3) when the daemon
   lists it; existing containers change only on rebuild.
-- **Tests.** `tests/unit/electron/container-log-service.test.ts` (shared
+- **Tests.** `apps/backend/tests/container-log-service.test.ts` (shared
   follower and grace stop, split multibyte and huge lines, ring gaps and foreign
   source ids, lease expiry and follower cap, ended source and shutdown, launch
   shell, writer rotation/modes/line cut); `container-log-bounds.test.ts`

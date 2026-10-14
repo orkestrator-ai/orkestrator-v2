@@ -5,7 +5,7 @@
 - **Date observed:** 2026-09-19
 - **Test:** `pinned desktop toolchain cache > reports executable probe spawn,
   nonzero-exit, and timeout failures`
-  (`tests/unit/electron/toolchain-manager.test.ts:1117`)
+  (`packages/toolchain/src/manager.test.ts:1117`)
 - **Original command:** `mise run test`
 - **Worker configuration:** root group under the host-capacity runner with up to
   four Bun workers while workspace and bridge groups also ran.
@@ -14,7 +14,7 @@
 - **Suite counts:** root group: 4,316 total, 4,307 passed, 2 skipped, 7 failed,
   4 between-tests errors.
 - **Isolated rerun:** `mise run test:logged -- --name toolchain-manager -- bun
-  test ./tests/unit/electron/toolchain-manager.test.ts --parallel=1
+  test ./packages/toolchain/src/manager.test.ts --parallel=1
   --only-failures` → passed in 2.9 s.
 - **Hypothesis:** under aggregate load, the executable that immediately exits 7
   was not observed before its five-second process deadline, so the timeout path

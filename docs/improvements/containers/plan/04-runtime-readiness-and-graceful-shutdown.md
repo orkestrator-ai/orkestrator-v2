@@ -152,7 +152,7 @@ ambiguous setup is recoverable and explicit stop has a measured bounded outcome.
   entrypoint's `sudo`) and its own descendants, and signals every other process;
   per-bridge stop commands keep their specific process patterns, so no pidfile
   registry was added.
-- **Tests.** `tests/unit/electron/container-readiness.test.ts` (probe parsing,
+- **Tests.** `apps/backend/tests/container-readiness.test.ts` (probe parsing,
   stale-record rejection, failed/exited/timeout typing, no gating for legacy or
   unanswered probes, drain fence and parsing, setup currency).
   Live (`container-live-qualification.test.ts`, real Engine 29.7.2): restart

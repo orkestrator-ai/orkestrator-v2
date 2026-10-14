@@ -314,7 +314,7 @@ What affects us:
   `ClipboardLike` type in the same file, and `writeClipboardText` in
   `apps/desktop/electron/main.ts`, whose returned Promise is not awaited —
   typecheck will catch `ipc.ts` but **not** the un-awaited calls. Update the
-  mocks in `tests/unit/electron/main-ipc.test.ts`. Renderers already go through
+  mocks in `apps/desktop/tests/main-ipc.test.ts`. Renderers already go through
   IPC (`preload-api.ts`), so the removal of `clipboard` from renderers does not
   affect us.
 - **Electron 44 drops macOS 12.** The plist floor is macOS 13. The release

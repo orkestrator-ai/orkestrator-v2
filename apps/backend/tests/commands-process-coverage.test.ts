@@ -1,0 +1,1932 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import type { AddressInfo } from "node:net";
+import type { CommandContext } from "../src/core/commands";
+import type { Environment } from "../src/core/models";
+import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
+import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
+
+const { createCommandRegistry, __testing } = await import("../src/core/commands");
+
+type Handler = NonNullable<
+  ReturnType<typeof createCommandRegistry>["get"] extends (name: string) => infer T ? T : never
+>;
+
+const originalPath = process.env.PATH;
+const originalHome = process.env.HOME;
+const originalHomedir = os.homedir;
+const originalDockerLog = process.env.FAKE_DOCKER_LOG;
+const originalLauncherLog = process.env.FAKE_LAUNCHER_LOG;
+const originalLauncherFailExecutable = process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+const originalLauncherFailSecondaryExecutable = process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
+const originalLauncherExitCode = process.env.FAKE_LAUNCHER_EXIT_CODE;
+const originalDockerStatus = process.env.FAKE_DOCKER_STATUS;
+const originalDockerPort = process.env.FAKE_DOCKER_PORT;
+const originalDockerFailInfo = process.env.FAKE_DOCKER_FAIL_INFO;
+const originalDockerFailImage = process.env.FAKE_DOCKER_FAIL_IMAGE;
+const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
+const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
+const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
+const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+const originalOpenCodeGitHubPluginFingerprint = process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
+const originalClaudeGitHubEnvironmentFingerprint = process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
+const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
+const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+const originalDockerDesktopGateway = process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
+const originalDockerExplicitHostEntry = process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
+const originalDockerGateway = process.env.FAKE_DOCKER_GATEWAY;
+const originalClaudeAgentToolsFingerprint = process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+const originalCodexAgentToolsFingerprint = process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
+let root = "";
+let binDir = "";
+let commandLog = "";
+let launcherLog = "";
+let fakeHome = "";
+
+const PROCESS_TEST_BUDGET_MS = 30_000;
+
+const DOCKER_SCRIPT = `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$FAKE_DOCKER_LOG"
+
+if [ "$1" = "info" ]; then
+  [ -n "\${FAKE_DOCKER_FAIL_INFO:-}" ] && { echo "$FAKE_DOCKER_FAIL_INFO" >&2; exit 19; }
+  exit 0
+fi
+if [ "$1" = "version" ]; then
+  printf '26.1.4\n'
+  exit 0
+fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  [ "\${FAKE_DOCKER_FAIL_IMAGE:-}" = "1" ] && { echo "image missing" >&2; exit 20; }
+  printf '[]\n'
+  exit 0
+fi
+if [ "$1" = "create" ]; then
+  printf 'container-created-123\n'
+  exit 0
+fi
+if [ "$1" = "inspect" ] && [ "$2" = "-f" ]; then
+  case "$3" in
+    *'index .Config.Labels "orkestrator-owner"'*)
+      printf '%s\t%s\torkestrator-v2\t%s\n' "\${FAKE_DOCKER_OWNER:-}" "\${FAKE_DOCKER_STATUS:-running}" "$4"
+      ;;
+    *"json .Config.Labels"*)
+      case "$4" in
+        container-old) printf 'exited\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_OWNER:-}" ;;
+        legacy-old) printf 'exited\t{"app":"orkestrator-v2"}\n' ;;
+        container-a) printf '%s\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_STATUS:-running}" "\${FAKE_DOCKER_OWNER:-}" ;;
+        *) echo "Error: No such object: $4" >&2; exit 1 ;;
+      esac
+      ;;
+    *) printf '%s\n' "\${FAKE_DOCKER_STATUS:-running}" ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "inspect" ] && [ "$2" = "--format" ]; then
+  printf '%s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}"
+  exit 0
+fi
+if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
+  case " $* " in
+    *" -q "*) printf 'container-a\ncontainer-b\n' ;;
+    *"{{json .}}"*)
+      printf '{"ID":"container-old","Names":"old","State":"exited","Size":"1.25GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=%s"}\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf '{"ID":"legacy-old","Names":"legacy","State":"exited","Size":"512MB (virtual 3GB)","Labels":"app=orkestrator-v2"}\n'
+      printf '{"ID":"container-existing","Names":"assigned","State":"exited","Size":"9GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=%s"}\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf '{"ID":"container-foreign","Names":"foreign","State":"exited","Size":"1GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=other-registry"}\n'
+      ;;
+    *)
+      printf 'container-a\talpha\tapp=orkestrator-v2,orkestrator-owner=%s\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf 'container-b\tbeta\tapp=orkestrator-v2\n'
+      printf 'container-c\tgamma\tapp=orkestrator-v2,orkestrator-owner=other-registry\n'
+      ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "ps" ] && [ "$2" = "-q" ]; then
+  printf 'container-a\n'
+  exit 0
+fi
+if [ "$1" = "images" ] && [ "$2" = "-q" ]; then
+  printf 'image-a\nimage-a\nimage-b\n'
+  exit 0
+fi
+if [ "$1" = "port" ]; then
+  [ "\${FAKE_DOCKER_NO_PORT:-}" = "1" ] && exit 1
+  printf '0.0.0.0:%s\n' "\${FAKE_DOCKER_PORT:-43123}"
+  exit 0
+fi
+if [ "$1" = "logs" ]; then
+  case " $* " in
+    *" -f "*) printf 'stream stdout\n'; printf 'stream stderr\n' >&2 ;;
+    *) printf 'historical container log\n' ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "container" ] && [ "$2" = "prune" ]; then
+  case "$*" in
+    *"label!=orkestrator-owner"*)
+      printf 'Deleted Containers:\nlegacy-old\nTotal reclaimed space: 512MB\n'
+      ;;
+    *)
+      printf 'Deleted Containers:\ncontainer-old\nTotal reclaimed space: 1.25GB\n'
+      ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *"getent hosts gateway.docker.internal"*)
+      [ "\${FAKE_DOCKER_DESKTOP_GATEWAY:-}" = "1" ] && printf '192.168.65.1 gateway.docker.internal\n'
+      ;;
+    *"getent hosts host.docker.internal"*)
+      if [ -n "\${FAKE_DOCKER_HOSTS_OUTPUT:-}" ]; then
+        printf '%s' "\${FAKE_DOCKER_HOSTS_OUTPUT}"
+      elif [ "\${FAKE_DOCKER_HOST_RESOLVES:-}" = "1" ]; then
+        printf '%s %s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}" host.docker.internal
+      fi
+      ;;
+    *"grep -E"*"host\\.docker\\.internal"*)
+      [ -n "\${FAKE_DOCKER_EXPLICIT_HOST_ENTRY:-}" ] && printf '%s\n' "\${FAKE_DOCKER_EXPLICIT_HOST_ENTRY}"
+      ;;
+    *claude-agent-tools-fingerprint*) printf '%s' "\${FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT:-}" ;;
+    *codex-agent-tools-fingerprint*) printf '%s' "\${FAKE_CODEX_AGENT_TOOLS_FINGERPRINT:-}" ;;
+    *claude-github-env-fingerprint*) printf '%s' "\${FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT:-}" ;;
+    *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
+    *claude-bridge-token*) printf '%s' "\${FAKE_CLAUDE_BRIDGE_TOKEN:-}" ;;
+    *opencode-github-env-plugin-fingerprint*) printf '%s' "\${FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT:-}" ;;
+    *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
+    *opencode-serve.log*) printf 'opencode log\n' ;;
+    *claude-bridge.log*) printf 'claude log\n' ;;
+    *codex-bridge.log*) printf 'codex log\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+`;
+
+const LAUNCHER_SCRIPT = `#!/bin/sh
+printf '%s\\000%s\\000' "\${0##*/}" "$#" >> "$FAKE_LAUNCHER_LOG"
+for arg in "$@"; do
+  printf '%s\\000' "$arg" >> "$FAKE_LAUNCHER_LOG"
+done
+if [ "\${FAKE_LAUNCHER_FAIL_EXECUTABLE:-}" = "\${0##*/}" ] || \
+   [ "\${FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE:-}" = "\${0##*/}" ]; then
+  printf 'launcher failed\n' >&2
+  exit "\${FAKE_LAUNCHER_EXIT_CODE:-23}"
+fi
+`;
+
+type LauncherInvocation = {
+  executable: string;
+  args: string[];
+};
+
+function environment(overrides: Partial<Environment> = {}): Environment {
+  return {
+    id: "environment-1",
+    projectId: "project-1",
+    name: "feature-environment",
+    branch: "feature/process-commands",
+    containerId: "container-existing",
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    allowedDomains: [],
+    order: 0,
+    environmentType: "containerized",
+    worktreePath: null,
+    ...overrides,
+  };
+}
+
+function createContext(initialEnvironment = environment()): {
+  context: CommandContext;
+  updates: Array<Record<string, unknown>>;
+  added: Environment[];
+  events: Array<{ event: string; payload: unknown }>;
+  /** Mutable so a test can change the enabled platforms before provisioning. */
+  globalConfig: Record<string, unknown>;
+  /** Mutable so a test can change the per-environment allowlist. */
+  environment: Environment;
+  /** Mutable so a test can exercise agent-test-only repository handling. */
+  project: {
+    id: string;
+    name: string;
+    gitUrl: string;
+    localPath: string | null;
+    addedAt: string;
+    order: number;
+  };
+} {
+  const globalConfig: Record<string, unknown> = { allowedDomains: [] };
+  const project = {
+    id: "project-1",
+    name: "Project",
+    gitUrl: "https://github.com/example/project.git",
+    localPath: null,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  };
+  const updates: Array<Record<string, unknown>> = [];
+  const added: Environment[] = [];
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const context = {
+    appRoot: root,
+    resourceRoot: root,
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
+    storage: {
+      getDataDir: () => root,
+      // No added agent accounts: every launch uses the host login.
+      loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
+      agentAccountsDirectory: () => path.join(root, "agent-accounts"),
+      getEnvironment: mock(async (id: string) =>
+        id === initialEnvironment.id ? initialEnvironment : null,
+      ),
+      loadEnvironments: mock(async () => [initialEnvironment]),
+      updateEnvironment: mock(async (id: string, update: Record<string, unknown>) => {
+        if (id !== initialEnvironment.id) throw new Error(`Environment not found: ${id}`);
+        updates.push(update);
+        Object.assign(initialEnvironment, update);
+        return initialEnvironment;
+      }),
+      getProject: mock(async (id: string) => (id === "project-1" ? project : null)),
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: globalConfig,
+        repositories: { "project-1": { defaultBranch: "main", prBaseBranch: "main" } },
+      })),
+      addEnvironment: mock(async (item: Environment) => {
+        added.push(item);
+        return item;
+      }),
+    },
+  } as unknown as CommandContext;
+  return {
+    context,
+    updates,
+    added,
+    events,
+    globalConfig,
+    environment: initialEnvironment,
+    project,
+  };
+}
+
+let registry: ReturnType<typeof createCommandRegistry>;
+let fixture: ReturnType<typeof createContext>;
+
+async function invoke(
+  name: string,
+  args: Record<string, unknown> = {},
+  context = fixture.context,
+): Promise<unknown> {
+  const handler = registry.get(name) as Handler | undefined;
+  expect(handler).toBeDefined();
+  return handler!(args, context);
+}
+
+/** The command log accumulates, so only the most recent create matters. */
+function lastAllowedDomains(log: string): string[] {
+  const matches = [...log.matchAll(/ALLOWED_DOMAINS=([^\s]+)/g)];
+  return matches.at(-1)?.[1]?.split(",") ?? [];
+}
+
+async function readCommandLog(): Promise<string> {
+  return fs.readFile(commandLog, "utf8").catch(() => "");
+}
+
+async function readLauncherInvocations(): Promise<LauncherInvocation[]> {
+  const serialized = await fs.readFile(launcherLog, "utf8").catch(() => "");
+  const fields = serialized.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const invocations: LauncherInvocation[] = [];
+  for (let index = 0; index < fields.length;) {
+    const executable = fields[index++];
+    const argumentCount = Number(fields[index++]);
+    if (!executable || !Number.isSafeInteger(argumentCount) || argumentCount < 0) {
+      throw new Error("Malformed fake launcher record");
+    }
+    const args = fields.slice(index, index + argumentCount);
+    if (args.length !== argumentCount) throw new Error("Truncated fake launcher record");
+    index += argumentCount;
+    invocations.push({ executable, args });
+  }
+  return invocations;
+}
+
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  description: string,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function startHealthServer(
+  status = 200,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(status);
+    response.end("ok");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  return {
+    port,
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  };
+}
+
+const startHealthyServer = () => startHealthServer(200);
+
+async function startOpenCodeServer(): Promise<{
+  port: number;
+  close: () => Promise<void>;
+  configurations: Array<Record<string, unknown>>;
+}> {
+  const configurations: Array<Record<string, unknown>> = [];
+  const server = http.createServer(async (request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        "access-control-allow-headers": "authorization, content-type",
+      });
+      response.end();
+      return;
+    }
+    if (request.method === "GET" && pathname === "/global/health") {
+      response.writeHead(200, { "access-control-allow-origin": "*" });
+      response.end("ok");
+      return;
+    }
+    if (request.method === "POST" && pathname === "/mcp") {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      configurations.push(JSON.parse(body) as Record<string, unknown>);
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+      });
+      response.end(JSON.stringify({ orkestrator: { status: "connected" } }));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+    configurations,
+  };
+}
+
+beforeAll(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-process-command-coverage-"));
+  binDir = path.join(root, "bin");
+  commandLog = path.join(root, "commands.log");
+  launcherLog = path.join(root, "launchers.log");
+  fakeHome = path.join(root, "home");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.mkdir(fakeHome, { recursive: true });
+  await fs.writeFile(path.join(binDir, "docker"), DOCKER_SCRIPT);
+  await fs.chmod(path.join(binDir, "docker"), 0o755);
+  for (const executable of [
+    "gh",
+    "open",
+    "xdg-open",
+    "dbus-send",
+    "explorer.exe",
+    "explorer",
+    "code",
+    "cursor",
+  ]) {
+    await fs.writeFile(path.join(binDir, executable), LAUNCHER_SCRIPT);
+    await fs.chmod(path.join(binDir, executable), 0o755);
+  }
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  process.env.HOME = fakeHome;
+  process.env.FAKE_DOCKER_LOG = commandLog;
+  process.env.FAKE_LAUNCHER_LOG = launcherLog;
+  // Lets the fake `docker ps` label one row with the owner the registry under
+  // test will compute from `root`.
+  process.env.FAKE_DOCKER_OWNER = dockerOwnerNamespace(root);
+  Object.defineProperty(os, "homedir", { configurable: true, value: () => fakeHome });
+});
+
+beforeEach(async () => {
+  registry = createCommandRegistry();
+  fixture = createContext();
+  await fs.writeFile(commandLog, "");
+  await fs.writeFile(launcherLog, "");
+  delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+  delete process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
+  delete process.env.FAKE_LAUNCHER_EXIT_CODE;
+  delete process.env.FAKE_DOCKER_STATUS;
+  delete process.env.FAKE_DOCKER_PORT;
+  delete process.env.FAKE_DOCKER_FAIL_INFO;
+  delete process.env.FAKE_DOCKER_FAIL_IMAGE;
+  delete process.env.FAKE_DOCKER_NO_PORT;
+  delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
+  delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
+  delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+  process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT =
+    __testing.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
+  process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT = __testing.CLAUDE_GITHUB_ENV_FINGERPRINT;
+  delete process.env.FAKE_DOCKER_HOST_RESOLVES;
+  delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  delete process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
+  delete process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
+  delete process.env.FAKE_DOCKER_GATEWAY;
+  delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+  delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
+});
+
+afterEach(() => {
+  mock.restore();
+});
+
+afterAll(async () => {
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  Object.defineProperty(os, "homedir", { configurable: true, value: originalHomedir });
+  if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
+  else process.env.FAKE_DOCKER_LOG = originalDockerLog;
+  if (originalLauncherLog === undefined) delete process.env.FAKE_LAUNCHER_LOG;
+  else process.env.FAKE_LAUNCHER_LOG = originalLauncherLog;
+  if (originalLauncherFailExecutable === undefined)
+    delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+  else process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = originalLauncherFailExecutable;
+  if (originalLauncherFailSecondaryExecutable === undefined) {
+    delete process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
+  } else {
+    process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE = originalLauncherFailSecondaryExecutable;
+  }
+  if (originalLauncherExitCode === undefined) delete process.env.FAKE_LAUNCHER_EXIT_CODE;
+  else process.env.FAKE_LAUNCHER_EXIT_CODE = originalLauncherExitCode;
+  if (originalDockerStatus === undefined) delete process.env.FAKE_DOCKER_STATUS;
+  else process.env.FAKE_DOCKER_STATUS = originalDockerStatus;
+  if (originalDockerPort === undefined) delete process.env.FAKE_DOCKER_PORT;
+  else process.env.FAKE_DOCKER_PORT = originalDockerPort;
+  if (originalDockerFailInfo === undefined) delete process.env.FAKE_DOCKER_FAIL_INFO;
+  else process.env.FAKE_DOCKER_FAIL_INFO = originalDockerFailInfo;
+  if (originalDockerFailImage === undefined) delete process.env.FAKE_DOCKER_FAIL_IMAGE;
+  else process.env.FAKE_DOCKER_FAIL_IMAGE = originalDockerFailImage;
+  if (originalDockerNoPort === undefined) delete process.env.FAKE_DOCKER_NO_PORT;
+  else process.env.FAKE_DOCKER_NO_PORT = originalDockerNoPort;
+  if (originalCodexBridgeToken === undefined) delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
+  else process.env.FAKE_CODEX_BRIDGE_TOKEN = originalCodexBridgeToken;
+  if (originalClaudeBridgeToken === undefined) delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
+  else process.env.FAKE_CLAUDE_BRIDGE_TOKEN = originalClaudeBridgeToken;
+  if (originalOpenCodeServerPassword === undefined)
+    delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+  else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
+  if (originalOpenCodeGitHubPluginFingerprint === undefined) {
+    delete process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
+  } else {
+    process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT = originalOpenCodeGitHubPluginFingerprint;
+  }
+  if (originalClaudeGitHubEnvironmentFingerprint === undefined) {
+    delete process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
+  } else {
+    process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT = originalClaudeGitHubEnvironmentFingerprint;
+  }
+  if (originalDockerHostResolves === undefined) delete process.env.FAKE_DOCKER_HOST_RESOLVES;
+  else process.env.FAKE_DOCKER_HOST_RESOLVES = originalDockerHostResolves;
+  if (originalDockerHostsOutput === undefined) delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  else process.env.FAKE_DOCKER_HOSTS_OUTPUT = originalDockerHostsOutput;
+  if (originalDockerDesktopGateway === undefined) delete process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
+  else process.env.FAKE_DOCKER_DESKTOP_GATEWAY = originalDockerDesktopGateway;
+  if (originalDockerExplicitHostEntry === undefined)
+    delete process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
+  else process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY = originalDockerExplicitHostEntry;
+  if (originalDockerGateway === undefined) delete process.env.FAKE_DOCKER_GATEWAY;
+  else process.env.FAKE_DOCKER_GATEWAY = originalDockerGateway;
+  if (originalClaudeAgentToolsFingerprint === undefined)
+    delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+  else process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT = originalClaudeAgentToolsFingerprint;
+  if (originalCodexAgentToolsFingerprint === undefined)
+    delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
+  else process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT = originalCodexAgentToolsFingerprint;
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("process and platform command behavior", () => {
+  test("checks Docker availability, version, and base image failures", async () => {
+    expect(await invoke("check_docker")).toEqual({ available: true, reason: null });
+    expect(await invoke("docker_version")).toBe("26.1.4");
+    expect(await invoke("check_base_image")).toBe(true);
+
+    process.env.FAKE_DOCKER_FAIL_INFO = "1";
+    process.env.FAKE_DOCKER_FAIL_IMAGE = "1";
+    expect(await invoke("check_docker")).toEqual({ available: false, reason: "unknown" });
+    expect(await invoke("check_base_image")).toBe(false);
+
+    process.env.FAKE_DOCKER_FAIL_INFO =
+      "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock";
+    expect(await invoke("check_docker")).toEqual({
+      available: false,
+      reason: "permission-denied",
+    });
+  });
+
+  test("provisions and controls a container with validated arguments", async () => {
+    fixture.environment.containerId = null;
+    expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
+      "container-created-123",
+    );
+    expect(fixture.updates).toContainEqual(
+      expect.objectContaining({ containerId: "container-created-123" }),
+    );
+    // Provisioning is idempotent: a repeated request returns the same runtime.
+    expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
+      "container-created-123",
+    );
+
+    await invoke("docker_start_container", { containerId: "container-a" });
+    await invoke("docker_stop_container", { containerId: "container-a" });
+    await invoke("docker_remove_container", { containerId: "container-a" });
+    await expect(invoke("docker_start_container", { containerId: 7 })).rejects.toThrow(
+      "Expected containerId to be a string",
+    );
+
+    const log = await readCommandLog();
+    const owner = dockerOwnerNamespace(root);
+    expect(log).toContain(
+      `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
+    );
+    expect(log).toContain("--shm-size 1024m");
+    expect(log).toContain("--label environment-name=feature-environment");
+    expect(log).toContain(`--label orkestrator-owner=${owner}`);
+    expect(log).toContain("ALLOWED_DOMAINS=");
+    // Neither ACP platform is enabled here, so the user's allowlist is used
+    // verbatim rather than widened with vendor hosts they never asked for.
+    expect(log).not.toContain("auth.x.ai");
+    expect(log).not.toContain("api2.cursor.sh");
+    expect(log).toContain("GIT_URL=https://github.com/example/project.git");
+    if (process.platform === "linux") {
+      expect(log).toContain("--add-host host.docker.internal:host-gateway");
+    } else {
+      expect(log).not.toContain("--add-host host.docker.internal:host-gateway");
+    }
+    expect(log).toContain("docker start container-a");
+    expect(log).toContain("docker stop container-a");
+    expect(log).toContain("docker rm -f container-a");
+  });
+
+  test("mounts an agent-test local Git remote read-write for container cloning", async () => {
+    const profileDataDir = path.join(root, "profile", "data");
+    const originPath = path.join(root, "profile", "fixtures", "origin.git");
+    await fs.mkdir(originPath, { recursive: true });
+    fixture.context.runtimeFlavor = "agent-test";
+    fixture.context.storage.getDataDir = () => profileDataDir;
+    fixture.project.gitUrl = originPath;
+
+    fixture.environment.containerId = null;
+
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const log = await readCommandLog();
+    expect(log).toContain(`-v ${originPath}:/orkestrator-agent-test-origin.git`);
+    expect(log).not.toContain(`${originPath}:/orkestrator-agent-test-origin.git:ro`);
+    expect(log).toContain("GIT_URL=/orkestrator-agent-test-origin.git");
+    expect(log).not.toContain(`GIT_URL=${originPath}`);
+  });
+
+  test("does not mount arbitrary absolute Git paths in agent-test mode", async () => {
+    const unrelatedRemote = path.join(root, "unrelated-origin.git");
+    await fs.mkdir(unrelatedRemote);
+    fixture.context.runtimeFlavor = "agent-test";
+    fixture.project.gitUrl = unrelatedRemote;
+
+    fixture.environment.containerId = null;
+
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const log = await readCommandLog();
+    expect(log).not.toContain("/orkestrator-agent-test-origin.git");
+    expect(log).toContain(`GIT_URL=${unrelatedRemote}`);
+  });
+
+  test("adds ACP vendor hosts only for the platforms that are enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "cursor"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toContain("github.com");
+    // Cursor is enabled, so its endpoints are reachable.
+    expect(allowed).toContain("api2.cursor.sh");
+    expect(allowed).toContain("cursor.com");
+    // Grok is not, so its endpoints stay blocked.
+    expect(allowed).not.toContain("auth.x.ai");
+    expect(allowed).not.toContain("cli-chat-proxy.grok.com");
+    // The user's own entries are preserved and never duplicated.
+    expect(allowed.filter((domain) => domain === "github.com")).toHaveLength(1);
+  });
+
+  test("keeps an explicit per-environment allowlist intact when no platform with its own hosts is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "opencode"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
+  });
+
+  test("adds ChatGPT's hosts when Codex is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const allowed = lastAllowedDomains(await readCommandLog());
+    expect(allowed).toEqual(["github.com", "chatgpt.com", "auth.openai.com"]);
+  });
+
+  test("parses container status, listings, ports, logs, prune output, and aggregate stats", async () => {
+    expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("running");
+    process.env.FAKE_DOCKER_STATUS = "paused";
+    expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("stopped");
+    process.env.FAKE_DOCKER_STATUS = "unexpected";
+    expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("error");
+
+    // container-a is owned by this registry and container-b predates the owner
+    // label, so both are listed; container-c belongs to another registry.
+    expect(await invoke("list_docker_containers")).toEqual([
+      ["container-a", "alpha"],
+      ["container-b", "beta"],
+    ]);
+    expect(await readCommandLog()).not.toContain(
+      `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
+    );
+    expect(
+      await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 }),
+    ).toBe(43123);
+    process.env.FAKE_DOCKER_NO_PORT = "1";
+    expect(
+      await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 }),
+    ).toBeNull();
+    delete process.env.FAKE_DOCKER_NO_PORT;
+
+    expect(await invoke("get_container_logs", { containerId: "container-a", tail: "25" })).toBe(
+      "historical container log\n",
+    );
+    // Log content is never pushed as events: it is read by cursor.
+    const stream = (await invoke("stream_container_logs", { containerId: "container-a" })) as {
+      subscriptionId: string;
+      sourceId: string;
+    };
+    let lines: string[] = [];
+    await waitFor(async () => {
+      const read = (await invoke("read_container_logs", {
+        subscriptionId: stream.subscriptionId,
+        sourceId: stream.sourceId,
+        cursor: 0,
+      })) as { records?: Array<{ text: string }> };
+      lines = (read.records ?? []).map((record) => record.text);
+      return lines.length === 2;
+    }, "stdout and stderr container log records");
+    expect(lines.sort()).toEqual(["stream stderr\n", "stream stdout\n"]);
+    expect(fixture.events.filter((entry) => entry.event === "container-log")).toEqual([]);
+    await invoke("close_container_logs", { subscriptionId: stream.subscriptionId });
+
+    // Unreviewed removal is refused; cleanup goes through the reviewed preview.
+    await expect(invoke("docker_system_prune", { pruneVolumes: true })).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
+    // Capacity is the daemon's and usage this installation's; anything the
+    // fake daemon does not answer is reported unknown, not as host values.
+    expect(await invoke("get_docker_system_stats")).toMatchObject({
+      imagesTotal: 2,
+      // Nothing is running, so nothing is in use; what Docker did not say is null.
+      memoryUsed: 0,
+      cpuCoresUsed: 0,
+      memoryTotal: null,
+      cpus: null,
+      diskUsed: null,
+      diskTotal: null,
+      diskKnown: false,
+      memoryTotalKnown: false,
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
+    });
+    const pruneLog = await readCommandLog();
+    // Nothing is removed without a reviewed selection.
+    expect(pruneLog).not.toMatch(/docker rm( -f)? /);
+    expect(pruneLog).not.toContain("docker container prune");
+    expect(pruneLog).not.toContain("docker system prune");
+    expect(pruneLog).not.toContain("--volumes");
+  });
+
+  test("reattaches a container and persists its inspected status", async () => {
+    const result = (await invoke("reattach_container", {
+      projectId: "project-1",
+      containerId: "0123456789abcdef",
+    })) as Environment;
+
+    expect(result.name).toBe("reattached-01234567");
+    expect(result.containerId).toBe("0123456789abcdef");
+    expect(result.status).toBe("running");
+    expect(fixture.added).toHaveLength(1);
+  });
+
+  test("controls bridge processes, reads logs and preferences, and reports port health", async () => {
+    await invoke("stop_opencode_server", { containerId: "container-a" });
+    await invoke("stop_claude_server", { containerId: "container-a" });
+    await invoke("stop_codex_server", { containerId: "container-a" });
+    expect(await invoke("get_opencode_server_log", { containerId: "container-a" })).toBe(
+      "opencode log\n",
+    );
+    expect(await invoke("get_claude_server_log", { containerId: "container-a" })).toBe(
+      "claude log\n",
+    );
+    expect(await invoke("get_codex_server_log", { containerId: "container-a" })).toBe(
+      "codex log\n",
+    );
+
+    process.env.FAKE_DOCKER_NO_PORT = "1";
+    expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({
+      running: false,
+      hostPort: null,
+    });
+    expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+      running: false,
+      hostPort: null,
+    });
+    expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
+      running: false,
+      hostPort: null,
+    });
+    delete process.env.FAKE_DOCKER_NO_PORT;
+
+    const healthyStatus = await startHealthServer(200);
+    process.env.FAKE_DOCKER_PORT = String(healthyStatus.port);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
+    try {
+      expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthyStatus.port,
+        authToken: "o".repeat(43),
+      });
+      for (const agent of ["claude", "codex"]) {
+        expect(await invoke(`get_${agent}_server_status`, { containerId: "container-a" })).toEqual({
+          running: true,
+          hostPort: healthyStatus.port,
+        });
+      }
+    } finally {
+      await healthyStatus.close();
+    }
+
+    const unhealthyStatus = await startHealthServer(503);
+    process.env.FAKE_DOCKER_PORT = String(unhealthyStatus.port);
+    try {
+      for (const agent of ["opencode", "claude", "codex"]) {
+        expect(await invoke(`get_${agent}_server_status`, { containerId: "container-a" })).toEqual({
+          running: false,
+          hostPort: unhealthyStatus.port,
+        });
+      }
+    } finally {
+      await unhealthyStatus.close();
+    }
+
+    expect(await invoke("get_opencode_model_preferences")).toEqual({
+      recent: [],
+      favorite: [],
+      variant: {},
+    });
+    const preferencePath = path.join(fakeHome, ".local", "state", "opencode", "model.json");
+    await fs.mkdir(path.dirname(preferencePath), { recursive: true });
+    await fs.writeFile(
+      preferencePath,
+      JSON.stringify({
+        recent: ["provider/model"],
+        favorite: [],
+        variant: { "provider/model": "fast" },
+      }),
+    );
+    expect(await invoke("get_opencode_model_preferences")).toEqual({
+      recent: ["provider/model"],
+      favorite: [],
+      variant: { "provider/model": "fast" },
+    });
+
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    process.env.FAKE_CODEX_BRIDGE_TOKEN = "a".repeat(43);
+    process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "b".repeat(43);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
+    try {
+      expect(await invoke("start_opencode_server", { containerId: "container-a" })).toEqual({
+        hostPort: healthy.port,
+        wasRunning: true,
+        authToken: "o".repeat(43),
+      });
+      expect(await invoke("start_codex_server", { containerId: "container-a" })).toEqual({
+        hostPort: healthy.port,
+        wasRunning: true,
+        authToken: "a".repeat(43),
+      });
+      expect(await invoke("start_claude_server", { containerId: "container-a" })).toEqual({
+        hostPort: healthy.port,
+        wasRunning: true,
+        authToken: "b".repeat(43),
+      });
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  test("rehydrates OpenCode agent tools from status and repairs legacy container host resolution", async () => {
+    const openCode = await startOpenCodeServer();
+    process.env.FAKE_DOCKER_PORT = String(openCode.port);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
+    const connection = {
+      url: "http://host.docker.internal:45678/mcp",
+      token: "project-scoped-secret-token",
+    };
+    const agentTools = {
+      connection: mock(() => connection),
+      revokeEnvironment: mock(() => undefined),
+    };
+    const context = {
+      ...fixture.context,
+      agentTools,
+    } as CommandContext;
+    try {
+      await expect(
+        invoke("get_opencode_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toEqual({
+        running: true,
+        hostPort: openCode.port,
+        authToken: "o".repeat(43),
+        // Reconciliation is backgrounded, so the first observer sees it in
+        // flight rather than an unqualified "everything is wired up".
+        agentTools: "pending",
+      });
+      expect(agentTools.connection).toHaveBeenCalledWith("environment-1", "project-1", "container");
+      await waitFor(
+        () => openCode.configurations.length === 1,
+        "background OpenCode agent-tool reconciliation",
+      );
+      expect(openCode.configurations).toEqual([
+        expect.objectContaining({
+          name: "orkestrator",
+          config: expect.objectContaining({
+            url: connection.url,
+            headers: { Authorization: `Bearer ${connection.token}` },
+          }),
+        }),
+      ]);
+
+      // Once the POST lands, the same observer reports usable ticket tools.
+      await waitFor(
+        () => __testing.openCodeAgentToolsState("container:container-existing") === "connected",
+        "the recorded connected outcome",
+      );
+      await expect(
+        invoke("get_opencode_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toMatchObject({ running: true, agentTools: "connected" });
+      // The memo means the second status read did no further MCP I/O.
+      expect(openCode.configurations).toHaveLength(1);
+
+      const log = await readCommandLog();
+      expect(log).toContain(
+        "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+      );
+      expect(log).toContain("docker exec --user root container-existing");
+      expect(log).not.toContain(connection.token);
+    } finally {
+      // Retire the memo so a later test against this container reconciles
+      // rather than inheriting this generation's recorded outcome.
+      __testing.cancelOpenCodeAgentToolsConfiguration("container:container-existing");
+      await openCode.close();
+    }
+  });
+
+  test("does not rewrite container hosts when Docker already resolves the agent-tools host", async () => {
+    process.env.FAKE_DOCKER_HOST_RESOLVES = "1";
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts host.docker.internal");
+    expect(log).toContain("docker inspect --format");
+    expect(log).not.toContain("docker exec --user root");
+  });
+
+  test("removes a Linux host-gateway override when Docker Desktop DNS is available", async () => {
+    process.env.FAKE_DOCKER_DESKTOP_GATEWAY = "1";
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "192.168.65.254 host.docker.internal\n";
+    process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY = "172.17.0.1 host.docker.internal";
+
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts gateway.docker.internal");
+    expect(log).toContain("grep -E");
+    expect(log).toContain("docker exec --user root container-existing");
+    expect(log).not.toContain("docker inspect --format");
+  });
+
+  test("does not add a Linux host-gateway override on Docker Desktop host platforms", () => {
+    expect(__testing.shouldAddDockerHostGatewayAlias("darwin")).toBe(false);
+    expect(__testing.shouldAddDockerHostGatewayAlias("win32")).toBe(false);
+    expect(__testing.shouldAddDockerHostGatewayAlias("linux")).toBe(true);
+  });
+
+  test("rewrites a stale host.docker.internal mapping before trusting the alias", async () => {
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.0.7 host.docker.internal\n";
+    process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
+
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts host.docker.internal");
+    expect(log).toContain(
+      "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+    );
+    expect(log).toContain("docker exec --user root container-existing");
+  });
+
+  test("fails closed when Docker does not report a usable gateway for the alias repair", async () => {
+    process.env.FAKE_DOCKER_GATEWAY = "not-an-ip";
+
+    await expect(__testing.ensureContainerAgentToolsHost("container-existing")).rejects.toThrow(
+      "Could not determine the Docker host gateway",
+    );
+
+    const log = await readCommandLog();
+    expect(log).toContain(
+      "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+    );
+    expect(log).not.toContain("docker exec --user root container-existing");
+  });
+
+  test("status reuses Claude and Codex bridges with the current agent-tools fingerprint", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    process.env.FAKE_DOCKER_HOST_RESOLVES = "1";
+    process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "c".repeat(43);
+    process.env.FAKE_CODEX_BRIDGE_TOKEN = "d".repeat(43);
+    const connection = {
+      url: "http://host.docker.internal:45678/mcp",
+      token: "current-project-token",
+    };
+    const fingerprint = __testing.agentToolConnectionFingerprint(connection);
+    process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT = fingerprint;
+    process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT = fingerprint;
+    const agentTools = {
+      connection: mock(() => connection),
+      revokeEnvironment: mock(() => undefined),
+    };
+    const context = { ...fixture.context, agentTools } as CommandContext;
+    try {
+      await expect(
+        invoke("get_claude_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toEqual({
+        running: true,
+        hostPort: healthy.port,
+        authToken: "c".repeat(43),
+      });
+      await expect(
+        invoke("get_codex_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toEqual({
+        running: true,
+        hostPort: healthy.port,
+        authToken: "d".repeat(43),
+      });
+      expect(agentTools.connection).toHaveBeenCalledTimes(2);
+      const log = await readCommandLog();
+      expect(log).not.toContain("pkill -f");
+      expect(log).not.toContain(connection.token);
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  test("fires a background reachability probe when resolving the container agent-tools connection", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    process.env.FAKE_DOCKER_HOST_RESOLVES = "1";
+    process.env.FAKE_CODEX_BRIDGE_TOKEN = "e".repeat(43);
+    const connection = {
+      url: "http://host.docker.internal:45678/mcp",
+      token: "probe-project-token",
+    };
+    process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT =
+      __testing.agentToolConnectionFingerprint(connection);
+    const agentTools = {
+      connection: mock(() => connection),
+      revokeEnvironment: mock(() => undefined),
+    };
+    // The probe is evidence, not a gate: a rejecting or hung probe must leave
+    // the resolved connection, and the bridge reuse built on it, untouched.
+    const probes: Array<"reject" | "hang"> = ["reject", "hang"];
+    const checkEnvironmentContainer = mock((_containerId: string, _options: unknown) =>
+      probes.shift() === "hang"
+        ? new Promise<never>(() => undefined)
+        : Promise.reject(new Error("container cannot reach the agent tools server")),
+    );
+    const context = {
+      ...fixture.context,
+      agentTools,
+      containerHostReachability: {
+        checkEnvironmentContainer,
+      } as unknown as CommandContext["containerHostReachability"],
+    } as CommandContext;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          invoke("get_codex_server_status", { containerId: "container-existing" }, context),
+        ).resolves.toEqual({
+          running: true,
+          hostPort: healthy.port,
+          authToken: "e".repeat(43),
+        });
+      }
+      expect(agentTools.connection).toHaveBeenCalledTimes(2);
+      expect(agentTools.connection).toHaveBeenCalledWith("environment-1", "project-1", "container");
+      expect(checkEnvironmentContainer.mock.calls).toEqual([
+        ["container-existing", { reason: "bridge-start", environmentName: "feature-environment" }],
+        ["container-existing", { reason: "bridge-start", environmentName: "feature-environment" }],
+      ]);
+      const log = await readCommandLog();
+      expect(log).not.toContain("pkill -f");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await healthy.close();
+    }
+  });
+
+  test("loads and validates the durable OpenCode model catalogue", async () => {
+    const cached = {
+      schemaVersion: 2 as const,
+      projectId: "project-a",
+      catalogVersion: "cached",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
+    };
+    const getOpenCodeModelCatalog = mock(async (_projectId: string) => cached);
+    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
+      ...cached,
+      catalogVersion: "updated",
+      models,
+    }));
+    const context = {
+      ...fixture.context,
+      storage: {
+        ...fixture.context.storage,
+        getOpenCodeModelCatalog,
+        cacheOpenCodeModelCatalog,
+      },
+    } as CommandContext;
+
+    expect(
+      await invoke("get_opencode_model_catalog_cache", { projectId: " project-a " }, context),
+    ).toEqual(cached);
+    expect(getOpenCodeModelCatalog).toHaveBeenCalledWith("project-a");
+
+    const models = [
+      {
+        id: " opencode/openai/gpt-5 ",
+        name: " GPT-5 ",
+        provider: " opencode ",
+        variants: [" low ", "high"],
+        inputCost: 0,
+        outputCost: Number.MAX_VALUE,
+        contextWindow: Number.MAX_SAFE_INTEGER,
+      },
+    ];
+    expect(
+      await invoke("cache_opencode_model_catalog", { projectId: " project-a ", models }, context),
+    ).toEqual({
+      ...cached,
+      catalogVersion: "updated",
+      models: [
+        {
+          id: "opencode/openai/gpt-5",
+          name: "GPT-5",
+          provider: "opencode",
+          variants: ["low", "high"],
+          inputCost: 0,
+          outputCost: Number.MAX_VALUE,
+          contextWindow: Number.MAX_SAFE_INTEGER,
+        },
+      ],
+    });
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
+      {
+        id: "opencode/openai/gpt-5",
+        name: "GPT-5",
+        provider: "opencode",
+        variants: ["low", "high"],
+        inputCost: 0,
+        outputCost: Number.MAX_VALUE,
+        contextWindow: Number.MAX_SAFE_INTEGER,
+      },
+    ]);
+
+    await expect(
+      invoke(
+        "cache_opencode_model_catalog",
+        { projectId: "project-a", models: [{ id: "missing-fields" }] },
+        context,
+      ),
+    ).rejects.toThrow("models[0].name");
+  });
+
+  test("caches the valid models in a batch instead of rejecting it wholesale", async () => {
+    // The catalogue is best-effort data assembled from whatever a provider
+    // reports and the renderer only logs a rejection, so one rogue model must
+    // not silently disable caching for the whole project.
+    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown) => ({
+      schemaVersion: 2,
+      projectId: "project-a",
+      catalogVersion: "v1",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models,
+    }));
+    const context = {
+      ...fixture.context,
+      storage: { ...fixture.context.storage, cacheOpenCodeModelCatalog },
+    } as CommandContext;
+
+    await invoke(
+      "cache_opencode_model_catalog",
+      {
+        projectId: "project-a",
+        models: [
+          { id: "opencode/good", name: "Good", provider: "opencode" },
+          // Every rejection reason, one per entry.
+          { id: "opencode/nan-cost", name: "NaN", provider: "opencode", inputCost: Number.NaN },
+          { id: "opencode/unknown-key", name: "Unknown", provider: "opencode", tier: "pro" },
+          { id: " ", name: "Blank id", provider: "opencode" },
+          null,
+          { id: "opencode/also-good", name: "Also Good", provider: "opencode", variants: ["high"] },
+        ],
+      },
+      context,
+    );
+
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
+      { id: "opencode/good", name: "Good", provider: "opencode" },
+      { id: "opencode/also-good", name: "Also Good", provider: "opencode", variants: ["high"] },
+    ]);
+  });
+
+  test("reports why a batch was rejected when no model in it is usable", async () => {
+    await expect(
+      invoke("cache_opencode_model_catalog", {
+        projectId: "project-a",
+        models: [
+          { id: "opencode/a", name: "A", provider: "opencode", contextWindow: 1.5 },
+          { id: "opencode/b", name: "B", provider: "opencode", inputCost: -1 },
+        ],
+      }),
+    ).rejects.toThrow(/at least one model.*contextWindow to be a positive safe integer/s);
+  });
+
+  test.each([
+    ["missing project id", "get_opencode_model_catalog_cache", {}, "projectId"],
+    ["blank project id", "get_opencode_model_catalog_cache", { projectId: " " }, "non-blank"],
+    [
+      "unexpected get argument",
+      "get_opencode_model_catalog_cache",
+      { projectId: "p", extra: true },
+      "Unexpected arguments field",
+    ],
+    [
+      "models is not an array",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: {} },
+      "models to be an array",
+    ],
+    [
+      "empty models",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [] },
+      "at least one model",
+    ],
+    [
+      "model is not an object",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [null] },
+      "models[0] to be an object",
+    ],
+    [
+      "unexpected model field",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", extra: true }] },
+      "Unexpected models[0] field",
+    ],
+    [
+      "blank model id",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: " ", name: "A", provider: "p" }] },
+      "models[0].id to be a non-blank string",
+    ],
+    [
+      "blank model name",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: " ", provider: "p" }] },
+      "models[0].name to be a non-blank string",
+    ],
+    [
+      "blank model provider",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: " " }] },
+      "models[0].provider to be a non-blank string",
+    ],
+    [
+      "variants is not an array",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: "fast" }] },
+      "variants to be an array",
+    ],
+    [
+      "non-string variant",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [1] }] },
+      "variants[0] to be a string",
+    ],
+    [
+      "blank variant",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [" "] }] },
+      "variants[0] to be a non-blank string",
+    ],
+    [
+      "negative input cost",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", inputCost: -1 }] },
+      "inputCost to be non-negative",
+    ],
+    [
+      "infinite output cost",
+      "cache_opencode_model_catalog",
+      {
+        projectId: "p",
+        models: [{ id: "a", name: "A", provider: "p", outputCost: Number.POSITIVE_INFINITY }],
+      },
+      "outputCost to be a number",
+    ],
+    [
+      "zero context",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 0 }] },
+      "contextWindow to be a positive safe integer",
+    ],
+    [
+      "fractional context",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 1.5 }] },
+      "contextWindow to be a positive safe integer",
+    ],
+    [
+      "unsafe context",
+      "cache_opencode_model_catalog",
+      {
+        projectId: "p",
+        models: [{ id: "a", name: "A", provider: "p", contextWindow: Number.MAX_SAFE_INTEGER + 1 }],
+      },
+      "contextWindow to be a positive safe integer",
+    ],
+    [
+      "unexpected cache argument",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true },
+      "Unexpected arguments field",
+    ],
+  ] as const)(
+    "rejects malformed OpenCode catalogue command input: %s",
+    async (_label, command, args, message) => {
+      await expect(invoke(command, args)).rejects.toThrow(message);
+    },
+  );
+
+  test("stops the in-container Codex bridge without the pattern matching its own shell", async () => {
+    await expect(
+      invoke("stop_codex_server", { containerId: "container-a" }),
+    ).resolves.toBeUndefined();
+
+    const log = await readCommandLog();
+    expect(log).toContain(
+      "pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token",
+    );
+    expect(log).not.toContain("pkill -f 'codex-bridge'");
+  });
+
+  test("stops the in-container Claude bridge without the pattern matching its own shell", async () => {
+    await expect(
+      invoke("stop_claude_server", { containerId: "container-a" }),
+    ).resolves.toBeUndefined();
+
+    const log = await readCommandLog();
+    expect(log).toContain(
+      "pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token",
+    );
+    expect(log).not.toContain("pkill -f 'claude-bridge'");
+  });
+
+  test("omits the Codex auth token when the container token file is missing or malformed", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    try {
+      expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+
+      process.env.FAKE_CODEX_BRIDGE_TOKEN = "not-a-valid-token";
+      expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  test("reports the Claude auth token from status only when it is well-formed", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    try {
+      expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+
+      process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "not-a-valid-token";
+      expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+
+      process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "c".repeat(43);
+      expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+        authToken: "c".repeat(43),
+      });
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  test("reports credentials and GitHub CLI availability from isolated filesystem state", async () => {
+    expect(await invoke("has_claude_credentials")).toBe(false);
+    expect(await invoke("get_credential_status")).toEqual({ available: false, expiresAt: null });
+    expect(await invoke("check_claude_config")).toBe(false);
+    expect(await invoke("check_github_cli")).toBe(true);
+
+    await fs.mkdir(path.join(fakeHome, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(fakeHome, ".claude", ".credentials.json"), "{}");
+    await fs.writeFile(path.join(fakeHome, ".claude.json"), "{}");
+    expect(await invoke("has_claude_credentials")).toBe(true);
+    expect(await invoke("get_credential_status")).toEqual({ available: true, expiresAt: null });
+    expect(await invoke("check_claude_config")).toBe(true);
+  });
+
+  test("launches browser, file manager, and editors without a shell", async () => {
+    await invoke("open_in_browser", { url: "https://example.com/path?q=one&next=two" });
+    await expect(invoke("open_in_browser", { url: "file:///tmp/private" })).rejects.toThrow(
+      "Unsupported browser URL protocol",
+    );
+    await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
+    await invoke("open_in_editor", { containerId: "container-a", editor: "cursor" });
+    await invoke("open_in_editor", { containerId: "container-b", editor: "vscode" });
+    await invoke("open_local_in_editor", { path: "/tmp/project", editor: "code" });
+
+    const invocations = await readLauncherInvocations();
+    const browserLauncher =
+      process.platform === "darwin"
+        ? "open"
+        : process.platform === "win32"
+          ? "explorer.exe"
+          : "xdg-open";
+    expect(invocations).toContainEqual({
+      executable: browserLauncher,
+      args: ["https://example.com/path?q=one&next=two"],
+    });
+    expect(invocations).toContainEqual(
+      process.platform === "darwin"
+        ? { executable: "open", args: ["-R", "/tmp/project/file.ts"] }
+        : process.platform === "win32"
+          ? { executable: "explorer", args: ["/select,", "/tmp/project/file.ts"] }
+          : {
+              executable: "dbus-send",
+              args: [
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.FileManager1",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                "array:string:file:///tmp/project/file.ts",
+                "string:",
+              ],
+            },
+    );
+    expect(invocations).toContainEqual({
+      executable: "cursor",
+      args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d61/workspace"],
+    });
+    expect(invocations).toContainEqual({
+      executable: "code",
+      args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d62/workspace"],
+    });
+    expect(invocations).toContainEqual({ executable: "code", args: ["/tmp/project"] });
+  }, 20_000);
+
+  test(
+    "falls back to the parent directory when Linux FileManager1 fails",
+    async () => {
+      const platform = process.platform;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "dbus-send";
+      try {
+        await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
+        expect(await readLauncherInvocations()).toEqual([
+          {
+            executable: "dbus-send",
+            args: [
+              "--session",
+              "--print-reply",
+              "--dest=org.freedesktop.FileManager1",
+              "/org/freedesktop/FileManager1",
+              "org.freedesktop.FileManager1.ShowItems",
+              "array:string:file:///tmp/project/file.ts",
+              "string:",
+            ],
+          },
+          { executable: "xdg-open", args: ["/tmp/project"] },
+        ]);
+      } finally {
+        Object.defineProperty(process, "platform", { configurable: true, value: platform });
+      }
+    },
+    PROCESS_TEST_BUDGET_MS,
+  );
+
+  test("propagates the fallback failure when both Linux reveal commands fail", async () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "dbus-send";
+    process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE = "xdg-open";
+    try {
+      await expect(
+        invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" }),
+      ).rejects.toThrow("launcher failed");
+      expect((await readLauncherInvocations()).map(({ executable }) => executable)).toEqual([
+        "dbus-send",
+        "xdg-open",
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+    }
+  });
+
+  test.each([
+    ["missing container id", { editor: "vscode" }, "containerId"],
+    ["non-string container id", { containerId: 42, editor: "vscode" }, "containerId"],
+    ["missing editor", { containerId: "container-a" }, "editor"],
+    ["non-string editor", { containerId: "container-a", editor: false }, "editor"],
+  ] as const)("rejects invalid editor launch input: %s", async (_label, args, field) => {
+    await expect(invoke("open_in_editor", args)).rejects.toThrow(field);
+    expect(await readLauncherInvocations()).toEqual([]);
+  });
+
+  test("propagates editor launcher exit and spawn failures", async () => {
+    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "cursor";
+    process.env.FAKE_LAUNCHER_EXIT_CODE = "23";
+    const exitFailure = (await invoke("open_in_editor", {
+      containerId: "container-a",
+      editor: "cursor",
+    }).catch((error: unknown) => error)) as {
+      message?: string;
+      exitCode?: number | null;
+      executableMissing?: boolean;
+    };
+    expect(exitFailure).toMatchObject({
+      message: "launcher failed",
+      exitCode: 23,
+      executableMissing: false,
+    });
+
+    delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+    const codePath = path.join(binDir, "code");
+    const hiddenCodePath = path.join(binDir, "code.hidden");
+    const fixturePath = process.env.PATH;
+    await fs.rename(codePath, hiddenCodePath);
+    process.env.PATH = binDir;
+    try {
+      const spawnFailure = (await invoke("open_in_editor", {
+        containerId: "container-b",
+        editor: "vscode",
+      }).catch((error: unknown) => error)) as {
+        executableMissing?: boolean;
+        exitCode?: number | null;
+      };
+      expect(spawnFailure).toMatchObject({ executableMissing: true, exitCode: null });
+    } finally {
+      if (fixturePath === undefined) delete process.env.PATH;
+      else process.env.PATH = fixturePath;
+      await fs.rename(hiddenCodePath, codePath);
+    }
+  });
+
+  test("resolves domains and validate_domains delegates to the same behavior", async () => {
+    const resolved = (await invoke("test_domain_resolution", {
+      domains: ["localhost", "bad domain"],
+    })) as Array<Record<string, unknown>>;
+    expect(resolved[0]).toMatchObject({
+      domain: "localhost",
+      valid: true,
+      resolvable: true,
+      error: null,
+    });
+    expect(resolved[0]?.ips).toBeArray();
+    expect((resolved[0]!.ips as string[]).length).toBeGreaterThan(0);
+    expect(resolved[1]).toMatchObject({
+      domain: "bad domain",
+      valid: true,
+      resolvable: false,
+      ips: [],
+    });
+    expect(resolved[1]?.error).toBeString();
+
+    const delegated = (await invoke("validate_domains", { domains: ["localhost"] })) as Array<
+      Record<string, unknown>
+    >;
+    expect(delegated[0]).toMatchObject({
+      domain: "localhost",
+      valid: true,
+      resolvable: true,
+      error: null,
+    });
+  });
+});
+
+/**
+ * Linear and looped-review commands. The Linear handlers are the only ones
+ * here that reach an external service, so `fetch` is stubbed at the module
+ * boundary: everything below it (auth gating, argument validation, GraphQL
+ * response mapping and error sanitization) is the real implementation.
+ */
+describe("Linear and looped review command behavior", () => {
+  const originalFetch = globalThis.fetch;
+
+  type LinearAuth = { apiKey: string; viewer: { id: string; name: string } } | null;
+
+  function jsonResponse(payload: unknown, status = 200): Response {
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  function issueNode(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "Ship the thing",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2025-12-01T00:00:00.000Z",
+      url: "https://linear.app/acme/issue/ENG-1",
+      priority: 1,
+      priorityLabel: "Urgent",
+      sortOrder: 1,
+      state: { name: "In Progress", type: "started" },
+      team: { key: "ENG", name: "Engineering" },
+      assignee: { name: "Ada" },
+      ...overrides,
+    };
+  }
+
+  function createLinearContext(auth: LinearAuth) {
+    const getLinearAuth = mock(async () => auth);
+    const context = {
+      appRoot: root,
+      resourceRoot: root,
+      emit: mock(() => {}),
+      storage: { getLinearAuth },
+    } as unknown as CommandContext;
+    return { context, getLinearAuth };
+  }
+
+  function createWorkflowContext(workflows: Record<string, unknown>) {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const context = {
+      appRoot: root,
+      resourceRoot: root,
+      emit: mock(() => {}),
+      storage: {
+        getLoopedReviewWorkflow: mock(async (workflowId: string) => {
+          calls.push({ method: "get", args: [workflowId] });
+          return workflows[workflowId] ?? null;
+        }),
+        listLoopedReviewWorkflows: mock(async (environmentId: string) => {
+          calls.push({ method: "list", args: [environmentId] });
+          return Object.values(workflows).filter(
+            (workflow) => (workflow as { environmentId?: string }).environmentId === environmentId,
+          );
+        }),
+        deleteLoopedReviewWorkflow: mock(async (workflowId: string) => {
+          calls.push({ method: "delete", args: [workflowId] });
+          delete workflows[workflowId];
+        }),
+      },
+    } as unknown as CommandContext;
+    return { context, calls };
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("refuses Linear issue commands before an account is connected", async () => {
+    const { context, getLinearAuth } = createLinearContext(null);
+    const fetchMock = mock(async () => jsonResponse({ data: {} }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(invoke("get_linear_issues", {}, context)).rejects.toThrow(
+      "Linear is not connected",
+    );
+    await expect(invoke("get_linear_issue", { issueId: "ENG-1" }, context)).rejects.toThrow(
+      "Linear is not connected",
+    );
+
+    // The auth gate runs before any network call.
+    expect(getLinearAuth).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("lists Linear issues with the stored API key and paginates", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    const requests: Array<{ headers: unknown; variables: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        variables: Record<string, unknown>;
+      };
+      requests.push({ headers: init?.headers, variables: body.variables });
+      if (requests.length === 1) {
+        return jsonResponse({
+          data: {
+            issues: {
+              nodes: [issueNode()],
+              pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        data: {
+          issues: {
+            nodes: [issueNode({ id: "issue-2", identifier: "ENG-2", sortOrder: 2 })],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const issues = (await invoke("get_linear_issues", {}, context)) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(issues.map((issue) => issue.identifier)).toEqual(["ENG-1", "ENG-2"]);
+    expect(issues[0]).toMatchObject({
+      id: "issue-1",
+      title: "Ship the thing",
+      status: "In Progress",
+      statusType: "started",
+      teamKey: "ENG",
+      assigneeName: "Ada",
+      priority: 1,
+      priorityLabel: "Urgent",
+    });
+    expect(requests[0]?.headers).toMatchObject({ Authorization: "lin_api_secret" });
+    expect(requests[0]?.variables).toEqual({ after: null });
+    expect(requests[1]?.variables).toEqual({ after: "cursor-1" });
+  });
+
+  test("sanitizes the API key out of a failed Linear issue list", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    globalThis.fetch = mock(async () =>
+      jsonResponse({ errors: [{ message: "Authentication failed for lin_api_secret" }] }, 401),
+    ) as unknown as typeof fetch;
+
+    const error = await invoke("get_linear_issues", {}, context).then(
+      () => null,
+      (reason: unknown) => reason as Error,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).not.toContain("lin_api_secret");
+    expect(error?.message).toContain("[redacted]");
+  });
+
+  test("fetches one Linear issue with its comments", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    const variables: Array<Record<string, unknown>> = [];
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      variables.push(body.variables);
+      if (body.query.includes("comments(")) {
+        return jsonResponse({
+          data: {
+            issue: {
+              comments: {
+                nodes: [
+                  {
+                    id: "comment-1",
+                    body: "Looks good",
+                    createdAt: "2026-01-02T00:00:00.000Z",
+                    user: { name: "Grace" },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        data: {
+          issue: issueNode({
+            description: "Full description",
+            creator: { name: "Ada" },
+            project: { name: "Platform" },
+            cycle: { name: "Cycle 4" },
+            labels: { nodes: [{ name: "backend" }] },
+          }),
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const issue = (await invoke("get_linear_issue", { issueId: "ENG-1" }, context)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(issue).toMatchObject({
+      id: "issue-1",
+      identifier: "ENG-1",
+      description: "Full description",
+      creatorName: "Ada",
+      projectName: "Platform",
+      cycleName: "Cycle 4",
+      labels: ["backend"],
+    });
+    expect(issue.comments).toMatchObject([{ id: "comment-1", body: "Looks good" }]);
+    expect(variables[0]).toEqual({ id: "ENG-1" });
+  });
+
+  test("reports a missing Linear issue without leaking the API key", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    globalThis.fetch = mock(async () =>
+      jsonResponse({ data: { issue: null } }),
+    ) as unknown as typeof fetch;
+
+    await expect(invoke("get_linear_issue", { issueId: "ENG-404" }, context)).rejects.toThrow(
+      "Linear issue not found: ENG-404",
+    );
+  });
+
+  test("validates the issueId argument of get_linear_issue", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    const fetchMock = mock(async () => jsonResponse({ data: {} }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(invoke("get_linear_issue", { issueId: 7 }, context)).rejects.toThrow(
+      "Expected issueId to be a string",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("reads, lists, and deletes looped review workflows through storage", async () => {
+    const workflows: Record<string, unknown> = {
+      "workflow-1": {
+        version: 1,
+        id: "workflow-1",
+        environmentId: "environment-1",
+        snapshot: { phase: "reviewing" },
+        updatedAt: new Date(0).toISOString(),
+        revision: 3,
+      },
+      "workflow-2": {
+        version: 1,
+        id: "workflow-2",
+        environmentId: "environment-2",
+        snapshot: { phase: "completed" },
+        updatedAt: new Date(0).toISOString(),
+        revision: 1,
+      },
+    };
+    const { context, calls } = createWorkflowContext(workflows);
+
+    expect(
+      await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context),
+    ).toMatchObject({ id: "workflow-1", revision: 3, snapshot: { phase: "reviewing" } });
+
+    // Listing is environment-scoped: another environment's workflow is excluded.
+    expect(
+      await invoke("list_looped_review_workflows", { environmentId: "environment-1" }, context),
+    ).toMatchObject([{ id: "workflow-1" }]);
+
+    await invoke("delete_looped_review_workflow", { workflowId: "workflow-1" }, context);
+
+    expect(
+      await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context),
+    ).toBeNull();
+    expect(calls).toEqual([
+      { method: "get", args: ["workflow-1"] },
+      { method: "list", args: ["environment-1"] },
+      // Deletion reads first so an active backend-owned workflow cannot be
+      // removed without an explicit cancel transition.
+      { method: "get", args: ["workflow-1"] },
+      { method: "delete", args: ["workflow-1"] },
+      { method: "get", args: ["workflow-1"] },
+    ]);
+  });
+
+  test("returns nothing for an unknown looped review workflow or environment", async () => {
+    const { context } = createWorkflowContext({});
+
+    expect(
+      await invoke("get_looped_review_workflow", { workflowId: "missing" }, context),
+    ).toBeNull();
+    expect(
+      await invoke("list_looped_review_workflows", { environmentId: "missing" }, context),
+    ).toEqual([]);
+    // Deleting an absent workflow is a no-op rather than an error.
+    await invoke("delete_looped_review_workflow", { workflowId: "missing" }, context);
+  });
+
+  test("validates looped review workflow arguments", async () => {
+    const { context, calls } = createWorkflowContext({});
+
+    await expect(invoke("get_looped_review_workflow", { workflowId: 1 }, context)).rejects.toThrow(
+      "Expected workflowId to be a string",
+    );
+    await expect(
+      invoke("list_looped_review_workflows", { environmentId: null }, context),
+    ).rejects.toThrow("Expected environmentId to be a string");
+    await expect(invoke("delete_looped_review_workflow", {}, context)).rejects.toThrow(
+      "Expected workflowId to be a string",
+    );
+
+    expect(calls).toEqual([]);
+  });
+});

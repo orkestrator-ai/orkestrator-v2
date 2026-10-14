@@ -164,7 +164,7 @@ clears the old reference and proceeds. Container names are deterministic for
 owner plus environment ID. If failed removal leaves that name reserved, the
 replacement create conflicts. The existing test “recreates a container even
 when the old one cannot be removed” in
-[lifecycle tests](../../tests/unit/electron/commands-registry-environments.test.ts)
+[lifecycle tests](../../apps/backend/tests/commands-registry-environments.test.ts)
 uses a fake Docker executable that always accepts `create`; it does not model
 Docker's name uniqueness.
 

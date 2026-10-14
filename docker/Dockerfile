@@ -185,7 +185,7 @@ ENV VISUAL=nano
 # so these are a second copy; `every shipped agent, uniformly` in
 # tests/unit/version-drift.test.ts is what stops the two drifting.
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
-#   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/web/package.json and apps/backend/package.json
+#   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/backend/package.json
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.

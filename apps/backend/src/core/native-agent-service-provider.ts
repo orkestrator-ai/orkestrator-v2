@@ -110,10 +110,7 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
 import type { ProviderMcpConfigEvidenceRead } from "./agent-provider-contract.js";
-import {
-  openCodeCommandChangeJournalDirectory,
-  type OpenCodeCommandChangeOptions,
-} from "./opencode-command-changes.js";
+import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
@@ -173,7 +170,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
         provider = createNativeAgentProvider(connection, {
           autoAnswerRequests: false,
           stageImages: (images) => this.stageImages(environmentId, images),
-          commandChanges: this.openCodeCommandChanges(environmentId),
+          environment: this.providerEnvironment(environmentId),
         });
         this.cacheProvider(cacheKey, provider, identity);
       }
@@ -221,12 +218,13 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       autoAnswerRequests: false,
       onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
-      // Read per call rather than per provider: providers are cached for the
-      // life of a bridge connection, so a settings edit would otherwise not
-      // reach the catalogue until the environment restarted.
-      resolveOpenCodeModelProviders: async () =>
-        (await this.storage.loadConfig()).global.openCodeModelProviders,
-      commandChanges: this.openCodeCommandChanges(input.environmentId),
+      environment: {
+        ...this.providerEnvironment(input.environmentId),
+        // Read per call rather than per provider: providers are cached for the
+        // life of a bridge connection, so a settings edit would otherwise not
+        // reach the model catalogue until the environment restarted.
+        loadConfig: () => this.storage.loadConfig(),
+      },
     });
     this.cacheProvider(cacheKey, provider, connectionIdentity);
     return provider;
@@ -259,23 +257,17 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
   }
 
   /**
-   * Shell-change badges for an interactive OpenCode provider, journaled under
-   * the backend data directory per environment so environment deletion can
-   * drop them. Every creation site passes them: whichever one caches the
-   * provider serves the tab. The provider itself decides whether its worktree
-   * is measurable (local worktrees only). Storage doubles without a data
-   * directory get no badges rather than git runs in fixture directories.
+   * The environment an interactive provider serves. The provider factory
+   * derives platform-specific dependencies from it (per-environment on-disk
+   * state under the backend data directory, for example). Every creation site
+   * that can cache a tab's provider passes it: whichever one caches the
+   * provider serves the tab. Storage doubles without a data directory get no
+   * on-disk provider state.
    */
-  protected openCodeCommandChanges(
-    environmentId: string,
-  ): OpenCodeCommandChangeOptions | undefined {
-    if (typeof this.storage.getDataDir !== "function") return undefined;
-    return {
-      journalDirectory: openCodeCommandChangeJournalDirectory(
-        this.storage.getDataDir(),
-        environmentId,
-      ),
-    };
+  protected providerEnvironment(environmentId: string): NativeAgentProviderEnvironment {
+    return typeof this.storage.getDataDir === "function"
+      ? { environmentId, dataDir: this.storage.getDataDir() }
+      : { environmentId };
   }
 
   protected bridgeConnectionIdentity(connection: BridgeConnection): string {
@@ -389,7 +381,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       autoAnswerRequests: false,
       onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
-      commandChanges: this.openCodeCommandChanges(input.environmentId),
+      environment: this.providerEnvironment(input.environmentId),
     });
     this.cacheProvider(cacheKey, provider, this.bridgeConnectionIdentity(connection));
     return provider;

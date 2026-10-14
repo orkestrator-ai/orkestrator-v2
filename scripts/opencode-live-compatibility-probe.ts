@@ -79,7 +79,7 @@ export type ListSessions = (
 
 export interface OpenCodeLiveCompatibilityOptions {
   cliPath?: string;
-  /** Defaults to the `@opencode-ai/sdk` pin in `apps/web/package.json`. */
+  /** Defaults to the `@opencode-ai/sdk` pin in `apps/backend/package.json`. */
   expectedVersion?: string;
   /** Defaults to the version of the installed `@opencode-ai/sdk` package. */
   installedSdkVersion?: string;
@@ -116,13 +116,18 @@ type CreateOpencodeClient = (config: { baseUrl: string; directory?: string }) =>
 };
 
 /**
- * Loads the SDK client from the web workspace that pins it, the same package
- * `readInstalledSdkVersion` reports. The SDK is not hoisted to the repository
- * root, so a bare import from `scripts/` would not resolve.
+ * The backend workspace is the only one that depends on the SDK (it is the only
+ * OpenCode client in the app). The SDK is not hoisted to the repository root, so
+ * a bare import from `scripts/` would not resolve; resolve from here instead.
+ */
+const SDK_OWNER_ROOT = join(import.meta.dir, "..", "apps", "backend");
+
+/**
+ * Loads the SDK client from the backend workspace that pins it, the same package
+ * `readInstalledSdkVersion` reports.
  */
 async function loadPinnedSdkClientFactory(): Promise<CreateOpencodeClient> {
-  const webPackageRoot = join(import.meta.dir, "..", "apps", "web");
-  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", webPackageRoot);
+  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", SDK_OWNER_ROOT);
   const sdk = (await import(entry)) as { createOpencodeClient: CreateOpencodeClient };
   return sdk.createOpencodeClient;
 }
@@ -178,14 +183,14 @@ export async function availableLoopbackPort(): Promise<number> {
   return port;
 }
 
-/** Reads the exact `@opencode-ai/sdk` version `apps/web` pins. */
+/** Reads the exact `@opencode-ai/sdk` version `apps/backend` pins. */
 export async function readPinnedSdkVersion(): Promise<string> {
-  const webManifest = JSON.parse(
-    await readFile(join(import.meta.dir, "..", "apps", "web", "package.json"), "utf8"),
+  const backendManifest = JSON.parse(
+    await readFile(join(SDK_OWNER_ROOT, "package.json"), "utf8"),
   ) as { dependencies?: Record<string, string> };
-  const pinned = webManifest.dependencies?.["@opencode-ai/sdk"];
+  const pinned = backendManifest.dependencies?.["@opencode-ai/sdk"];
   if (!pinned?.match(/^\d+\.\d+\.\d+$/)) {
-    throw new Error("apps/web must exactly pin @opencode-ai/sdk");
+    throw new Error("apps/backend must exactly pin @opencode-ai/sdk");
   }
   return pinned;
 }
@@ -194,13 +199,12 @@ export async function readPinnedSdkVersion(): Promise<string> {
  * Reads the version of the `@opencode-ai/sdk` that is actually installed, so the
  * caller's comparison against the pin is a real check rather than a tautology.
  *
- * Resolution starts from the web workspace that owns the dependency, not the
+ * Resolution starts from the backend workspace that owns the dependency, not the
  * caller's cwd. The package does not export `./package.json`, so this walks up
  * from the resolved entry point instead of resolving the manifest directly.
  */
 export async function readInstalledSdkVersion(): Promise<string> {
-  const webPackageRoot = join(import.meta.dir, "..", "apps", "web");
-  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", webPackageRoot);
+  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", SDK_OWNER_ROOT);
   let directory = dirname(entry);
   for (;;) {
     const manifestPath = join(directory, "package.json");

@@ -53,6 +53,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { GithubIcon } from "@/components/icons/GithubIcon";
+import { GitHubCliSetup } from "@/components/github/GitHubCliSetup";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { CursorSdkSignIn } from "./agent/CursorSdkSignIn";
 import { Textarea } from "@/components/ui/textarea";
@@ -687,13 +688,14 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </div>
 
           {useHostGitHubCredentials ? (
-            <div className="border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
+            <div className="space-y-3 border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
               <p className="text-xs text-muted-foreground">
                 Host CLI authentication is selected.
                 {global.githubTokenConfigured
                   ? " Your stored PAT remains available if you turn this off."
                   : ""}
               </p>
+              <GitHubCliSetup />
             </div>
           ) : (
             <div className="space-y-3 border-t border-zinc-800 p-4">

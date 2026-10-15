@@ -152,3 +152,5 @@ Fixed on 2026-10-15.
   host without `gh`, a codex-only isolated profile will therefore show that
   (dismissible) warning, and only `browser-gateway.spec.ts:1023` dismisses it.
   This host has `gh`, so the run above was unaffected.
+  That dialog now also installs `gh` with Homebrew and signs it in; see
+  [`../2026-10-15/github-cli-setup.md`](../2026-10-15/github-cli-setup.md).

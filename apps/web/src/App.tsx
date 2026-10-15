@@ -31,6 +31,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialog";
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
+import { GitHubCliSetup } from "@/components/github/GitHubCliSetup";
 import {
   checkDocker,
   checkClaudeCli,
@@ -44,6 +45,7 @@ import {
   getScopedResourceSnapshots,
   prepareEnvironmentAgentLaunch,
   syncAllEnvironmentsWithDocker,
+  type GitHubCliStatus,
 } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
@@ -346,6 +348,7 @@ function App() {
   const [hostToolCheckStatus, setHostToolCheckStatus] = useState<StartupCheckStatus>("checking");
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
+  const [githubCliSetupStatus, setGithubCliSetupStatus] = useState<GitHubCliStatus | null>(null);
   const [claudeLoginNoticeDismissed, setClaudeLoginNoticeDismissed] = useState(false);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
     string | null
@@ -758,6 +761,13 @@ function App() {
     } finally {
       setIsCheckingClaude(false);
     }
+  };
+
+  // The dialog stays open after an install so the user can sign in; closing it
+  // publishes what the setup found.
+  const handleCloseGithubCliSetup = () => {
+    setGithubCliWarningDismissed(true);
+    if (githubCliSetupStatus?.installed) setGithubCliAvailable(true);
   };
 
   // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native page
@@ -1541,7 +1551,7 @@ function App() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* GitHub CLI warning dialog - non-blocking, dismissible */}
+        {/* GitHub CLI setup dialog - non-blocking, dismissible; installs and signs in gh */}
         <AlertDialog open={showGithubWarning}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -1549,43 +1559,12 @@ function App() {
               <AlertDialogDescription>
                 The GitHub CLI (gh) is not installed on your system. While not required, it enables
                 features like PR detection and GitHub integration.
-                <br />
-                <br />
-                <strong>Install GitHub CLI:</strong>
-                <br />
-                <br />
-                <strong>macOS (Homebrew):</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">brew install gh</pre>
-                <strong>Linux:</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  sudo apt install gh # Debian/Ubuntu{"\n"}sudo dnf install gh # Fedora
-                </pre>
-                <strong>Windows:</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  winget install GitHub.cli
-                </pre>
-                After installation, run{" "}
-                <code className="rounded bg-muted px-1 font-mono">gh auth login</code> to
-                authenticate.
               </AlertDialogDescription>
             </AlertDialogHeader>
+            <GitHubCliSetup onStatusChange={setGithubCliSetupStatus} />
             <AlertDialogFooter>
-              <Button
-                variant="outline"
-                onClick={handleRetryClaudeCheck}
-                disabled={isCheckingClaude}
-              >
-                {isCheckingClaude ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Checking...
-                  </>
-                ) : (
-                  "Retry"
-                )}
-              </Button>
-              <AlertDialogAction onClick={() => setGithubCliWarningDismissed(true)}>
-                Continue Without GitHub CLI
+              <AlertDialogAction onClick={handleCloseGithubCliSetup}>
+                {githubCliSetupStatus?.installed ? "Done" : "Continue Without GitHub CLI"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

@@ -3,6 +3,14 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.js";
+import {
+  cancelGitHubCliLogin,
+  getGitHubCliStatus,
+  gitHubCliInstallProgress,
+  gitHubCliLoginProgress,
+  startGitHubCliInstall,
+  startGitHubCliLogin,
+} from "./github-cli-setup.js";
 import { commandExists, homePath, pathExists } from "./shell.js";
 import {
   asString,
@@ -160,6 +168,36 @@ export function registerToolingCommands(
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
   register("check_pi_cli", (_args, context) => checkHostTool(context, "pi"));
   register("check_github_cli", () => commandExists("gh"));
+  register("get_github_cli_status", (args, context) => {
+    assertOnlyKeys(args, [], "get_github_cli_status argument");
+    return getGitHubCliStatus(context);
+  });
+  /**
+   * Install and sign-in are split into start and poll like the agent account
+   * sign-in: both outlast a request, and sign-in waits on the user.
+   */
+  register("start_github_cli_install", (args, context) => {
+    assertOnlyKeys(args, [], "start_github_cli_install argument");
+    return startGitHubCliInstall(context);
+  });
+  register("get_github_cli_install", (args) => {
+    assertOnlyKeys(args, [], "get_github_cli_install argument");
+    return gitHubCliInstallProgress();
+  });
+  register("start_github_cli_login", (args, context) => {
+    assertOnlyKeys(args, [], "start_github_cli_login argument");
+    return startGitHubCliLogin(context);
+  });
+  register("get_github_cli_login", (args) => {
+    assertOnlyKeys(args, [], "get_github_cli_login argument");
+    return gitHubCliLoginProgress();
+  });
+  register("cancel_github_cli_login", (args) => {
+    assertOnlyKeys(args, ["operationId"], "cancel_github_cli_login argument");
+    return cancelGitHubCliLogin(
+      args.operationId === undefined ? undefined : asString(args.operationId, "operationId"),
+    );
+  });
   register("get_container_github_credential_status", async (_args, context) =>
     getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global),
   );

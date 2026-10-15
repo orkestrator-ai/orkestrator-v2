@@ -485,6 +485,61 @@ export async function checkGithubCli(): Promise<boolean> {
   return invoke<boolean>("check_github_cli");
 }
 
+export interface GitHubCliStatus {
+  installed: boolean;
+  /** `gh` holds a login for github.com. */
+  authenticated: boolean;
+  /** One click can install `gh` here: macOS with Homebrew available. */
+  canInstallWithHomebrew: boolean;
+}
+
+export type GitHubCliOperationState = "idle" | "pending" | "succeeded" | "failed";
+
+export interface GitHubCliLoginProgress {
+  state: GitHubCliOperationState;
+  operationId?: string;
+  url?: string;
+  userCode?: string;
+  error?: string;
+}
+
+export interface GitHubCliInstallProgress {
+  state: GitHubCliOperationState;
+  operationId?: string;
+  error?: string;
+}
+
+/** Whether the host's GitHub CLI is installed and signed in, and whether it can be installed. */
+export async function getGitHubCliStatus(): Promise<GitHubCliStatus> {
+  return invoke<GitHubCliStatus>("get_github_cli_status", {});
+}
+
+/** Start `brew install gh` on the backend host; poll with `getGitHubCliInstall`. */
+export async function startGitHubCliInstall(): Promise<GitHubCliInstallProgress> {
+  return invoke<GitHubCliInstallProgress>("start_github_cli_install", {});
+}
+
+export async function getGitHubCliInstall(): Promise<GitHubCliInstallProgress> {
+  return invoke<GitHubCliInstallProgress>("get_github_cli_install", {});
+}
+
+/** Start `gh auth login` with GitHub's device flow; poll with `getGitHubCliLogin`. */
+export async function startGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
+  return invoke<GitHubCliLoginProgress>("start_github_cli_login", {});
+}
+
+export async function getGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
+  return invoke<GitHubCliLoginProgress>("get_github_cli_login", {});
+}
+
+/** Cancel a pending GitHub sign-in, or dismiss a finished one. */
+export async function cancelGitHubCliLogin(operationId?: string): Promise<GitHubCliLoginProgress> {
+  return invoke<GitHubCliLoginProgress>(
+    "cancel_github_cli_login",
+    operationId ? { operationId } : {},
+  );
+}
+
 /** Check if any AI CLI (Claude or OpenCode) is available for name generation */
 export async function checkAnyAiCli(): Promise<boolean> {
   return invoke<boolean>("check_any_ai_cli");

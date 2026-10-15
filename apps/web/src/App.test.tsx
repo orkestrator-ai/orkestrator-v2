@@ -239,6 +239,11 @@ const mockCheckClaudeCli = mock(async () => true);
 const mockCheckClaudeConfig = mock(async () => true);
 const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
+const mockGetGitHubCliStatus = mock(async () => ({
+  installed: false,
+  authenticated: false,
+  canInstallWithHomebrew: false,
+}));
 const mockGetConfig = mock(async () => mockConfig);
 const mockGetResourceRevisionManifest = mock(async () => ({
   generation: "a".repeat(32),
@@ -347,6 +352,9 @@ mock.module("@/lib/backend", () => ({
   checkClaudeConfig: mockCheckClaudeConfig,
   checkGithubCli: mockCheckGithubCli,
   getAvailableAiCli: mockGetAvailableAiCli,
+  getGitHubCliStatus: mockGetGitHubCliStatus,
+  getGitHubCliInstall: async () => ({ state: "idle" }),
+  getGitHubCliLogin: async () => ({ state: "idle" }),
   getConfig: mockGetConfig,
   getResourceRevisionManifest: mockGetResourceRevisionManifest,
   getScopedResourceRevisionManifest: mockGetScopedResourceRevisionManifest,
@@ -558,6 +566,12 @@ function resetAppMocks() {
   mockCheckGithubCli.mockImplementation(async () => true);
   mockGetAvailableAiCli.mockClear();
   mockGetAvailableAiCli.mockImplementation(async () => "claude");
+  mockGetGitHubCliStatus.mockClear();
+  mockGetGitHubCliStatus.mockImplementation(async () => ({
+    installed: false,
+    authenticated: false,
+    canInstallWithHomebrew: false,
+  }));
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
   mockGetResourceRevisionManifest.mockClear();
@@ -3025,6 +3039,25 @@ describe("App startup checks and global events", () => {
     await waitFor(() => {
       expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
     });
+  });
+
+  test("keeps the GitHub CLI setup open after an install so the user can sign in", async () => {
+    mockCheckGithubCli.mockImplementation(async () => false);
+    // The setup reports gh as installed, as it does after a Homebrew install.
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canInstallWithHomebrew: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("GitHub CLI Not Found")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Sign in to GitHub" })).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Done" }).click());
+
+    await waitFor(() => expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true));
   });
 
   test("continues rendering when config load fails", async () => {

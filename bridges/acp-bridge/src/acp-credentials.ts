@@ -38,13 +38,15 @@ export function acpSignInRoute(provider: string): NativeAgentSignInRoute {
   };
 }
 
-function grokHome(): string {
-  return process.env.GROK_HOME?.trim() || join(homedir(), ".grok");
+type AcpEnvironment = Record<string, string | undefined>;
+
+function grokHome(env: AcpEnvironment): string {
+  return env.GROK_HOME?.trim() || join(env.HOME?.trim() || homedir(), ".grok");
 }
 
 /** Where Grok keeps its login. `GROK_AUTH_FILE` exists for tests. */
-export function grokAuthFile(): string {
-  return process.env.GROK_AUTH_FILE?.trim() || join(grokHome(), "auth.json");
+export function grokAuthFile(env: AcpEnvironment = process.env): string {
+  return env.GROK_AUTH_FILE?.trim() || join(grokHome(env), "auth.json");
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -63,21 +65,22 @@ async function fileExists(path: string): Promise<boolean> {
 export async function acpSignInMissing(
   provider: string,
   authMethodEnv: string | undefined,
+  env: AcpEnvironment = process.env,
 ): Promise<boolean> {
   if (provider !== "grok") return false;
-  const env = process.env;
   if (env.XAI_API_KEY?.trim() || env.GROK_AUTH_PROVIDER_COMMAND?.trim()) return false;
   if (authMethodEnv && env[authMethodEnv]?.trim()) return false;
-  if (await fileExists(grokAuthFile())) return false;
-  const config = await fs.readFile(join(grokHome(), "config.toml"), "utf8").catch(() => "");
+  if (await fileExists(grokAuthFile(env))) return false;
+  const config = await fs.readFile(join(grokHome(env), "config.toml"), "utf8").catch(() => "");
   return !/^\s*auth_provider_command\s*=/m.test(config);
 }
 
 export async function assertAcpSignedIn(
   provider: string,
   authMethodEnv: string | undefined,
+  env: AcpEnvironment = process.env,
 ): Promise<void> {
-  if (await acpSignInMissing(provider, authMethodEnv)) {
+  if (await acpSignInMissing(provider, authMethodEnv, env)) {
     throw new CredentialError(GROK_SIGN_IN_REQUIRED_MESSAGE);
   }
 }
@@ -90,8 +93,9 @@ export async function assertAcpSignedIn(
 export async function acpReadiness(
   provider: string,
   authMethodEnv: string | undefined,
+  env: AcpEnvironment = process.env,
 ): Promise<NativeAgentReadiness | undefined> {
-  if (!(await acpSignInMissing(provider, authMethodEnv))) return undefined;
+  if (!(await acpSignInMissing(provider, authMethodEnv, env))) return undefined;
   return {
     state: "authentication-required",
     message: GROK_SIGN_IN_REQUIRED_MESSAGE,

@@ -402,7 +402,12 @@ export async function createSessionReserved(
   signal?: AbortSignal,
   spawnOptions: AcpSpawnOptions & AcpComposerPatch = {},
 ): Promise<SessionState> {
-  if (await acpSignInMissing(provider, providerConfig.authMethodEnv)) {
+  if (
+    await acpSignInMissing(provider, providerConfig.authMethodEnv, {
+      ...process.env,
+      ...providerConfig.env,
+    })
+  ) {
     return createDeferredSession(clientSessionKey, spawnOptions);
   }
   const child = new AcpProcess({
@@ -571,7 +576,10 @@ function withRequestedSelection(
  * fails, so the next attach loads it rather than creating a second.
  */
 async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
-  await assertAcpSignedIn(provider, providerConfig.authMethodEnv);
+  await assertAcpSignedIn(provider, providerConfig.authMethodEnv, {
+    ...process.env,
+    ...providerConfig.env,
+  });
   const requested = state.sessionConfig.composer;
   const patch = composerPatchFromSpawn({
     ...(requested.selectedModelId ? { modelId: requested.selectedModelId } : {}),

@@ -149,13 +149,13 @@ export function setAuthProbeTimeoutForTests(timeoutMs?: number): void {
 }
 
 /**
- * Refuse a turn whose model's provider has no usable login, before Pi is asked.
+ * Diagnose a preflight refusal when the model's provider has no usable login.
  *
- * Pi's own preflight refuses it too, but as a plain error the bridge cannot
- * tell from any other failure, so it reached the backend as an outcome-unknown
- * 500. This is Pi's check (`hasConfiguredAuth`, else `checkAuth`), bounded,
- * and a refusal here is a `CredentialError` naming the provider. Another
- * provider may well be signed in, which is why `assertAuthenticated` passed.
+ * Pi checks credentials after running local extension commands and input
+ * handlers. Let it make that decision first, then use its auth checks
+ * (`hasConfiguredAuth`, else `checkAuth`) to give a refused model prompt an
+ * actionable 401 instead of a generic 422. Another provider may be signed in,
+ * so bridge-wide availability alone cannot answer this.
  */
 export async function assertModelSignedIn(model: { provider: string } | undefined): Promise<void> {
   // No model at all is Pi's own refusal to make.

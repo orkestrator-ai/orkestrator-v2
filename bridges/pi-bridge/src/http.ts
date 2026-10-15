@@ -1357,8 +1357,6 @@ async function handleAdmittedPrompt(
     stopIfCancelled();
     session = await ensureSession(state);
     await applyComposerToSession(state);
-    // After the composer is applied: `session.model` is what will run.
-    await assertModelSignedIn(session.model);
     stopIfCancelled();
     if (command) {
       // A cold attach re-read the list from a fresh runtime. Hold the
@@ -1471,6 +1469,10 @@ async function handleAdmittedPrompt(
     state.revision += 1;
     schedulePersist();
     void runDeferredCommandReload(state).catch(() => undefined);
+    // Pi dispatches extension commands and input handlers before it needs a
+    // model credential. Only diagnose missing credentials after Pi has
+    // explicitly refused preflight; a locally handled prompt needs no login.
+    if (error instanceof PromptRefusedError) await assertModelSignedIn(session.model);
     throw error;
   }
 

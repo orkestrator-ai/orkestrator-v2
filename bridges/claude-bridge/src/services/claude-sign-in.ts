@@ -32,12 +32,16 @@ export const CLAUDE_SIGN_IN_REQUIRED_MESSAGE =
 let authCache: { expiresAt: number; value: NativeAgentAuthStatus } | undefined;
 /** One probe at a time: a background re-read and a route read share it. */
 let authRead: Promise<NativeAgentAuthStatus> | undefined;
+let authReadGeneration: number | undefined;
+let authRefreshPending = false;
 /** Bumped by every invalidation so an older probe cannot repopulate the cache. */
 let authGeneration = 0;
 
 export function resetClaudeSignInForTesting(): void {
   authCache = undefined;
   authRead = undefined;
+  authReadGeneration = undefined;
+  authRefreshPending = false;
   authGeneration += 1;
 }
 
@@ -112,8 +116,15 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
       return value;
     })
     .finally(() => {
-      if (authRead === read) authRead = undefined;
+      if (authRead !== read) return;
+      authRead = undefined;
+      authReadGeneration = undefined;
+      if (authRefreshPending) {
+        authRefreshPending = false;
+        void readClaudeAuthStatus();
+      }
     });
+  authReadGeneration = generation;
   authRead = read;
   return read;
 }
@@ -125,16 +136,20 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
  */
 export function noteClaudeAuthenticationFailure(): void {
   authCache = undefined;
-  authRead = undefined;
-  authGeneration += 1;
+  // Failures share the active probe. If success already fenced it, queue one
+  // replacement after its cleanup, rather than spawning concurrent CLIs.
+  if (authRead && authReadGeneration !== authGeneration) authRefreshPending = true;
   void readClaudeAuthStatus();
 }
 
 /** A model answered, so a cached "no login" is stale. */
 export function noteClaudeAuthenticationWorked(): void {
-  if (authCache?.value.state !== "needs-auth") return;
-  authCache = undefined;
+  // Success also fences a probe that has not published any cache entry yet.
+  // Keep its slot until cleanup completes so another read cannot spawn a
+  // second CLI while the obsolete probe is still running.
   authGeneration += 1;
+  authRefreshPending = false;
+  if (authCache?.value.state === "needs-auth") authCache = undefined;
 }
 
 /**

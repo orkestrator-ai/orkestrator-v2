@@ -76,6 +76,51 @@ describe("ACP sign-in check", () => {
     await assertAcpSignedIn("grok", "GROK_AUTH_METHOD_ID");
   });
 
+  test.each([
+    ["XAI_API_KEY", "xai-test"],
+    ["GROK_AUTH_PROVIDER_COMMAND", "/bin/true"],
+    ["GROK_AUTH_METHOD_ID", "grok.com"],
+  ])("uses %s from the effective child environment", async (key, value) => {
+    const env = { ...process.env, [key]: value };
+    expect(await acpSignInMissing("grok", "GROK_AUTH_METHOD_ID", env)).toBe(false);
+    expect(await acpReadiness("grok", "GROK_AUTH_METHOD_ID", env)).toBeUndefined();
+    await assertAcpSignedIn("grok", "GROK_AUTH_METHOD_ID", env);
+    expect(process.env[key]).toBeUndefined();
+  });
+
+  test.each(["auth.json", "config.toml"])(
+    "resolves %s under the child's GROK_HOME",
+    async (file) => {
+      const relocated = join(home, "child");
+      await fs.mkdir(relocated);
+      await fs.writeFile(
+        join(relocated, file),
+        file === "auth.json" ? "{}" : 'auth_provider_command = "/bin/true"',
+      );
+      expect(await acpSignInMissing("grok", undefined)).toBe(true);
+      expect(
+        await acpSignInMissing("grok", undefined, { ...process.env, GROK_HOME: relocated }),
+      ).toBe(false);
+    },
+  );
+
+  test("resolves the default home and explicit auth file in the child's environment", async () => {
+    await fs.mkdir(join(home, ".grok"));
+    await fs.writeFile(join(home, ".grok", "auth.json"), "{}");
+    expect(await acpSignInMissing("grok", undefined, { HOME: home })).toBe(false);
+    expect(
+      await acpSignInMissing("grok", undefined, {
+        GROK_AUTH_FILE: join(home, ".grok", "auth.json"),
+      }),
+    ).toBe(false);
+    expect(
+      await acpSignInMissing("grok", undefined, {
+        HOME: home,
+        GROK_AUTH_FILE: join(home, "missing"),
+      }),
+    ).toBe(true);
+  });
+
   test("reads an explicit credential path over GROK_HOME", async () => {
     await fs.writeFile(join(home, "auth.json"), "{}");
     process.env.GROK_AUTH_FILE = join(home, "elsewhere.json");

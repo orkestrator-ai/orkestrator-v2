@@ -72,8 +72,11 @@ entry, so live and resumed transcripts have the same shape.
 - Pi refuses a prompt in preflight with a plain error. Nothing has run, so the
   route answers a definite refusal, never the outcome-unknown 500: 401
   `authentication-required` when the bridge's own check finds the model's
-  provider signed out (`assertModelSignedIn`, before Pi is asked), otherwise
-  422 `prompt-refused` with Pi's reason (`PromptRefusedError`).
+  provider signed out (`assertModelSignedIn`, after Pi refuses preflight), otherwise
+  422 `prompt-refused` with Pi's reason (`PromptRefusedError`). Local extension
+  commands and input handlers run before Pi needs model credentials; never put
+  a selected-model auth check ahead of their dispatch. Selected command bindings
+  are still validated before any command can execute.
 - `applySessionEvent` never awaits. It runs on the SDK's own listener, so an
   await there would let a large transcript back-pressure a live run.
 - A tool variant Pi adds — or a custom tool from a project extension, whose

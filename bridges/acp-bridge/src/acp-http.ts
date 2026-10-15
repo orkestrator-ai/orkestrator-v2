@@ -117,8 +117,10 @@ export async function route(
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
     const signedIn =
-      !(await acpSignInMissing(provider, providerConfig.authMethodEnv)) &&
-      agentRuntime.authenticated !== false;
+      !(await acpSignInMissing(provider, providerConfig.authMethodEnv, {
+        ...process.env,
+        ...providerConfig.env,
+      })) && agentRuntime.authenticated !== false;
     return json(response, 200, {
       state: signedIn ? "signed-in" : "needs-auth",
       signIn: acpSignInRoute(provider),
@@ -295,7 +297,10 @@ export async function route(
   }
   if (action === "status" && request.method === "GET") {
     const contextUsage = publicContextUsage(state);
-    const readiness = await acpReadiness(provider, providerConfig.authMethodEnv);
+    const readiness = await acpReadiness(provider, providerConfig.authMethodEnv, {
+      ...process.env,
+      ...providerConfig.env,
+    });
     return json(response, 200, {
       status: state.status,
       error: state.error,

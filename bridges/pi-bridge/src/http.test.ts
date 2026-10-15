@@ -1061,7 +1061,7 @@ describe("successful lifecycle routes", () => {
         "unavailable. Run /login other-provider in a Pi terminal tab, or choose another model.",
     ],
   ])(
-    "refuses a turn whose model's provider has no login (OAuth %p) before Pi is asked",
+    "refuses a turn whose model's provider has no login (OAuth %p) after Pi refuses preflight",
     async (oauth, message) => {
       const state = seedSession();
       let prompts = 0;
@@ -1091,9 +1091,9 @@ describe("successful lifecycle routes", () => {
 
         expect(response.status).toBe(401);
         expect(await response.json()).toEqual({ error: message, kind: "authentication-required" });
-        expect(prompts).toBe(0);
+        expect(prompts).toBe(1);
         expect(state.messages).toHaveLength(0);
-        expect(state.status).toBe("idle");
+        expect(state.status).toBe("error");
         expect(state.dispatching).toBe(false);
         expect(state.promptJournal.has("req-signed-out")).toBe(false);
       } finally {
@@ -3004,6 +3004,64 @@ describe("command dispatch", () => {
       resetTestDependencies();
     }
   });
+
+  test.each(["typed", "selected", "input-handler"])(
+    "runs a local %s command without selected-model credentials",
+    async (kind) => {
+      const handled: string[] = [];
+      const { state } = commandSeed({
+        extensions: [{ name: "review", sourceInfo: {} }],
+        overrides: {
+          model: { provider: "other-provider", id: "other-model" },
+          prompt: async (
+            text: string,
+            opts: { preflightResult?: (disposition: string) => void },
+          ) => {
+            if (text === "/review x" || text === "local input") {
+              handled.push(text);
+              opts.preflightResult?.("handled");
+              return;
+            }
+            throw new Error("No API key found for other-provider.");
+          },
+        },
+      });
+      installRuntime({ hasConfiguredAuth: () => false, checkAuth: async () => undefined });
+      try {
+        // A stale selection must still fail before a local handler can execute.
+        const unavailable = await postPrompt(state, {
+          prompt: "/review x",
+          requestId: "stale-local",
+          command: { ...selection(state, "pi:extension:review", "x"), bindingRevision: "invalid" },
+        });
+        expect(unavailable.status).toBe(422);
+        expect(handled).toEqual([]);
+        const text = kind === "input-handler" ? "local input" : "/review x";
+        const response = await postPrompt(state, {
+          prompt: text,
+          requestId: "local-no-login",
+          ...(kind === "selected" ? { command: selection(state, "pi:extension:review", "x") } : {}),
+        });
+        expect(response.status).toBe(202);
+        await waitFor(() => state.status === "idle");
+        expect(handled).toEqual([text]);
+        expect(state.promptJournal.get("local-no-login")?.state).toBe("completed");
+        const refused = await postPrompt(state, {
+          prompt: "ordinary model prompt",
+          requestId: "model-no-login",
+        });
+        expect(refused.status).toBe(401);
+        expect(await refused.json()).toMatchObject({
+          kind: "authentication-required",
+          error: expect.stringContaining("/login other-provider"),
+        });
+        expect(state.promptJournal.has("model-no-login")).toBe(false);
+      } finally {
+        sessions.clear();
+        resetTestDependencies();
+      }
+    },
+  );
 
   test("dispatches the extension that shadows a template, and refuses the shadowed row", async () => {
     const extensions = [{ name: "review", description: "Extension review", sourceInfo: {} }];

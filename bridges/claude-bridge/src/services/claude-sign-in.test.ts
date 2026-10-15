@@ -13,6 +13,7 @@ import {
   claudeReadiness,
   normalizeClaudeAccount,
   noteClaudeAuthenticationFailure,
+  noteClaudeAuthenticationWorked,
   readClaudeAuthStatus,
 } from "./claude-sign-in.js";
 
@@ -109,6 +110,75 @@ describe("Claude prompt admission", () => {
 
     expect((await readClaudeAuthStatus()).state).toBe("unknown");
     expect(claudeReadiness()).toBeUndefined();
+  });
+
+  test("successful model evidence fences an unresolved signed-out probe", async () => {
+    let resolveAccount!: (value: typeof SIGNED_OUT) => void;
+    queryControlOverrides.accountInfo = mock(
+      () =>
+        new Promise((resolve) => {
+          resolveAccount = resolve;
+        }),
+    );
+    noteClaudeAuthenticationFailure();
+    const probe = await nextQueryCall();
+    const pending = readClaudeAuthStatus();
+    noteClaudeAuthenticationWorked();
+    expect(claudeReadiness()).toBeUndefined();
+    resolveAccount(SIGNED_OUT);
+    await pending;
+    await waitFor(() => probe.isClosed());
+    expect(claudeReadiness()).toBeUndefined();
+  });
+
+  test("concurrent auth failures and route reads share one active account probe", async () => {
+    let resolveAccount!: (value: typeof SIGNED_OUT) => void;
+    const accountInfo = mock(
+      () =>
+        new Promise<typeof SIGNED_OUT>((resolve) => {
+          resolveAccount = resolve;
+        }),
+    );
+    queryControlOverrides.accountInfo = accountInfo;
+    noteClaudeAuthenticationFailure();
+    const probe = await nextQueryCall();
+    const pending = readClaudeAuthStatus();
+    for (let i = 0; i < 10; i += 1) noteClaudeAuthenticationFailure();
+    expect(readClaudeAuthStatus()).toBe(pending);
+    expect(accountInfo).toHaveBeenCalledTimes(1);
+    resolveAccount(SIGNED_OUT);
+    await pending;
+    await waitFor(() => probe.isClosed());
+    expect(claudeReadiness()).toEqual(LOCKED);
+    expect(accountInfo).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failure after success queues one fresh probe after the obsolete probe closes", async () => {
+    let resolveAccount!: (value: typeof SIGNED_OUT) => void;
+    const accountInfo = mock(
+      () =>
+        new Promise<typeof SIGNED_OUT>((resolve) => {
+          resolveAccount = resolve;
+        }),
+    );
+    queryControlOverrides.accountInfo = accountInfo;
+    noteClaudeAuthenticationFailure();
+    const oldProbe = await nextQueryCall();
+    const pending = readClaudeAuthStatus();
+    noteClaudeAuthenticationWorked();
+    for (let i = 0; i < 10; i += 1) noteClaudeAuthenticationFailure();
+    expect(accountInfo).toHaveBeenCalledTimes(1);
+    resolveAccount(SIGNED_OUT);
+    await pending;
+    const freshProbe = await nextQueryCall();
+    expect(oldProbe.isClosed()).toBe(true);
+    expect(accountInfo).toHaveBeenCalledTimes(2);
+    expect(claudeReadiness()).toBeUndefined();
+    const freshRead = readClaudeAuthStatus();
+    resolveAccount(SIGNED_OUT);
+    await freshRead;
+    expect(freshProbe.isClosed()).toBe(true);
+    expect(claudeReadiness()).toEqual(LOCKED);
   });
 
   test("a model answer clears a cached missing login", async () => {

@@ -22,8 +22,6 @@ const SKIPPED_DIRECTORIES = new Set([
   "__tests__",
 ]);
 
-const PLAN_04 = "docs/2026-10-14/04-remaining-inheritance-chains-and-guard.md";
-
 /**
  * Layered `extends` chains that predate this guard. Each one is a single class
  * that `refactor(core): split large modules` (#417) cut into files by size, held
@@ -34,12 +32,12 @@ const PLAN_04 = "docs/2026-10-14/04-remaining-inheritance-chains-and-guard.md";
  * new; a chain that loses one fails as stale, so whoever shortens it updates the
  * entry in the same change.
  *
- * Coordination: plans 01 (storage), 02 (native agent service) and 04 are being
- * done in parallel, and each removes its own entry below. Whichever merges
- * second rebases onto the first and updates this list (drop the merged entry,
- * keep the rest) rather than restoring it. Plan 03 (claude-bridge
- * `sendPrompt`) splits one function, not a class chain, so it has no entry.
- * The web annotation chain was removed by plan 04 step 2.
+ * Coordination: plans 01 (storage) and 02 (native agent service) are being done
+ * in parallel, and each removes its own entry below. Whichever merges second
+ * rebases onto the first and updates this list (drop the merged entry, keep the
+ * other) rather than restoring it. Plan 03 (claude-bridge `sendPrompt`) splits
+ * one function, not a class chain, so it has no entry. Plan 04 removed the
+ * gateway, Codex runtime, build pipeline and web annotation chains.
  */
 const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; reason: string }> = [
   {
@@ -75,19 +73,6 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
     plan: "docs/2026-10-14/02-native-agent-service-collaborators.md",
     reason:
       "NativeAgentService (exported as NativeAgentServiceProvider) split into six layers; plan 02 turns them into collaborators.",
-  },
-  {
-    classes: [
-      "AppServerRuntimeBase",
-      "AppServerRuntimeLifecycle",
-      "AppServerRuntimeSessions",
-      "AppServerRuntimePrompt",
-      "AppServerRuntimeTail",
-      "AppServerRuntime",
-    ],
-    plan: PLAN_04,
-    reason:
-      "Codex AppServerRuntime split into lifecycle, sessions, prompt and tail layers; plan 04 moves them onto a CodexRuntimeContext.",
   },
 ];
 

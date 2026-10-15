@@ -671,3 +671,49 @@ test.each(["rejected", "throwing"])(
     expect(state.historyEpoch("session")).toBe(epoch);
   },
 );
+
+describe("OpenCodeStreamState fork model seed", () => {
+  const sessionUpdated = (sessionID: string, id: string, variant?: string) =>
+    ({
+      type: "session.updated",
+      properties: {
+        sessionID,
+        info: { id: sessionID, model: { providerID: "opencode-go", id, variant } },
+      },
+    }) as never;
+
+  test("prefers the fork's own model, then the source's streamed model", () => {
+    const state = new OpenCodeStreamState();
+    state.apply(sessionUpdated("source", "deepseek-v4.1-flash", "high"));
+
+    state.seedForkedSessionModel(
+      "fork-a",
+      { id: "fork-a", model: { providerID: "opencode-go", id: "kimi-k3" } },
+      "source",
+    );
+    expect(state.sessionModel("fork-a")).toEqual({ modelId: "opencode-go/kimi-k3" });
+
+    state.seedForkedSessionModel("fork-b", { id: "fork-b" }, "source");
+    expect(state.sessionModel("fork-b")).toEqual({
+      modelId: "opencode-go/deepseek-v4.1-flash",
+      reasoningId: "high",
+    });
+
+    state.seedForkedSessionModel("fork-c", { id: "fork-c" }, "unknown-source");
+    expect(state.sessionModel("fork-c")).toEqual({});
+  });
+
+  test("never overwrites a model the stream already reported for the fork", () => {
+    const state = new OpenCodeStreamState();
+    state.apply(sessionUpdated("fork", "glm-5", "max"));
+    state.seedForkedSessionModel(
+      "fork",
+      { id: "fork", model: { providerID: "opencode-go", id: "deepseek-v4.1-flash" } },
+      "source",
+    );
+    expect(state.sessionModel("fork")).toEqual({
+      modelId: "opencode-go/glm-5",
+      reasoningId: "max",
+    });
+  });
+});

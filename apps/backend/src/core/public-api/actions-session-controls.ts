@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import type {
   NativeAgentComposerState,
+  NativeAgentForkOutcome,
   NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
@@ -504,13 +505,10 @@ const sessionFork: MutationActionHandler<TargetInput & { messageId?: string }> =
       resources: { environmentId: session.environment.id },
       async execute(operation) {
         await operation.update({ stage: "forking" });
-        const fork = await context.invoke<{ sessionId: string; title?: string }>(
-          "fork_native_agent_session",
-          {
-            ...triple(session),
-            ...(input.messageId ? { messageId: input.messageId } : {}),
-          },
-        );
+        const fork = await context.invoke<NativeAgentForkOutcome>("fork_native_agent_session", {
+          ...triple(session),
+          ...(input.messageId ? { messageId: input.messageId } : {}),
+        });
         // A fork is a new public session: its own tab adopting the forked
         // provider conversation. The source keeps its history untouched.
         const tabId = `agent-fork-${createHash("sha256").update(operation.operationId).digest("hex").slice(0, 24)}`;
@@ -529,6 +527,9 @@ const sessionFork: MutationActionHandler<TargetInput & { messageId?: string }> =
           logicalSessionKey: nativeTabLogicalSessionKey(session.environment.id, tabId),
           providerSessionId: fork.sessionId,
           origin: "interactive-native",
+          // The source's model and reasoning, so the fork does not fall back
+          // to the catalogue default before its first prompt.
+          ...(fork.controls ? { controls: fork.controls } : {}),
         });
         const sessionId = encodePublicSessionId(session.environment.id, tabId);
         return {

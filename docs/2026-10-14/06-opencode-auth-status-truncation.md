@@ -1,7 +1,11 @@
 # OpenCode reports "needs auth" while a provider is connected
 
-Status: Active — found 2026-10-14 during live QA, not fixed. Cause found by
-reading the code; the live provider count was not measured.
+Status: Fixed 2026-10-15. `authStatus()` now derives `state` from
+`connected` within the model-provider allowlist, independent of the list cap;
+the bounded `providers` list puts connected, then allowlisted, providers
+first; and the needs-auth hint names the allowlisted providers to connect.
+Covered by `apps/backend/src/core/opencode-capabilities.test.ts`. The live
+provider count was still not measured; the fix holds either way.
 
 **Severity: low to medium.** The card is wrong but turns still work. It
 misleads users into "fixing" a login that is fine, and anything gated on the

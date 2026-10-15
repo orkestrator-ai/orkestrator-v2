@@ -1,6 +1,6 @@
 # Codex escalation restart backstop timing
 
-- **ID:** 0212
+- **ID:** 0214
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `session lifecycle > a failed escalation restart keeps the guard and re-arms the backstop` in `bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts:907`.

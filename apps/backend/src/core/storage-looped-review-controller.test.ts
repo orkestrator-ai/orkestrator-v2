@@ -1,9 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import type { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase } from "./storage-stores.js";
+import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
+
+function storageDatabase(storage: StorageService): StorageDatabase {
+  return (storage as unknown as { database: StorageDatabase }).database;
+}
+
+function storeDir(storage: StorageService): string {
+  return (storage as unknown as { dataDir: string }).dataDir;
+}
 
 async function withWorkflowStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-review-lease-guard-"));
@@ -355,6 +365,112 @@ describe("listAllLoopedReviewWorkflows", () => {
           { rejectStoredVersionAtLeast: 2 },
         ),
       ).resolves.toBeDefined();
+    });
+  });
+});
+
+describe("looped-review store access", () => {
+  test("validates a controller from one row without waiting for the store's lease", async () => {
+    await withWorkflowStorage(async (storage) => {
+      for (let index = 0; index < 5; index++) {
+        await storage.saveLoopedReviewWorkflow(`retained-${index}`, "env-1", 2, {
+          id: `retained-${index}`,
+        });
+      }
+      const claimed = await storage.claimLoopedReviewController("workflow-1", "owner-1", 15_000);
+      const other = openBackendDatabase(storeDir(storage));
+      const release = await other.acquireLease("looped-reviews.json", "another backend");
+      const database = storageDatabase(storage);
+      const wholeReads = spyOn(database, "readStore");
+      const rowReads = spyOn(database, "readStoreRow");
+      const leases = spyOn(database, "acquireLease");
+      try {
+        const checked = await Promise.race([
+          storage.validateLoopedReviewController("workflow-1", "owner-1", claimed.token),
+          Bun.sleep(1_000).then(() => "blocked behind the lease"),
+        ]);
+        expect(checked).toBe(true);
+        expect(
+          await storage.validateLoopedReviewController("workflow-1", "owner-2", claimed.token),
+        ).toBe(false);
+        expect(rowReads).toHaveBeenCalledTimes(2);
+        expect(wholeReads).not.toHaveBeenCalled();
+        expect(leases).not.toHaveBeenCalled();
+      } finally {
+        wholeReads.mockRestore();
+        rowReads.mockRestore();
+        leases.mockRestore();
+        await release();
+        other.close();
+      }
+    });
+  });
+
+  test("reads and writes touch only the workflow they name", async () => {
+    await withWorkflowStorage(async (storage) => {
+      const retained = await storage.saveLoopedReviewWorkflow("retained", "env-1", 2, {
+        id: "retained",
+      });
+      const database = storageDatabase(storage);
+      const wholeReads = spyOn(database, "readStore");
+      const wholeWrites = spyOn(database, "writeStore");
+      try {
+        const claimed = await storage.claimLoopedReviewController("workflow-1", "owner-1", 15_000);
+        const saved = await storage.saveLoopedReviewWorkflow(
+          "workflow-1",
+          "env-1",
+          2,
+          { id: "workflow-1", phase: "reviewing" },
+          1,
+          { ownerId: "owner-1", token: claimed.token },
+        );
+        expect(saved.revision).toBe(2);
+        expect((await storage.getLoopedReviewWorkflow("workflow-1"))?.revision).toBe(2);
+        await storage.releaseLoopedReviewController("workflow-1", "owner-1", claimed.token);
+        await storage.deleteLoopedReviewWorkflow("workflow-1");
+        // The save's environment check reads the environments store; nothing
+        // assembles or rewrites the looped-review store.
+        const loopedReviewStore = ([store]: unknown[]) => store === "looped-reviews";
+        expect(wholeReads.mock.calls.filter(loopedReviewStore)).toEqual([]);
+        expect(wholeWrites.mock.calls.filter(loopedReviewStore)).toEqual([]);
+      } finally {
+        wholeReads.mockRestore();
+        wholeWrites.mockRestore();
+      }
+      expect(await storage.getLoopedReviewWorkflow("workflow-1")).toBeNull();
+      expect(await storage.getLoopedReviewWorkflow("retained")).toEqual(retained);
+    });
+  });
+
+  test("deleting a workflow leaves none of its content in the database files", async () => {
+    await withWorkflowStorage(async (storage) => {
+      const secret = "LOOPED-REVIEW-SECRET-27f4";
+      await storage.saveLoopedReviewWorkflow("workflow-2", "env-1", 2, {
+        id: "workflow-2",
+        diff: secret,
+      });
+      expect(storageFilesContain(storeDir(storage), secret)).toBe(true);
+      await storage.deleteLoopedReviewWorkflow("workflow-2");
+      expect(await storage.getLoopedReviewWorkflow("workflow-2")).toBeNull();
+      expect(storageFilesContain(storeDir(storage), secret)).toBe(false);
+      expect(await storage.getLoopedReviewWorkflow("workflow-1")).not.toBeNull();
+    });
+  });
+
+  test("an environment sweep removes every record that names the environment", async () => {
+    await withWorkflowStorage(async (storage) => {
+      const secret = "LOOPED-REVIEW-UNREADABLE-90c2";
+      const dataDir = storeDir(storage);
+      seedStore(dataDir, "looped-reviews.json", {
+        ...readStoredValue<Record<string, unknown>>(dataDir, "looped-reviews.json"),
+        unreadable: { environmentId: "env-1", note: secret },
+        elsewhere: { environmentId: "env-2", note: "kept" },
+      });
+      await storage.deleteLoopedReviewWorkflowsByEnvironment("env-1");
+      expect(readStoredValue(dataDir, "looped-reviews.json")).toEqual({
+        elsewhere: { environmentId: "env-2", note: "kept" },
+      });
+      expect(storageFilesContain(dataDir, secret)).toBe(false);
     });
   });
 });

@@ -2226,8 +2226,9 @@ describe("LoopedReviewService resource lifetime", () => {
       expect(first.granted).toBe(true);
 
       // The claim happens on every advance, once a second in production, for
-      // every non-terminal workflow. Writing there rewrites the whole file —
-      // which legitimately holds complete diffs — and rotates five backups.
+      // every non-terminal workflow. Writing there rewrites the workflow's row
+      // — which legitimately holds complete diffs — and moves the store
+      // revision every client watches.
       const second = await storage.claimLoopedReviewController(started.id, owner, 15_000);
       const afterSecond = (await storage.getLoopedReviewWorkflow(started.id))!;
       expect(second.granted).toBe(true);

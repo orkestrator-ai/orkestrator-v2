@@ -1223,6 +1223,43 @@ export abstract class StorageBase {
   }
 
   /**
+   * One row of a database store by key (an array item, a record key, or a key
+   * of one envelope collection) without assembling the whole store, so a
+   * lookup costs the row, not every other record. `undefined` when absent or
+   * unreadable, as {@link loadJson} treats an unreadable store. Inside an
+   * atomic scope it reads the buffered value instead.
+   */
+  protected loadStoreRow(
+    filePath: string,
+    key: string,
+    options: { collection?: string } = {},
+  ): unknown {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("loadStoreRow requires a database store");
+    const scope = this.openAtomicScope();
+    if (scope?.writes.has(store)) {
+      const buffered = this.loadStore<unknown>(store, () => ({}));
+      if (Array.isArray(buffered)) {
+        const layout = storeLayout(store);
+        const field = layout.kind === "array" ? (layout.key ?? "id") : "id";
+        return buffered.find((item) => isRecord(item) && item[field] === key);
+      }
+      const records = options.collection
+        ? isRecord(buffered)
+          ? buffered[options.collection]
+          : undefined
+        : buffered;
+      return isRecord(records) ? records[key] : undefined;
+    }
+    try {
+      return this.database.readStoreRow(store, key, options.collection);
+    } catch (error) {
+      if (error instanceof StoreCorruptError) return undefined;
+      throw error;
+    }
+  }
+
+  /**
    * Strict read of a database store: an unreadable value throws rather than
    * reading as absent. For stores whose corruption must refuse work instead of
    * looking empty (the public operation ledger).

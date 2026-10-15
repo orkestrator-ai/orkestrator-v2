@@ -78,7 +78,8 @@ whole as a document; the row layout returns on the next keyable write.
 
 Rows carry an optional indexed `owner` (`projectId` for environments and
 Kanban, `environmentId` for sessions). `loadStoreRowsByOwner` reads one
-project's board or one environment's sessions without assembling the store.
+project's board or one environment's sessions without assembling the store,
+and `loadStoreRow` reads one row by key the same way.
 
 Each store row records its layout, so `assembleStoredValue` rebuilds the value
 without the registry. Scripts use `readStorageDatabaseStore`, which opens the
@@ -122,6 +123,17 @@ from that.
   their commit, so a create that overlaps the deletion cannot leave a record
   behind. Lease rows whose holder stopped heartbeating an hour ago are purged
   at start-up.
+
+  Looped and Multi Review workflows keep **one lease per store for writers**:
+  a save awaits its environment check, and launch and the environment sweep
+  scan every workflow. Each write is still a single-row `updateStoreRow` that
+  re-checks the controller fence and revision inside its own transaction.
+  Reads, including the controller fence check a supervisor runs around
+  nearly every provider call, read one row with `loadStoreRow` and take no
+  lease. A lease held for a read is released before the caller acts on the
+  answer, so it would cost two write transactions per check and protect
+  nothing; the commit's own check is what stops a controller that lost its
+  lease.
 - **`atomically(operation)`**: buffers every database-store write and delete
   made inside it and commits them in one transaction. Resource announcements
   made inside are published only after that commit. Reads inside see the
@@ -130,9 +142,13 @@ from that.
   Never wrap work that must be durable *before* an external side effect, such
   as a native `pendingDispatch` written before the provider send.
 
-Reads are cached per store and revalidated against the committed revision on
-every read (one indexed lookup), which also observes other processes' writes.
-`getResourceSnapshotRevision` hashes the database identity and that revision.
+Whole-store reads are cached per store and revalidated against the committed
+revision on every read (one indexed lookup), which also observes other
+processes' writes. Keyed reads and mutations fetch only their named row even
+on a cold connection or after another process writes; keyed mutations invalidate
+any whole-store cache after commit. Legacy document representations retain the
+whole-document fallback. `getResourceSnapshotRevision` hashes the database
+identity and that revision.
 
 Several backends may share a data directory (the desktop app and `orkestrator
 serve` default to the same one). WAL lets them read concurrently, and the

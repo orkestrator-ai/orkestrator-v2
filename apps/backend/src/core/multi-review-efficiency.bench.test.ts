@@ -2,13 +2,15 @@
  * Deterministic Multi Review control-plane benchmark.
  *
  * Measures what the fan-out costs around the model work — evidence
- * verifications, provider calls, transcript reads, workflow writes, backup
- * rotations, dispatch skew, consolidation input — with fake providers, a
- * temporary store, synthetic reports and no real source or transcript content.
+ * verifications, provider calls, transcript reads, workflow writes, controller
+ * fence checks, storage row and whole-store access, dispatch skew,
+ * consolidation input — with fake providers, a temporary store, synthetic
+ * reports and no real source or transcript content.
  *
  * Counting happens only through the fake provider, the command invoker and
- * storage spies. The harness therefore runs unchanged against older code, which
- * is how the efficiency work's before/after baseline was produced. The budgets
+ * storage and database spies. The harness therefore runs unchanged against
+ * older code (back to the SQLite store), which is how the efficiency work's
+ * before/after baselines were produced. The budgets
  * it checks, and why they were chosen, are in
  * `docs/architecture/review-preparation.md` ("Fan-out budgets and benchmark").
  * Reproduce with:
@@ -22,7 +24,8 @@
  * default run is CI-sized and asserts the structural gates; set
  * `MULTI_REVIEW_BENCH_REPORT_ONLY=1` to measure an older build without them.
  */
-import { describe, expect, jest, test } from "bun:test";
+import { describe, expect, jest, spyOn, test } from "bun:test";
+import type { SQLQueryBindings } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -39,6 +42,7 @@ import { syntheticReport } from "./multi-review-efficiency-fixtures.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { StorageService } from "./storage.js";
+import type { StorageDatabase } from "./storage-database.js";
 
 jest.setTimeout(120_000);
 
@@ -62,6 +66,8 @@ interface BenchOptions {
   issuesPerReport: number;
   runningPasses: number;
   packageBytes: number;
+  /** Finished workflows already in the store: the retained review history. */
+  retainedWorkflows?: number;
 }
 
 class BenchProvider implements BuildPipelineProvider {
@@ -173,9 +179,19 @@ interface BenchResult {
   transcriptReads: number;
   workflowSaves: number;
   savesPerRunningPass: number;
-  backupRotations: number;
-  leaseWrites: number;
-  leaseWritesWithBackup: number;
+  retainedWorkflows: number;
+  /** Controller fence checks, total and per running pass. */
+  fenceChecks: number;
+  fenceChecksPerRunningPass: number;
+  /** Multi Review store access: whole-store reads and writes, single-row reads and writes. */
+  wholeStoreReads: number;
+  wholeStoreReadsPerRunningPass: number;
+  wholeStoreWrites: number;
+  rowReads: number;
+  rowWrites: number;
+  /** Multi Review mutation-lease acquisitions (two SQLite write transactions each). */
+  leaseAcquires: number;
+  leaseAcquiresPerRunningPass: number;
   consolidationPromptBytes: number;
   totalMs: number;
 }
@@ -203,46 +219,74 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
     setupScriptsComplete: true,
   });
 
-  // Storage spies: logical saves, and physical sensitive writes by backup mode.
-  let workflowSaves = 0;
-  let backupRotations = 0;
-  let leaseWrites = 0;
-  let leaseWritesWithBackup = 0;
-  let inLeaseWrite = false;
+  // Finished workflows a long-lived environment retains: each fence check must
+  // cost the same whether there are none or many.
+  const retainedTimestamp = new Date(0).toISOString();
+  for (let index = 0; index < (options.retainedWorkflows ?? 0); index++) {
+    const id = randomUUID();
+    const retained: MultiReviewWorkflow = {
+      version: 1,
+      controller: "backend",
+      id,
+      environmentId,
+      projectId: "project-1",
+      targetBranch: "main",
+      autoFix: false,
+      reviewers: Array.from({ length: 8 }, (_, reviewer) => ({
+        id: randomUUID(),
+        agent: "claude" as const,
+        model: "bench-model",
+        status: "completed" as const,
+        report: syntheticReport(options.issuesPerReport, reviewer),
+      })),
+      fixModel: { agent: "claude", model: "bench-fix" },
+      phase: "completed",
+      createdAt: retainedTimestamp,
+      updatedAt: retainedTimestamp,
+      backendRevision: 0,
+    };
+    await storage.saveMultiReviewWorkflow(id, environmentId, 1, retained);
+  }
+
+  // Storage spies: logical saves and fence checks, and how the Multi Review
+  // store is reached underneath them.
+  const counts = {
+    workflowSaves: 0,
+    fenceChecks: 0,
+    wholeStoreReads: 0,
+    wholeStoreWrites: 0,
+    rowReads: 0,
+    rowWrites: 0,
+    leaseAcquires: 0,
+  };
   const originalSave = storage.saveMultiReviewWorkflow.bind(storage);
   storage.saveMultiReviewWorkflow = async (...args) => {
-    workflowSaves += 1;
+    counts.workflowSaves += 1;
     return originalSave(...args);
   };
-  for (const method of ["claimMultiReviewController", "releaseMultiReviewController"] as const) {
-    const original = (storage[method] as (...args: unknown[]) => Promise<unknown>).bind(storage);
-    (storage as unknown as Record<string, unknown>)[method] = async (...args: unknown[]) => {
-      inLeaseWrite = true;
-      try {
-        return await original(...args);
-      } finally {
-        inLeaseWrite = false;
-      }
+  const originalValidate = storage.validateMultiReviewController.bind(storage);
+  storage.validateMultiReviewController = async (...args) => {
+    counts.fenceChecks += 1;
+    return originalValidate(...args);
+  };
+  const database = (storage as unknown as { database: Record<string, unknown> }).database;
+  const spy = (
+    method: string,
+    matches: (target: unknown) => boolean,
+    count: keyof typeof counts,
+  ) => {
+    const original = (database[method] as (...args: unknown[]) => unknown).bind(database);
+    database[method] = (...args: unknown[]) => {
+      if (matches(args[0])) counts[count] += 1;
+      return original(...args);
     };
-  }
-  const internals = storage as unknown as {
-    saveSensitiveJson: (
-      file: string,
-      value: unknown,
-      options?: { backup?: boolean },
-    ) => Promise<void>;
   };
-  const originalSensitive = internals.saveSensitiveJson.bind(storage);
-  internals.saveSensitiveJson = async (file, value, saveOptions) => {
-    if (file.endsWith("multi-reviews.json")) {
-      if (saveOptions?.backup !== false) backupRotations += 1;
-      if (inLeaseWrite) {
-        leaseWrites += 1;
-        if (saveOptions?.backup !== false) leaseWritesWithBackup += 1;
-      }
-    }
-    return originalSensitive(file, value, saveOptions);
-  };
+  const multiReviewStore = (store: unknown) => store === "multi-reviews";
+  spy("readStore", multiReviewStore, "wholeStoreReads");
+  spy("writeStore", multiReviewStore, "wholeStoreWrites");
+  spy("readStoreRow", multiReviewStore, "rowReads");
+  spy("updateStoreRow", multiReviewStore, "rowWrites");
+  spy("acquireLease", (name) => name === "multi-reviews.json", "leaseAcquires");
 
   let verifyCalls = 0;
   const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
@@ -338,7 +382,7 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
     const beforeRunning = {
       status: allProviders.reduce((total, provider) => total + provider.statusCalls, 0),
       messages: allProviders.reduce((total, provider) => total + provider.messagesCalls, 0),
-      saves: workflowSaves,
+      ...counts,
     };
     for (let pass = 0; pass < options.runningPasses; pass++) {
       await service.advanceNow(workflow.id);
@@ -349,7 +393,14 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
     const runningReads =
       allProviders.reduce((total, provider) => total + provider.messagesCalls, 0) -
       beforeRunning.messages;
-    const runningSaves = workflowSaves - beforeRunning.saves;
+    const perRunningPass = (count: keyof typeof counts) =>
+      Number(((counts[count] - beforeRunning[count]) / options.runningPasses).toFixed(2));
+    const running = {
+      saves: perRunningPass("workflowSaves"),
+      fenceChecks: perRunningPass("fenceChecks"),
+      wholeStoreReads: perRunningPass("wholeStoreReads"),
+      leaseAcquires: perRunningPass("leaseAcquires"),
+    };
 
     // Settlement and consolidation.
     for (const provider of allProviders) provider.running = false;
@@ -377,11 +428,18 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
       runningPasses: options.runningPasses,
       statusCalls: runningStatus,
       transcriptReads: runningReads,
-      workflowSaves,
-      savesPerRunningPass: Number((runningSaves / options.runningPasses).toFixed(2)),
-      backupRotations,
-      leaseWrites,
-      leaseWritesWithBackup,
+      workflowSaves: counts.workflowSaves,
+      savesPerRunningPass: running.saves,
+      retainedWorkflows: options.retainedWorkflows ?? 0,
+      fenceChecks: counts.fenceChecks,
+      fenceChecksPerRunningPass: running.fenceChecks,
+      wholeStoreReads: counts.wholeStoreReads,
+      wholeStoreReadsPerRunningPass: running.wholeStoreReads,
+      wholeStoreWrites: counts.wholeStoreWrites,
+      rowReads: counts.rowReads,
+      rowWrites: counts.rowWrites,
+      leaseAcquires: counts.leaseAcquires,
+      leaseAcquiresPerRunningPass: running.leaseAcquires,
       consolidationPromptBytes: Buffer.byteLength(consolidationPrompt ?? "", "utf8"),
       totalMs: Math.round(performance.now() - started),
     };
@@ -402,8 +460,19 @@ const BASE: Omit<BenchOptions, "reviewers" | "agents"> = {
 
 const results: BenchResult[] = [];
 
+/**
+ * A fence check reads one committed row and takes no lease, so a running pass
+ * reads no whole store and takes the same leases at any panel size or history:
+ * the controller claim and the observational flush.
+ */
+function expectFenceChecksCostOneRow(result: BenchResult): void {
+  expect(result.fenceChecksPerRunningPass).toBeGreaterThan(0);
+  expect(result.wholeStoreReadsPerRunningPass).toBe(0);
+  expect(result.leaseAcquiresPerRunningPass).toBeLessThanOrEqual(2);
+}
+
 describe("Multi Review control-plane benchmark", () => {
-  for (const reviewers of [1, 2, 4, 8, 32]) {
+  for (const reviewers of [1, 2, 4, 8, 16, 32]) {
     test(`${reviewers} reviewer(s), one provider`, async () => {
       const result = await runBenchmark({ ...BASE, reviewers, agents: ["claude"] });
       results.push(result);
@@ -416,12 +485,26 @@ describe("Multi Review control-plane benchmark", () => {
       expect(result.transcriptReads).toBeLessThanOrEqual(reviewers);
       // At most one observational checkpoint per running pass.
       expect(result.savesPerRunningPass).toBeLessThanOrEqual(1);
-      // Lease writes never rotate workflow backups.
-      expect(result.leaseWritesWithBackup).toBe(0);
+      expectFenceChecksCostOneRow(result);
       // Setup overlaps within the default cap of four.
       expect(result.maxConcurrentSetup).toBe(Math.min(reviewers, 4));
     });
   }
+
+  test("retained review history does not change a running pass's storage work", async () => {
+    const fresh = await runBenchmark({ ...BASE, reviewers: 8, agents: ["claude"] });
+    const retained = await runBenchmark({
+      ...BASE,
+      reviewers: 8,
+      agents: ["claude"],
+      retainedWorkflows: 50,
+    });
+    results.push(retained);
+    if (REPORT_ONLY) return;
+    expectFenceChecksCostOneRow(retained);
+    expect(retained.fenceChecksPerRunningPass).toBe(fresh.fenceChecksPerRunningPass);
+    expect(retained.leaseAcquiresPerRunningPass).toBe(fresh.leaseAcquiresPerRunningPass);
+  });
 
   test("8 reviewers across two providers", async () => {
     const result = await runBenchmark({ ...BASE, reviewers: 8, agents: ["claude", "codex"] });
@@ -451,3 +534,150 @@ describe("Multi Review control-plane benchmark", () => {
     expect(results.length).toBeGreaterThan(0);
   });
 });
+
+// Observe SQLite results rather than the logical readStoreRow call: a keyed
+// API can still hide a whole-store load on a cold or invalidated cache.
+test.each([0, 50])(
+  "keyed storage fetches only its row with %i retained workflows",
+  async (retained) => {
+    if (REPORT_ONLY) return;
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-storage-bench-"));
+    const writer = new StorageService(dataDir);
+    const reader = new StorageService(dataDir);
+    try {
+      await writer.init();
+      await writer.addEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        name: "bench",
+        branch: "change",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "full",
+        order: 0,
+        environmentType: "local",
+        worktreePath: "/tmp/review",
+      });
+      const snapshot = (id: string, phase: "reviewing" | "completed"): MultiReviewWorkflow => ({
+        version: 1,
+        controller: "backend",
+        id,
+        environmentId: "env-1",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [],
+        fixModel: { agent: "claude", model: "bench" },
+        phase,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        backendRevision: 0,
+      });
+      for (let index = 0; index < retained; index++) {
+        await writer.saveMultiReviewWorkflow(`retained-${index}`, "env-1", 1, {
+          ...snapshot(`retained-${index}`, "completed"),
+          reviewers: [
+            {
+              id: "reviewer",
+              agent: "claude",
+              model: "bench",
+              status: "completed",
+              report: syntheticReport(20, index),
+            },
+          ],
+        });
+      }
+      await writer.saveMultiReviewWorkflow("active", "env-1", 1, snapshot("active", "reviewing"));
+      const first = await writer.claimMultiReviewController("active", "owner-1", 60_000);
+      await reader.init();
+      const database = (reader as unknown as { database: StorageDatabase }).database;
+      const sqlite = database.db;
+      const query = sqlite.query.bind(sqlite);
+      let rowsFetched = 0;
+      let bytesFetched = 0;
+      const observe = spyOn(sqlite, "query").mockImplementation(function <
+        Result,
+        Params extends SQLQueryBindings | SQLQueryBindings[],
+      >(sql: string) {
+        const statement = query<Result, Params>(sql);
+        if (!/^\s*SELECT\b/i.test(sql) || !/\bFROM\s+store_rows\b/i.test(sql)) return statement;
+        return new Proxy(statement, {
+          get(target, property) {
+            if (property !== "get" && property !== "all") {
+              const value = Reflect.get(target, property, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            }
+            return (...bindings: unknown[]) => {
+              const result = Reflect.apply(target[property], target, bindings) as unknown;
+              if (bindings[0] === "multi-reviews") {
+                for (const row of Array.isArray(result) ? result : result ? [result] : []) {
+                  rowsFetched += 1;
+                  if (typeof row.value === "string") bytesFetched += Buffer.byteLength(row.value);
+                }
+              }
+              return result;
+            };
+          },
+        });
+      });
+      const expectedBytes = (storage: StorageService) => {
+        const db = (storage as unknown as { database: StorageDatabase }).database;
+        return db.rows("multi-reviews").entry("active")!.bytes;
+      };
+      const expectOneRow = async (operation: () => Promise<unknown>) => {
+        const bytes = expectedBytes(writer);
+        rowsFetched = 0;
+        bytesFetched = 0;
+        await operation();
+        expect(rowsFetched).toBe(1);
+        expect(bytesFetched).toBe(bytes);
+      };
+      try {
+        // This reader has never read Multi Review history.
+        await expectOneRow(async () => {
+          expect(await reader.validateMultiReviewController("active", "owner-1", first.token)).toBe(
+            true,
+          );
+        });
+        // Populate the old whole-store cache, then invalidate it from a separate
+        // connection. Neither the fence nor subsequent mutations may reload it.
+        database.readStore("multi-reviews");
+        await writer.releaseMultiReviewController("active", "owner-1", first.token);
+        await expectOneRow(async () => {
+          expect(await reader.validateMultiReviewController("active", "owner-1", first.token)).toBe(
+            false,
+          );
+        });
+        const next = await writer.claimMultiReviewController("active", "owner-2", 60_000);
+        await expectOneRow(() => reader.claimMultiReviewController("active", "owner-2", 60_000));
+        await expectOneRow(() =>
+          reader.saveMultiReviewWorkflow(
+            "active",
+            "env-1",
+            1,
+            { ...snapshot("active", "reviewing"), phase: "consolidating" },
+            1,
+            { ownerId: "owner-2", token: next.token },
+          ),
+        );
+        await expectOneRow(() => reader.getMultiReviewWorkflow("active"));
+        await expectOneRow(() =>
+          reader.releaseMultiReviewController("active", "owner-2", next.token),
+        );
+        expect((await writer.getMultiReviewWorkflow("active"))?.revision).toBe(2);
+        expect(await writer.listMultiReviewWorkflows("env-1")).toHaveLength(retained + 1);
+        await expectOneRow(() => reader.deleteMultiReviewWorkflow("active"));
+        expect(await writer.getMultiReviewWorkflow("active")).toBeNull();
+      } finally {
+        observe.mockRestore();
+      }
+    } finally {
+      reader.close();
+      writer.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  },
+);

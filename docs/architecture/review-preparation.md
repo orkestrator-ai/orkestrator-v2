@@ -157,6 +157,8 @@ independently of panel size, up to the 32-reviewer maximum:
 | Evidence verifications | 2 per evidence generation: before admission and before consolidation | `review-evidence-permits.ts` |
 | Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `multi-review-progress.ts`, `review-fanout-transcript.ts` |
 | Observational writes | At most one workflow write per pass, for any panel size | `ReviewFanoutRunner.stageObservation` |
+| Controller fence checks | One committed row read each, with no lease, whatever the panel size or retained review history; four per running reviewer per pass, plus one (and one per pending request) on providers that report interactions | `StorageReviews.validateMultiReviewController` |
+| Multi Review store work per running pass | No whole-store read; two lease acquisitions (the controller claim and the observational flush) at any panel size | `storage-reviews.ts` |
 | Running-reviewer observation | Next pass 3 s after the previous one finishes, plus up to 1 s stable per-workflow jitter; admission, dispatch and consolidation work runs at 1 s | `multi-review-service.ts` |
 | Accepted report | 1 MiB, 100 issues, 16 KiB per prose field | `packages/protocol/src/structured-review/budgets.ts` |
 | Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review-consolidation-evidence.ts` |
@@ -178,17 +180,30 @@ Why these values:
   reviewer does not delay its peers.
 - **3 s running cadence.** Reviews take minutes; 3 s keeps the tab fresh while
   cutting provider status traffic by at least two thirds compared with 1 s.
+- **Fence checks read one row.** A running reviewer is fenced four or five
+  times a pass, so a fence check must not grow with the panel or with retained
+  history. When each check instead took the store's lease and parsed every
+  retained workflow (2026-10-15, after the SQLite move), a 32-reviewer running
+  pass made 128 checks, 130 lease acquisitions and 132 whole-store parses, and
+  50 retained finished 8-reviewer workflows (about 8 MiB) made a running pass
+  about 25 times slower.
 
 [`multi-review-efficiency.bench.test.ts`](../../apps/backend/src/core/multi-review-efficiency.bench.test.ts)
 measures this with fake providers, a temporary store and synthetic reports
-(`multi-review-efficiency-fixtures.ts`) for 1, 2, 4, 8 and 32 reviewers, a
-two-provider panel and one slow reviewer. It counts only through the fake
-provider, the command invoker and storage spies, so the same file can run
-against an older build. Its numbers are control-plane work, not model latency,
-tokens or cost. The default run asserts two verifications per generation,
-transcript reads bounded by reviewer count, at most one save per running pass,
+(`multi-review-efficiency-fixtures.ts`) for 1, 2, 4, 8, 16 and 32 reviewers,
+an 8-reviewer panel over 50 retained finished workflows, a two-provider panel
+and one slow reviewer. It counts only through the fake provider, the command
+invoker and storage and database spies, so the same file can run against an
+older build of the SQLite store. Its numbers are control-plane work, not model
+latency, tokens or cost. The default run asserts two verifications per
+generation, transcript reads bounded by reviewer count, at most one save per
+running pass, no whole-store read and at most two Multi Review lease
+acquisitions per running pass (unchanged by retained history),
 `min(reviewers, 4)` concurrent setups, and that a slow setup does not
-serialise the panel. To record the result table:
+serialise the panel. Separate storage probes count the actual SQLite rows and
+serialized bytes fetched with zero and 50 retained workflows. They check a cold
+reader and a reader invalidated by another backend, so a keyed API cannot hide
+a whole-store cache load. To record the result table:
 
 ```bash
 MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \
@@ -202,6 +217,8 @@ assertions. The remaining budgets are asserted by focused tests:
 `review-fanout-efficiency.test.ts` (transcript reads, writes per pass,
 admission, isolation), `multi-review-service-efficiency.test.ts` and
 `multi-review-reviewer-transcript.test.ts` (reviewer-tab snapshots),
+`storage-multi-review.test.ts` and `storage-looped-review-controller.test.ts`
+(fence checks read one row without the lease),
 `structured-review/budgets.test.ts` (reports) and
 `review-consolidation-evidence.test.ts` (consolidation input). Open
 scale and cost work is in

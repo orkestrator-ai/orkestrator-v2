@@ -61,6 +61,32 @@ lost-update bugs closed by the SQLite migration cannot come back.
 
 ## Outstanding work
 
+### Retired JSON archive
+
+`saveSensitiveJson` (`storage-base.ts`) runs `scrubLegacyJsonStore` after
+every database write of a sensitive store, for as long as `legacy-json/` holds
+that store (14 days after the import). Its transform keeps each archived
+top-level key that the new value still has, but writes the key's **current**
+value. So, until the archive is purged:
+
+- every sensitive save to a database store (agent mail, coordinators, prompt
+  queues, drafts and handoffs among them) also reads, parses and rewrites the
+  store's archived primary and its five `.bak.N` copies synchronously on the
+  event loop;
+- the archive stops being the pre-migration copy that `storage.md` tells a
+  downgrade to restore from. On a live install on 2026-10-15, all six archived
+  `agent-mail.json*` copies (178 KB each) and all six `coordinators.json*`
+  copies had been rewritten to one identical, current value that afternoon;
+- it keeps a second copy of current sensitive content outside the database.
+
+Fix: scrub the archive only when something is deleted, dropping the removed
+keys and leaving archived values as they were (`scrubSensitiveJsonBackups`
+already does this), and stop calling `scrubLegacyJsonStore` from non-deleting
+saves. Multi Review and looped-review workflows no longer save through
+`saveSensitiveJson`. Done when a non-deleting sensitive save leaves
+`legacy-json/` byte-identical, a delete still removes the key from every
+archived copy, and `storage-environment-privacy.test.ts` still passes.
+
 ### Code
 
 Each step is its own PR and keeps behaviour identical. **Every step must update

@@ -161,6 +161,11 @@ default).
      consolidation session (`ReviewConsolidationSession`) record
      `modelSubstitution`, and the stage rail shows its message as a notice line
      under the row.
+   - Multi Review and looped review: they run the launcher's selection, and
+     its "Default" reaches the provider as no model. `createBuildPipelineProvider`
+     resolves such an unpinned session through the same capability at
+     creation, starts it on the effective default, and names that model on the
+     session's model-less turns.
    - The saved configuration is never rewritten by resolution, so the user's
      choice returns when the provider reconnects.
 3. **Connectivity is persisted.** `OpenCodeModelCatalogSnapshot` gained
@@ -201,6 +206,8 @@ New tests for a login with only `opencode-go` connected:
 preselection, first prompt dispatched on `opencode-go`; unset model resolved),
 `build-pipeline-service-supervisor.test.ts` (build with no step model, unset
 model, fan-out reviewers, pinned step model kept),
+`build-pipeline-provider.test.ts` (unpinned Multi Review and looped review
+sessions),
 `opencode-provider-runtime.test.ts` (parser, substitution and resolution on the
 real fixture), `commands-registry-coverage.test.ts` and
 `commands-state-sync.test.ts` (live and persisted connectivity, launch-dialog
@@ -209,14 +216,8 @@ cache marks), `storage.test.ts` (snapshot connectivity, clearing),
 connected" row), `agent-launch.test.ts`, `BuildChatTab.test.tsx` (stage
 notice), and the `build-pipeline.test.ts` / `review-fanout.test.ts` validators.
 
-### Not done
+### Also cleaned up
 
-- `selectedReasoningId` is still optional in the OpenCode discovery-metadata
-  plumbing (`opencode-discovery-metadata.ts`, the composer in
-  `opencode-provider.ts`). The catalogue no longer produces it, so it is always
-  absent. Removing it is left alone so it does not collide with the
-  concurrent fix for 04.
-- Multi Review and looped review do not read the configured OpenCode default:
-  they run the launcher's selection, and their "Default" choice sends no model,
-  which leaves the choice to OpenCode's server as before. That is unchanged and
-  outside this issue.
+- The OpenCode discovery metadata and composer no longer carry a
+  `selectedReasoningId`: the `default` map has no variant, so it was always
+  absent.

@@ -1124,9 +1124,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
         models: metadata.models,
         ...(metadata.selectedModelId ? { selectedModelId: metadata.selectedModelId } : {}),
-        ...(metadata.selectedReasoningId
-          ? { selectedReasoningId: metadata.selectedReasoningId }
-          : {}),
         executionProfiles: metadata.executionProfiles,
       },
       ...(metadata.sessionModelId ? { sessionModelId: metadata.sessionModelId } : {}),

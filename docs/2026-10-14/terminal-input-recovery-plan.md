@@ -1,9 +1,13 @@
 # Terminal input recovery: one strict rule plus an explicit resume
 
-Status: Proposed (2026-10-14). Not started.
-Depends on: the shared transport core branch
-(`investigate-architecture-92cc4a4b9d96-r1`), which introduced
-`TerminalInputSequencer` and the transport contract fixtures. Land that first;
+Status: Implemented (2026-10-15) on `feat-terminal-input-resume-strict-fence`.
+Format, lint and typecheck pass, as do the protocol, web, desktop, web-public,
+CLI and toolchain test suites. The only full-suite failures are unrelated and
+also fail on main: host-dependency tests (firewall, `migrate-copy`, the Pi
+vendoring timeout) and one backend shutdown test. The manual real-browser and
+Electron checks under Verification are still pending.
+Depends on: the shared transport core (#968), which introduced
+`TerminalInputSequencer` and the transport contract fixtures. It is on main;
 this is a separate, deliberately behaviour-changing PR.
 
 ## Problem
@@ -147,7 +151,7 @@ These pin the old browser rule and must change:
 "leaves a failed queue closed when the recovering resize also fails" is
 unchanged.
 
-### Desktop (`tests/unit/electron/backend-terminal-input.test.ts`)
+### Desktop (`apps/desktop/tests/backend-terminal-input.test.ts`)
 
 - The existing strict tests stay as they are.
 - Add one test that resume crosses `BackendHttpClient.invoke` without an HTTP

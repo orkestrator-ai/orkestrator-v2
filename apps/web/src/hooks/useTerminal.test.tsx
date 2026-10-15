@@ -6,7 +6,10 @@ import {
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
 } from "@/lib/native/events";
 import * as realBackend from "@/lib/backend";
-import { mockToastError as toastErrorMock } from "../../../../tests/mocks/sonner";
+import {
+  mockToastDismiss as toastDismissMock,
+  mockToastError as toastErrorMock,
+} from "../../../../tests/mocks/sonner";
 
 type TestTerminalOutputSnapshot = Omit<realBackend.TerminalOutputSnapshot, "truncated"> & {
   truncated?: boolean;
@@ -72,6 +75,9 @@ const resizeTerminalMock = mock(
 // keystroke that actually reached a shell.
 const writeLocalTerminalMock = mock(async (_sessionId: string, _data: string) => true);
 const writeTerminalMock = mock(async (_sessionId: string, _data: string) => true);
+const resumeTerminalInputMock = mock(
+  async (_sessionId: string, _options?: { local?: boolean }) => true,
+);
 
 const realBackendSnapshot = { ...realBackend };
 mock.module("@/lib/backend", () => ({
@@ -90,6 +96,7 @@ mock.module("@/lib/backend", () => ({
   resizeTerminal: resizeTerminalMock,
   writeLocalTerminal: writeLocalTerminalMock,
   writeTerminal: writeTerminalMock,
+  resumeTerminalInput: resumeTerminalInputMock,
 }));
 
 const listenMock = listen as ReturnType<typeof mock>;
@@ -118,7 +125,9 @@ describe("useTerminal reconnect behavior", () => {
     resizeTerminalMock.mockClear();
     writeLocalTerminalMock.mockClear();
     writeTerminalMock.mockClear();
+    resumeTerminalInputMock.mockClear();
     toastErrorMock.mockClear();
+    toastDismissMock.mockClear();
     listenMock.mockClear();
     unlistenMock.mockClear();
 
@@ -148,6 +157,7 @@ describe("useTerminal reconnect behavior", () => {
     resizeTerminalMock.mockImplementation(async () => undefined);
     writeLocalTerminalMock.mockImplementation(async () => true);
     writeTerminalMock.mockImplementation(async () => true);
+    resumeTerminalInputMock.mockImplementation(async () => true);
     listenMock.mockImplementation(async () => unlistenMock);
   });
 
@@ -2251,12 +2261,14 @@ describe("useTerminal reconnect behavior", () => {
     expect(result.current.isConnected).toBe(true);
     expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
       id: "terminal-input-session-new-container",
-      description: "write failed",
-      action: { label: "Reconnect", onClick: expect.any(Function) },
+      description:
+        "write failed. Check the terminal before resuming: part of your last input may have reached the shell.",
+      action: { label: "Resume input", onClick: expect.any(Function) },
+      cancel: { label: "Reconnect", onClick: expect.any(Function) },
     });
   });
 
-  it("offers a reconnect action that rebuilds the session a failed write left closed", async () => {
+  it("offers a reconnect button that rebuilds the session a failed write left closed", async () => {
     writeTerminalMock.mockRejectedValueOnce(new Error("closed until the session restarts"));
     const { result } = renderHook(() =>
       useTerminal({
@@ -2274,9 +2286,9 @@ describe("useTerminal reconnect behavior", () => {
     startTerminalSessionMock.mockClear();
     const [, options] = toastErrorMock.mock.calls.at(-1) as [
       string,
-      { action: { label: string; onClick: () => void } },
+      { cancel: { label: string; onClick: () => void } },
     ];
-    expect(options.action.label).toBe("Reconnect");
+    expect(options.cancel.label).toBe("Reconnect");
 
     // Only a restarted session reopens the gateway's input queue, so the action
     // has to detach and start rather than merely re-attach.
@@ -2285,13 +2297,79 @@ describe("useTerminal reconnect behavior", () => {
       running: false,
     }));
     await act(async () => {
-      options.action.onClick();
+      options.cancel.onClick();
       await waitFor(() => expect(startTerminalSessionMock).toHaveBeenCalled());
     });
 
     expect(detachTerminalMock).toHaveBeenCalledWith("session-new-container");
     expect(createTerminalSessionMock).toHaveBeenCalled();
     expect(result.current.isConnected).toBe(true);
+  });
+
+  for (const isLocal of [false, true]) {
+    it(`resumes ${isLocal ? "local" : "container"} input without restarting the shell`, async () => {
+      const writeMock = isLocal ? writeLocalTerminalMock : writeTerminalMock;
+      writeMock.mockRejectedValueOnce(new Error("write timed out"));
+      const { result } = renderHook(() =>
+        useTerminal({
+          containerId: isLocal ? null : "container-1",
+          environmentId: "env-1",
+          isLocal,
+          persistSession: true,
+        }),
+      );
+      await act(async () => {
+        await result.current.connect();
+        await result.current.write("input");
+      });
+      const sessionId = isLocal ? "session-new-local" : "session-new-container";
+      const [, options] = toastErrorMock.mock.calls.at(-1) as [
+        string,
+        { id: string; action: { label: string; onClick: (event: Event) => void } },
+      ];
+      expect(options.action.label).toBe("Resume input");
+
+      detachTerminalMock.mockClear();
+      closeLocalTerminalSessionMock.mockClear();
+      const event = new Event("click", { cancelable: true });
+      await act(async () => {
+        options.action.onClick(event);
+        await waitFor(() => expect(toastDismissMock).toHaveBeenCalledWith(options.id));
+      });
+
+      // Sonner would dismiss on click; the toast stays until resume succeeds.
+      expect(event.defaultPrevented).toBe(true);
+      expect(resumeTerminalInputMock).toHaveBeenCalledWith(sessionId, { local: isLocal });
+      expect(detachTerminalMock).not.toHaveBeenCalled();
+      expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
+      expect(result.current.sessionId).toBe(sessionId);
+    });
+  }
+
+  it("keeps the toast open when there was nothing to resume", async () => {
+    writeTerminalMock.mockRejectedValueOnce(new Error("write failed"));
+    resumeTerminalInputMock.mockImplementationOnce(async () => false);
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+      await result.current.write("input");
+    });
+    const [, options] = toastErrorMock.mock.calls.at(-1) as [
+      string,
+      { action: { onClick: (event: Event) => void } },
+    ];
+    await act(async () => {
+      options.action.onClick(new Event("click", { cancelable: true }));
+      await waitFor(() => expect(resumeTerminalInputMock).toHaveBeenCalled());
+      // Let the resume promise settle before checking it left the toast alone.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(toastDismissMock).not.toHaveBeenCalled();
   });
 
   it("reports a failed local terminal write against its own session", async () => {
@@ -2312,8 +2390,10 @@ describe("useTerminal reconnect behavior", () => {
     expect(writeLocalTerminalMock).toHaveBeenCalledWith("session-new-local", "pwd\r");
     expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
       id: "terminal-input-session-new-local",
-      description: "local write failed",
-      action: { label: "Reconnect", onClick: expect.any(Function) },
+      description:
+        "local write failed. Check the terminal before resuming: part of your last input may have reached the shell.",
+      action: { label: "Resume input", onClick: expect.any(Function) },
+      cancel: { label: "Reconnect", onClick: expect.any(Function) },
     });
   });
 
@@ -2334,8 +2414,10 @@ describe("useTerminal reconnect behavior", () => {
 
     expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
       id: "terminal-input-session-new-container",
-      description: "gateway replaced",
-      action: { label: "Reconnect", onClick: expect.any(Function) },
+      description:
+        "gateway replaced. Check the terminal before resuming: part of your last input may have reached the shell.",
+      action: { label: "Resume input", onClick: expect.any(Function) },
+      cancel: { label: "Reconnect", onClick: expect.any(Function) },
     });
   });
 

@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { TerminalInputRequest } from "./terminal-input-batcher";
 import {
   parseTerminalLifecycleCommand,
+  LOCAL_TERMINAL_INPUT_RESUME_COMMAND,
   TERMINAL_INPUT_CLOSED_MESSAGE,
+  TERMINAL_INPUT_RESUME_COMMAND,
   TerminalInputSequencer,
-  type TerminalInputRecovery,
   type TerminalInputSequencerOptions,
   type TerminalLifecycleOperation,
 } from "./terminal-input-sequencer";
@@ -32,13 +33,9 @@ const outcome = (promise: Promise<unknown> | null) =>
   );
 
 /** A sequencer whose HTTP and lifecycle sends are logged and answered at once. */
-function harness(
-  recovery: TerminalInputRecovery,
-  overrides: Partial<TerminalInputSequencerOptions> = {},
-) {
+function harness(overrides: Partial<TerminalInputSequencerOptions> = {}) {
   const log: string[] = [];
   const sequencer = new TerminalInputSequencer({
-    recovery,
     batchDelayMs: 0,
     sendInput: async (request: TerminalInputRequest) => {
       log.push(`http:${request.data}`);
@@ -74,19 +71,78 @@ describe("parseTerminalLifecycleCommand", () => {
 
 describe("TerminalInputSequencer", () => {
   test("routes only terminal input and lifecycle commands", () => {
-    const { sequencer } = harness("rearm-on-lifecycle");
+    const { sequencer } = harness();
     expect(sequencer.invoke("get_projects", {})).toBeNull();
     expect(sequencer.invoke("terminal_write", { sessionId: 1, data: "x" })).toBeNull();
     expect(sequencer.invoke("terminal_resize", { cols: 80 })).toBeNull();
   });
 
-  test("rejects an unknown recovery rule", () => {
-    expect(() => harness("sometimes" as TerminalInputRecovery)).toThrow("recovery");
+  test("answers resume commands itself, refusing a malformed one", async () => {
+    const { log, sequencer } = harness();
+    expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+      resumed: false,
+    });
+    expect(await sequencer.invoke(LOCAL_TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual(
+      { resumed: false },
+    );
+    expect(await outcome(sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, {}))).toContain(
+      "requires a string sessionId",
+    );
+    expect(log).toEqual([]);
+  });
+
+  test("resume clears an overflow fence", async () => {
+    const held = deferred<unknown>();
+    const { log, sequencer } = harness({ maxPendingInputs: 1, sendInput: () => held.promise });
+    const writes = ["a", "b"].map((data) =>
+      outcome(sequencer.invoke("terminal_write", { sessionId: "s", data })),
+    );
+    expect((await Promise.all(writes)).every((value) => value.includes("queue limit"))).toBe(true);
+    expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+      resumed: true,
+    });
+    held.resolve({ delivered: true });
+    sequencer.dispose();
+    expect(log).toEqual([]);
+  });
+
+  test("a write issued after a resume waits for it", async () => {
+    const held = deferred<unknown>();
+    let failHttp = true;
+    const { log, sequencer } = harness({
+      sendInput: async (request) => {
+        log.push(`http:${request.data}`);
+        if (failHttp) throw new Error("http failed");
+        return { delivered: true };
+      },
+      runLifecycle: () => held.promise,
+    });
+    expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }))).toBe(
+      "rejected: http failed",
+    );
+    failHttp = false;
+    const resize = outcome(sequencer.invoke("terminal_resize", { sessionId: "s" }));
+    const resumed = sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" });
+    const write = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "b" }));
+    await tick();
+    held.resolve(null);
+    expect(await resize).toBe("ok");
+    expect(await resumed).toEqual({ resumed: true });
+    expect(await write).toBe("ok");
+    expect(log).toEqual(["http:a", "http:b"]);
+  });
+
+  test("resume rejects once disposed", async () => {
+    const { sequencer } = harness();
+    sequencer.dispose(new Error("replaced"));
+    expect(await outcome(sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" }))).toBe(
+      "rejected: replaced",
+    );
   });
 
   test("bounds a lifecycle command by the send deadline and aborts it", async () => {
     let signal: AbortSignal | undefined;
-    const { sequencer } = harness("rearm-on-lifecycle", {
+    const { sequencer } = harness({
       sendTimeoutMs: 20,
       runLifecycle: (_operation, lifecycleSignal) => {
         signal = lifecycleSignal;
@@ -97,7 +153,12 @@ describe("TerminalInputSequencer", () => {
       await outcome(sequencer.invoke("terminal_resize", { sessionId: "s", cols: 1, rows: 1 })),
     ).toContain("timed out");
     expect(signal?.aborted).toBe(true);
-    // A timed-out resize does not strand later input behind it.
+    // A timed-out resize fences later input rather than stranding it behind
+    // the resize, and an explicit resume re-arms it.
+    expect(
+      await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "x" })),
+    ).toContain("timed out");
+    await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" });
     expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "x" }))).toBe(
       "ok",
     );
@@ -105,7 +166,7 @@ describe("TerminalInputSequencer", () => {
 
   test("dispose rejects queued work and every later call", async () => {
     const held = deferred<unknown>();
-    const { sequencer } = harness("fence-until-start", { sendInput: () => held.promise });
+    const { sequencer } = harness({ sendInput: () => held.promise });
     const write = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }));
     const close = outcome(sequencer.invoke("detach_terminal", { sessionId: "s" }));
     sequencer.dispose(new Error("replaced"));
@@ -120,7 +181,7 @@ describe("TerminalInputSequencer", () => {
   });
 
   test("forgets the oldest closed session beyond its memory", async () => {
-    const { sequencer } = harness("rearm-on-lifecycle", { closedSessionMemory: 2 });
+    const { sequencer } = harness({ closedSessionMemory: 2 });
     for (const sessionId of ["a", "b", "c"]) {
       await sequencer.invoke("detach_terminal", { sessionId });
     }
@@ -134,7 +195,7 @@ describe("TerminalInputSequencer", () => {
   });
 
   test("forgets lifecycle bookkeeping once commands settle", async () => {
-    const { sequencer } = harness("rearm-on-lifecycle");
+    const { sequencer } = harness();
     await Promise.all([
       sequencer.invoke("terminal_resize", { sessionId: "s", cols: 1, rows: 1 }),
       sequencer.invoke("terminal_resize", { sessionId: "s", cols: 2, rows: 2 }),
@@ -148,7 +209,7 @@ describe("TerminalInputSequencer", () => {
       for (const limit of ["count", "bytes"] as const) {
         test(`${command}: bounds ${limit} before lifecycle completes (pipelined=${pipelined})`, async () => {
           const held = deferred<unknown>();
-          const { log, sequencer } = harness("fence-until-start", {
+          const { log, sequencer } = harness({
             runLifecycle: () => held.promise,
             maxPendingInputs: limit === "count" ? 2 : 20,
             maxBatchBytes: 4,
@@ -197,7 +258,7 @@ describe("TerminalInputSequencer", () => {
   }
 
   test("overflow issued before start executes remains fenced", async () => {
-    const { log, sequencer } = harness("fence-until-start", { maxPendingInputs: 1 });
+    const { log, sequencer } = harness({ maxPendingInputs: 1 });
     const start = outcome(sequencer.invoke("start_terminal_session", { sessionId: "s" }));
     const first = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "x" }));
     const second = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "y" }));
@@ -215,7 +276,7 @@ describe("TerminalInputSequencer", () => {
 
   test("disposal promptly releases writes waiting behind unresolved lifecycle work", async () => {
     const held = deferred<unknown>();
-    const { log, sequencer } = harness("fence-until-start", { runLifecycle: () => held.promise });
+    const { log, sequencer } = harness({ runLifecycle: () => held.promise });
     const start = outcome(sequencer.invoke("start_terminal_session", { sessionId: "s" }));
     await tick();
     const write = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "held" }));
@@ -234,7 +295,7 @@ describe("TerminalInputSequencer", () => {
     test(`${command}: reserves capacity before lifecycle execution and retains failure fences`, async () => {
       const held = deferred<unknown>();
       const calls: string[] = [];
-      const { sequencer } = harness("fence-until-start", {
+      const { sequencer } = harness({
         maxTerminals: 2,
         runLifecycle: ({ sessionId }) => {
           calls.push(sessionId);
@@ -263,7 +324,7 @@ describe("TerminalInputSequencer", () => {
 
   test("writes waiting behind a resize preserve issue order", async () => {
     const held = deferred<unknown>();
-    const { log, sequencer } = harness("fence-until-start", { runLifecycle: () => held.promise });
+    const { log, sequencer } = harness({ runLifecycle: () => held.promise });
     const resize = sequencer.invoke("terminal_resize", { sessionId: "s" });
     const writes = ["a", "b", "c"].map((data) =>
       sequencer.invoke("terminal_write", { sessionId: "s", data }),
@@ -281,10 +342,10 @@ describe("TerminalInputSequencer", () => {
   });
 
   describe("pipelined input", () => {
-    function pipelinedHarness(recovery: TerminalInputRecovery) {
+    function pipelinedHarness() {
       const acks: Deferred[] = [];
       let usable = true;
-      const { log, sequencer } = harness(recovery, {
+      const { log, sequencer } = harness({
         pipelined: {
           active: () => true,
           send: (request) => {
@@ -307,7 +368,7 @@ describe("TerminalInputSequencer", () => {
     }
 
     test("sends consecutive writes without waiting for acknowledgements", async () => {
-      const { log, sequencer, acks } = pipelinedHarness("rearm-on-lifecycle");
+      const { log, sequencer, acks } = pipelinedHarness();
       const writes = ["a", "b", "c"].map((data) =>
         outcome(sequencer.invoke("terminal_write", { sessionId: "s", data })),
       );
@@ -318,7 +379,7 @@ describe("TerminalInputSequencer", () => {
     });
 
     test("a lifecycle command waits for every outstanding acknowledgement", async () => {
-      const { log, sequencer, acks } = pipelinedHarness("rearm-on-lifecycle");
+      const { log, sequencer, acks } = pipelinedHarness();
       const write = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }));
       await tick();
       const close = outcome(sequencer.invoke("detach_terminal", { sessionId: "s" }));
@@ -330,7 +391,7 @@ describe("TerminalInputSequencer", () => {
     });
 
     test("resize drains only earlier acknowledgements and never waits on its own later writes", async () => {
-      const { log, sequencer, acks } = pipelinedHarness("rearm-on-lifecycle");
+      const { log, sequencer, acks } = pipelinedHarness();
       const first = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }));
       const resize = outcome(sequencer.invoke("terminal_resize", { sessionId: "s" }));
       const second = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "b" }));
@@ -344,7 +405,7 @@ describe("TerminalInputSequencer", () => {
     });
 
     test("falls back to HTTP when the channel cannot carry a write", async () => {
-      const { log, sequencer, setUsable } = pipelinedHarness("rearm-on-lifecycle");
+      const { log, sequencer, setUsable } = pipelinedHarness();
       setUsable(false);
       expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }))).toBe(
         "ok",
@@ -352,55 +413,54 @@ describe("TerminalInputSequencer", () => {
       expect(log).toEqual(["http:a"]);
     });
 
-    for (const recovery of ["rearm-on-lifecycle", "fence-until-start"] as const) {
-      test(`${recovery}: an accepted channel write ${
-        recovery === "rearm-on-lifecycle" ? "re-arms" : "does not re-arm"
-      } a failed HTTP queue`, async () => {
-        let failHttp = true;
-        const acks: Deferred[] = [];
-        let usable = false;
-        const log: string[] = [];
-        const sequencer = new TerminalInputSequencer({
-          recovery,
-          batchDelayMs: 0,
-          sendInput: async (request) => {
-            log.push(`http:${request.data}`);
-            if (failHttp) throw new Error("http failed");
-            return { delivered: true };
+    test("an accepted channel write does not re-arm a failed HTTP queue; resume does", async () => {
+      let failHttp = true;
+      let usable = false;
+      const log: string[] = [];
+      const sequencer = new TerminalInputSequencer({
+        batchDelayMs: 0,
+        sendInput: async (request) => {
+          log.push(`http:${request.data}`);
+          if (failHttp) throw new Error("http failed");
+          return { delivered: true };
+        },
+        runLifecycle: async () => null,
+        pipelined: {
+          active: () => true,
+          send: (request) => {
+            if (!usable) return null;
+            log.push(`socket:${request.data}`);
+            return Promise.resolve();
           },
-          runLifecycle: async () => null,
-          pipelined: {
-            active: () => true,
-            send: (request) => {
-              if (!usable) return null;
-              log.push(`socket:${request.data}`);
-              const ack = deferred();
-              acks.push(ack);
-              ack.resolve();
-              return ack.promise;
-            },
-          },
-        });
-        expect(
-          await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" })),
-        ).toBe("rejected: http failed");
-        usable = true;
-        failHttp = false;
-        const viaSocket = await outcome(
-          sequencer.invoke("terminal_write", { sessionId: "s", data: "b" }),
-        );
-        usable = false;
-        const viaHttp = await outcome(
-          sequencer.invoke("terminal_write", { sessionId: "s", data: "c" }),
-        );
-        if (recovery === "rearm-on-lifecycle") {
-          expect([viaSocket, viaHttp]).toEqual(["ok", "ok"]);
-          expect(log).toEqual(["http:a", "socket:b", "http:c"]);
-        } else {
-          expect([viaSocket, viaHttp]).toEqual(["rejected: http failed", "rejected: http failed"]);
-          expect(log).toEqual(["http:a"]);
-        }
+        },
       });
-    }
+      expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "a" }))).toBe(
+        "rejected: http failed",
+      );
+      usable = true;
+      failHttp = false;
+      const viaSocket = await outcome(
+        sequencer.invoke("terminal_write", { sessionId: "s", data: "b" }),
+      );
+      usable = false;
+      const viaHttp = await outcome(
+        sequencer.invoke("terminal_write", { sessionId: "s", data: "c" }),
+      );
+      expect([viaSocket, viaHttp]).toEqual(["rejected: http failed", "rejected: http failed"]);
+      expect(log).toEqual(["http:a"]);
+
+      expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+        resumed: true,
+      });
+      usable = true;
+      expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "d" }))).toBe(
+        "ok",
+      );
+      usable = false;
+      expect(await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "e" }))).toBe(
+        "ok",
+      );
+      expect(log).toEqual(["http:a", "socket:d", "http:e"]);
+    });
   });
 });

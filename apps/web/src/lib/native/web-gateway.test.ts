@@ -5,6 +5,7 @@ import {
   TERMINAL_TRANSPORT_STORAGE_KEY,
 } from "./web-gateway";
 import { TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES } from "@orkestrator/protocol/terminal-input-batcher";
+import { TERMINAL_INPUT_RESUME_COMMAND } from "@orkestrator/protocol/terminal-input-sequencer";
 import {
   clearDirectGatewayTransport,
   configureDirectGatewayTransport,
@@ -1183,7 +1184,7 @@ describe("web gateway browser API", () => {
     ).toHaveLength(1);
   });
 
-  test("keeps a live terminal writable when its close never reached the backend", async () => {
+  test("keeps a terminal closed when its close never reached the backend, until a start", async () => {
     const invokes: string[] = [];
     globalThis.fetch = mock(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as {
@@ -1202,20 +1203,26 @@ describe("web gateway browser API", () => {
       "gateway unavailable",
     );
 
-    // The backend terminal survived the failed detach, so its input must not be
-    // rejected for the lifetime of the page.
-    await api.invoke("terminal_write", { sessionId: "still-alive", data: "ls\r" });
-    expect(invokes).toEqual(["detach_terminal", "terminal_write"]);
+    // The UI asked for the close, so input stays refused even though the
+    // backend terminal may have survived. Resume does not reopen it.
+    await expect(
+      api.invoke("terminal_write", { sessionId: "still-alive", data: "ls\r" }),
+    ).rejects.toThrow("closed until the session restarts");
+    await expect(
+      api.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "still-alive" }),
+    ).resolves.toEqual({ resumed: false });
+    await expect(
+      api.invoke("terminal_write", { sessionId: "still-alive", data: "ls\r" }),
+    ).rejects.toThrow("closed until the session restarts");
+    expect(invokes).toEqual(["detach_terminal"]);
 
-    // A close that does land still closes the queue.
-    await api.invoke("detach_terminal", { sessionId: "other" });
-    await expect(api.invoke("terminal_write", { sessionId: "other", data: "x" })).rejects.toThrow(
-      "closed until the session restarts",
-    );
-    expect(invokes).toEqual(["detach_terminal", "terminal_write", "detach_terminal"]);
+    // Only a start reopens it.
+    await api.invoke("start_terminal_session", { sessionId: "still-alive" });
+    await api.invoke("terminal_write", { sessionId: "still-alive", data: "ls\r" });
+    expect(invokes).toEqual(["detach_terminal", "start_terminal_session", "terminal_write"]);
   });
 
-  test("re-arms a terminal whose input failed once the transport recovers", async () => {
+  test("keeps a failed terminal fenced after a resize until the user resumes", async () => {
     const invokes: string[] = [];
     let rejectWrites = true;
     globalThis.fetch = mock(async (_input, init) => {
@@ -1238,10 +1245,19 @@ describe("web gateway browser API", () => {
       "gateway unavailable",
     );
 
-    // A resize that succeeds proves the transport recovered.
+    // Layout changes resize the terminal; that is not evidence of what the
+    // lost write delivered, so input stays fenced.
     rejectWrites = false;
     await api.invoke("terminal_resize", { sessionId: "flaky", cols: 100, rows: 30 });
-    await api.invoke("terminal_write", { sessionId: "flaky", data: "c\r" });
+    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "c\r" })).rejects.toThrow(
+      "gateway unavailable",
+    );
+
+    // An explicit resume re-arms it, without a request to the backend.
+    await expect(
+      api.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "flaky" }),
+    ).resolves.toEqual({ resumed: true });
+    await api.invoke("terminal_write", { sessionId: "flaky", data: "d\r" });
 
     expect(invokes).toEqual(["terminal_write", "terminal_resize", "terminal_write"]);
   });
@@ -1266,7 +1282,7 @@ describe("web gateway browser API", () => {
     );
   });
 
-  test("reopens a terminal whose start command failed", async () => {
+  test("fences a terminal whose start command failed until a start succeeds", async () => {
     const invokes: string[] = [];
     let rejectStart = true;
     globalThis.fetch = mock(async (_input, init) => {
@@ -1285,8 +1301,13 @@ describe("web gateway browser API", () => {
       "container gone",
     );
 
-    // The failed start already cleared the close marker, so a retry works and
-    // input is accepted rather than rejected against a session that now exists.
+    // After a failed start the shell may not exist, so input carries the start
+    // error rather than reaching the backend.
+    await expect(
+      api.invoke("terminal_write", { sessionId: "restart", data: "no\r" }),
+    ).rejects.toThrow("container gone");
+
+    // A successful retry re-arms it.
     await api.invoke("start_terminal_session", { sessionId: "restart" });
     await api.invoke("terminal_write", { sessionId: "restart", data: "ok\r" });
     expect(invokes).toEqual([
@@ -1732,7 +1753,7 @@ describe("web gateway browser API", () => {
     stop();
   });
 
-  test("keeps socket input working after a transient HTTP write failure latched the queue", async () => {
+  test("rejects socket input after an HTTP write failure latched the queue, until resume", async () => {
     let failWrites = true;
     const invokes: string[] = [];
     globalThis.fetch = mock(async (input, init) => {
@@ -1764,9 +1785,17 @@ describe("web gateway browser API", () => {
     failWrites = false;
 
     const channelId = subscribeTerminalSocket(socket, "latched", "current");
-    const write = api.invoke("terminal_write", { sessionId: "latched", data: "y" });
-    // A latched HTTP queue must not veto a healthy socket: the flush rejection
-    // belongs to the write that already failed, not to this one.
+    // A healthy socket says nothing about how much of the lost write reached
+    // the shell, so the latched failure vetoes it too.
+    await expect(api.invoke("terminal_write", { sessionId: "latched", data: "y" })).rejects.toThrow(
+      "write failed",
+    );
+    expect(socket.sent.some((frame) => typeof frame !== "string")).toBe(false);
+
+    await expect(
+      api.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "latched" }),
+    ).resolves.toEqual({ resumed: true });
+    const write = api.invoke("terminal_write", { sessionId: "latched", data: "z" });
     await waitForCondition(
       () => socket.sent.some((frame) => typeof frame !== "string"),
       "A latched HTTP queue blocked a healthy WebSocket write",
@@ -1784,6 +1813,8 @@ describe("web gateway browser API", () => {
       }),
     );
     await write;
+    // The only HTTP request is the write that failed.
+    expect(invokes).toEqual(["terminal_write"]);
     stop();
   });
 

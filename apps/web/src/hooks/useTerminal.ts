@@ -10,6 +10,9 @@ import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
 
+const RESUME_ADVICE =
+  "Check the terminal before resuming: part of your last input may have reached the shell.";
+
 const TERMINAL_RECONCILE_BUFFER_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_RECONCILE_BUFFER_MAX_FRAMES = 1_024;
 const TERMINAL_RECONCILE_RETRY_MS = 100;
@@ -974,10 +977,10 @@ export function useTerminal({
     return true;
   }, []);
 
-  // A failed write can leave the terminal input queue closed until the session
-  // restarts, while output keeps streaming so the terminal still looks alive.
-  // Reconnecting is the only recovery that works on every transport, so the
-  // failure toast offers it.
+  // A failed write fences the terminal's input queue, while output keeps
+  // streaming so the terminal still looks alive. The failure toast's Resume
+  // input is the non-destructive way out: it re-arms the queue and keeps the
+  // shell. Reconnect restarts the shell, for a terminal that really is broken.
   //
   // `connect` refuses while a renderer-owned connection is already established,
   // so that session has to restart. Attach-only sessions are backend-owned,
@@ -1029,20 +1032,44 @@ export function useTerminal({
   // Every way a keystroke can fail to reach a shell reports the same way. The
   // silent cases below are the ones that made a dead terminal indistinguishable
   // from a live one: the user types, nothing echoes, and nothing says why.
+  //
+  // Resume is offered only when a live shell may hold part of the input: with
+  // no session, or once the backend says the shell is gone, only a restart
+  // can help.
   const reportInputFailure = useCallback(
-    (description: string, failedSessionId: string | null) => {
+    (description: string, failedSessionId: string | null, { resumable = true } = {}) => {
+      // Keyed on the session so repeated failures against one shell collapse
+      // into a single toast. A terminal with no session has no such key, so
+      // it falls back to its own stable identity.
+      const id = `terminal-input-${
+        failedSessionId ?? terminalKey ?? environmentId ?? containerId ?? "unknown"
+      }`;
+      const reconnectAction = { label: "Reconnect", onClick: () => reconnectRef.current() };
+      if (!failedSessionId || !resumable) {
+        toast.error("Terminal input failed", { id, description, action: reconnectAction });
+        return;
+      }
+      const local = isLocalRef.current;
       toast.error("Terminal input failed", {
-        // Keyed on the session so repeated failures against one shell collapse
-        // into a single toast. A terminal with no session has no such key, so
-        // it falls back to its own stable identity.
-        id: `terminal-input-${
-          failedSessionId ?? terminalKey ?? environmentId ?? containerId ?? "unknown"
-        }`,
-        description,
+        id,
+        description: `${/[.!?]$/.test(description) ? description : `${description}.`} ${RESUME_ADVICE}`,
         action: {
-          label: "Reconnect",
-          onClick: () => reconnectRef.current(),
+          label: "Resume input",
+          onClick: (event) => {
+            // Stay open until the queue is re-armed, so Reconnect remains
+            // available if it was not.
+            event.preventDefault();
+            void backend
+              .resumeTerminalInput(failedSessionId, { local })
+              .then((resumed) => {
+                if (resumed) toast.dismiss(id);
+              })
+              .catch((err: unknown) => {
+                console.error("[useTerminal] Failed to resume terminal input:", err);
+              });
+          },
         },
+        cancel: reconnectAction,
       });
     },
     [containerId, environmentId, terminalKey],
@@ -1073,7 +1100,13 @@ export function useTerminal({
         // gone, so a resolved promise is not proof the keystroke landed.
         if (!delivered) {
           console.warn("[useTerminal] Terminal input was not delivered:", currentSessionId);
-          reportInputFailure("The shell for this terminal is no longer running.", currentSessionId);
+          reportInputFailure(
+            "The shell for this terminal is no longer running.",
+            currentSessionId,
+            {
+              resumable: false,
+            },
+          );
         }
       } catch (err) {
         console.error("[useTerminal] Failed to write to terminal:", err);

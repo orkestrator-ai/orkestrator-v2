@@ -2357,3 +2357,68 @@ describe("OpenCode provider history paging", () => {
     }
   });
 });
+
+describe("OpenCode provider forkSession", () => {
+  function withFork(fake: ReturnType<typeof openCodeFake>, data: Record<string, unknown>) {
+    const forkCalls: Array<Record<string, unknown>> = [];
+    Object.assign(fake.client.session, {
+      async fork(parameters: Record<string, unknown>) {
+        forkCalls.push(parameters);
+        return { data };
+      },
+    });
+    return forkCalls;
+  }
+
+  test("seeds the fork's progressive state with the model OpenCode reports for it", async () => {
+    const fake = openCodeFake();
+    const forkCalls = withFork(fake, {
+      id: "fork-session",
+      title: "Forked",
+      model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "high" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const outcome = await provider.forkSession?.("owned-session", "message-1");
+      expect(outcome).toEqual({ sessionId: "fork-session", title: "Forked" });
+      expect(forkCalls[0]).toMatchObject({ sessionID: "owned-session", messageID: "message-1" });
+      const state = await provider.sessionStateSnapshot?.("fork-session");
+      expect(state?.sessionModelId).toBe("opencode-go/deepseek-v4.1-flash");
+      expect(state?.sessionReasoningId).toBe("high");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("falls back to the source session's streamed model when the fork reports none", async () => {
+    const fake = openCodeFake();
+    withFork(fake, { id: "fork-session" });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      provider.registerSession?.("owned-session");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.subscriptions[0]!.push({
+        type: "session.updated",
+        properties: {
+          sessionID: "owned-session",
+          info: {
+            id: "owned-session",
+            model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "max" },
+          },
+        },
+      });
+      let source = await provider.sessionStateSnapshot?.("owned-session");
+      for (let attempt = 0; !source?.sessionModelId && attempt < 100; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        source = await provider.sessionStateSnapshot?.("owned-session");
+      }
+      expect(source?.sessionModelId).toBe("opencode-go/deepseek-v4.1-flash");
+      await provider.forkSession?.("owned-session");
+      const state = await provider.sessionStateSnapshot?.("fork-session");
+      expect(state?.sessionModelId).toBe("opencode-go/deepseek-v4.1-flash");
+      expect(state?.sessionReasoningId).toBe("max");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});

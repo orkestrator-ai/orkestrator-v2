@@ -1361,6 +1361,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const forkedId = nonEmptyString(forked?.id);
     if (!forkedId) throw new ProviderUnavailableError("OpenCode returned a malformed fork");
     this.lifecycle.rememberExistingSession(forkedId);
+    this.streamState.seedForkedSessionModel(forkedId, forked, sessionId);
     return {
       sessionId: forkedId,
       ...(typeof forked?.title === "string" ? { title: forked.title } : {}),

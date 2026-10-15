@@ -1,6 +1,6 @@
 # A forked OpenCode session does not keep its model
 
-Status: Active — found 2026-10-14 during live QA, not fixed.
+Status: Fixed 2026-10-15 — see [Resolution](#resolution).
 
 **Severity: medium.** A fork silently switches to whichever model happens to
 be first in the catalogue, so the user's next prompt in the fork runs on a
@@ -59,3 +59,44 @@ entry point gets it:
 Test: fork a session that ran on a non-first catalogue model and assert the
 fork's composer selects the same model and reasoning profile, before any
 prompt is sent.
+
+## Resolution
+
+Fixed on 2026-10-15. When it was picked up, fix 1 had already landed for both
+renderer entry points in #970: `forkProjectionSession` returns the source's
+controls (the stored controls overlaid with the composer's `selectedModelId`
+and `selectedReasoningId`), and both `openForkTab` and the in-tab fork in
+`AgentNativeTab.controller.tsx` adopt with them. Tests pin each step:
+`native-agent-service-projection.test.ts` ("weak progressive OpenCode
+state … fork adoption"), `AgentInfoButton.test.tsx` ("Agent Info adopts an
+OpenCode fork with the source model and reasoning controls") and
+`AgentNativeTab.test.tsx` ("in-tab OpenCode response forks adopt the source
+composer controls"). `openForkTab` still sets no `initialAgentModel`.
+
+What remained:
+
+- **Public API `session.fork`** (`public-api/actions-session-controls.ts`), a
+  third entry point, adopted the fork without `controls`. It now forwards
+  `fork.controls`. Test: `public-api-sessions.test.ts` ("session.fork").
+- **Fix 2.** `OpenCodeProvider.forkSession` now seeds the stream state's
+  session model for the fork (`OpenCodeStreamState.seedForkedSessionModel`) from the
+  fork's `Session.model`. If OpenCode reports no model for the fork, it falls
+  back to the source session's streamed model. A model the stream has already
+  reported for the fork is never overwritten. The progressive state view
+  therefore carries `sessionModelId` and `sessionReasoningId` before any
+  prompt, even without controls. The model is deliberately not returned as
+  `NativeAgentForkOutcome.controls`: `forkProjectionSession` lets provider
+  controls override the composer, which would discard a model the user
+  selected in the source but had not yet prompted with. Tests:
+  `opencode-provider-runtime.test.ts` ("OpenCode provider forkSession") and
+  `opencode-stream-state.test.ts` ("OpenCodeStreamState fork model seed").
+
+The fix does not depend on the catalogue default from
+`01-opencode-default-model-not-connected.md` (root cause 5). The new public
+API test sets the source's controls explicitly because, until 01 is fixed,
+`session.start` without a model stores `opencode/claude-sonnet-5`.
+
+Not verified live: whether OpenCode 1.19's `session.fork` response populates
+`Session.model`. The fallback to the source's model covers the case where it
+does not.
+

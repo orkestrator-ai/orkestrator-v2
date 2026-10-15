@@ -6,9 +6,17 @@ import {
   cleanupEnvironmentTmux,
   killEnvironmentTmuxSessions,
   tmuxSessionName,
+  tmuxManager,
+  getLastTmuxOrphanSweepAt,
+  setLastTmuxOrphanSweepAt,
 } from "../src/core/tmux";
 import { TmuxBackend } from "../src/core/tmux-backend";
 import { existsSync, promises as fs } from "node:fs";
+import {
+  readHostTmuxSessions,
+  reapOrphanedClaudeTmuxRuntimes,
+} from "../src/core/local-server-reaper.js";
+import { realTmux, withPrivateTmux } from "./tmux-lifecycle-fixture.js";
 
 import {
   createHandlers,
@@ -19,30 +27,199 @@ import {
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux environment teardown", () => {
-  test("session reaping accepts an empty server but refuses ambiguous connection failures", async () => {
+  test.skipIf(!realTmux)(
+    "an unlinked live socket retains session attribution, cleanup and startup retry state",
+    async () => {
+      const handlers = createHandlers();
+      await withFakeTmuxRuntime(async ({ environment, worktree, runtimeRoot }) => {
+        await withPrivateTmux(async (fixture) => {
+          const context = {
+            storage: {
+              getEnvironment: async () => environment,
+              loadEnvironments: async () => [environment],
+              loadPaneLayoutsForReconciliation: async () => ({ available: true, layouts: {} }),
+            },
+            emit: () => undefined,
+            appRoot: "",
+            resourceRoot: "",
+          };
+          const tabId = "tab-unlinked-socket";
+          const started = (await invoke(
+            handlers,
+            "claude_tmux_start",
+            { tabId, environmentId: environment.id },
+            context,
+          )) as { tmux_session: string; session_id: string };
+          const session = tmuxManager.get(environment.id, tabId)!;
+          const sessionDir = path.join(runtimeRoot, "sessions", started.session_id);
+          await fixture.start(started.tmux_session, worktree);
+          await fs.unlink(fixture.socket);
+          const unreachable = await fixture.exec(["tmux", "list-sessions"]);
+          expect(unreachable.stderr).toContain("No such file or directory");
+          expect(fixture.alive()).toBe(true);
+
+          const exec = TmuxBackend.prototype.exec;
+          const spy = spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (
+            this: TmuxBackend,
+            ...args
+          ) {
+            return args[0][0] === "tmux" || args[0][0] === "ps"
+              ? fixture.exec(args[0])
+              : exec.apply(this, args);
+          });
+          const lastSweep = getLastTmuxOrphanSweepAt();
+          const run = async (command: string, args: string[] = []) => {
+            const result = await fixture.exec([command, ...args]);
+            if (result.status !== 0) throw new Error(result.stderr);
+            return result;
+          };
+          const reap = () =>
+            reapOrphanedClaudeTmuxRuntimes({
+              storage: { loadEnvironments: async () => [] },
+              runtimeRootPrefix: path.dirname(runtimeRoot),
+              listRuntimeRoots: async () => [environment.id],
+              listTmuxSessions: () => readHostTmuxSessions(run),
+              log: () => undefined,
+            });
+          try {
+            expect(await session.stop()).toBe(false);
+            await expect(
+              invoke(
+                handlers,
+                "claude_tmux_stop",
+                { tabId, environmentId: environment.id },
+                context,
+              ),
+            ).rejects.toThrow("stop incomplete");
+            await expect(
+              cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext, {
+                requireStopped: true,
+              }),
+            ).rejects.toThrow("cleanup incomplete");
+            expect(tmuxManager.get(environment.id, tabId)).toBe(session);
+            expect(existsSync(sessionDir)).toBe(true);
+            expect((await reap())[0]?.outcome).toBe("retry-pending");
+            expect(existsSync(runtimeRoot)).toBe(true);
+
+            // A restarted backend has no in-memory sessions. Reconciliation must
+            // still keep the durable hooks and attribution on socket ENOENT.
+            tmuxManager.removeEnvironment(environment.id);
+            setLastTmuxOrphanSweepAt(0);
+            await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
+            expect(existsSync(sessionDir)).toBe(true);
+            expect(fixture.alive()).toBe(true);
+
+            await fixture.terminate();
+            // Exercise the same kill-session ENOENT through TmuxSession.stop:
+            // it is successful only now that process absence can be established.
+            expect(await session.stop()).toBe(true);
+            expect(existsSync(sessionDir)).toBe(false);
+            setLastTmuxOrphanSweepAt(0);
+            await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
+            expect(existsSync(runtimeRoot)).toBe(false);
+            await fs.mkdir(runtimeRoot, { recursive: true });
+            expect((await reap())[0]?.outcome).toBe("reaped");
+            expect(existsSync(runtimeRoot)).toBe(false);
+          } finally {
+            tmuxManager.removeEnvironment(environment.id);
+            setLastTmuxOrphanSweepAt(lastSweep);
+            spy.mockRestore();
+          }
+        });
+      });
+    },
+  );
+
+  test.skipIf(!realTmux)(
+    "cleanup succeeds with an isolated socket whose server never started",
+    async () => {
+      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+        await withPrivateTmux(async (fixture) => {
+          await fs.mkdir(runtimeRoot, { recursive: true });
+          const exec = TmuxBackend.prototype.exec;
+          const spy = spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (
+            this: TmuxBackend,
+            ...args
+          ) {
+            return args[0][0] === "tmux" || args[0][0] === "ps"
+              ? fixture.exec(args[0])
+              : exec.apply(this, args);
+          });
+          try {
+            const context = {
+              storage: {
+                getEnvironment: async () => environment,
+                loadEnvironments: async () => [environment],
+              },
+            } as unknown as CommandContext;
+            await cleanupEnvironmentTmux(environment.id, context, { requireStopped: true });
+            expect(existsSync(runtimeRoot)).toBe(false);
+          } finally {
+            spy.mockRestore();
+          }
+        });
+      });
+    },
+  );
+
+  test("a socket lost between listing and killing is incomplete while any tmux process remains", async () => {
+    const backend = TmuxBackend.local("/unused-fixture");
+    const exec = spyOn(backend, "exec");
+    try {
+      for (const [stdout, complete] of [
+        ["3 tmux: server\n", false],
+        ["1 /sbin/init\n", true],
+      ] as const) {
+        exec.mockImplementation(async (args) =>
+          args[1] === "list-sessions"
+            ? { status: 0, stdout: tmuxSessionName("fixture", "orphan"), stderr: "" }
+            : args[0] === "ps"
+              ? { status: 0, stdout, stderr: "" }
+              : {
+                  status: 1,
+                  stdout: "",
+                  stderr: "error connecting to /tmp/socket (No such file or directory)",
+                },
+        );
+        expect(await killEnvironmentTmuxSessions(backend, "fixture", [])).toEqual({
+          killed: [],
+          complete,
+        });
+      }
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  test("session reaping accepts an absent server but refuses other connection failures", async () => {
     const backend = TmuxBackend.local("/unused-fixture");
     const exec = spyOn(backend, "exec");
     for (const [stderr, complete] of [
-      // An absent socket does not prove the server stopped: it may have been deleted.
-      ["error connecting to /private/tmp/tmux-501/default (No such file or directory)", false],
+      // No server has used this socket since /tmp was last cleared.
+      ["error connecting to /private/tmp/tmux-501/default (No such file or directory)", true],
+      ["error connecting to /tmp/tmux-501/default (Connection refused)", true],
       ["no server running on /tmp/tmux-501/default", true],
       ["no sessions", true],
       ["error connecting to /tmp/tmux-501/default (Permission denied)", false],
-      ["error connecting to /tmp/tmux-501/default (Connection refused)", false],
       ["tmux: No such file or directory", false],
     ] as const) {
-      exec.mockResolvedValue({ status: 1, stdout: "", stderr });
+      exec.mockImplementation(async (args) =>
+        args[0] === "ps"
+          ? { status: 0, stdout: "1 /sbin/init\n", stderr: "" }
+          : { status: 1, stdout: "", stderr },
+      );
       expect(await killEnvironmentTmuxSessions(backend, "fixture", [])).toEqual({
         killed: [],
         complete,
       });
-      expect(exec).toHaveBeenLastCalledWith(["tmux", "list-sessions", "-F", "#{session_name}"]);
+      expect(exec).toHaveBeenCalledWith(["tmux", "list-sessions", "-F", "#{session_name}"]);
     }
     exec.mockRejectedValue(new Error("cannot spawn tmux"));
     expect(await killEnvironmentTmuxSessions(backend, "fixture", [])).toEqual({
       killed: [],
       complete: false,
     });
+    exec.mockRestore();
   });
 
   test("environment teardown kills live sessions, restores settings and removes the runtime root", async () => {

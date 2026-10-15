@@ -13,6 +13,7 @@ import {
   openCodeProvider,
   openCodeActivityProvider,
 } from "./agent-provider-test-support.js";
+import { withService, waitForCondition } from "./native-agent-service-projection-test-support.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { nativeCapabilities, nativeComposerControls } from "./native-agent-service-shared.js";
@@ -2369,6 +2370,100 @@ describe("OpenCode provider forkSession", () => {
     });
     return forkCalls;
   }
+
+  test.each(["fork response", "source stream"] as const)(
+    "preserves the model seeded from %s through registration and adoption without controls",
+    async (modelSource) => {
+      const fake = openCodeFake();
+      const model = {
+        providerID: "opencode-go",
+        id: "deepseek-v4.1-flash",
+        variant: "high",
+      };
+      withFork(fake, {
+        id: "fork-session",
+        ...(modelSource === "fork response" ? { model } : {}),
+      });
+      Object.assign(fake.client, {
+        provider: {
+          list: async () => ({
+            data: {
+              providers: [
+                { id: "opencode", models: { "mimo-v2.6-pro": { name: "MiMo" } } },
+                {
+                  id: "opencode-go",
+                  models: {
+                    "deepseek-v4.1-flash": { name: "DeepSeek", variants: { high: {} } },
+                  },
+                },
+              ],
+              default: { providerID: "opencode", modelID: "mimo-v2.6-pro" },
+            },
+          }),
+        },
+      });
+      // Later metadata reads provide no model: only the fork seed can supply it.
+      fake.setSessionGetResponse("fork-session", {
+        data: { id: "fork-session", directory: "/workspace" },
+      });
+      const provider = openCodeActivityProvider(fake);
+      try {
+        if (modelSource === "source stream") {
+          provider.registerSession?.("owned-session");
+          await waitUntil(() => fake.subscriptions.length === 1);
+          fake.subscriptions[0]!.push({
+            type: "session.updated",
+            properties: {
+              sessionID: "owned-session",
+              info: { id: "owned-session", model },
+            },
+          });
+          await waitForCondition(
+            async () =>
+              (await provider.sessionStateSnapshot?.("owned-session"))?.sessionModelId ===
+              "opencode-go/deepseek-v4.1-flash",
+          );
+        }
+        const fork = await provider.forkSession!("owned-session");
+        provider.registerSession?.(fork.sessionId);
+        expect(await provider.sessionStateSnapshot!(fork.sessionId)).toMatchObject({
+          sessionModelId: "opencode-go/deepseek-v4.1-flash",
+          sessionReasoningId: "high",
+        });
+        await withService(
+          {
+            prefix: "orkestrator-opencode-fork-adopt-",
+            provider: async () => provider,
+          },
+          async ({ service, storage }) => {
+            const identity = {
+              environmentId: "env-1",
+              agent: "opencode" as const,
+              logicalSessionKey: "fork-tab",
+            };
+            const adopted = await service.adoptSession({
+              ...identity,
+              providerSessionId: fork.sessionId,
+            });
+            expect(adopted.controls).toBeUndefined();
+            await waitForCondition(
+              async () =>
+                (await service.getProjection(identity))?.composer?.selectedModelId ===
+                "opencode-go/deepseek-v4.1-flash",
+            );
+            expect((await service.getProjection(identity))?.composer).toMatchObject({
+              selectedModelId: "opencode-go/deepseek-v4.1-flash",
+              selectedReasoningId: "high",
+            });
+            expect((await storage.getNativeAgentSession(adopted.key))?.controls).toBeUndefined();
+            expect(fake.promptCalls).toHaveLength(0);
+          },
+        );
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
 
   test("seeds the fork's progressive state with the model OpenCode reports for it", async () => {
     const fake = openCodeFake();

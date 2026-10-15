@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import {
   decodePublicSessionId,
+  encodePublicSessionId,
   nativeTabLogicalSessionKey,
 } from "@orkestrator/protocol/public-api-resources";
 import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
@@ -570,7 +571,12 @@ describe("observation cost and privacy", () => {
 });
 
 describe("session.fork", () => {
-  test("the fork's tab adopts the source's model and reasoning before any prompt", async () => {
+  test.each([
+    ["stored controls", undefined],
+    ["stored controls", "message-1"],
+    ["composer inference", undefined],
+    ["composer inference", "message-1"],
+  ] as const)("inherits %s when forking at %s before any prompt", async (selection, messageId) => {
     const { harness, service, stub } = await setup("opencode");
     const models = [
       { platform: "opencode", id: "opencode/mimo-v2.6-pro", label: "MiMo" },
@@ -581,43 +587,81 @@ describe("session.fork", () => {
         reasoning: [{ id: "high", label: "High" }],
       },
     ];
+    const forkSession = mock(async (_sessionId: string, _messageId?: string) => ({
+      sessionId: "fork-provider-session",
+      title: "Fork",
+    }));
     Object.assign(stub.provider, {
       // A fresh fork has no evidence of its own, so the provider composer
       // falls back to the first catalogue row.
-      interactiveSnapshot: async () => ({
+      interactiveSnapshot: async (sessionId: string) => ({
         status: "idle",
         messages: [],
         composer: {
           models,
-          selectedModelId: "opencode/mimo-v2.6-pro",
+          selectedModelId:
+            selection === "composer inference" && sessionId !== "fork-provider-session"
+              ? "opencode-go/deepseek-v4.1-flash"
+              : "opencode/mimo-v2.6-pro",
+          ...(selection === "composer inference" && sessionId !== "fork-provider-session"
+            ? { selectedReasoningId: "high" }
+            : {}),
           fastModeEnabled: false,
           fastModeAvailable: false,
           modes: [],
         },
       }),
-      forkSession: async () => ({ sessionId: "fork-provider-session", title: "Fork" }),
+      forkSession,
     });
-    const started = await harness.call<{ sessionId: string; tabId: string; runId: string }>(
-      "session.start",
-      { environmentId: "env-1", agent: "opencode", prompt: "task" },
-      { requestId: "fork-source" },
-    );
-    if (!started.ok) throw new Error(`start failed: ${started.error.message}`);
-    setActivity(service, "opencode", started.result.tabId, stub.sends[0]!.sessionId, "idle");
-    stub.setStatus(async () => "idle");
-    // The user picked a model that is not first in the catalogue.
-    await service.updateProjectionControls({
+    const sourceTabId = "source-tab";
+    const sourceProviderSessionId = "source-provider-session";
+    const sourceIdentity = {
       environmentId: "env-1",
+      agent: "opencode" as const,
+      logicalSessionKey: nativeTabLogicalSessionKey("env-1", sourceTabId),
+    };
+    stub.setStatus(async () => "idle");
+    await harness.storage.ensureNativeAgentJobTab({
+      environmentId: "env-1",
+      tabId: sourceTabId,
       agent: "opencode",
-      logicalSessionKey: nativeTabLogicalSessionKey("env-1", started.result.tabId),
-      update: { modelId: "opencode-go/deepseek-v4.1-flash", reasoningId: "high" },
+      providerSessionId: sourceProviderSessionId,
+      activate: false,
     });
+    await service.adoptSession({ ...sourceIdentity, providerSessionId: sourceProviderSessionId });
+    setActivity(service, "opencode", sourceTabId, sourceProviderSessionId, "idle");
+    if (selection === "stored controls") {
+      // The user picked a model that is not first in the catalogue.
+      await service.updateProjectionControls({
+        ...sourceIdentity,
+        update: { modelId: "opencode-go/deepseek-v4.1-flash", reasoningId: "high" },
+      });
+    } else {
+      const source = await harness.storage.getNativeAgentSession(
+        nativeAgentSessionStorageKey(
+          sourceIdentity.environmentId,
+          sourceIdentity.agent,
+          sourceIdentity.logicalSessionKey,
+        ),
+      );
+      expect(source).not.toBeNull();
+      expect(source?.controls).toBeUndefined();
+      expect((await service.getProjection(sourceIdentity))?.composer).toMatchObject({
+        selectedModelId: "opencode-go/deepseek-v4.1-flash",
+        selectedReasoningId: "high",
+      });
+    }
     const forked = await harness.call<{ tabId: string }>(
       "session.fork",
-      { sessionId: started.result.sessionId },
+      {
+        sessionId: encodePublicSessionId("env-1", sourceTabId),
+        ...(messageId ? { messageId } : {}),
+      },
       { requestId: "fork-1" },
     );
     if (!forked.ok) throw new Error(`fork failed: ${forked.error.message}`);
+    expect(forkSession).toHaveBeenCalledTimes(1);
+    expect(forkSession).toHaveBeenCalledWith(sourceProviderSessionId, messageId);
     const identity = {
       environmentId: "env-1",
       agent: "opencode" as const,
@@ -635,7 +679,7 @@ describe("session.fork", () => {
       modelId: "opencode-go/deepseek-v4.1-flash",
       reasoningId: "high",
     });
-    expect(stub.sends).toHaveLength(1);
+    expect(stub.sends).toHaveLength(0);
     expect((await service.getProjection(identity))?.composer).toMatchObject({
       selectedModelId: "opencode-go/deepseek-v4.1-flash",
       selectedReasoningId: "high",

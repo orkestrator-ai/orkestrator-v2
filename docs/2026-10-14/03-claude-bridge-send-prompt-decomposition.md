@@ -1,7 +1,11 @@
 # 03 — Claude bridge: break up the 3,252-line `sendPrompt`
 
 Status: In progress. Step 1 (`TurnState`, in
-`session-manager-prompt-turn.ts`) landed 2026-10-15. Priority: third. Read
+`session-manager-prompt-turn.ts`) landed 2026-10-15. Step 2 has started: `init`
+and the leaf branches (`prompt_suggestion`, `rate_limit_event`, `auth_status`,
+`stream_event`, `tool_progress`, `tool_use_summary`, `conversation_reset`) are
+in `session-manager-prompt-handlers/`; `system`, `assistant`, `user` and
+`result` are still inline. Priority: third. Read
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md) and
 [`bridges/claude-bridge/AGENTS.md`](../../bridges/claude-bridge/AGENTS.md)
 before starting.

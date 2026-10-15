@@ -1,5 +1,4 @@
 import { observeClaudeMessage } from "./diagnostics.js";
-import { pluginStatusesFromInit } from "./init-plugins.js";
 import { reportUltracodeRuntime, requestsUltracode } from "./ultracode.js";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
@@ -8,7 +7,6 @@ import type {
   CanUseTool,
   HookCallback,
   SDKAPIRetryMessage,
-  SDKAuthStatusMessage,
   SDKAssistantMessage,
   SDKHookResponseMessage,
   SDKInformationalMessage,
@@ -18,9 +16,6 @@ import type {
   SDKStatusMessage,
   SDKThinkingTokensMessage,
   SDKUsageReport,
-  SDKSystemMessage,
-  SDKToolProgressMessage,
-  SDKToolUseSummaryMessage,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -34,14 +29,12 @@ import type {
   QuestionRequest,
   PlanApprovalRequest,
   PromptOptions,
-  McpServerRuntimeStatus,
   SdkMessageBase,
   SdkResultMessage,
   SdkSystemMessage,
   SessionTurnActivity,
   SessionUsageSnapshot,
   BackgroundTaskSnapshot,
-  SessionRateLimitWindow,
 } from "../types/index.js";
 import {
   isHandledSdkMessageType,
@@ -81,7 +74,6 @@ import {
   appendLocalCommandResult,
   readLiveCommandInventory,
   recordCommandsChanged,
-  recordInitCommandInventory,
 } from "./session-manager-commands.js";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
@@ -188,27 +180,26 @@ export function applyClaudeUsageReport(
 import * as core from "./session-manager-core.js";
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
 import { captureTurnStartup, createTurnState } from "./session-manager-prompt-turn.js";
+import type { PromptMessageContext } from "./session-manager-prompt-handlers/context.js";
+import { handleInitMessage } from "./session-manager-prompt-handlers/init.js";
+import { leafMessageHandler } from "./session-manager-prompt-handlers/leaf.js";
+import { appendTranscriptNotice } from "./session-manager-prompt-handlers/transcript-notice.js";
 import { inProgressClaudeUsage, reconcileClaudeUsage } from "./session-manager-usage.js";
 import { nextTurnGeneration } from "./session-manager-core.js";
 import {
   ClaudeStructuredOutputError,
   PLAN_APPROVAL_TIMEOUT_MS,
   QUESTION_TIMEOUT_MS,
-  type RateLimitEventInfo,
   applySessionPlanMode,
-  beginClaudeUsageQuery,
   buildClaudeUsageSnapshot,
-  claudeCliContinuesResumedUsage,
   claimedPromptDispatches,
   claudeExecutableOptions,
   createStructuredUsageRefreshCoordinator,
   generateMessageId,
   pendingPlanApprovals,
   pendingQuestions,
-  persistSessionMetadata,
   planApprovalResolvers,
   questionResolvers,
-  rateLimitsFromEventInfo,
   recordStructuredOutput,
   sdkSessionIdFromBridgeId,
   sessionOperationError,
@@ -361,33 +352,6 @@ function settlePendingApiRetry(
 }
 
 /**
- * Append a one-part standalone message to the transcript.
- *
- * Used for rows that belong to the conversation but to no assistant turn: a
- * compaction boundary, a status line, a settled retry. Role `system` so the
- * renderer styles them as markers rather than as anything the user or the
- * model said.
- */
-function appendTranscriptNotice(
-  session: SessionState,
-  sessionId: string,
-  emit: (event: SSEEvent) => void,
-  part: NormalizedPart,
-): NormalizedMessage {
-  const message: NormalizedMessage = {
-    id: generateMessageId(),
-    role: "system",
-    content: part.content,
-    parts: [part],
-    createdAt: new Date().toISOString(),
-  };
-  session.messages.push(message);
-  markTranscriptChanged(session);
-  emit({ type: "message.updated", sessionId, data: { message } });
-  return message;
-}
-
-/**
  * How loudly to report one Claude system subtype.
  *
  * These are the SDK's own diagnostics, so they are recorded as `provider`
@@ -396,17 +360,6 @@ function appendTranscriptNotice(
  * raises `error` in the tab as a persistent toast. Dedicated transcript rows,
  * such as API retry progress, remain independent of this health severity.
  */
-/** Bound on the open capability set, which the CLI, not this bridge, sizes. */
-const MAX_SDK_CAPABILITIES = 64;
-
-/** Notice wording per `conversation_reset.trigger`; an open set upstream. */
-const CONVERSATION_RESET_CAUSES: Record<string, string> = {
-  clear: "Conversation cleared with /clear.",
-  plan_mode_exit: "Conversation cleared when the plan was approved.",
-  fresh_session: "Started a fresh session to implement the approved plan.",
-  onboarding: "Conversation restarted by onboarding.",
-};
-
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
   informational: "info",
   notification: "info",
@@ -1666,6 +1619,13 @@ export async function sendPrompt(
         updatedInput: input,
       };
     }) as CanUseTool;
+    const context: PromptMessageContext = {
+      session,
+      sessionId,
+      turn,
+      reclaimReleasedTurnForAssistant,
+      publishStreamUsage,
+    };
     // One SDK frame routed to this turn by the runtime's single consumer.
     const handleMessage = async (message: SDKMessage): Promise<void> => {
       if (abortController.signal.aborted) {
@@ -1706,164 +1666,11 @@ export async function sendPrompt(
           : undefined;
 
       // Handle different message types from SDK
-      if (message.type === "system" && message.subtype === "init") {
-        // Store the SDK session ID for resume functionality
-        const initMsg = message as SDKSystemMessage & Record<string, unknown>;
-        beginClaudeUsageQuery(session, initMsg.claude_code_version);
-        if (!claudeCliContinuesResumedUsage(initMsg.claude_code_version)) {
-          turn.bootstrapClaudeUsage = false;
-        }
-        const sdkSessionId = initMsg.session_id;
-        if (sdkSessionId) {
-          const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
-          session.sdkSessionId = sdkSessionId;
-          debugLog("[session-manager] Session initialized, stored SDK session ID:", sdkSessionId);
-          // A plan-mode preference set before the first turn had no durable key
-          // to be written under; the id assigned here is that key.
-          if (gainedDurableIdentity) await persistSessionMetadata(session);
-        }
-
-        // Protocol capabilities the CLI advertises. Kept so later work can
-        // feature-detect — `interrupt_receipt_v1` is what plan 05's interrupt
-        // ladder needs to know whether a receipt will name the turns that
-        // survived — rather than version-sniffing the CLI. An open set: unknown
-        // values are retained verbatim and never interpreted here.
-        if (Array.isArray(initMsg.capabilities)) {
-          session.sdkCapabilities = initMsg.capabilities
-            .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
-            .slice(0, MAX_SDK_CAPABILITIES)
-            .map((entry) => entry.slice(0, 128));
-        }
-
-        // Capture MCP servers and plugins from init message
-        const allMcpServers = initMsg.mcp_servers || [];
-
-        // Plugin-provided MCP servers are listed with the plugins below.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const regularMcpServers = allMcpServers.filter((s: any) => !s.name?.startsWith("plugin:"));
-
-        const mcpServerStatuses: McpServerRuntimeStatus[] = regularMcpServers.map(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (s: any) => ({
-            name: s.name,
-            status: s.status === "connected" ? "connected" : "failed",
-            error: s.error,
-            tools: s.tools,
-          }),
-        );
-
-        const { statuses: pluginStatuses, errors: pluginErrors } = pluginStatusesFromInit(initMsg);
-        const previousPluginErrors = new Set(session.pluginErrorSignatures);
-        session.pluginErrorSignatures = pluginErrors.map(
-          ({ plugin, type, message, path, loaded }) =>
-            JSON.stringify([plugin, type, message, path, loaded]),
-        );
-        for (const [index, pluginError] of pluginErrors.entries()) {
-          const signature = session.pluginErrorSignatures[index]!;
-          if (previousPluginErrors.has(signature)) continue;
-          previousPluginErrors.add(signature);
-          sessionHealth(session).recordNotice({
-            message: pluginError.loaded
-              ? `Claude plugin ${pluginError.plugin} loaded with errors`
-              : `Claude plugin ${pluginError.plugin} failed to load`,
-            // Named like Pi's `extension/load`, so a load failure reads the
-            // same whichever harness reported it.
-            method: "plugin/load",
-            severity: pluginError.loaded ? "warning" : "error",
-            source: "provider",
-            detail: `${pluginError.type}: ${pluginError.message}`,
-          });
-        }
-
-        // Store init data in session
-        session.initData = {
-          mcpServers: mcpServerStatuses,
-          plugins: pluginStatuses,
-          slashCommands: initMsg.slash_commands,
-          ...(Array.isArray(initMsg.terminal_slash_commands)
-            ? { terminalSlashCommands: initMsg.terminal_slash_commands.slice(0, 512) }
-            : {}),
-          skills: Array.isArray(initMsg.skills) ? initMsg.skills : [],
-          apiKeySource: typeof initMsg.apiKeySource === "string" ? initMsg.apiKeySource : undefined,
-          agents: turn.runtime?.supportedAgents ?? [],
-        };
-
-        debugLog("[session-manager] Session init data captured", {
-          sessionId,
-          mcpServerCount: mcpServerStatuses.length,
-          pluginCount: pluginStatuses.length,
-          slashCommandCount: initMsg.slash_commands?.length ?? 0,
-        });
-
-        // Init names seed an empty inventory only; they never replace a
-        // live read or a `commands_changed` push.
-        recordInitCommandInventory(session);
-
-        // Emit session.init event so frontend can update UI
-        eventEmitter.emit({
-          type: "session.init",
-          sessionId,
-          data: session.initData,
-        });
-      } else if (message.type === "prompt_suggestion") {
-        const suggestion =
-          typeof (message as { suggestion?: unknown }).suggestion === "string"
-            ? (message as { suggestion: string }).suggestion.trim()
-            : "";
-        if (suggestion) {
-          session.promptSuggestion = suggestion;
-          eventEmitter.emit({
-            type: "session.updated",
-            sessionId,
-            data: { promptSuggestion: suggestion },
-          });
-        }
-      } else if (message.type === "rate_limit_event") {
-        const info = (message as { rate_limit_info?: RateLimitEventInfo }).rate_limit_info;
-        if (info) {
-          const nextWindows = rateLimitsFromEventInfo(info);
-          const nextLabels = new Set(nextWindows.map((window) => window.label));
-          // Held on the session, not inside `usage`. Rate-limit events arrive
-          // mid-turn and `usage` only exists after the first `result`, so
-          // gating on it discarded every window a first turn reported.
-          const existing = session.rateLimits ?? session.usage?.rateLimits ?? [];
-          const existingByLabel = new Map(existing.map((window) => [window.label, window]));
-          session.rateLimits = [
-            ...existing.filter((window: SessionRateLimitWindow) => !nextLabels.has(window.label)),
-            ...nextWindows.map((window) => ({ ...existingByLabel.get(window.label), ...window })),
-          ];
-          if (session.usage) {
-            session.usage = {
-              ...session.usage,
-              rateLimits: session.rateLimits,
-              updatedAt: new Date().toISOString(),
-            };
-          }
-          // Read through the declared session shape: this turn initializes the
-          // field to undefined and later mutates it from a stream callback,
-          // which TypeScript's local control-flow analysis cannot observe.
-          const inProgressUsage = (session as SessionState).inProgressUsage;
-          if (inProgressUsage) {
-            session.inProgressUsage = {
-              ...inProgressUsage,
-              rateLimits: session.rateLimits,
-              updatedAt: new Date().toISOString(),
-            };
-          }
-          const contextUsage = session.inProgressUsage ?? session.usage;
-          eventEmitter.emit({
-            type: "session.updated",
-            sessionId,
-            data: {
-              rateLimits: session.rateLimits,
-              ...(contextUsage ? { contextUsage } : {}),
-            },
-          });
-          // The notification is often only a threshold edge with no
-          // utilization. Use it as a signal to fetch the complete `/usage`
-          // snapshot, but never pause the SDK iterator while doing so.
-          void turn.structuredUsageRefresh?.trigger();
-        }
+      const leafHandler = leafMessageHandler(message.type);
+      if (leafHandler) {
+        leafHandler(context, message);
+      } else if (message.type === "system" && message.subtype === "init") {
+        await handleInitMessage(context, message);
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
         const sysMsg = message as SdkSystemMessage;
@@ -2623,25 +2430,6 @@ export async function sendPrompt(
           );
         }
         // Skip adding user message replay as we already added it
-      } else if (message.type === "auth_status") {
-        const auth = message as SDKAuthStatusMessage;
-        const content = auth.error
-          ? `Claude authentication failed: ${auth.error}`
-          : auth.isAuthenticating
-            ? "Claude authentication is in progress."
-            : "Claude authentication state changed.";
-        sessionHealth(session).recordNotice({
-          method: "auth_status",
-          message: content,
-          severity: auth.error ? "error" : "info",
-          source: "provider",
-        });
-        appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-          type: "status",
-          content,
-          severity: auth.error ? "error" : "info",
-          createdAt: new Date().toISOString(),
-        });
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
         // Only allowlisted metadata reaches the shared debug sink.
         const resultMsg = message as SdkResultMessage;
@@ -2881,88 +2669,6 @@ export async function sendPrompt(
           }
           throw new Error(resultError);
         }
-      } else if (message.type === "stream_event") {
-        // A resumed root turn can think for minutes before its first complete
-        // assistant record, streaming only partials meanwhile. Waiting for that
-        // record left the session idle — and the environment marked done —
-        // while Claude was still working, so the first root partial reclaims.
-        // Pings carry no content and are not evidence of a new model request.
-        if ((message as { event?: { type?: unknown } }).event?.type !== "ping") {
-          reclaimReleasedTurnForAssistant(message as SdkMessageBase);
-        }
-        publishStreamUsage(message);
-        stream.applyPartialAssistantMessage(message);
-      } else if (message.type === "tool_progress") {
-        // A live sub-line on the tool row it names, not a row of its own. It is
-        // pushed into the assistant message holding the call so the backend's
-        // projection can fold it onto that call — a progress part in its own
-        // message would have nothing to attach to.
-        const progress = message as SDKToolProgressMessage;
-        const progressRow = progress.tool_use_id
-          ? stream.rowHoldingTool(progress.tool_use_id)
-          : null;
-        if (progressRow && progress.tool_use_id) {
-          const elapsedMs =
-            typeof progress.elapsed_time_seconds === "number"
-              ? Math.max(0, Math.round(progress.elapsed_time_seconds * 1_000))
-              : undefined;
-          // Only the newest report per call survives: progress is a hint over
-          // the authoritative tool state, so superseded lines are noise.
-          const parts = progressRow.parts.filter(
-            (candidate) =>
-              candidate.type !== "progress" || candidate.toolUseId !== progress.tool_use_id,
-          );
-          parts.push({
-            type: "progress",
-            // The subagent type is the only thing the SDK says about *what* is
-            // taking the time; without it the line is just a clock.
-            content: progress.subagent_type
-              ? `${progress.subagent_type} running`
-              : `${progress.tool_name ?? "Tool"} running`,
-            toolUseId: progress.tool_use_id,
-            ...(elapsedMs !== undefined ? { elapsedMs } : {}),
-            createdAt: new Date().toISOString(),
-          });
-          progressRow.parts = parts;
-          markTranscriptChanged(session);
-          stream.publishRow(progressRow);
-        }
-      } else if (message.type === "tool_use_summary") {
-        const summary = (message as SDKToolUseSummaryMessage).summary?.trim();
-        if (summary) {
-          appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-            type: "status",
-            content: summary,
-            severity: "info",
-            createdAt: new Date().toISOString(),
-          });
-        }
-      } else if (message.type === "conversation_reset") {
-        // The conversation this transcript describes no longer exists. Leaving
-        // the old messages would show history the model has no memory of and
-        // will not answer questions about.
-        session.messages = [];
-        resetTranscriptEpoch(session);
-        // No bespoke "cleared" event: the backend re-reads the whole transcript
-        // on every projection poll, so the authoritative snapshot already
-        // reflects the clear. The status row below is what a live client needs.
-        // `trigger` (Agent SDK 0.3.281+) only words the notice: every reset
-        // clears, whatever it says, and an absent or unknown value is generic.
-        const reset = message as { trigger?: unknown; timestamp?: unknown };
-        const cause =
-          typeof reset.trigger === "string" &&
-          Object.hasOwn(CONVERSATION_RESET_CAUSES, reset.trigger)
-            ? CONVERSATION_RESET_CAUSES[reset.trigger]
-            : undefined;
-        appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-          type: "status",
-          content: `${cause ?? "Conversation cleared."} The agent no longer has the earlier history.`,
-          severity: "warning",
-          createdAt:
-            typeof reset.timestamp === "string" && !Number.isNaN(Date.parse(reset.timestamp))
-              ? new Date(reset.timestamp).toISOString()
-              : new Date().toISOString(),
-        });
       } else if (isKnownInternalSdkMessageType(message.type)) {
         // An internal CLI frame outside the SDK's union that the bridge has
         // read and needs nothing from. Not drift: counting it flagged every

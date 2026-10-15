@@ -111,6 +111,19 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ modelUnpinned: "yes" as never }))).toBe(false);
   });
 
+  test("carries a bounded model substitution", () => {
+    const modelSubstitution = {
+      requestedModelId: "opencode/claude-sonnet-5",
+      modelId: "opencode-go/gpt-5.6-luna",
+      message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+    };
+    expect(isReviewerRecord(reviewer({ modelSubstitution }))).toBe(true);
+    expect(
+      isReviewerRecord(reviewer({ modelSubstitution: { ...modelSubstitution, modelId: "" } })),
+    ).toBe(false);
+    expect(isReviewerRecord(reviewer({ modelSubstitution: "substituted" as never }))).toBe(false);
+  });
+
   test("accepts a non-negative token count and rejects malformed usage", () => {
     expect(isReviewerRecord(reviewer({ tokenCount: 12_345 }))).toBe(true);
     expect(isReviewerRecord(reviewer({ tokenCount: -1 }))).toBe(false);
@@ -182,6 +195,18 @@ describe("consolidation session", () => {
       true,
     );
     expect(isReviewConsolidationSession({ ...session, fastMode: "fast" })).toBe(false);
+    expect(
+      isReviewConsolidationSession({
+        ...session,
+        model: "opencode-go/gpt-5.6-luna",
+        modelSubstitution: {
+          requestedModelId: "opencode/claude-sonnet-5",
+          modelId: "opencode-go/gpt-5.6-luna",
+          message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+        },
+      }),
+    ).toBe(true);
+    expect(isReviewConsolidationSession({ ...session, modelSubstitution: {} })).toBe(false);
     expect(isReviewConsolidationSession({ ...session, model: "  " })).toBe(false);
   });
 

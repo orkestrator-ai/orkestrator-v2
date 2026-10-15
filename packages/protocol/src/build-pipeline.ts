@@ -19,6 +19,7 @@ import {
   type AgentInteractionWorkflowSummary,
 } from "./agent-interactions.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import { isNativeAgentModelSubstitution } from "./native-agent.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -379,8 +380,16 @@ export interface PipelineSession {
    * before per-step harnesses existed, which fall back to `agentType`.
    */
   agent?: BuildPipelineAgent;
+  /** True when an absent model is deliberately unpinned, rather than legacy metadata. */
+  modelSelectionResolved?: boolean;
   /** Exact prompt-level selection, retained so ambiguous dispatch can retry faithfully. */
   model?: string;
+  /**
+   * Set when {@link model} replaced a configured default the runtime reported
+   * it cannot serve, such as an OpenCode provider this login has not
+   * connected. Shown on the stage so the substitution is never silent.
+   */
+  modelSubstitution?: import("./native-agent.js").NativeAgentModelSubstitution;
   reasoningEffort?: string;
   /** Fast/Normal choice retained for exact prompt recovery. */
   fastMode?: boolean;
@@ -1040,6 +1049,10 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
     (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
     (value.model === undefined || isNonBlankString(value.model)) &&
+    (value.modelSelectionResolved === undefined ||
+      typeof value.modelSelectionResolved === "boolean") &&
+    (value.modelSubstitution === undefined ||
+      isNativeAgentModelSubstitution(value.modelSubstitution)) &&
     (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     ((value.origin === undefined && value.interactionPolicy === undefined) ||

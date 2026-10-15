@@ -140,8 +140,6 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 import { CODEX_MODELS } from "@/lib/codex-models";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
@@ -188,9 +186,12 @@ function resetStores(config = makeConfig()) {
     isLoading: false,
     error: null,
   });
-  useClaudeStore.setState({ models: [] });
-  useCodexStore.setState({ models: CODEX_MODELS });
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+  useAgentModelCatalogStore.setState({
+    claudeModels: [],
+    codexModels: CODEX_MODELS,
+    cursorModels: [],
+    grokModels: [],
+  });
 }
 
 function renderSettings({

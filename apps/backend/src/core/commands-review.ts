@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
@@ -26,7 +27,6 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import {
   deletingLocalServerEnvironments,
-  invalidateEnvironmentRemoteFreshness,
   mergingEnvironments,
   withContainerRuntimeCredential,
 } from "./commands-runtime-state.js";
@@ -147,7 +147,7 @@ export function isRemoteBranchAlreadyDeletedError(message: string): boolean {
 
 export function createLocalGhRunner(cwd: string): GhCliRunner {
   return async (args, timeoutMs = 60_000) => {
-    const { stdout } = await runCommand("gh", args, { cwd, timeoutMs });
+    const { stdout } = await runCommand(gitHubCli(), args, { cwd, timeoutMs });
     return stdout;
   };
 }
@@ -199,12 +199,16 @@ export function createEnvironmentCommandRunner(environment: Environment): Enviro
       const release = beginEnvironmentMutation(environment.id);
       try {
         return (
-          await runCommand(command, args, {
-            cwd: environment.worktreePath,
-            timeoutMs,
-            ...(env ? { env } : {}),
-          })
-        ).stdout;
+          // `gh` on the host is the backend's resolved copy; inside a
+          // container it is the image's own.
+          (
+            await runCommand(command === "gh" ? gitHubCli() : command, args, {
+              cwd: environment.worktreePath,
+              timeoutMs,
+              ...(env ? { env } : {}),
+            })
+          ).stdout
+        );
       } finally {
         release();
       }
@@ -1245,7 +1249,8 @@ async function runStoredEnvironmentMergeOnce<T>(
     // A merge moved the base branch on the remote (or may have, when the
     // outcome is unknown): the next diff must not wait out a fetch cooldown to
     // see it. A still-pending merge changed nothing yet.
-    if (result.outcome !== "pending") invalidateEnvironmentRemoteFreshness(environment);
+    if (result.outcome !== "pending")
+      context.runtime.diffStats.invalidateRemoteFreshness(environment);
     // The callback runs before the merge guard is released. A confirmed
     // merge-and-cleanup can therefore transition directly into the deletion
     // tombstone without a user delete racing through the middle.

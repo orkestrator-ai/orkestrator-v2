@@ -123,6 +123,7 @@ class ScriptedProvider implements BuildPipelineProvider {
     requestId: string;
     mode?: ProviderExecutionMode;
     schema?: JsonSchema;
+    model?: string;
   }> = [];
   readonly registered: string[] = [];
   disposed = 0;
@@ -196,6 +197,7 @@ class ScriptedProvider implements BuildPipelineProvider {
       requestId: string;
       schema?: JsonSchema;
       mode?: ProviderExecutionMode;
+      model?: string;
     },
   ): Promise<void> {
     this.dispatchTrace.push(`send:${sessionId}`);
@@ -207,6 +209,7 @@ class ScriptedProvider implements BuildPipelineProvider {
       requestId: options.requestId,
       mode: options.mode,
       schema: options.schema,
+      model: options.model,
     });
     this.running.delete(sessionId);
   }
@@ -515,6 +518,30 @@ describe("BuildPipelineService reconnect", () => {
 });
 
 describe("BuildPipelineService prompt dispatch", () => {
+  test("redispatch keeps a deliberately unpinned session despite changed defaults", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      const pending = await snapshot(storage, staged.id);
+      const requestId = pending.pendingPromptAttempt!.requestId;
+      const sessionId = pending.pendingPromptAttempt!.sessionId;
+      const current = pending;
+      await storage.saveBuildPipeline(pending.id, pending.projectId, pending.environmentId, 2, {
+        ...current,
+        sessions: current.sessions.map((session) =>
+          session.sdkSessionId === sessionId
+            ? { ...session, model: undefined, modelSelectionResolved: true }
+            : session,
+        ),
+        steps: { ...current.steps, build: { agent: "claude", model: "changed-default" } },
+      });
+      await service.advanceNow(pending.id);
+      expect(provider.sent[0]).toMatchObject({ requestId });
+      expect(provider.sent[0]?.model).toBeUndefined();
+    });
+  });
+
   test("attaches the agent before every prompt, including a redispatch", async () => {
     await withService(async ({ service, storage, provider }) => {
       const staged = await startAtSetup(service, storage);

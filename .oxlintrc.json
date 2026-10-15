@@ -127,6 +127,26 @@
       }
     },
     {
+      "files": ["apps/backend/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@orkestrator/protocol/testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              },
+              {
+                "group": ["**/design/*", "!**/design/index.js"],
+                "message": "Import the design domain through design/index.js."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": [
         "**/*.test.ts",
         "**/*.test.tsx",
@@ -143,6 +163,22 @@
       "rules": {
         "no-restricted-imports": "off",
         "import/no-mutable-exports": "off"
+      }
+    },
+    {
+      "files": ["tests/unit/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/backend/src/core/design/*", "!**/backend/src/core/design/index.js"],
+                "message": "Import the design domain through design/index.js."
+              }
+            ]
+          }
+        ]
       }
     },
     {

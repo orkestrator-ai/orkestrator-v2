@@ -9,7 +9,7 @@ A trusted client can authorize one registered service without exposing the
 gateway token to application code or replacing application authentication.
 Implement a proposed `PreviewAccessService` in backend core, with narrow gateway
 adapters. Integrate existing token rotation in
-[gateway base](../../../../apps/backend/src/gateway-base.ts),
+[gateway lifecycle](../../../../apps/backend/src/gateway-lifecycle.ts),
 [authentication](../../../../apps/backend/src/gateway-auth.ts), and the
 [desktop connection manager](../../../../apps/desktop/electron/connection-manager.ts).
 

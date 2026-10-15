@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
   compareGitHubNames,
@@ -27,7 +28,9 @@ const PAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 function gitHubCliError(action: string, error: unknown): Error {
   if (error instanceof CommandFailedError && error.executableMissing) {
-    return new Error("GitHub CLI is not installed. Install gh and run `gh auth login`, then retry");
+    return new Error(
+      "GitHub CLI is not available. Set it up under GitHub authentication in Settings, then retry",
+    );
   }
   return new Error(`Could not ${action}: ${conciseError(error)}`);
 }
@@ -51,11 +54,11 @@ export async function listGitHubCloneAccounts(
   let organizations: string[];
   try {
     [viewer, organizations] = await Promise.all([
-      run("gh", ["api", "--hostname", GITHUB_HOST, "user", "--jq", ".login"], {
+      run(gitHubCli(), ["api", "--hostname", GITHUB_HOST, "user", "--jq", ".login"], {
         timeoutMs: GITHUB_API_TIMEOUT_MS,
       }).then(({ stdout }) => outputLogins(stdout)),
       run(
-        "gh",
+        gitHubCli(),
         [
           "api",
           "--hostname",
@@ -88,9 +91,13 @@ export async function listGitHubCloneAccounts(
 
 async function preferredGitProtocol(run: typeof runCommand): Promise<"ssh" | "https"> {
   try {
-    const { stdout } = await run("gh", ["config", "get", "git_protocol", "--host", GITHUB_HOST], {
-      timeoutMs: GITHUB_API_TIMEOUT_MS,
-    });
+    const { stdout } = await run(
+      gitHubCli(),
+      ["config", "get", "git_protocol", "--host", GITHUB_HOST],
+      {
+        timeoutMs: GITHUB_API_TIMEOUT_MS,
+      },
+    );
     return stdout.trim() === "ssh" ? "ssh" : "https";
   } catch {
     return "https";
@@ -153,7 +160,7 @@ export async function listGitHubCloneRepositories(
   const [protocol, stdout] = await Promise.all([
     preferredGitProtocol(run),
     run(
-      "gh",
+      gitHubCli(),
       [
         "api",
         "--hostname",

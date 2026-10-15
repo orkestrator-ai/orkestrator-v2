@@ -10,6 +10,7 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentDispatchOutcome,
   NativeAgentMessageWindow,
+  NativeAgentModelSubstitution,
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentToolDetails,
@@ -683,6 +684,12 @@ interface UseNativeAgentSessionOptions {
     replacementProviderSessionId: string;
     logicalSessionKey: string;
   }) => Promise<void>;
+  /**
+   * Called when the backend created this tab's session on another model
+   * because the configured one is unavailable (an OpenCode provider this login
+   * has not connected). The configuration itself is unchanged.
+   */
+  onModelSubstituted?: (substitution: NativeAgentModelSubstitution) => void;
   initialConversationMode?: "build" | "plan";
   initialFastMode?: boolean;
   initialExecutionProfileId?: string;
@@ -743,6 +750,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   initialProviderSessionId,
   requireExistingResumeSession = false,
   onResumeSessionReplaced,
+  onModelSubstituted,
   initialConversationMode,
   initialFastMode,
   initialExecutionProfileId,
@@ -2572,12 +2580,14 @@ export function useNativeAgentSession<TMessage = unknown>({
                   ? "Grok Build"
                   : "Agent Session",
             model: initialAgentModel ?? defaultAgentModel,
+            modelSource: initialAgentModel ? "explicit" : "default",
             reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
             sessionMode: initialConversationMode,
             fastMode: initialFastMode ?? defaultFastMode,
             executionProfileId: initialExecutionProfileId,
             parameterValues: defaultParameterValues,
           });
+          if (replacement.modelSubstitution) onModelSubstituted?.(replacement.modelSubstitution);
           await onResumeSessionReplaced?.({
             requestedProviderSessionId: initialProviderSessionId,
             replacementProviderSessionId: replacement.providerSessionId,
@@ -2589,7 +2599,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           });
         }
       } else {
-        await ensureNativeAgentSession({
+        const ensured = await ensureNativeAgentSession({
           ...identity,
           title:
             platform === "cursor"
@@ -2598,12 +2608,14 @@ export function useNativeAgentSession<TMessage = unknown>({
                 ? "Grok Build"
                 : "Agent Session",
           model: initialAgentModel ?? defaultAgentModel,
+          modelSource: initialAgentModel ? "explicit" : "default",
           reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
           sessionMode: initialConversationMode,
           fastMode: initialFastMode ?? defaultFastMode,
           executionProfileId: initialExecutionProfileId,
           parameterValues: defaultParameterValues,
         });
+        if (ensured.modelSubstitution) onModelSubstituted?.(ensured.modelSubstitution);
       }
       isInitializedRef.current = true;
       lastInitTimeRef.current = Date.now();
@@ -2659,6 +2671,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     initialReasoningEffort,
     markSessionStateAvailability,
     requireExistingResumeSession,
+    onModelSubstituted,
     onResumeSessionReplaced,
     enabled,
     flushPendingReconcile,

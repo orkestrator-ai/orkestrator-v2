@@ -1,7 +1,16 @@
+import path from "node:path";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
-import { commandExists, homePath, pathExists } from "./shell.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.js";
+import {
+  cancelGitHubCliLogin,
+  getGitHubCliStatus,
+  gitHubCliLoginProgress,
+  startGitHubCliLogin,
+} from "./github-cli-setup.js";
+import { checkHostTool } from "./host-tools.js";
+import { homePath, pathExists } from "./shell.js";
 import {
   asString,
   asAgentSkillProvider,
@@ -10,38 +19,29 @@ import {
   hasCursorSdkBridge,
   hasManagedAcpBinary,
   getContainerGitHubCredentialStatus,
-  resolveManagedBinary,
 } from "./commands-helpers.js";
 
-type HostToolSource = "managed" | "path" | "missing";
-
-const lastHostToolSourceByContext = new WeakMap<CommandContext, Map<string, HostToolSource>>();
-
-function logHostToolAvailability(
+/**
+ * Where this runtime's Claude login would be, or null when it may not use one.
+ *
+ * An agent-test profile runs with an isolated HOME. When it is allowed the
+ * host's Claude login, launches are pointed at the host's home and config
+ * directory, so the login check has to look there too.
+ */
+function claudeLoginHome(
   context: CommandContext,
-  name: string,
-  source: HostToolSource,
-): void {
-  let sources = lastHostToolSourceByContext.get(context);
-  if (!sources) {
-    sources = new Map();
-    lastHostToolSourceByContext.set(context, sources);
-  }
-  if (sources.get(name) === source) return;
-  sources.set(name, source);
-  const message = `[Tooling] Host tool availability: tool=${name} available=${source !== "missing"} source=${source}`;
-  if (source === "missing") console.warn(message);
-  else console.info(message);
+): { home: string; configDir: string | undefined } | null {
+  if (context.runtimeFlavor !== "agent-test") return { home: homePath(), configDir: undefined };
+  if (!context.credentialSources?.has("claude")) return null;
+  return {
+    home: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim() || homePath(),
+    configDir: process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim() || undefined,
+  };
 }
 
-async function checkHostTool(context: CommandContext, name: string) {
-  if (resolveManagedBinary(context, name)) {
-    logHostToolAvailability(context, name, "managed");
-    return true;
-  }
-  const available = await commandExists(name);
-  logHostToolAvailability(context, name, available ? "path" : "missing");
-  return available;
+async function anyPathExists(candidates: string[]): Promise<boolean> {
+  for (const candidate of candidates) if (await pathExists(candidate)) return true;
+  return false;
 }
 
 export function registerToolingCommands(
@@ -98,11 +98,13 @@ export function registerToolingCommands(
   });
 
   register("has_claude_credentials", (_args, context) => {
-    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude"))
-      return false;
-    return pathExists(homePath(".claude", ".credentials.json")).then(
-      async (exists) => exists || pathExists(homePath(".claude.json")),
-    );
+    const login = claudeLoginHome(context);
+    if (!login) return false;
+    return anyPathExists([
+      ...(login.configDir ? [path.join(login.configDir, ".credentials.json")] : []),
+      path.join(login.home, ".claude", ".credentials.json"),
+      path.join(login.home, ".claude.json"),
+    ]);
   });
   register("get_credential_status", async (_args, context) => ({
     available: await commands.get("has_claude_credentials")?.({}, context),
@@ -110,9 +112,13 @@ export function registerToolingCommands(
   }));
   register("check_claude_cli", (_args, context) => checkHostTool(context, "claude"));
   register("check_claude_config", (_args, context) => {
-    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude"))
-      return false;
-    return pathExists(homePath(".claude.json"));
+    const login = claudeLoginHome(context);
+    if (!login) return false;
+    // Claude Code keeps `.claude.json` inside CLAUDE_CONFIG_DIR when it is set.
+    return anyPathExists([
+      ...(login.configDir ? [path.join(login.configDir, ".claude.json")] : []),
+      path.join(login.home, ".claude.json"),
+    ]);
   });
   register("check_opencode_cli", (_args, context) => checkHostTool(context, "opencode"));
   register("check_codex_cli", (_args, context) => checkHostTool(context, "codex"));
@@ -121,7 +127,29 @@ export function registerToolingCommands(
   register("check_cursor_cli", (_args, context) => hasCursorSdkBridge(context));
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
   register("check_pi_cli", (_args, context) => checkHostTool(context, "pi"));
-  register("check_github_cli", () => commandExists("gh"));
+  register("check_github_cli", (_args, context) => checkHostTool(context, "gh"));
+  register("get_github_cli_status", (args, context) => {
+    assertOnlyKeys(args, [], "get_github_cli_status argument");
+    return getGitHubCliStatus(context);
+  });
+  /**
+   * Sign-in is split into start and poll like the agent account sign-in: it
+   * waits on the user and must not hold a request open.
+   */
+  register("start_github_cli_login", (args, context) => {
+    assertOnlyKeys(args, [], "start_github_cli_login argument");
+    return startGitHubCliLogin(context);
+  });
+  register("get_github_cli_login", (args) => {
+    assertOnlyKeys(args, [], "get_github_cli_login argument");
+    return gitHubCliLoginProgress();
+  });
+  register("cancel_github_cli_login", (args) => {
+    assertOnlyKeys(args, ["operationId"], "cancel_github_cli_login argument");
+    return cancelGitHubCliLogin(
+      args.operationId === undefined ? undefined : asString(args.operationId, "operationId"),
+    );
+  });
   register("get_container_github_credential_status", async (_args, context) =>
     getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global),
   );

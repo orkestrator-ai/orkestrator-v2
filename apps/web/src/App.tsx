@@ -31,14 +31,17 @@ import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialog";
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
+import { GitHubCliSetup } from "@/components/github/GitHubCliSetup";
+import { Checkbox } from "@/components/ui/checkbox";
+import { BackendVersionReminder } from "@/components/BackendVersionReminder";
 import {
   checkDocker,
   checkClaudeCli,
   checkClaudeConfig,
-  checkCodexCli,
-  checkOpencodeCli,
   checkGithubCli,
   getAvailableAiCli,
+  getGitHubCliStatus,
+  setGitHubCliReminderDismissed,
   getConfig,
   getEnvironment,
   getResourceRevisionManifest,
@@ -46,6 +49,7 @@ import {
   getScopedResourceSnapshots,
   prepareEnvironmentAgentLaunch,
   syncAllEnvironmentsWithDocker,
+  type GitHubCliStatus,
 } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
@@ -343,13 +347,17 @@ function App() {
   }, [pipelineProjectIds]);
   const [claudeCliAvailable, setClaudeCliAvailable] = useState<boolean | null>(null);
   const [claudeConfigAvailable, setClaudeConfigAvailable] = useState<boolean | null>(null);
-  const [opencodeCliAvailable, setOpencodeCliAvailable] = useState<boolean | null>(null);
-  const [codexCliAvailable, setCodexCliAvailable] = useState<boolean | null>(null);
   const [githubCliAvailable, setGithubCliAvailable] = useState<boolean | null>(null);
   const [availableAiCli, setAvailableAiCli] = useState<string | null>(null);
   const [hostToolCheckStatus, setHostToolCheckStatus] = useState<StartupCheckStatus>("checking");
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
+  const [githubCliSetupStatus, setGithubCliSetupStatus] = useState<GitHubCliStatus | null>(null);
+  // Latched so the dialog stays open, showing the result, once the sign-in it
+  // offered has finished.
+  const [githubSignInOffered, setGithubSignInOffered] = useState(false);
+  const [githubReminderOptOut, setGithubReminderOptOut] = useState(false);
+  const [claudeLoginNoticeDismissed, setClaudeLoginNoticeDismissed] = useState(false);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
     string | null
   >(null);
@@ -621,16 +629,14 @@ function App() {
       let results = await Promise.allSettled([
         checkClaudeCli(),
         checkClaudeConfig(),
-        checkOpencodeCli(),
-        checkCodexCli(),
         checkGithubCli(),
         getAvailableAiCli(),
       ]);
 
       const firstClaudeCli = results[0]?.status === "fulfilled" ? results[0].value : undefined;
       const firstClaudeConfig = results[1]?.status === "fulfilled" ? results[1].value : undefined;
-      const firstGithubCli = results[4]?.status === "fulfilled" ? results[4].value : undefined;
-      const firstAiCli = results[5]?.status === "fulfilled" ? results[5].value : undefined;
+      const firstGithubCli = results[2]?.status === "fulfilled" ? results[2].value : undefined;
+      const firstAiCli = results[3]?.status === "fulfilled" ? results[3].value : undefined;
       const needsConfirmation =
         results.some((result) => result.status === "rejected") ||
         !firstAiCli ||
@@ -642,8 +648,6 @@ function App() {
         results = await Promise.allSettled([
           checkClaudeCli(),
           checkClaudeConfig(),
-          checkOpencodeCli(),
-          checkCodexCli(),
           checkGithubCli(),
           getAvailableAiCli(),
         ]);
@@ -664,22 +668,18 @@ function App() {
         setHostToolCheckStatus("complete");
       }
 
-      const [claudeCli, claudeConfig, opencodeCli, codexCli, githubCli] = results.map((result) =>
+      const [claudeCli, claudeConfig, githubCli] = results.map((result) =>
         result.status === "fulfilled" ? result.value : null,
       );
-      const aiCli = results[5]?.status === "fulfilled" ? results[5].value : undefined;
+      const aiCli = results[3]?.status === "fulfilled" ? results[3].value : undefined;
       if (typeof claudeCli === "boolean") setClaudeCliAvailable(claudeCli);
       if (typeof claudeConfig === "boolean") setClaudeConfigAvailable(claudeConfig);
-      if (typeof opencodeCli === "boolean") setOpencodeCliAvailable(opencodeCli);
-      if (typeof codexCli === "boolean") setCodexCliAvailable(codexCli);
       if (typeof githubCli === "boolean") setGithubCliAvailable(githubCli);
       if (typeof aiCli === "string" || aiCli === null) setAvailableAiCli(aiCli);
 
       if (failures.length === 0) {
         rendererDebugLog("[App] Claude CLI available:", claudeCli);
         rendererDebugLog("[App] Claude config available:", claudeConfig);
-        rendererDebugLog("[App] OpenCode CLI available:", opencodeCli);
-        rendererDebugLog("[App] Codex CLI available:", codexCli);
         rendererDebugLog("[App] GitHub CLI available:", githubCli);
         rendererDebugLog("[App] Available AI CLI:", aiCli);
       }
@@ -733,26 +733,20 @@ function App() {
     }
   };
 
-  // Handle retrying CLI checks (Claude, OpenCode, GitHub)
+  // Handle retrying CLI checks (Claude, GitHub and the available agent platform)
   const handleRetryClaudeCheck = async () => {
     setIsCheckingClaude(true);
     setHostToolCheckStatus("checking");
     try {
-      const [claudeCli, claudeConfig, opencodeCli, codexCli, githubCli, aiCli] = await Promise.all([
+      const [claudeCli, claudeConfig, githubCli, aiCli] = await Promise.all([
         checkClaudeCli(),
         checkClaudeConfig(),
-        checkOpencodeCli(),
-        checkCodexCli(),
         checkGithubCli(),
         getAvailableAiCli(),
       ]);
       rendererDebugLog(
         "[App] CLI retry check - Claude:",
         claudeCli,
-        "OpenCode:",
-        opencodeCli,
-        "Codex:",
-        codexCli,
         "GitHub:",
         githubCli,
         "Available AI:",
@@ -760,8 +754,6 @@ function App() {
       );
       setClaudeCliAvailable(claudeCli);
       setClaudeConfigAvailable(claudeConfig);
-      setOpencodeCliAvailable(opencodeCli);
-      setCodexCliAvailable(codexCli);
       setGithubCliAvailable(githubCli);
       setAvailableAiCli(aiCli);
       setHostToolCheckStatus("complete");
@@ -776,6 +768,22 @@ function App() {
       });
     } finally {
       setIsCheckingClaude(false);
+    }
+  };
+
+  // The dialog stays open after a sign-in so the user sees it worked; closing it
+  // publishes what the setup found, and remembers a "don't remind me again".
+  const handleCloseGithubCliSetup = () => {
+    setGithubCliWarningDismissed(true);
+    if (githubCliSetupStatus?.installed) setGithubCliAvailable(true);
+    if (githubReminderOptOut && !githubCliSetupStatus?.authenticated) {
+      void setGitHubCliReminderDismissed(true)
+        .then(setConfig)
+        .catch((error) => {
+          toast.error("Could not save your reminder preference", {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        });
     }
   };
 
@@ -905,27 +913,50 @@ function App() {
 
   const isCheckingCliTools = hostToolWarningsVisible && hostToolCheckStatus === "checking";
 
+  // The backend's AI CLI selection covers every agent platform, including the
+  // managed ones (Cursor, Grok, Pi) the per-CLI checks here do not probe.
   const noAiCliAvailable =
-    hostToolWarningsVisible &&
-    hostToolCheckStatus === "complete" &&
-    availableAiCli === null &&
-    claudeCliAvailable === false &&
-    opencodeCliAvailable === false &&
-    codexCliAvailable === false;
+    hostToolWarningsVisible && hostToolCheckStatus === "complete" && availableAiCli === null;
 
-  const claudeNeedsLogin =
+  // A missing Claude login only affects Claude sessions, so the notice never
+  // blocks the app: it can be dismissed and every other platform keeps working.
+  const showClaudeLoginNotice =
     hostToolWarningsVisible &&
     hostToolCheckStatus === "complete" &&
     claudeCliAvailable === true &&
     claudeConfigAvailable === false &&
-    opencodeCliAvailable === false;
+    !claudeLoginNoticeDismissed;
+
+  // Orkestrator installs its own gh with the agent CLIs, so a missing one is
+  // rare; a signed-out one is the usual reason GitHub features do not work.
+  // Either is offered at startup unless the user asked not to be reminded.
+  useEffect(() => {
+    if (hostToolCheckStatus !== "complete" || githubCliAvailable === null) return;
+    if (githubCliSetupStatus) return;
+    let active = true;
+    void getGitHubCliStatus()
+      .then((status) => {
+        if (!active) return;
+        setGithubCliSetupStatus(status);
+        const needsSetup = !status.installed || (!status.authenticated && status.canSignIn);
+        if (needsSetup && !status.reminderDismissed) setGithubSignInOffered(true);
+      })
+      .catch((error) => console.warn("[App] Could not read GitHub CLI status:", error));
+    return () => {
+      active = false;
+    };
+  }, [hostToolCheckStatus, githubCliAvailable, githubCliSetupStatus]);
 
   const showGithubWarning =
     hostToolWarningsVisible &&
     hostToolCheckStatus === "complete" &&
-    (claudeCliAvailable === true || opencodeCliAvailable === true) &&
-    githubCliAvailable === false &&
+    typeof availableAiCli === "string" &&
+    !showClaudeLoginNotice &&
+    githubSignInOffered &&
     !githubCliWarningDismissed;
+  const githubCliMissing = githubCliSetupStatus
+    ? !githubCliSetupStatus.installed
+    : githubCliAvailable === false;
 
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
@@ -1185,6 +1216,7 @@ function App() {
         <ErrorDetailsDialog />
         <HostPathPickerDialog />
         <ContainerHostReachabilityNotice />
+        <BackendVersionReminder />
 
         {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
           <div
@@ -1473,7 +1505,7 @@ function App() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* AI CLI not installed dialog - shows when Claude, Codex, and OpenCode are unavailable */}
+        {/* AI CLI not installed dialog - shows only when no agent platform is available */}
         <AlertDialog open={noAiCliAvailable}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -1523,13 +1555,14 @@ function App() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* Claude Code not logged in dialog - only shows when Claude is available but not logged in, and OpenCode is NOT available as fallback */}
-        <AlertDialog open={claudeNeedsLogin}>
+        {/* Claude Code not logged in notice - non-blocking, dismissible; other platforms keep working */}
+        <AlertDialog open={showClaudeLoginNotice}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Claude Code Login Required</AlertDialogTitle>
+              <AlertDialogTitle>Claude Code Is Not Logged In</AlertDialogTitle>
               <AlertDialogDescription>
-                Claude Code is installed but you haven't logged in yet. Please log in to continue.
+                Claude Code is installed but you haven't logged in yet. Claude sessions will not
+                start until you do; other agent platforms keep working.
                 <br />
                 <br />
                 Run the following command in your terminal:
@@ -1552,56 +1585,43 @@ function App() {
                   "Retry"
                 )}
               </Button>
-              <Button onClick={handleCloseApp}>Close Application</Button>
+              <AlertDialogAction onClick={() => setClaudeLoginNoticeDismissed(true)}>
+                Continue Without Claude
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* GitHub CLI warning dialog - non-blocking, dismissible */}
+        {/* GitHub CLI setup dialog - non-blocking, dismissible; signs in gh */}
         <AlertDialog open={showGithubWarning}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>GitHub CLI Not Found</AlertDialogTitle>
+              <AlertDialogTitle>
+                {githubCliMissing ? "GitHub CLI Not Found" : "Sign In to GitHub"}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                The GitHub CLI (gh) is not installed on your system. While not required, it enables
-                features like PR detection and GitHub integration.
-                <br />
-                <br />
-                <strong>Install GitHub CLI:</strong>
-                <br />
-                <br />
-                <strong>macOS (Homebrew):</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">brew install gh</pre>
-                <strong>Linux:</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  sudo apt install gh # Debian/Ubuntu{"\n"}sudo dnf install gh # Fedora
-                </pre>
-                <strong>Windows:</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  winget install GitHub.cli
-                </pre>
-                After installation, run{" "}
-                <code className="rounded bg-muted px-1 font-mono">gh auth login</code> to
-                authenticate.
+                {githubCliMissing
+                  ? "The GitHub CLI (gh) is not installed on your system. While not required, it enables features like PR detection and GitHub integration."
+                  : "Orkestrator uses the GitHub CLI for PR detection, reviews and cloning private repositories. While not required, sign in to use them."}
               </AlertDialogDescription>
             </AlertDialogHeader>
+            <GitHubCliSetup onStatusChange={setGithubCliSetupStatus} />
             <AlertDialogFooter>
-              <Button
-                variant="outline"
-                onClick={handleRetryClaudeCheck}
-                disabled={isCheckingClaude}
-              >
-                {isCheckingClaude ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Checking...
-                  </>
-                ) : (
-                  "Retry"
-                )}
-              </Button>
-              <AlertDialogAction onClick={() => setGithubCliWarningDismissed(true)}>
-                Continue Without GitHub CLI
+              {githubCliSetupStatus?.authenticated ? null : (
+                <label className="mr-auto flex items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={githubReminderOptOut}
+                    onCheckedChange={(checked) => setGithubReminderOptOut(checked === true)}
+                  />
+                  Don&apos;t remind me again
+                </label>
+              )}
+              <AlertDialogAction onClick={handleCloseGithubCliSetup}>
+                {githubCliMissing
+                  ? "Continue Without GitHub CLI"
+                  : githubCliSetupStatus?.authenticated
+                    ? "Done"
+                    : "Not Now"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

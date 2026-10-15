@@ -35,7 +35,7 @@ import type {
   WebAnnotationHostComposeDraft,
   WebAnnotationHostEnvironment,
   WebAnnotationHostStorage,
-} from "./web-annotation-service-core.js";
+} from "./web-annotation-service-threads.js";
 import {
   WebAnnotationService,
   type WebAnnotationServiceOptions,

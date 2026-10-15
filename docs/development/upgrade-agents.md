@@ -144,6 +144,33 @@ currently embedded in the Electron package. The root `package` script downloads
 only Bun, and `build.extraResources` includes only `binaries/bun` from the
 `binaries/` directory.
 
+### Support tools
+
+The toolchain also pins host tools that are not agents.
+`PINNED_SUPPORT_TOOL_VERSIONS` in the manifest holds them, beside the agents'
+`PINNED_TOOLCHAIN_VERSIONS`. Today that is only the GitHub CLI.
+
+- Every profile with at least one enabled platform gets the support tools,
+  even a Cursor-only one (`pinnedArtifactsForPlatforms`). The headless
+  installer adds them to every selection.
+- They have no Dockerfile pin. The image installs `gh` from its distribution,
+  so the `AGENT_PINS` table and the Dockerfile checks do not cover them.
+- The backend runs the managed `gh` for PR detection, reviews, cloning and the
+  in-app GitHub sign-in (`apps/backend/src/core/github-cli-binary.ts`), and
+  falls back to `gh` on `PATH`. Terminals and agents find it first on `PATH`
+  as well. Every copy shares gh's configuration and stored login.
+
+To bump `gh`:
+
+1. Set `PINNED_SUPPORT_TOOL_VERSIONS.gh` to the latest `cli/cli` release.
+2. Download the four `gh_<version>_{macOS,linux}_{arm64,amd64}` archives and
+   check them against the release's `gh_<version>_checksums.txt`.
+3. Record each archive's size and SHA-256 and each `bin/gh`'s size and
+   SHA-256 in the `ghArtifact(...)` entries. The macOS binary is signed and
+   notarized by GitHub, so it is pinned unmodified.
+4. Run
+   `RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts --tool=gh`.
+
 ### Backend-only hosts
 
 A backend that runs without the desktop app (`orkestrator serve`, a server, a
@@ -381,7 +408,7 @@ under `bypassPermissions`.
    procedure.
 6. Review `session-manager.ts` for option, event, and message-union changes. Pay
    particular attention to the version-pinned `canUseTool` comment in
-   `session-manager-prompt.ts` and re-prove that `AskUserQuestion` remains parked
+   `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool
    under bypassPermissions` case in `sdk-compatibility.test.ts` is that proof —
    it drives the real installed SDK — so move the comment's version only once it

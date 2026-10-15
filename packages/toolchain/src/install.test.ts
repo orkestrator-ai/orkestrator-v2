@@ -11,9 +11,9 @@ import {
   resolveToolchainSelection,
 } from "./install.js";
 import type { EnsurePinnedToolchainsOptions, PinnedToolchainResult } from "./manager.js";
-import { PINNED_TOOLCHAIN_VERSIONS, type ToolchainName } from "./manifest.js";
+import { PINNED_TOOL_VERSIONS, PINNED_TOOLCHAIN_VERSIONS, type ToolchainName } from "./manifest.js";
 
-const ALL_TOOLS = Object.keys(PINNED_TOOLCHAIN_VERSIONS).sort();
+const ALL_TOOLS = Object.keys(PINNED_TOOL_VERSIONS).sort();
 const directories: string[] = [];
 
 afterEach(async () => {
@@ -58,25 +58,26 @@ describe("resolveToolchainSelection", () => {
     const selection = await resolveToolchainSelection({
       dataDir: await dataDir({ global: { enabledAgentPlatforms: ["claude", "pi"] } }),
     });
-    expect(selection).toEqual({ tools: ["claude", "pi"], source: "config" });
+    expect(selection).toEqual({ tools: ["claude", "pi", "gh"], source: "config" });
   });
 
   test("drops platforms that ship no binary", async () => {
     const selection = await resolveToolchainSelection({
       dataDir: await dataDir({ global: { enabledAgentPlatforms: ["codex", "cursor"] } }),
     });
-    expect(selection.tools).toEqual(["codex"]);
+    expect(selection.tools).toEqual(["codex", "gh"]);
   });
 
   test("an installation that predates platform selection keeps its three", async () => {
     const selection = await resolveToolchainSelection({ dataDir: await dataDir({ global: {} }) });
-    expect(selection).toEqual({ tools: ["claude", "codex", "opencode"], source: "config" });
+    expect(selection).toEqual({ tools: ["claude", "codex", "opencode", "gh"], source: "config" });
   });
 
   test("an explicit list wins over config and is validated", async () => {
     const directory = await dataDir({ global: { enabledAgentPlatforms: ["claude"] } });
+    // Support tools come with every selection, explicit or not.
     expect(await resolveToolchainSelection({ dataDir: directory, tools: ["grok"] })).toEqual({
-      tools: ["grok"],
+      tools: ["grok", "gh"],
       source: "explicit",
     });
     await expect(
@@ -93,9 +94,13 @@ describe("planToolchainInstall", () => {
       platform: "linux",
       architecture: "x64",
     });
-    expect(plan.artifacts.map((artifact) => artifact.name).sort()).toEqual(["claude", "codex"]);
+    expect(plan.artifacts.map((artifact) => artifact.name).sort()).toEqual([
+      "claude",
+      "codex",
+      "gh",
+    ]);
     for (const artifact of plan.artifacts) {
-      expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
+      expect(artifact.version).toBe(PINNED_TOOL_VERSIONS[artifact.name]);
       expect([artifact.platform, artifact.architecture]).toEqual(["linux", "x64"]);
     }
   });
@@ -116,11 +121,13 @@ describe("installPinnedToolchains", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.artifacts?.map((artifact) => artifact.name).sort()).toEqual([
       "claude",
+      "gh",
       "opencode",
     ]);
     expect(result.source).toBe("config");
     expect(result.versions).toEqual({
       claude: PINNED_TOOLCHAIN_VERSIONS.claude,
+      gh: PINNED_TOOL_VERSIONS.gh,
       opencode: PINNED_TOOLCHAIN_VERSIONS.opencode,
     });
     expect(result.currentBinDir).toBe(currentToolchainBinDir(directory));
@@ -264,13 +271,12 @@ describe("installPinnedToolchains", () => {
     ).rejects.toThrow("not directly inside");
   });
 
-  test("fails clearly when the selection has nothing to install", async () => {
+  test("installs only the support tools for an SDK-only selection", async () => {
     const directory = await dataDir({ global: { enabledAgentPlatforms: ["cursor"] } });
     const { ensure, calls } = fakeEnsure();
-    await expect(installPinnedToolchains({ dataDir: directory, ensure })).rejects.toThrow(
-      "None of the selected agent platforms",
-    );
-    expect(calls).toHaveLength(0);
+    const result = await installPinnedToolchains({ dataDir: directory, ensure });
+    expect(calls[0]!.artifacts?.map((artifact) => artifact.name)).toEqual(["gh"]);
+    expect(result.tools).toEqual(["gh"]);
   });
 
   test("propagates an install failure without touching current", async () => {

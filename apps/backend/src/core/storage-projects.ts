@@ -408,6 +408,22 @@ export abstract class StorageProjects extends StorageBase {
     return projects;
   }
 
+  /** Destructive reconciliation needs a complete owner set, never a fallback. */
+  async loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
+    const snapshot = this.loadStoreStrict<unknown>(this.environmentsFile());
+    if (!snapshot || !Array.isArray(snapshot.value)) {
+      throw new Error("Environment store is missing or invalid; cleanup refused");
+    }
+    const ids = new Set<string>();
+    for (const environment of snapshot.value) {
+      if (!isRecord(environment) || !isNonBlankString(environment.id) || ids.has(environment.id)) {
+        throw new Error("Environment owner is invalid; cleanup refused");
+      }
+      ids.add(environment.id);
+    }
+    return ids;
+  }
+
   async loadEnvironments(): Promise<Environment[]> {
     const environments = await this.loadJsonCached<Environment[]>(
       this.environmentsFile(),

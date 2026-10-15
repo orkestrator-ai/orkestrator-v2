@@ -332,6 +332,10 @@ function ModelRow({
             <span className="truncate">
               {model.providerLabel ?? PLATFORM_LABELS[model.platform]}
             </span>
+            {model.connected === false ? (
+              // Still selectable: the report can predate a sign-in.
+              <span className="shrink-0 text-amber-300/90">· Not connected</span>
+            ) : null}
           </span>
         </span>
       </DropdownMenuRadioItem>

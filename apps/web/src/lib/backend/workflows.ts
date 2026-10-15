@@ -65,6 +65,7 @@ import type {
   NativeAgentDiscoverySection,
   NativeAgentCommandIntent,
   NativeAgentCommandRefreshOutcome,
+  NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 
 /**
@@ -428,6 +429,8 @@ export async function ensureNativeAgentSession(input: {
   interactionPolicy?: AgentInteractionPolicy;
   title?: string;
   model?: string;
+  /** Only inherited defaults may be substituted when their provider is disconnected. */
+  modelSource?: "default" | "explicit";
   reasoningEffort?: string;
   phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
   /**
@@ -440,8 +443,11 @@ export async function ensureNativeAgentSession(input: {
   fastMode?: boolean;
   executionProfileId?: string;
   parameterValues?: Record<string, string | boolean>;
-}): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>("ensure_native_agent_session", input);
+}): Promise<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }> {
+  return invoke<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }>(
+    "ensure_native_agent_session",
+    input,
+  );
 }
 
 export async function adoptNativeAgentSession(input: {
@@ -805,6 +811,7 @@ export async function dispatchNativeAgentIntent(input: {
   interactionPolicy?: AgentInteractionPolicy;
   title?: string;
   model?: string;
+  modelSource?: "default" | "explicit";
   reasoningEffort?: string;
   phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
   prompt: string;
@@ -1234,30 +1241,6 @@ export async function rejectPromptQueueClaim<T>(
     queueKey,
     environmentId,
     claimToken,
-  });
-}
-
-export async function transferPromptQueueMessageToComposeDraft<T>(
-  queueKey: string,
-  environmentId: string,
-  messageId: string,
-  draftKey: string,
-  ownerType: "environment" | "project",
-  ownerId: string,
-  expectedDraftRevision?: number,
-): Promise<{
-  removed: T | null;
-  queue: PersistedPromptQueue<T> | null;
-  draft: PersistedComposeDraft | null;
-}> {
-  return invoke("transfer_prompt_queue_message_to_compose_draft", {
-    queueKey,
-    environmentId,
-    messageId,
-    draftKey,
-    ownerType,
-    ownerId,
-    ...(expectedDraftRevision === undefined ? {} : { expectedDraftRevision }),
   });
 }
 

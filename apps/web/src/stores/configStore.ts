@@ -101,7 +101,8 @@ const DEFAULT_CONFIG: AppConfig = {
           claudeNativeBackend: "sdk",
         },
         codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
-        opencode: { mode: "terminal", model: "opencode/claude-sonnet-5" },
+        // No model: unset resolves to OpenCode's connected, allowlisted default.
+        opencode: { mode: "terminal" },
         grok: { mode: "terminal" },
       },
     },

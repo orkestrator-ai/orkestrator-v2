@@ -1889,7 +1889,8 @@ describe("GlobalSettings", () => {
     expect(await screen.findByText("App version")).toBeTruthy();
     expect(await screen.findByText("9.8.7-test")).toBeTruthy();
     expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
-    expect(screen.getByText(/client and backend versions differ/)).toBeTruthy();
+    // The backend is newer, so the note names both versions and how to catch up.
+    expect(screen.getByText(/runs 9\.8\.7-test/)).toBeTruthy();
     expect(mockGetAppVersion).toHaveBeenCalled();
   });
 
@@ -1898,7 +1899,7 @@ describe("GlobalSettings", () => {
     render(<GlobalSettings activeSection="debug" />);
 
     await waitFor(() => expect(screen.getAllByText(BUNDLED_APP_VERSION)).toHaveLength(2));
-    expect(screen.queryByText(/versions differ/) === null).toBe(true);
+    expect(screen.queryByText(/runs /) === null).toBe(true);
   });
 
   test("shows the remote backend gateway hostname and port", async () => {

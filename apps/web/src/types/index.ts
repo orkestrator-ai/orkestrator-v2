@@ -534,6 +534,8 @@ export interface GlobalConfig {
   githubTokenConfigured?: boolean;
   /** Reuse the host's active `gh auth login` token for container GitHub access. */
   useHostGitHubCredentials?: boolean;
+  /** The user asked not to be reminded at startup to set up the GitHub CLI. */
+  githubCliReminderDismissed?: boolean;
   /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
   sshAgentSocketPath?: string;
   /** Deliver the host's Claude Code OAuth credential into containers. */

@@ -127,6 +127,8 @@ export interface EnsureNativeAgentSessionInput {
   interactionPolicy?: AgentInteractionPolicy;
   title?: string;
   model?: string;
+  /** Only inherited defaults may be substituted when their provider is disconnected. */
+  modelSource?: "default" | "explicit";
   reasoningEffort?: string;
   phase?: PipelineSessionPhase;
   /**

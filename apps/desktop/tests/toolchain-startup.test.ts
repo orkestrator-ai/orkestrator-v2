@@ -8,6 +8,7 @@ import type {
   PinnedToolchainResult,
   ToolchainProgress,
 } from "@orkestrator/toolchain/manager";
+import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 
 function progress(phase: ToolchainProgress["phase"]): ToolchainProgress {
   return { phase, completedTools: 0, totalTools: 3, overallFraction: 0, message: phase };
@@ -158,7 +159,7 @@ describe("toolchain startup orchestration", () => {
       }),
     ).resolves.toBe("/data/toolchains/bin");
 
-    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(ensure).toHaveBeenCalledTimes(3);
     expect(showMessageBox.mock.calls[0]?.[0].detail).toContain("network down");
     expect(quit).not.toHaveBeenCalled();
   });
@@ -188,6 +189,76 @@ describe("toolchain startup orchestration", () => {
 
     expect(ensure).toHaveBeenCalledTimes(1);
     expect(ensure.mock.calls[0]?.[0].artifacts).toEqual([]);
+  });
+
+  test.each([
+    { platform: "claude", interactive: true },
+    { platform: "claude", interactive: false },
+    { platform: "cursor", interactive: true },
+    { platform: "cursor", interactive: false },
+  ])(
+    "continues startup when optional gh preparation fails (%j)",
+    async ({ platform, interactive }) => {
+      const artifacts = pinnedArtifactsForPlatforms([platform], "darwin", "arm64");
+      const error = new Error("gh checksum verification failed");
+      const ensure = mock(async (options: EnsurePinnedToolchainsOptions) => {
+        if (options.artifacts?.some((artifact) => artifact.name === "gh")) throw error;
+        return {
+          rootDir: "/data/toolchains",
+          binDir: "/data/toolchains/bin/agents",
+          executables: {},
+        } as PinnedToolchainResult;
+      });
+      const showMessageBox = mock(async () => ({ response: 1 }));
+      const quit = mock(() => undefined);
+      const logError = mock(() => undefined);
+      await expect(
+        preparePinnedToolchains({
+          dataDir: "/data",
+          ensure,
+          artifacts,
+          interactive,
+          fetchImpl: mock(async () => new Response()),
+          onProgress: mock(() => undefined),
+          showMessageBox,
+          quit,
+          logError,
+        }),
+      ).resolves.toBe("/data/toolchains/bin/agents");
+      expect(
+        ensure.mock.calls.map(([options]) => options.artifacts?.map((artifact) => artifact.name)),
+      ).toEqual(platform === "claude" ? [["claude"], ["claude", "gh"]] : [[], ["gh"]]);
+      expect(logError).toHaveBeenCalledWith(error);
+      expect(showMessageBox).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+    },
+  );
+
+  test("returns the combined activation directory when support tools succeed", async () => {
+    const artifacts = pinnedArtifactsForPlatforms(["claude"], "darwin", "arm64");
+    const ensure = mock(
+      async (options: EnsurePinnedToolchainsOptions) =>
+        ({
+          rootDir: "/data/toolchains",
+          binDir: options.artifacts?.some((artifact) => artifact.name === "gh")
+            ? "/data/toolchains/bin/combined"
+            : "/data/toolchains/bin/agents",
+          executables: {},
+        }) as PinnedToolchainResult,
+    );
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        artifacts,
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox: mock(async () => ({ response: 1 })),
+        quit: mock(() => undefined),
+        logError: mock(() => undefined),
+      }),
+    ).resolves.toBe("/data/toolchains/bin/combined");
+    expect(ensure).toHaveBeenCalledTimes(2);
   });
 
   test("quits after a rejected retry prompt and handles non-Error failures", async () => {

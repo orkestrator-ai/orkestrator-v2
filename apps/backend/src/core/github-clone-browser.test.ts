@@ -70,7 +70,7 @@ describe("listGitHubCloneAccounts", () => {
       () => new CommandFailedError("spawn gh ENOENT", { executableMissing: true }),
     );
     await expect(listGitHubCloneAccounts(run)).rejects.toThrow(
-      "GitHub CLI is not installed. Install gh and run `gh auth login`, then retry",
+      "GitHub CLI is not available. Set it up under GitHub authentication in Settings, then retry",
     );
   });
 

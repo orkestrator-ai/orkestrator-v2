@@ -1,8 +1,49 @@
 # Todo index
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); reference docs folded in
+against `9fb4e6a8` the same day.
 
-Every outstanding item in `docs/todo/`, scored by importance and listed most important first. Each line links the file that holds the detail: what exists today, the constraints, and how to know it is done.
+`docs/todo/` holds every piece of outstanding work in the repository, one file
+per concept. This file is the single checklist across all of them: each item is
+scored by importance and listed most important first, and links the file that
+holds the detail (what exists today, the constraints, and how to know it is
+done). Pick work from the top.
+
+## Scoring an item
+
+Score the **impact of leaving the item undone**, not the effort to do it.
+Walk down the questions and take the first score that answers yes.
+
+1. **Very high.** Could leaving it lose or corrupt user data, leak a
+   credential or cross an isolation boundary, break shipped behaviour for most
+   users or every run today, or let a broken release ship unguarded?
+2. **High.** Does a user hit it in normal use (even with a workaround)? Does it
+   waste significant time, compute or money on every run? Is it a feature that
+   is on by default but has never been proved on the real stack, or a gate that
+   must pass before a shipped capability can be enabled? Is it security
+   hardening against a real, reachable exposure?
+3. **Medium.** Is it a functional gap or a provider-parity difference, a
+   qualification run for a secondary provider or platform, a refactor that
+   removes a real risk, a compatibility path to retire, or a missing
+   measurement?
+4. **Low.** Everything else: optional or deferred features, extensions,
+   optimisations that should wait for a measurement, cosmetic fixes, comment
+   and doc hygiene, and work blocked upstream.
+
+When judging, weigh the worst realistic outcome against how many users or runs
+it reaches. Some rules of thumb:
+
+- `blocked` and `deferred` items usually score low, because nothing can or
+  should start yet; rescore them when they are unblocked or the stated
+  measurement arrives.
+- Qualifying something that is on by default scores higher than qualifying
+  something behind a flag or off by default.
+- A prerequisite keeps its own score; say in the owning file what it unblocks
+  rather than raising it.
+- If torn between two scores, pick the higher one when data, credentials or
+  release safety are involved, otherwise the lower one.
+- Rescore when the facts change (a default flips, an upstream release lands, a
+  measurement comes in), and move the line to its new section.
 
 ## How to use this file
 
@@ -10,7 +51,6 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - When every item of a file is ticked, move any durable behaviour into `architecture/` or `development/`, delete the file, and delete its ticked lines and its row in [By file](#by-file).
 - New work goes into the owning file first, then gets a line here with a score.
 - Items without a tag are code work. Tags mark the rest: `qualification` (evidence to collect, usually a live or real-stack run), `verify` (status still unknown), `decision`, `deferred` (start only when the stated measurement justifies it) and `blocked` (waiting on upstream).
-- Scores are importance, not effort or order. A low item may still be a prerequisite for a higher one; the owning file says so.
 
 ## Scores
 
@@ -18,9 +58,9 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 5 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 58 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 231 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 233 |
-| **Total** | | **527** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 235 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 242 |
+| **Total** | | **540** |
 
 ## Very high
 
@@ -225,6 +265,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - [ ] Regenerate the deterministic recurring-work baseline; stored step artifacts no longer reproduce ([container-state-observation.md](container-state-observation.md), qualification)
 - [ ] Decide whether Claude state polling can be limited to containers running Claude in a terminal ([container-state-observation.md](container-state-observation.md), decision)
 - [ ] Qualify container deletion through the ledger (container, volumes, network steps) on Docker Desktop ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
+- [ ] Qualify backend upgrade over old containers and rollback-floor refusal with real releases ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 
 ### Design canvas (medium)
 
@@ -399,6 +440,9 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - [ ] Add `BackendProcess.launch` tests for readiness timeout, invalid auth file and startup races ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Test `main.ts` window and connection bookkeeping, including the `useConnection` rollback ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Add a breakpoint-crossing browser spec and check both mobile fixes in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
+- [ ] Upgrade Electron 44 → 46 before 44 loses support on 2027-03-02; re-test annotation masking on a HiDPI display ([dependency-upgrades.md](dependency-upgrades.md))
+- [ ] Burn down the React Compiler lint warnings in `apps/web` and raise each rule back to `error` at zero ([dependency-upgrades.md](dependency-upgrades.md))
+- [ ] Decide how to manage the update-manifest signing key before electron-builder 27 ([dependency-upgrades.md](dependency-upgrades.md), decision)
 
 ## Low
 
@@ -445,6 +489,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - [ ] Design generated, attributed thread summaries that never replace the latest human instruction ([web-annotation-extensions.md](web-annotation-extensions.md))
 - [ ] Qualify each annotation extension that lands with synthetic pages and frame and shadow adversarial cases ([web-annotation-extensions.md](web-annotation-extensions.md), qualification)
 - [ ] Decide which annotation extension, if any, to build next ([web-annotation-extensions.md](web-annotation-extensions.md), decision)
+- [ ] Qualify pins and Show on page for offscreen, in-modal and late-font layout-shift targets ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 
 ### CLI and slash commands (low)
 
@@ -460,7 +505,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - [ ] Build a policy-reviewed executor for Codex inline-shell templates, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Add further Orkestrator slash shortcuts beyond `/steer` and `/compact` with qualified semantics ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Update stale SDK pin facts in the OpenCode, Claude and Cursor command owner comments ([slash-command-catalogue.md](slash-command-catalogue.md))
-- [ ] Re-date the slash-command qualification record's pins and owner comments after a pass ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [ ] Update the pins and tables in `native-agent-commands.md` ("Provider support") and the owner comments after a qualification pass ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Check whether any slash-command live runs happened informally after #827 ([slash-command-qualification.md](slash-command-qualification.md), verify)
 
 ### Containers and environments (low)
@@ -601,6 +646,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - [ ] Avoid the validation reader's in-environment `bun` spawn on every poll ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Demand-gate interactive tmux capture (B19, `tmux-interactive.ts`) ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Split the validation worker's 500 ms liveness write from result writes (B20) with crash-recovery proof ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
+- [ ] Bring `RECURRING_JOB_CATALOGUE` and the recurring harness limitation text back in line with the code (L07, C13, `coordinator-repair`) ([recurring-work-qualification.md](recurring-work-qualification.md))
 
 ### Multi Review (low)
 
@@ -667,6 +713,13 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 - [ ] Split backend `test:workspace` into source and `dist`-consuming tests if Turbo summaries justify it ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), deferred)
 - [ ] Rotate a real phone or iOS simulator with a split and a terminal pane open ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
 - [ ] Verify the mobile environment-settings defect still reproduces in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), verify)
+- [ ] Drop `tsx` from claude-bridge and codex-bridge in favour of `bun --watch` ([dependency-upgrades.md](dependency-upgrades.md))
+- [ ] Move to electron-builder 27 / electron-updater 7 once 27 is stable ([dependency-upgrades.md](dependency-upgrades.md), blocked)
+- [ ] Move to `marked` 18 once `@tiptap/markdown` accepts it ([dependency-upgrades.md](dependency-upgrades.md), blocked)
+- [ ] Move to hono 5 once it is stable ([dependency-upgrades.md](dependency-upgrades.md), blocked)
+- [ ] Migrate to `@dnd-kit/react` 1.0 and drop the duplicate root dev dependencies ([dependency-upgrades.md](dependency-upgrades.md), blocked)
+- [ ] Clear the `postcss-selector-parser` advisory when `@tailwindcss/typography` moves off its pin ([dependency-upgrades.md](dependency-upgrades.md), blocked)
+- [ ] Move the Docker image to Node 26 after its LTS settles, not before December 2026 ([dependency-upgrades.md](dependency-upgrades.md), deferred)
 
 ## By file
 
@@ -676,7 +729,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 | [service-preview-rollout.md](service-preview-rollout.md) |  | 3 | 14 | 7 | 24 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
-| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 4 | 14 | 2 | 20 |
+| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 4 | 14 | 3 | 21 |
 | [web-annotation-known-limitations.md](web-annotation-known-limitations.md) |  |  | 7 | 3 | 10 |
 | [web-annotation-extensions.md](web-annotation-extensions.md) |  |  |  | 11 | 11 |
 | **CLI and slash commands** | | | | | |
@@ -685,7 +738,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 | [slash-command-catalogue.md](slash-command-catalogue.md) |  | 1 | 6 | 4 | 11 |
 | [slash-command-qualification.md](slash-command-qualification.md) |  | 2 | 3 | 2 | 7 |
 | **Containers and environments** | | | | | |
-| [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 10 | 1 | 14 |
+| [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 11 | 1 | 15 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  | 1 | 3 | 2 | 6 |
 | [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 1 | 2 | 1 | 4 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
@@ -712,7 +765,7 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  | 1 | 6 | 2 | 9 |
-| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 9 | 17 | 31 |
+| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 9 | 18 | 32 |
 | **Multi Review** | | | | | |
 | [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) | 1 | 3 | 7 | 9 | 20 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
@@ -731,3 +784,4 @@ Every outstanding item in `docs/todo/`, scored by importance and listed most imp
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  | 1 | 2 | 3 | 6 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 11 | 17 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  | 2 | 1 | 2 | 5 |
+| [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |

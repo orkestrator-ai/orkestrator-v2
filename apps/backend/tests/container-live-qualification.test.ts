@@ -10,7 +10,7 @@
  * the resources labelled with this run and nothing else — never a prune.
  *
  * Scenario ids refer to the matrix in
- * docs/improvements/containers/plan/14-integrated-qualification-and-rollout.md.
+ * docs/development/container-qualification.md.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";

@@ -73,9 +73,9 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
      generic page-script execution as the annotation API. Any privileged
      desktop inspection route needs a reviewed narrow command set, a checked
      sender identity and negative tests before it is enabled.
-   - Extend the anchor rules in the
-     [anchor resolution rules](../improvements/web-page-annotations/plan/10-anchors-navigation-and-stale-targets.md)
-     rather than adding a score.
+   - Extend the ordered rules in
+     [web-page-annotations.md](../architecture/web-page-annotations.md)
+     §"Resolution rules" rather than adding a score.
 5. Non-desktop capture.
    - Start with a short design decision that compares a trusted preview bridge
      with a backend-owned browser session. The chosen method must either keep

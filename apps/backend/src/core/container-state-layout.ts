@@ -6,8 +6,9 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
  * provider home's credentials, configuration, caches and host binaries stay in
  * the container layer and are never part of the preserved set.
  *
- * Traced against the pinned providers; the inventory, with citations, is in
- * docs/improvements/containers/plan/05-persistent-workspace-and-agent-state.md.
+ * Traced against the pinned providers; the inventory of what each provider
+ * preserves and excludes is in docs/architecture/container-lifecycle.md
+ * ("Provider state").
  * The bridge's own state is preserved with each provider's transcripts: for
  * Codex, Cursor, Grok and Pi the host's provider session id cannot be resolved
  * without it.

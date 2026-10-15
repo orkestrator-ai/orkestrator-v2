@@ -149,15 +149,9 @@ credentials; batch them with
   `overflow: true` without `overflowBefore` is read as bounded by the load
   time.
 - Which records survive a bridge or backend restart, and who owns each, is in
-  the kept
-  [record-ownership table](../improvements/inconsistencies/plan/01-contract-baseline-and-regression-fixtures.md).
-  Its backend `.json` file names predate SQLite (#969); the stores are now
-  `native-agent-sessions`, `compose-drafts` and `environments`
-  (`tabTeardownIntents`).
-- Every caller of close and its intended retention is in the kept
-  [caller inventory](../improvements/inconsistencies/plan/09-conversation-retention-and-close-semantics.md).
-  Two rows are stale: #970 removed the renderer `deleteSession` helpers, and
-  ACP now sends `session/close`.
+  [agent-engines.md → What survives a restart](../architecture/agent-engines.md#what-survives-a-restart).
+- Every caller of close and its intended retention is in
+  [agent-engines.md → Who calls close](../architecture/agent-engines.md#who-calls-close).
 
 ## Open questions
 
@@ -191,14 +185,6 @@ credentials; batch them with
   the interaction contract behind qualification item 7.
 - [transcript-history-efficiency.md](transcript-history-efficiency.md):
   truncated history views (item 5).
-- Living-doc drift to fix in
-  [`agent-engines.md`](../architecture/agent-engines.md):
-  - The Grok paragraph says "ACP has no release call and no delete method".
-    Since #964 close sends `session/close` when advertised.
-  - The sentence at the end of the close section that sends readers to the
-    inconsistency plan for the caller inventory should link the kept
-    [caller inventory](../improvements/inconsistencies/plan/09-conversation-retention-and-close-semantics.md)
-    directly, or move its corrected rows inline.
 
 ## Replaces
 
@@ -213,4 +199,7 @@ credentials; batch them with
 - `docs/improvements/inconsistencies/plan/08-bounded-steer-history-with-safe-replay.md`
 - `docs/improvements/inconsistencies/plan/10-shared-transcript-cursor-validation.md`
 - `docs/improvements/inconsistencies/plan/11-conformance-verification-and-release-handoff.md`
-- The open items of `plan/01-…` and `plan/09-…`, which stay as reference.
+- `docs/improvements/inconsistencies/plan/01-contract-baseline-and-regression-fixtures.md`
+  (record-ownership table now in `agent-engines.md`)
+- `docs/improvements/inconsistencies/plan/09-conversation-retention-and-close-semantics.md`
+  (caller inventory now in `agent-engines.md`)

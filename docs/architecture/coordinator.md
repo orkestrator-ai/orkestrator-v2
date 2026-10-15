@@ -8,7 +8,9 @@ Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
 What is still missing — mainly provider parity — lives in
-[`docs/todo/coordinator-to-implement.md`](../todo/coordinator-to-implement.md).
+[coordinator-read-only-adapters.md](../todo/coordinator-read-only-adapters.md),
+[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md) and
+[coordinator-consistency-gaps.md](../todo/coordinator-consistency-gaps.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -477,4 +479,4 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `idle` at turn end and how it translates `capabilityPolicy`
 
 A live per-provider tree-hash suite is not in the tree. That gap is part of
-[`docs/todo/coordinator-to-implement.md`](../todo/coordinator-to-implement.md).
+[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).

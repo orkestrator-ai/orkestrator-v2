@@ -1,8 +1,10 @@
 # Design canvas
 
 Status: Living — HTML/CSS design workspace with recoverable operations
-(protocol v2). Implementation plan and evidence:
-[`docs/improvements/design-space/plan/`](../improvements/design-space/plan/00-index.md).
+(protocol v2). Outstanding work:
+[design-canvas-qualification.md](../todo/design-canvas-qualification.md),
+[design-operation-recovery-edges.md](../todo/design-operation-recovery-edges.md)
+and [design-agent-conversation-links.md](../todo/design-agent-conversation-links.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
 dialog has two modes: **New design** (optionally with Claude or Codex, or a

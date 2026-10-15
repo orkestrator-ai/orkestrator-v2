@@ -184,8 +184,8 @@ default change with the staged plan's decision-record template.
   transport?
 - Which approval and completion budget applies under data-saving mode? The
   recurring-work budgets (approval visible within 2 s p95, turn completion
-  within 3 s) in the
-  [recurring baseline](../improvements/recurring-processes/baseline/README.md)
+  within 3 s) in
+  [recurring-work.md](../architecture/recurring-work.md#latency-budgets)
   are the natural starting point.
 
 ## Needs verification

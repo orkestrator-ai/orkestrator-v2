@@ -106,66 +106,23 @@ stopped retrying.
 
 ## Constraints and rationale
 
+The full rules are in
+[environment-deletion.md](../architecture/environment-deletion.md). Any change
+here must keep these invariants:
+
 - Delete only what the ledger names, or what is provable from a name: bridge
-  state directories are `<hash>` of an environment id, and branch namespaces
-  come from `parseEnvironmentBranchNamespace`.
+  state directories are `<hash>` of an environment or coordinator runtime id,
+  and branch namespaces come from `parseEnvironmentBranchNamespace`.
 - The ledger entry is written immediately after the deletion tombstone and
   before any destructive step. The environment record is still removed on
   time; what failed stays in the ledger for the reconciler.
-- Every ledger path must resolve inside the data directory or the worktree
-  base, and every directory removal goes through `removeConfinedDirectory`,
-  so a symlink cannot redirect it.
-- Coordinator runtime ids count as owners of bridge state; coordinator
-  conversations run the same bridges beside environment state.
-- Branch policy. Unmerged branches are always kept, and no setting deletes
-  them. A branch is disposable only when one of these holds:
-  - its PR merged and the local tip is contained in `refs/remotes/origin/<branch>`
-    (a merged PR does not make a branch disposable when the local tip is ahead);
-  - the tip is contained in a merge target such as `origin/HEAD` or the
-    default branch;
-  - it has no commits beyond `createdFromCommit`.
-
-  A branch checked out in any worktree is never deleted. `git branch -D`
-  runs only after a check passes; `git branch -d` is not a substitute,
-  because it judges against the upstream or the checkout's `HEAD` and
-  rejects squash merges.
-- Pre-ledger sweeps have no ledger, so their rules are stricter:
-  - Stray workspace directories directly under `getWorktreeBaseDir()`. A
-    directory is removed only when:
-    - no live or deleting environment and no ledger entry references it;
-    - it is not a project checkout or a registered worktree of any known
-      project;
-    - it holds nothing but directories and `**/.turbo/turbo-*.log`.
-
-    The walk never follows symlinks, and the newest mtime anywhere in the
-    tree counts. A walk over 10,000 entries, or one that cannot be read,
-    counts as content. A failed `git worktree list` for any project abandons
-    the pass. The count of unowned directories kept because they hold files
-    is logged only when it changes.
-  - Orphaned environment branches. Names follow `<slug>-<ns>[-r<N>][-<n>]`:
-    revision 0 has no `-r`, and allocation can add up to two collision
-    suffixes. `parseEnvironmentBranchNamespace` is the single definition,
-    shared with `disk:report`. Protected branches:
-    - namespaces of live and deleting environments and of ledger entries;
-    - recorded `branch` and `delegationBaseBranch` names;
-    - branches checked out in any worktree;
-    - the configured default branch and the `origin/HEAD` target.
-
-    A pre-ledger branch has no PR state, so only the merge-target test and
-    "no commits beyond its reflog `Created from` entry" can pass. Deletion
-    goes through `cleanupEnvironmentBranch`. Each project is swept at most
-    once a day (`ORPHANED_BRANCH_SWEEP_INTERVAL_MS`), at most 500 candidates
-    per pass, with a cursor for the rest.
-  - Temp files: only names of the shape `<name>.json.<pid>.tmp` in the data
-    directory, when that PID is not running. Other shapes, such as
-    `.coordinators.json.<uuid>.tmp`, are left alone.
-  - Anything modified in the last hour is skipped
-    (`ORPHANED_STATE_MIN_AGE_MS`), which covers a creation in progress.
-  - The sweeps run as one lifecycle operation under the reserved queue key
-    `orphaned-disk-state-sweep`, so they get shutdown admission and draining.
-    Creation cannot collide with them: it never reuses an existing path or
-    branch name, and each new environment gets a fresh namespace. Each sweep
-    fails alone and logs once per process.
+- Every ledger path must resolve inside the data directory or the recorded
+  worktree root, and every directory removal goes through
+  `removeConfinedDirectory`, so a symlink cannot redirect it.
+- Unmerged branches are always kept, and no setting deletes them.
+- Sweeps without a ledger skip anything modified in the last hour, abort when
+  the owner set cannot be listed completely, and run under lifecycle
+  admission.
 - Never prune the Docker build cache, images or other tools' state (Claude
   Code worktrees and transcripts, Codex sessions, mise installs)
   automatically. Report them instead.
@@ -182,6 +139,11 @@ stopped retrying.
   never collides.
 - Should an entry at the attempt cap ever be retried again, for example after
   a backend upgrade or on an explicit user action?
+- Should the stray workspace directory sweep also cover the folders
+  environments were created in (`worktreeBaseDir`, chosen per environment
+  or in Settings > Disk usage)? Today it lists only the backend's worktree
+  root (`getWorktreeBaseDir`), so a stray directory in a user-chosen folder
+  is never swept.
 
 ## Needs verification
 
@@ -196,20 +158,18 @@ stopped retrying.
   (recovery copies and volumes the ledger removes),
   [test-suite-and-ci-health.md](test-suite-and-ci-health.md),
   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
-- [Environment deletion design](../plans/environment-deletion-cleanup.md):
-  scope, ledger semantics, branch policy and reconciler backoff. Its "Docker"
-  section and JSON ledger path are superseded: the ledger has `volumes` and
-  `network` steps and records retained containers (#877), and it is a SQLite
-  store (#969).
+- [Environment deletion](../architecture/environment-deletion.md): scope,
+  deletion order, ledger semantics, branch policy, reconciler backoff and
+  sweep ownership.
 - [Disk usage](../development/disk-usage.md) for the operator view.
 
 ## Replaces
 
 - `docs/plans/environment-deletion-cleanup.md` (step 08 real-stack
-  verification and the failing-cleanup diagnostics follow-up; the design
-  stays in place)
+  verification and the failing-cleanup diagnostics follow-up are above; the
+  design moved to `architecture/environment-deletion.md`)
 - `docs/plans/orphaned-disk-state-cleanup.md` (all: the implementation notes
-  are carried into "Constraints and rationale", the open real-stack pass and
+  are in `architecture/environment-deletion.md`, the open real-stack pass and
   test-prefix follow-ups are above, and the machine measurements are
   historical)
 - `docs/improvements/containers/plan/07-recovery-deletion-and-cleanup-ux.md`

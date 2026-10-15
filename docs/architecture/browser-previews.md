@@ -1,16 +1,18 @@
 # Service Browser Previews
 
-Status: Living. Implemented on branch `webbrowser-functionality-cfc4abe48d47-r1`
-(2026-09-23). The execution history and evidence are in
-[the implementation plan](../improvements/browser/plan/00-index.md).
+Status: Living. Shipped in #831 (`4f02156b`). Rollout gates, the evidence log
+and remaining work are in
+[service-preview-rollout.md](../todo/service-preview-rollout.md).
 
 A browser tab previews a **service**: a backend-owned identity for one
 application port in one environment. It does not preview a host port. The tab
 follows the service when a container is recreated or its host binding changes,
 and it never follows a reused port to another application.
 
-Every new capability ships **disabled by default**. With everything off, the
-product behaves as before: browser tabs use the legacy gateway loopback route.
+Every new transport ships **disabled by default**. The service registry,
+service tabs and terminal-link intents are always on; with every transport
+off, a desktop service tab loads the service's current host port over the
+legacy gateway loopback route ("compatibility" mode).
 
 ## Components
 
@@ -31,15 +33,19 @@ product behaves as before: browser tabs use the legacy gateway loopback route.
 
 ## Identity
 
-- `backendInstanceId` is stored in `backend-identity.json` and bound to the data
-  directory. Copying a data directory to another path yields a new identity.
+- `backendInstanceId` is stored in the `backend-identity` store and bound to
+  the data directory. Copying a data directory to another path yields a new
+  identity.
 - `backendEpoch` changes on every backend start.
 - `serviceId` is stable for the life of a definition.
 - `endpointGeneration` changes whenever the resolved binding changes: a
   different container, host port, family, or transport. All access for the
   old generation is revoked before the new one is used.
 
-Definitions live in `preview-services.json`. Mutations are compare-and-set on
+Definitions live in the `preview-services` store (see [storage](storage.md)).
+Only definitions, idempotency records, the backend identity and operator
+settings are persisted; resolved host ports, grants and cookies never are.
+Mutations are compare-and-set on
 `definitionRevision`, deduplicated by operation ID, and removals leave
 tombstones so clients can detect deletions they missed.
 
@@ -58,7 +64,10 @@ settings → Preview services** or with `register_preview_service`.
 Container targets require the container to carry this backend's owner label
 and the environment's ID label. Orkestrator's own ports (gateway, Control MCP,
 agent tools, local agent servers, Docker API ports) and in-container agent
-servers (4096–4101) are refused with `forbidden`.
+servers (4096–4101) are refused with `forbidden`. Container targets are reached
+only through Docker's loopback binding for that exact application port, and
+manual targets are backend-loopback only: an arbitrary remote host is never a
+target.
 
 **Automatic host ports.** A port mapping with **Auto** (`hostPortMode: "auto"`,
 `hostPort: 0`) is published as `127.0.0.1::<port>` so Docker chooses a free
@@ -97,8 +106,14 @@ The client never names a host, port, or container.
   checks `Host` against DNS rebinding.
 - Each service gets its own Electron partition,
   `persist:orkestrator-preview-svc-<slot>-<connection>-<hash>`, so cookies and
-  storage never mix between services. **Reset site data** clears only that
-  partition.
+  storage never mix between services. Tabs of one service in one window share
+  the partition and the listener; different windows or connections never
+  share. **Reset site data** clears only that partition, and never runs on a
+  tab switch.
+- The listener first binds the port it used last for that service (bind, never
+  probe-then-close), so origin-keyed storage such as localStorage usually
+  survives a restart. If the port is taken, a fresh one is used and that
+  storage is lost.
 - Remote sessions block navigation to client-local and private addresses, so a
   remote preview cannot reach services on the user's own machine.
 - Close codes: 4401 unauthenticated, 4403 forbidden, 4409 generation changed,
@@ -137,10 +152,29 @@ The iOS client cannot POST across apps. It receives the step 3 URL directly
 30-second code. The session code is the only preview credential that ever
 appears in a URL. Grants and tunnel credentials never do.
 
-The reserved cookie is removed from requests before they reach the
-application, and applications cannot set it. Cross-site writes and WebSocket
-upgrades are refused before forwarding. The application's own `Authorization`
-headers and cookies pass through unchanged.
+The bootstrap host never serves application content, so no application
+service worker can be registered on it. A worker on the service host can
+intercept the session redirect, but the code only yields a session for the
+service whose code it already runs. Bootstrap responses are `no-store` with
+`Referrer-Policy: no-referrer`, and the web client submits the grant as a
+no-referrer form POST from a pre-opened top-level window, so it never reaches a
+URL, history entry or `Referer`. Paths under `/__orkestrator_preview/` are never
+forwarded upstream.
+
+The reserved cookies (the preview cookie and `orkestrator_gateway_auth`) are
+removed from requests before they reach the application, and upstream
+`Set-Cookie` fields using a reserved name are dropped. Upstream `Domain`
+attributes are removed, so application cookies become host-only rather than
+widened. The preview listener has no control dispatch, so control cookies are
+never valid on preview hosts. Cookie-authenticated writes and WebSocket
+upgrades must carry a same-service `Origin` (or `Sec-Fetch-Site: same-origin`)
+and are refused before forwarding otherwise. The application's own
+`Authorization` headers and cookies pass through unchanged.
+
+External-browser access is its own attachment with a session lease (30 minutes
+idle, 8 hours absolute). It outlives the tab that opened it and ends on service
+removal, an endpoint generation change, the access kill switch or credential
+rotation.
 
 Certificates are checked for coverage and expiry. A renewed certificate is
 detected and the listener is re-bound on the same port. A certificate that does
@@ -170,10 +204,77 @@ application bytes. HTTPS services are verified over the relay channel as usual.
 Images without `node` or `bun` cannot run the relay. For those, publish the
 port (Auto is enough) and recreate the container.
 
+## Security boundaries
+
+Application code is untrusted relative to Orkestrator control and to other
+services. Its authority is exactly the service being previewed. Every change
+to the preview path must keep these boundaries:
+
+- **Local ingress is credentialed.** Port secrecy is not authentication. The
+  desktop ingress requires `x-orkestrator-preview-ingress`, which Electron main
+  injects through `webRequest` only for requests from that service's partition
+  to that listener's origin (HTTP and WS). The header is stripped before bytes
+  enter the tunnel. Other local processes get `403`.
+- **The tunnel cannot choose destinations.** An attachment is bound to
+  `(serviceId, backendEpoch, endpointGeneration)`. An `OPEN` frame carrying
+  host or port fields is malformed. The backend re-resolves the upstream and
+  re-checks the generation immediately before connecting; a changed generation
+  fails the `OPEN`.
+- **Gateway credentials never ride application traffic.** The tunnel
+  authenticates in-band with its own credential, and browser sessions use the
+  host-only preview cookie. The application's own `Authorization` and cookies
+  pass through untouched.
+- **Chromium sandboxing is not a firewall.** Partitions of remote-backend
+  previews refuse requests to client-local loopback and private addresses
+  (including CGNAT tailnet ranges) other than the service's own ingress, so a
+  page cannot silently fall back to a service on the user's machine. This is
+  enforced through `webRequest`, not assumed from the sandbox.
+
+### Desktop credential and data path
+
+```mermaid
+sequenceDiagram
+  participant R as Renderer (ServiceBrowserTab)
+  participant M as Electron main
+  participant V as Service partition view
+  participant I as Local ingress 127.0.0.1:p
+  participant G as Backend gateway
+  participant A as PreviewAccessService
+  participant U as Application
+  R->>M: attach {tabId, serviceRef, bounds}
+  M->>G: create_preview_attachment (gateway bearer, control API)
+  G->>A: mint attachment (service, epoch, generation, surface=desktop-tunnel)
+  A-->>M: attachmentId + tunnel credential (only its hash is stored)
+  M->>I: listen 127.0.0.1, ingress secret S
+  M->>V: load http://127.0.0.1:p/<path> (webRequest adds S for this origin only)
+  V->>I: GET /path + S + application Authorization/cookies
+  I->>I: verify S, strip S, map Host/Origin to the private authority
+  I->>G: WS /__orkestrator/preview/tunnel (orkestrator.preview-tunnel.v1)
+  I->>G: HELLO {attachmentId, credential}
+  G->>A: authenticate (surface, expiry, revocation, generation)
+  I->>G: OPEN
+  G->>U: TCP connect to the verified binding for that generation
+  G-->>I: OPEN_OK, then bounded binary frames both ways
+```
+
+Each upstream TCP connection is one outer WebSocket. Idle connections are
+pooled per service; nothing is replayed after a reconnect.
+
+### Resource ownership
+
+| Resource | Owner | Cleanup |
+| --- | --- | --- |
+| Definition, endpoint generation, readiness | Backend `PreviewServiceRegistry` | Definitions persist; runtime state is rebuilt on restart under a new epoch |
+| Attachment and credential hash | Backend `PreviewAccessService` | Release, lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
+| Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
+| Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
+| Service partition cookies and storage | Electron session | **Reset site data** for that service only (see [service-preview-rollout.md](../todo/service-preview-rollout.md) for retention) |
+| Browser preview session cookie | Browser holds the value; backend owns validity | Server-side idle and absolute expiry, revocation |
+
 ## Operator controls
 
 **Settings → Previews** (`get_preview_settings`/`update_preview_settings`),
-stored in `preview-settings.json`:
+stored in the `preview-settings` store:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
@@ -210,9 +311,11 @@ sequence against a real gateway.
 **Schema downgrade.** Older clients load saved service tabs
 (`orkestrator-preview://service/...` in `browserData.url`). They show
 "supports backend-local HTTP addresses" and keep the stored value unchanged.
-Older backends ignore `preview-*.json` files. Port mappings using Auto
-(`hostPort: 0`) are rejected by older backends' validation. Change them to
-fixed ports before downgrading the backend.
+Preview definitions, settings and identity are database stores; a downgrade
+to a build that reads JSON files follows the downgrade note in
+[storage](storage.md). Port mappings using Auto (`hostPort: 0`) are rejected
+by pre-preview backends' validation. Change them to fixed ports before
+downgrading that far.
 
 ## Diagnostics
 
@@ -263,12 +366,13 @@ unchanged.
 
 - **Vite 7.3.6** (pinned fixture): the page, module graph, and HMR updates work
   over a private origin with an empty config. No `allowedHosts` or `hmr`
-  settings are needed (`apps/backend/src/preview-vite.test.ts`, opt-in). The
-  HMR client runs over the same transport; its execution in a real browser
-  has not been validated.
+  settings are needed (`apps/backend/src/preview-vite.test.ts`, opt-in). HMR
+  in a real Chromium page is covered by `e2e/preview/private-origin.spec.ts`
+  (opt-in Vite fixture); HMR over the desktop tunnel in a real Electron window
+  is not yet validated.
 - **OAuth**: register the service host `https://s-….<domain>` as a redirect
-  URI. The desktop ingress port changes each session, so use the private
-  origin for OAuth flows.
+  URI. The desktop ingress port can change between sessions, so use the
+  private origin for OAuth flows.
 - Applications that build absolute URLs from `Host` produce `localhost` links.
   Configure them to use `X-Forwarded-Host`, or set their public origin. An
   application that hardcodes a different `localhost` API origin needs that
@@ -287,7 +391,11 @@ unchanged.
   - a real Electron window;
   - a two-machine tailnet run.
 
-  See the [evidence log](../improvements/browser/plan/evidence.md).
+  See the evidence log in
+  [service-preview-rollout.md](../todo/service-preview-rollout.md).
+- Application script on one service host can set a parent-domain cookie for
+  its own application cookie names (never the reserved ones). Mutually
+  untrusted services need separate preview domains.
 - An application service worker can intercept the service host's sign-in path
   and block re-sign-in. The sign-in code only authorizes that same service, so
   nothing leaks, but the user must clear the site's data to recover.

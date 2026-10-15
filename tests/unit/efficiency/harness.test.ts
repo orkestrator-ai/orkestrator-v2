@@ -37,8 +37,8 @@ import {
 } from "../../../scripts/efficiency/harness";
 
 /**
- * The efficiency harness (scripts/efficiency) produces the committed baseline
- * in docs/improvements/efficiency/baseline. These tests keep its fixtures
+ * The efficiency harness (scripts/efficiency), documented in
+ * docs/development/efficiency-harness.md. These tests keep its fixtures
  * deterministic and content-free and its accounting exact; the workloads
  * themselves import repository modules and run through `mise run
  * efficiency:baseline`, not here.

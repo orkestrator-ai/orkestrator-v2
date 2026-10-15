@@ -48,21 +48,9 @@ than behaviour it has shown.
   (interrupted revoke, staging interrupted by a restart), and kill-at-every-phase
   reconciliation of a rebuild.
 
-Commands that reproduce the evidence (wrap any of them in
-`mise run test:logged -- --name <name> --` for a logged run):
-
-| Suite | Command |
-| --- | --- |
-| Unit and integration | `mise run test` |
-| Final image | `bash docker/tests/final-image-smoke.sh <image>` |
-| Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-live-qualification.test.ts apps/backend/tests/container-live-replacement.test.ts apps/backend/tests/container-live-network.test.ts apps/backend/tests/container-live-firewall.test.ts` |
-| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-benchmarks.test.ts` |
-| Real stack, local | `mise run test:agent:browser:isolated` |
-| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, rebuild the profile image with `mise run docker:build:dev --profile <p>` if it already existed, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` (includes the rebuild cycle) |
-| Provider resume (C13) | `scripts/qualify-session-resume.sh <profile> <agent>` in an authorized agent-test profile |
-
-Stop and reset the profile afterwards; `mise run dev:reset` also removes the
-profile's exact-owner volumes and networks.
+The commands that reproduce the evidence, the C01–C30 scenario matrix, the
+platform dimensions and the benchmark targets are in
+[container-qualification.md](../development/container-qualification.md).
 
 ## Outstanding work
 
@@ -128,6 +116,14 @@ profile's exact-owner volumes and networks.
 - Daemon disconnect mid-copy and a live process kill just before and after the
   rebuild commit write. Both are covered by unit reconciliation and the
   capacity preflight, not by a live run.
+- Backend upgrade and rollback with real releases. Start current `main` over
+  a data directory and containers left by an older release (legacy images and
+  records) and show nothing is migrated or mutated implicitly. Then open a
+  directory current `main` has written with a release at the rollback floor
+  (the first to ship `container-lifecycle.schema.json`) and show it stays
+  read-only and refuses every container mutation. Only
+  `apps/backend/tests/container-lifecycle-service.test.ts` covers the schema
+  floor today, with in-process writers.
 - Live host-service reply (C22). The original host's ufw dropped
   container-to-host traffic, so the agent-tools port was only shown to leave
   the container. On a host where `container-host-reachability.ts` reports the
@@ -179,8 +175,9 @@ profile's exact-owner volumes and networks.
   [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md),
   [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md)
   (container deletion through the ledger on Desktop).
-- [C01–C30 scenario definitions, proofs and platform dimensions](../improvements/containers/plan/14-integrated-qualification-and-rollout.md).
-- [Benchmark baselines and regression targets](../improvements/containers/benchmarks.md).
+- [Container qualification](../development/container-qualification.md):
+  C01–C30 scenario definitions, platform dimensions, suite commands and
+  benchmark targets.
 - [Container lifecycle](../architecture/container-lifecycle.md),
   [agent testing](../development/agent-testing.md),
   [testing guide](../development/testing-guide.md).
@@ -192,8 +189,9 @@ profile's exact-owner volumes and networks.
 - `docs/improvements/containers/remaining-work.md` (environment-limited list;
   items 1–39 shipped in #877)
 - `docs/improvements/containers/plan/14-integrated-qualification-and-rollout.md`
-  (platform dimensions, evidence workflow, release gates; the scenario matrix
-  stays in place)
+  (release gates and the upgrade/rollback check; the scenario matrix, platform
+  dimensions and evidence workflow moved to
+  `docs/development/container-qualification.md`)
 - `docs/improvements/containers/plan/00-index.md` (the minimum Engine/Desktop
   and rootless decision gate)
 - `docs/improvements/containers/plan/01-immediate-data-loss-safeguards.md`,

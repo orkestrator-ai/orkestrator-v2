@@ -245,7 +245,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 - [mcp-environment-delivery.md](mcp-environment-delivery.md) for containers,
   remote backends and environment-private configuration.
 - [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) and
-  [`multi-account.md`](../plans/multi-account.md).
+  [`agent-accounts.md`](../architecture/agent-accounts.md).
 - [mixed-version-compatibility.md](mixed-version-compatibility.md) for older
   bridges.
 - [`mcp-management.md`](../architecture/mcp-management.md),

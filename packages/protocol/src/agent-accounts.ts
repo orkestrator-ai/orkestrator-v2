@@ -6,7 +6,7 @@
  * implicit `default` account is the host's own login and is always present.
  * Exactly one account per platform is active; switching is global, so no tab,
  * environment or settings tier records an account. See
- * docs/plans/multi-account.md.
+ * docs/architecture/agent-accounts.md.
  */
 export const AGENT_ACCOUNT_PLATFORMS = ["claude", "codex"] as const;
 export type AgentAccountPlatform = (typeof AGENT_ACCOUNT_PLATFORMS)[number];

@@ -43,9 +43,11 @@ measurements against the regression targets.
 - The harness is `apps/backend/tests/container-benchmarks.test.ts`, run with
   `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-benchmarks.test.ts`.
   It writes JSON under `output/benchmarks/` and removes its own reports older
-  than 30 days. The kept benchmarks doc holds the baselines and regression
-  targets, measured on Linux Engine amd64. A change that misses a target is
-  fixed or recorded with its reason before it merges.
+  than 30 days. The regression targets, set on Linux Engine amd64, are in
+  [container-qualification.md](../development/container-qualification.md)
+  ("Benchmarks"); the harness does not assert them, so the report is compared
+  by hand. A change that misses a target is fixed or recorded with its reason
+  before it merges.
 
 ## Outstanding work
 
@@ -66,8 +68,8 @@ measurements against the regression targets.
   turns. Measure on Linux Engine and on Docker Desktop, where the VM's
   capacity is the ceiling.
 - Benchmark numbers for Docker Desktop and arm64 against the regression
-  targets. The kept doc also lists UI response under multi-environment load
-  and real provider and bridge authentication paths as not measured.
+  targets. UI response under multi-environment load and real provider and
+  bridge authentication paths are not measured either.
 
 ### Deferred until measured
 
@@ -132,7 +134,7 @@ Revisit only if measurements change.
   (Desktop and arm64 runs, registry pull time),
   [container-state-observation.md](container-state-observation.md) (per-container
   `docker exec` polling), [recurring-work-qualification.md](recurring-work-qualification.md).
-- [Benchmark baselines and regression targets](../improvements/containers/benchmarks.md).
+- [Benchmark harness and regression targets](../development/container-qualification.md#benchmarks).
 - [Container lifecycle](../architecture/container-lifecycle.md): "Resource
   budgets and usage" and "Bounded logs".
 
@@ -147,7 +149,9 @@ Revisit only if measurements change.
 - `docs/improvements/containers/plan/13-performance-baselines-and-targeted-optimization.md`
   (deferred and rejected candidates and their conditions)
 - `docs/improvements/containers/benchmarks.md` (decision table and "Not
-  measured here"; baselines and targets stay in place)
+  measured here"; the targets moved to
+  `docs/development/container-qualification.md`, the one-off baseline numbers
+  were dropped)
 - `docs/improvements/containers/plan/00-index.md` (measured default resource
   profile gate)
 - `docs/improvements/containers.md` (findings 7–9, superseded by #877)

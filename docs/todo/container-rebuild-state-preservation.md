@@ -17,9 +17,10 @@ paths also remain, behind rollout switches, with no retirement plan.
   sub-path from the `state` volume and what the product may claim. Claude, Pi
   and Cursor are `full`; Codex, OpenCode and Grok are `partial`, and their
   limitation text reaches the user through `rebuildPreview`. The module's
-  header cites the
-  [provider-state inventory](../improvements/containers/plan/05-persistent-workspace-and-agent-state.md),
-  which records what each provider preserves and excludes.
+  header cites the provider-state inventory in
+  [container-lifecycle.md](../architecture/container-lifecycle.md)
+  ("Provider state"), which records what each provider preserves and
+  excludes.
 - Storage selection is `selectStorageFormat` in
   `apps/backend/src/core/container-storage.ts`: `volume-v1` only when the
   image declares `persistent-workspace`, the daemon is Engine 26+
@@ -82,7 +83,8 @@ paths also remain, behind rollout switches, with no retirement plan.
    Each fix needs an explicit mount at the provider's real path (or a
    provider-supported relocation variable, as with `CODEX_SQLITE_HOME` and
    `OPENCODE_DB`), a `PROVIDER_STATE_LAYOUT` entry, a `PROVIDER_PRESERVATION`
-   update, the matching row of the provider-state inventory, and a live C14 assertion
+   update, the matching row of the "Provider state" table in
+   `container-lifecycle.md`, and a live C14 assertion
    in `apps/backend/tests/container-live-replacement.test.ts`.
 2. Re-trace provider state paths after each agent upgrade. The inventory was
    traced against the 2026-09-27 pins; #880, #888, #891, #935 and #964 have
@@ -171,9 +173,9 @@ paths also remain, behind rollout switches, with no retirement plan.
   [opencode-v2.md](opencode-v2.md),
   [mcp-environment-delivery.md](mcp-environment-delivery.md) (container-private
   overlay writes).
-- [Provider-state inventory](../improvements/containers/plan/05-persistent-workspace-and-agent-state.md)
-  and [rollout stages](../improvements/containers/plan/14-integrated-qualification-and-rollout.md).
-- [Container lifecycle](../architecture/container-lifecycle.md),
+- [Container lifecycle](../architecture/container-lifecycle.md) (the
+  provider-state inventory is under "Provider state"),
+  [container qualification](../development/container-qualification.md),
   [upgrading agents](../development/upgrade-agents.md).
 - Living-doc drift to fix in `docs/architecture/container-lifecycle.md`:
   - "Preserving rebuild" says extended attributes are not preserved.
@@ -188,8 +190,6 @@ paths also remain, behind rollout switches, with no retirement plan.
     `-e ANTHROPIC_API_KEY`. It stays visible to same-user processes, but no
     longer in `docker inspect`. The "Credentials" bullet in the same section
     repeats the old claim.
-  - The "Authority" table's `storage` row ("`legacy-layer` until persistent
-    volumes") is stale wording.
   - Only `ORKESTRATOR_CONTAINER_STORAGE` and
     `ORKESTRATOR_CONTAINER_REPLACEMENT` are documented; the `host-mounts` and
     policy-1 opt-outs are not.
@@ -197,7 +197,8 @@ paths also remain, behind rollout switches, with no retirement plan.
 ## Replaces
 
 - `docs/improvements/containers/plan/05-persistent-workspace-and-agent-state.md`
-  (partial-preservation gaps; the inventory table stays in place)
+  (partial-preservation gaps; the inventory table moved to
+  `docs/architecture/container-lifecycle.md`, "Provider state")
 - `docs/improvements/containers/plan/06-migration-and-transactional-replacement.md`
   (copy and commit decisions; the rest shipped in #877)
 - `docs/improvements/containers/plan/07-recovery-deletion-and-cleanup-ux.md`

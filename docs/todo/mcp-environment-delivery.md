@@ -139,8 +139,8 @@ through `mise run test:agent:docker`; remote runs with
   for state layout and staged inputs, and
   [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md)
   for the allowlist and staged-input credentials.
-- [`05-persistent-workspace-and-agent-state.md`](../improvements/containers/plan/05-persistent-workspace-and-agent-state.md)
-  (provider-state inventory).
+- [`container-lifecycle.md`](../architecture/container-lifecycle.md)
+  ("Provider state", the provider-state inventory).
 - [`mcp-management.md`](../architecture/mcp-management.md) ("Containers").
 
 ## Replaces

@@ -26,8 +26,9 @@ import { TRANSCRIPT_ENVIRONMENT } from "./workloads-transcripts.js";
  * same harness measures a baseline worktree and the current tree. Writes the
  * full report to `output/efficiency/<run-id>/<label>.json` unless `--out` is
  * given. `--compare` prints every deterministic counter that differs from a
- * stored report; `--summary-out` also writes the compact before/after summary
- * committed under docs/improvements/efficiency/baseline/.
+ * stored report; `--summary-out` also writes a compact before/after summary
+ * (both runs' counters and warm p50, no per-run detail). Usage and method:
+ * docs/development/efficiency-harness.md.
  */
 
 function argument(name: string): string | undefined {

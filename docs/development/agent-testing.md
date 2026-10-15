@@ -307,9 +307,10 @@ does not authenticate Claude or modify the host's configuration.
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. It also requires a pinned
 model, written as `<provider>/<model>`, from a provider your OpenCode login has
-connected. The shipped default fails when its provider is not connected; see
-[`01-opencode-default-model-not-connected.md`](../2026-10-14/01-opencode-default-model-not-connected.md).
-The build-pipeline case also needs a model that emits reasoning.
+connected. The build-pipeline case also needs a model that emits reasoning.
+The spec still requires the pin even though no fixed default model ships any
+more; making it optional is tracked in
+[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
 
 ```bash
 mise run dev:test --profile qa-opencode-live --fixture --credential-source opencode --agent-platforms opencode

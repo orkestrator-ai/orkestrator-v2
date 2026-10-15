@@ -1,9 +1,8 @@
 # Web page annotations
 
 Status: Living — implemented behind capability negotiation; real-stack gates
-(native window, Docker, live agents) not yet run. See
-[the plan](../improvements/web-page-annotations/plan/00-index.md) for the
-checklist and outstanding evidence.
+(native window, Docker, live agents) not yet run. Gates and evidence are in
+[web-annotation-qualification.md](../todo/web-annotation-qualification.md).
 
 Select part of a preview, save a note without any agent open, discuss it with
 one chosen native-agent session, request a change, and review and accept the
@@ -31,8 +30,8 @@ until a new host note refers to them.
 
 | Layer | Files |
 | --- | --- |
-| Contract | `packages/protocol/src/web-annotations.ts`, `web-annotations-validation.ts`, `web-annotations-fixtures.ts`; capture transport at the end of `browser-preview.ts` |
-| Page runtime | `apps/desktop/electron/browser-preview-annotation-script.ts`, `browser-preview-anchor-script.ts` |
+| Contract | `packages/protocol/src/web-annotations.ts`, `web-annotations-validation.ts`, `testing/web-annotations-fixtures.ts`; capture transport at the end of `browser-preview.ts` |
+| Page runtime | `apps/desktop/electron/browser-preview-annotation-script.ts`, `browser-preview-anchor-script.ts`, `browser-preview-pins-script.ts`; host side in `browser-preview-capture-pins.ts` |
 | Native capture and spool | `apps/desktop/electron/browser-preview-capture.ts`, `browser-preview-capture-store.ts`, `browser-preview-capture-validation.ts` |
 | Backend storage and service | `apps/backend/src/core/web-annotation-storage.ts`, `web-annotation-store-layout.ts`, `web-annotation-store-rows.ts`, `web-annotation-legacy-import.ts`, `web-annotation-assets.ts`, `web-annotation-sync.ts`, `web-annotation-service*.ts`, `web-annotation-migration.ts` |
 | Execution adapters | `web-annotation-brief.ts`, `web-annotation-dispatch.ts`, `web-annotation-tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
@@ -142,6 +141,13 @@ reservation.
 entry so frozen requests still reproduce their source. Deleting is a tombstone
 and is refused while an implementation is active.
 
+Every bound (ids, entries, capture metadata, briefs, pages, threads, spool,
+sync ring) is in `WEB_ANNOTATION_LIMITS`. Both character counts and serialized
+UTF-8 bytes are enforced: on the desktop before expensive DOM or image work
+where possible, and again at backend trust boundaries. A smaller transport ceiling wins
+and surfaces as an explicit capacity error. These are release defaults, not
+measured usage.
+
 Quotas follow `WEB_ANNOTATION_LIMITS` (2,000 annotations, 5,000 requests,
 32 MiB metadata, 512 MiB images per environment; 500 entries / 2 MiB per
 thread). Exceeding one returns a `Web annotation capacity exceeded:` error with
@@ -164,6 +170,83 @@ Clients subscribe before fetching, buffer hints while loading, refetch
 affected resources, and reconcile every three seconds while visible. Fetch
 errors are shown as connection state and never change a request or annotation
 status.
+
+## Anchors and pins
+
+A saved target is a description, never a live element handle. An element
+anchor (`anchorFor` in `browser-preview-anchor-script.ts`) records:
+
+- a stable `id` or `data-testid`, only when it is unique in the document at
+  capture time;
+- semantic identity: tag, implicit role and accessible name;
+- visible text with a short prefix and suffix (whitespace is normalized for
+  comparison, the original is stored);
+- up to eight ancestor descriptors and a CSS path;
+- the root scope. Targets inside iframes, shadow roots or closed roots are
+  recorded as `unsupported`, never as a top-level selector.
+
+A text range stores its quote with context plus the anchor of its containing
+element.
+
+### Resolution rules
+
+A resolution carries a state (`matched`, `missing`, `ambiguous`, `stale`,
+`unsupported`, `too-complex`), the rule that decided it, the candidate count,
+the document generation and the current rectangle. There is no numeric
+confidence score; rules are ordered and each match needs corroborating
+identity.
+
+1. **Route and scope** (Electron main, `browser-preview-capture-pins.ts`). A
+   note for another logical route is `missing` with `offPage` and is never
+   queried against the current page. Page and legacy targets, non-document
+   scopes and pages without an addressable identity are `unsupported`. A
+   region names captured pixels, so it is `stale` and `historical` unless the
+   document generation and viewport width are unchanged.
+2. **Stable id.** A unique match whose tag, role and name (or text) still
+   agree is `matched`. A unique match that disagrees is `stale`: the id was
+   reused or the label changed. Duplicate ids fall through to later rules.
+3. **Semantic identity.** Elements with the same tag, role and accessible name
+   are candidates. Each is checked against identifying ancestors and the
+   surrounding text; a disagreement on either contradicts it. Exactly one
+   corroborated candidate matches. Several are `ambiguous`, and a single
+   candidate with no evidence either way is never matched on this rule alone.
+4. **Structural path.** A unique CSS-path match counts only when the anchor
+   has a name or text, identity agrees and nothing contradicts it. A path
+   alone cannot tell a reordered repeated card from its neighbour.
+5. **No corroborated node.** `ambiguous` when more than one plausible
+   candidate remains (including a lone uncorroborated one), `stale` when a
+   disagreeing candidate was found, otherwise `missing`.
+
+Text ranges search a bounded, whitespace-normalized text map of the document.
+A unique occurrence corroborated by its prefix or suffix (or the only
+occurrence when no context was stored) matches; several are `ambiguous`; a
+contradicted one is `stale`.
+
+Geometry never establishes identity. Every pass has a traversal budget and
+deadline, and exhausting it gives `too-complex`, which is distinct from
+`unsupported` and `missing`. A changed label is reported, not silently
+matched: the user can **Reselect target**, which commits a new capture and
+content revision and leaves earlier captures, requests and results untouched.
+A live match only moves the pin. It never changes the stored capture or a
+request's frozen target.
+
+### Live pins
+
+`browser-preview-pins-script.ts` draws numbered pins only for matched targets,
+for up to `visiblePins` (50) open notes on the current page. Unmatched and
+off-page notes are listed in the panel with their state. A `MutationObserver`
+re-resolves after DOM replacement (hot reload, re-render) on a coalesced
+schedule: at most one trailing pass per 750 ms, a pause after 120 passes until
+the host re-sends pins, no work while the document is hidden, and a shared
+budget of 60,000 node visits or 120 ms per pass. Main clears pins for every
+new document and emits `pins-invalidated`, so the panel re-sends them from
+backend records after a reload, navigation or remount.
+
+**Show on page** navigates to the note's logical route through the current
+preview routing, waits for the document, resolves the anchor, then scrolls and
+highlights (10 s timeout). It never replays a form submission or an
+interaction. When the sanitized route is incomplete, sign-in expired or
+routing changed, the panel asks the user to navigate and reselect.
 
 ## Requests
 
@@ -231,6 +314,63 @@ a cancel that arrives after the turn was sent and finished normally settles
 it normally with `cancelArrivedLate`. A held or queued request whose
 destination was deleted can be moved to another session (`retargetOf`), and a
 settled request can be followed up with its remaining items (`followUpOf`).
+
+### Request states
+
+Execution state is kept apart from the annotation's open/resolved state. A
+prepared brief that has not been sent is outside this lifecycle: the first
+state starts when the user commits Send, which is also when implementation
+reservations are taken.
+
+| State | Meaning |
+| --- | --- |
+| `prepared` | Frozen request and reservations committed; not yet in the native queue |
+| `queued` | The native queue holds the request id, possibly held with a `blockedReason` |
+| `dispatching` | The drainer has claimed it |
+| `unconfirmed` | Native `pendingDispatch` for this id: delivery outcome unknown |
+| `running` | The session's dispatch receipt lists the id, even before a provider turn id exists |
+| `needs-input` | The dispatched turn is waiting on a question or approval |
+| `cancelling` | A stop was sent to this request's turn |
+| `completed` | A discuss turn ended. Never resolves the annotation |
+| `awaiting-review` | An implement turn ended. The annotation stays open until a human accepts |
+| `failed` / `cancelled` | Authoritative failure or cancellation, or safe removal before dispatch |
+| `abandoned-unconfirmed` | The user discarded an unconfirmed delivery; recorded as possibly run |
+
+The last five are terminal. `WEB_ANNOTATION_REQUEST_TRANSITIONS`
+(`web-annotations.ts`) lists the allowed moves, and `applyStateInTx`
+(`web-annotation-service-requests.ts`) applies them: an identity update is
+accepted, so duplicate and out-of-order updates are idempotent; any other
+disallowed move is ignored rather than regressing the request; a terminal
+request never changes. Settling releases reservations and clears pending
+interactions. A new attempt gets a new request id. `blockedReason` is
+orthogonal to state: a held queue is not a failed execution.
+
+The adapter observes native state by polling storage and in-memory snapshots,
+so states between two passes can go unobserved. The table therefore allows
+more than the plain lifecycle:
+
+- **Forward skips.** From `queued` to `running`, `unconfirmed`,
+  `needs-input`, `completed`, `awaiting-review`, `failed` or `cancelled`, and
+  from `dispatching` to `needs-input`, `completed`, `awaiting-review` or
+  `cancelled`. A turn can
+  be claimed, dispatched and finished between passes. The session's dispatch
+  receipts are authoritative, and rejecting the skip would leave the request
+  stuck. Once dispatch is confirmed, `applyStateInTx` also accepts any move
+  that is valid by way of `running`.
+- **`dispatching` → `queued`.** The drain rejected the prompt and left the
+  queue parked on it. The request is held `dispatch-rejected` until the user
+  retries with the same id or cancels.
+- **`unconfirmed` →** `dispatching` on **Retry delivery** (same id), a later
+  state when receipts settle it, or `abandoned-unconfirmed` on **Discard**.
+- **`running` or `needs-input` → `cancelled`** without `cancelling`: the
+  destination session was deleted, so nothing can run or be stopped. The
+  reason says that work sent earlier may have run.
+- **`cancelling` → `cancelled`** once the turn ends, because a stop was
+  actually sent. A cancel that arrives after the turn already finished settles
+  it normally with `cancelArrivedLate`.
+
+`prepared` never skips ahead. It leaves only through its own publication to
+`queued` or a cancel or failure before publication.
 
 ### Request cards
 
@@ -311,9 +451,9 @@ The new capture path never writes into native chat drafts.
 
 ## Known limitations
 
-- A turn outcome is `unknown` when the backend could not read the session's
-  status without hydrating the transcript; the card says so rather than
-  guessing.
+- A turn outcome is `unknown` when no running bridge answers the status read
+  (the read never starts one), the status is neither idle nor an error, or a
+  later request was dispatched first; the card says so rather than guessing.
 - Pending questions and approvals are answerable from the request card only
   when their bodies can be read from the destination session's projection;
   otherwise the card offers **Answer in chat**.
@@ -339,4 +479,5 @@ The new capture path never writes into native chat drafts.
   environment, as for other environment-scoped commands.
 - Not yet exercised on a real stack: Docker materialization, remote backend
   upload, live-agent implementation runs per provider, iOS review, and
-  native-window checks at several zoom levels. See the gate records in step 14.
+  native-window checks at several zoom levels. See "Last evidence" in
+  [web-annotation-qualification.md](../todo/web-annotation-qualification.md).

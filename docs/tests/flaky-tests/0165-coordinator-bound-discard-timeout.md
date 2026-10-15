@@ -38,3 +38,23 @@ mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backe
 ```
 
 No coordinator implementation, assertion, timeout or skip was changed.
+
+## Recurrence — 2026-10-15 (coordinator mail upgrade recovery)
+
+`mise run test:logged -- --name mail-native-reconciliation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-mail-service.test.ts ./src/core/coordinator-service.test.ts ./src/core/native-agent-service-reconciliation.test.ts --parallel=2 --only-failures`
+timed out in the same case at 5114.84 ms while the full repository suite was
+also running. Results: 184 passed, one failed and one teardown error across
+three files (31.35 seconds). The teardown hit `SQLITE_IOERR_VNODE` after the
+timed-out test's temporary store was removed. Evidence:
+`/tmp/orkestrator-test-run.XqYrUe/mail-native-reconciliation.log.gz`.
+
+An owning-file rerun during the aggregate also timed out at 5152.92 ms
+(47 passed, one failed, one teardown error; 31.16 seconds). Evidence:
+`/tmp/orkestrator-test-run.cxnHm5/coordinator-service-isolated.log.gz`.
+After the aggregate finished,
+`mise run test:logged -- --name coordinator-service-isolated-final -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+passed the whole owning file (48 tests, exit 0, 19.4 seconds).
+
+The new canonical-key persistence test passed in every run. No branch-switch
+implementation, assertion, timeout or skip was changed. Host contention remains
+the hypothesis for this recurrence.

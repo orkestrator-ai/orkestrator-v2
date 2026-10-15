@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0234 | open | `clears retained setup state when the environment is deleted` | apps/backend/tests/commands-integration.test.ts | Terminal-history removal hit EPERM in the aggregate; unchanged owning file passed alone in 29.2 seconds. | [0234-setup-delete-terminal-history-eperm.md](0234-setup-delete-terminal-history-eperm.md) |
 | 0233 | open | `reports a bounded, actionable error when the handshake never completes` | bridges/codex-bridge/src/app-server-http.test.ts | Harness exited without output while Turbo stopped the bridge group after a sibling failure; unchanged owner passed alone in 6.0 seconds. | [0233-codex-handshake-harness-empty-output.md](0233-codex-handshake-harness-empty-output.md) |
 | 0232 | open | `a failed state-file write answers pending and keeps the session registered` | bridges/acp-bridge/src/acp-session-close.test.ts | Fixture mkdir hit EEXIST after removing the state file in the aggregate; unchanged owner passed alone in 5.4 seconds. | [0232-acp-close-state-file-fixture-race.md](0232-acp-close-state-file-fixture-race.md) |
 | 0231 | open | `bounds hostile padded rows and unterminated terminal controls` | packages/protocol/src/tmux-observation.test.ts | Observation took 120.176 ms against a 100 ms limit in the aggregate; unchanged owner passed alone. | [0231-tmux-observation-hostile-row-timing.md](0231-tmux-observation-hostile-row-timing.md) |

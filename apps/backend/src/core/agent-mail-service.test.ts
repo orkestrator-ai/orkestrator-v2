@@ -7,12 +7,15 @@ import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
   coordinatorRuntimeId,
+  type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
 import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { exportStoresAsLegacyJson, readStoredValue, seedStore } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import type { PersistedNativeAgentSession } from "./models.js";
 
 /** Committed revision of the agent-mail store: any rewrite of the mail bumps it. */
 function agentMailRevision(dataDir: string): number | null {
@@ -114,6 +117,213 @@ async function replaceRecipientTab(storage: StorageService, type: "agent-native"
 }
 
 describe("AgentMailService", () => {
+  for (const state of ["submitting", "verifying"] as const) {
+    for (const canonicalExists of [false, true]) {
+      test.each(["dispatched", "refused", "unresolved"] as const)(
+        `upgrade reconciles legacy %s mail (${state}, canonical session=${canonicalExists})`,
+        async (evidence) => {
+          const { storage, dataDir } = await fixture();
+          const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+          const legacyKey = "coordinator-coordinator-1:conversation-1";
+          const canonicalKey = `env-${runtimeId}:coordinator-tab`;
+          const legacyStorageKey = nativeAgentSessionStorageKey(runtimeId, "codex", legacyKey);
+          const canonicalStorageKey = nativeAgentSessionStorageKey(
+            runtimeId,
+            "codex",
+            canonicalKey,
+          );
+          const now = new Date().toISOString();
+          const restartDir = path.join(dataDir, "upgrade");
+          let service: AgentMailService | undefined;
+          let native: NativeAgentService | undefined;
+          try {
+            await storage.updateProject("project", { localPath: dataDir });
+            await storage.mutateCoordinatorWorkspace("project", () => ({
+              version: COORDINATOR_WORKSPACE_VERSION,
+              id: "coordinator-1",
+              projectId: "project",
+              executionPolicy: COORDINATOR_EXECUTION_POLICY,
+              lifecycleState: "ready",
+              conversations: [
+                {
+                  id: "conversation-1",
+                  tabId: "coordinator-tab",
+                  logicalSessionKey: legacyKey,
+                  agent: "codex",
+                  title: "Coordinator",
+                  createdAt: now,
+                  mailboxIncarnationId: "coordinator-incarnation-1",
+                },
+              ],
+              selectedConversationId: "conversation-1",
+              repositoryContextRevision: 0,
+              createdAt: now,
+              updatedAt: now,
+            }));
+            await storage.synchronizeAgentMailboxes();
+            const message = await storage.sendAgentMail(
+              { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+              {
+                requestId: "worker-report-before-upgrade",
+                toEnvironmentId: runtimeId,
+                toTabId: "coordinator-tab",
+                body: "The worker finished before the restart.",
+              },
+            );
+            const mailbox = (await storage.getAgentMailMailbox(runtimeId, "coordinator-tab"))
+              .descriptor;
+            await storage.beginAgentMailInject(
+              mailbox.mailboxId,
+              message.id,
+              mailbox.incarnationId,
+            );
+            if (state === "verifying") {
+              await storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
+                outcome: "verify",
+                requestId: message.injectRequestId!,
+              });
+            }
+            await storage.adoptNativeAgentSession({
+              key: legacyStorageKey,
+              environmentId: runtimeId,
+              agent: "codex",
+              logicalSessionKey: legacyKey,
+              providerSessionId: "legacy-mail-thread",
+              origin: "coordinator",
+              executionPolicy: COORDINATOR_EXECUTION_POLICY,
+              owner: { kind: "coordinator", projectId: "project", coordinatorId: "coordinator-1" },
+            });
+            if (canonicalExists) {
+              await storage.adoptNativeAgentSession({
+                key: canonicalStorageKey,
+                environmentId: runtimeId,
+                agent: "codex",
+                logicalSessionKey: canonicalKey,
+                providerSessionId: "renderer-thread",
+                origin: "coordinator",
+                executionPolicy: COORDINATOR_EXECUTION_POLICY,
+                owner: {
+                  kind: "coordinator",
+                  projectId: "project",
+                  coordinatorId: "coordinator-1",
+                },
+              });
+            }
+            // Export a pre-change installation: both durable routing records
+            // still use the legacy key and the native row owns the send evidence.
+            exportStoresAsLegacyJson(dataDir, restartDir, (file, value) => {
+              if (file === "coordinators.json") {
+                const store = value as { workspaces: Record<string, CoordinatorWorkspace> };
+                store.workspaces.project!.conversations[0]!.logicalSessionKey = legacyKey;
+              } else if (file === "agent-mail.json") {
+                const store = value as {
+                  mailboxes: Record<string, { logicalSessionKey?: string }>;
+                  pendingInject: Array<{ retryAt?: string }>;
+                };
+                store.mailboxes[mailbox.mailboxId]!.logicalSessionKey = legacyKey;
+                // Model the verification delay having elapsed before restart.
+                for (const entry of store.pendingInject) delete entry.retryAt;
+              } else if (file === "native-agent-sessions.json") {
+                const store = value as Record<string, PersistedNativeAgentSession>;
+                const session = store[legacyStorageKey]!;
+                if (evidence === "dispatched")
+                  session.dispatchedRequestIds = [message.injectRequestId!];
+                else
+                  session.pendingDispatch = {
+                    requestId: message.injectRequestId!,
+                    prompt: "Worker report carrier",
+                    createdAt: now,
+                    ...(evidence === "refused" ? { mailRefused: true as const } : {}),
+                  };
+              }
+              return value;
+            });
+            let restarted = new StorageService(restartDir);
+            await restarted.init();
+            const rendererSession = await restarted.getNativeAgentSession(canonicalStorageKey);
+            const requests: Array<{ logicalSessionKey: string; requestId: string }> = [];
+            const startMail = () => {
+              native = new NativeAgentService(restarted, async () => {
+                throw new Error("No live bridge after restart");
+              });
+              return new AgentMailService(
+                restarted,
+                {
+                  reconcileMailInject: (input) => native!.reconcileMailInject(input),
+                  sessionActivitySnapshot: () => "idle",
+                  mailInjectPresence: async () => "idle",
+                  dispatchMailInject: async (input) => {
+                    requests.push({
+                      logicalSessionKey: input.logicalSessionKey,
+                      requestId: input.requestId,
+                    });
+                    return { outcome: "accepted", requestId: input.requestId };
+                  },
+                },
+                { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+              );
+            };
+            service = startMail();
+            await service.init();
+            expect(
+              (await restarted.getAgentMailMailbox(runtimeId, "coordinator-tab")).descriptor
+                .logicalSessionKey,
+            ).toBe(canonicalKey);
+            if (state === "verifying") {
+              // Persist canonical routing, then restart again before verification
+              // so recovery cannot rely on the old mailbox's in-memory key.
+              await service.shutdown();
+              await native!.shutdown();
+              restarted = new StorageService(restartDir);
+              await restarted.init();
+              service = startMail();
+              await service.init();
+            }
+            await service.drainInjects();
+            await service.drainInjects();
+            const delivered = await restarted.getAgentMailMessage(
+              runtimeId,
+              "coordinator-tab",
+              message.id,
+            );
+            expect(delivered.injectRequestId).toBe(message.injectRequestId);
+            if (evidence === "unresolved") {
+              expect(delivered.placement).toBe(
+                state === "submitting" ? "inject_failed" : "pending-inject",
+              );
+              expect(delivered.placementReason).toBe(
+                state === "submitting" ? "ambiguous" : "verifying",
+              );
+              expect(requests).toEqual([]);
+            } else {
+              expect(delivered.placement).toBe("injected");
+              expect(requests).toEqual(
+                evidence === "refused"
+                  ? [
+                      {
+                        logicalSessionKey: canonicalKey,
+                        requestId: message.injectRequestId!,
+                      },
+                    ]
+                  : [],
+              );
+            }
+            expect(await restarted.getNativeAgentSession(canonicalStorageKey)).toEqual(
+              rendererSession,
+            );
+            expect(
+              (await restarted.getNativeAgentSession(legacyStorageKey))?.providerSessionId,
+            ).toBe("legacy-mail-thread");
+          } finally {
+            await service?.shutdown();
+            await native?.shutdown();
+            await fs.rm(dataDir, { recursive: true, force: true });
+          }
+        },
+      );
+    }
+  }
+
   test("automatically dispatches mail received after startup", async () => {
     const { storage, dataDir } = await fixture();
     const dispatches: Array<Record<string, unknown>> = [];

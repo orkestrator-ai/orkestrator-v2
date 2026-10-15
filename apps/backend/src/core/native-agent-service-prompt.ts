@@ -577,18 +577,47 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   async reconcileMailInject(
     input: NativeAgentProjectionInput & { requestId: string },
   ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
-    const key = nativeAgentSessionStorageKey(
-      input.environmentId,
-      input.agent,
-      input.logicalSessionKey,
+    const candidates = [input];
+    const coordinatorId = coordinatorIdFromRuntimeId(input.environmentId);
+    const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
+    // Mailbox synchronization upgrades routing to the renderer's tab key, but
+    // an interrupted send still belongs to its original native-session row.
+    // Read that row too, including during later verification passes/restarts;
+    // never adopt it over an existing canonical transcript mapping.
+    if (
+      coordinatorId &&
+      conversationId &&
+      input.logicalSessionKey.startsWith(`env-${input.environmentId}:`)
+    ) {
+      candidates.push({
+        ...input,
+        logicalSessionKey: `coordinator-${coordinatorId}:${conversationId}`,
+      });
+    }
+    const records = await Promise.all(
+      candidates.map(async (candidate) => {
+        const key = nativeAgentSessionStorageKey(
+          candidate.environmentId,
+          candidate.agent,
+          candidate.logicalSessionKey,
+        );
+        return { candidate, key, session: await this.storage.getNativeAgentSession(key) };
+      }),
     );
-    const session = await this.storage.getNativeAgentSession(key);
-    if (session?.dispatchedRequestIds?.includes(input.requestId)) return "dispatched";
-    if (session?.pendingDispatch?.requestId !== input.requestId) return "unknown";
-    if (session.pendingDispatch.mailRefused) return "not-dispatched";
-    return (await this.settleAmbiguousDispatch(input, key, input.requestId))
-      ? "dispatched"
-      : "unknown";
+    if (records.some(({ session }) => session?.dispatchedRequestIds?.includes(input.requestId))) {
+      return "dispatched";
+    }
+    let refused = false;
+    let unresolved = false;
+    for (const { candidate, key, session } of records) {
+      if (session?.pendingDispatch?.requestId !== input.requestId) continue;
+      if (session.pendingDispatch.mailRefused) refused = true;
+      else if (await this.settleAmbiguousDispatch(candidate, key, input.requestId)) {
+        return "dispatched";
+      } else unresolved = true;
+    }
+    // A refusal in one identity cannot prove another identity's attempt unsent.
+    return refused && !unresolved ? "not-dispatched" : "unknown";
   }
 
   async dispatchMailInject(

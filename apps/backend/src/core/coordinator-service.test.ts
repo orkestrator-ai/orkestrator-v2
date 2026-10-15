@@ -11,7 +11,7 @@ import {
 } from "./commands-environment.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
-import { seedStore, writeLegacyStore } from "./storage-test-support.js";
+import { readStoredValue, seedStore, writeLegacyStore } from "./storage-test-support.js";
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
@@ -107,6 +107,30 @@ describe("project coordinator", () => {
     );
     expect(mains).toHaveLength(1);
     expect(mains[0]!.id).not.toBe(main.id);
+  });
+
+  test("ensure and createConversation persist the renderer's canonical session keys", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const created = await service.createConversation(project.id);
+    const persisted = readStoredValue<{
+      workspaces: Record<string, typeof initial.workspace>;
+    }>(path.join(root, "data"), "coordinators.json")!.workspaces[project.id]!;
+    expect(persisted.conversations).toHaveLength(2);
+    expect(persisted.id).toBe(created.workspace.id);
+    for (const conversation of persisted.conversations) {
+      expect(conversation.logicalSessionKey).toBe(
+        `env-coordinator:${persisted.id}:${conversation.id}:${conversation.tabId}`,
+      );
+    }
+    expect(persisted.conversations[0]!.id).toBe(initial.workspace.conversations[0]!.id);
   });
 
   test("retention never removes an open conversation", async () => {

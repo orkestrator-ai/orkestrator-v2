@@ -27,3 +27,19 @@
   was changed.
 
 Case 0202 tracks a different test in the same file.
+
+## Recurrence during firewall tuple validation (2026-10-15)
+
+`mise run test:logged -- --name root-tests -- mise run test` timed out this
+unchanged test at 5003 ms. The next case, `lets an explicit first prompt bypass
+rename retry backoff`, then observed one update instead of two, and the late
+rename attempted to use an already removed fake Codex executable. The browser
+component and isolated-browser suites were also running. The owning file passed
+unchanged alone in 9.7 seconds with `--parallel=1`:
+
+```bash
+mise run test:logged -- --name reconciliation-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-create.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.aDyLLJ/root-tests.log.gz`. No assertion,
+implementation, skip or timeout was changed for these cases.

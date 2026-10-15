@@ -7,6 +7,7 @@ import {
   allowedDomainsRevision,
   applyEnvironmentAllowedDomains,
   configuredAllowedDomains,
+  containerNetworkPolicy,
   ensureEnvironmentNetwork,
   environmentNetworkName,
   ingressPorts,
@@ -239,6 +240,7 @@ async function allowlistContext(allowedDomains: string[] | undefined) {
 function allowlistDocker(options: {
   tarPath: string;
   running?: boolean;
+  policy?: 2 | 3;
   before: string;
   after: string;
   marker: string;
@@ -247,7 +249,7 @@ function allowlistDocker(options: {
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   network) printf '172.30.0.0/16\\t172.30.0.1\\n' ;;
-  inspect) printf '2\\t${IMAGE_ID}\\t${options.running === false ? "false" : "true"}\\n' ;;
+  inspect) printf '${options.policy ?? 2}\\t${IMAGE_ID}\\t${options.running === false ? "false" : "true"}\\n' ;;
   create) printf 'probe-container\\n' ;;
   cp) cat '${options.tarPath}' ;;
   rm) exit 0 ;;
@@ -321,6 +323,56 @@ describe("allowlist edits in place", () => {
     );
   });
 
+  test("a new container gets the newest policy its image implements unless capped", () => {
+    expect(containerNetworkPolicy(0, undefined)).toBe(1);
+    expect(containerNetworkPolicy(2, undefined)).toBe(2);
+    expect(containerNetworkPolicy(3, undefined)).toBe(3);
+    expect(containerNetworkPolicy(3, "2")).toBe(2);
+    expect(containerNetworkPolicy(3, "1")).toBe(1);
+    expect(containerNetworkPolicy(2, "3")).toBe(2);
+  });
+
+  test("ports reach only a policy 3 container; earlier policies get each domain once", async () => {
+    const saved = ["one.example", "db.example:5432", "db.example"];
+    const { context, dir } = await allowlistContext(saved);
+    const tarPath = await manifestTar({ "network-policy": 3, "network-refresh": 1 });
+    const tuples = allowedDomainsRevision(saved);
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        policy: 3,
+        before: allowedDomainsRevision(["one.example"]),
+        after: tuples,
+        marker: path.join(dir, "applied-v3"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("applied");
+        expect(result.policy.policyVersion).toBe(3);
+        expect(result.policy.configured.domainsRevision).toBe(tuples);
+        expect(await log.read()).toContain("--set-domains one.example,db.example:5432,db.example");
+      },
+    );
+    resetImageManifestCache();
+    const domains = allowedDomainsRevision(["one.example", "db.example"]);
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        before: allowedDomainsRevision(["one.example"]),
+        after: domains,
+        marker: path.join(dir, "applied-v2"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("applied");
+        expect(result.policy.policyVersion).toBe(2);
+        // The revision is of the list this container was sent.
+        expect(result.policy.configured.domainsRevision).toBe(domains);
+        expect(await log.read()).toContain("--set-domains one.example,db.example\n");
+      },
+    );
+  });
+
   test("an image without in-place updates, or a stopped container, is left as it is", async () => {
     const { context, dir } = await allowlistContext(["one.example"]);
     const legacy = await manifestTar({ "network-policy": 2 });
@@ -366,6 +418,47 @@ describe("allowlist edits in place", () => {
         const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
         expect(result.kind).toBe("applied");
         expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+  });
+});
+
+describe("recorded host-service ports", () => {
+  test.each([
+    ["3\n41234\n", 42345, true],
+    ["3\n41234,42345\n", 42345, false],
+    ["2\n41234\n", 42345, true],
+    ["1\n41234\n", 42345, false],
+    ["", 42345, false],
+    ["3\n41234\n", null, false],
+  ])("record %s with service port %s updates: %s", async (record, port, updates) => {
+    const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$*" in *'cat /etc/orkestrator/network-policy'*) printf '%s' '${record}' ;; esac
+`,
+      async (log) => {
+        await ensureContainerHostServicePorts("container-1", port);
+        const calls = await log.read();
+        expect(
+          calls.includes(
+            "exec --user root container-1 /usr/local/bin/update-firewall.sh --host-ports 42345",
+          ),
+        ).toBe(updates);
+        if (port === null) expect(calls).toBe("");
+      },
+    );
+  });
+
+  test("a failed host-port update rejects before callers can use a stale tools URL", async () => {
+    const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+    await withDockerScript(
+      `#!/bin/sh
+case "$*" in *--host-ports*) exit 1 ;; *) printf '3\\n41234\\n' ;; esac
+`,
+      async () => {
+        await expect(ensureContainerHostServicePorts("container-1", 42345)).rejects.toThrow();
       },
     );
   });

@@ -771,8 +771,9 @@ export interface PersistedComposeDraft {
   ownerId: string;
   value: unknown;
   /**
-   * Bounded provenance for an idempotent queue-to-draft transfer. Ordinary
-   * draft saves never set this field.
+   * Bounded provenance written by the retired queue-to-draft transfer command.
+   * Nothing sets it any more; drafts persisted by older versions still carry
+   * it, so it is validated on load and kept on save.
    */
   sourcePromptQueue?: {
     queueKey: string;

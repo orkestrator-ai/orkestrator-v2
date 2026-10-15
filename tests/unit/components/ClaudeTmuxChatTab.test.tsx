@@ -16,7 +16,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 
 import { useConfigStore } from "@/stores/configStore";
 
-import { useClaudeStore } from "@/stores/claudeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 import { useUIStore } from "@/stores/uiStore";
 
@@ -99,7 +99,7 @@ const updateGlobalConfigMock = mock(async (global: any) => ({
 const getClaudeModelCatalogMock = mock(
   async (environmentId: string, _forceRefresh?: boolean): Promise<ClaudeModelCatalogSnapshot> => ({
     environmentId,
-    models: useClaudeStore.getState().models,
+    models: useAgentModelCatalogStore.getState().claudeModels,
     source: "fallback",
     fetchedAt: "2026-07-25T12:00:00.000Z",
     stale: false,
@@ -738,7 +738,7 @@ describe("ClaudeTmuxChatTab", () => {
     getClaudeModelCatalogMock.mockReset();
     getClaudeModelCatalogMock.mockImplementation(async (environmentId: string) => ({
       environmentId,
-      models: useClaudeStore.getState().models,
+      models: useAgentModelCatalogStore.getState().claudeModels,
       source: "fallback" as const,
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
@@ -933,7 +933,7 @@ describe("ClaudeTmuxChatTab", () => {
     usePromptDraftStore.getState().reset();
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
-    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
+    useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -2732,7 +2732,7 @@ Running 1 Explore agent...
 
   test("offers Opus 5 in the tmux fallback catalog", async () => {
     seedPane();
-    useClaudeStore.setState({ models: [] });
+    useAgentModelCatalogStore.setState({ claudeModels: [] });
 
     render(
       <ClaudeTmuxChatTab
@@ -2782,8 +2782,10 @@ Running 1 Explore agent...
     });
 
     await waitFor(() => {
-      expect(useClaudeStore.getState().models).toEqual([discoveredModel]);
-      expect(useClaudeStore.getState().getModels("env-1")).toEqual([discoveredModel]);
+      expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([discoveredModel]);
+      expect(useAgentModelCatalogStore.getState().getClaudeModels("env-1")).toEqual([
+        discoveredModel,
+      ]);
     });
   });
 
@@ -2822,7 +2824,7 @@ Running 1 Explore agent...
       />,
     );
     await waitFor(() => {
-      expect(useClaudeStore.getState().models).toEqual([newerModel]);
+      expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([newerModel]);
     });
 
     olderCatalog.resolve({
@@ -2837,13 +2839,13 @@ Running 1 Explore agent...
       await Promise.resolve();
     });
 
-    expect(useClaudeStore.getState().models).toEqual([newerModel]);
+    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([newerModel]);
   });
 
   test("uses the SDK list as-is when it already includes the Default sentinel", async () => {
     seedPane();
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "default",
           name: "Default (SDK)",

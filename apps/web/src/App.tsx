@@ -33,6 +33,7 @@ import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialo
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
 import { GitHubCliSetup } from "@/components/github/GitHubCliSetup";
 import { Checkbox } from "@/components/ui/checkbox";
+import { BackendVersionReminder } from "@/components/BackendVersionReminder";
 import {
   checkDocker,
   checkClaudeCli,
@@ -1215,6 +1216,7 @@ function App() {
         <ErrorDetailsDialog />
         <HostPathPickerDialog />
         <ContainerHostReachabilityNotice />
+        <BackendVersionReminder />
 
         {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
           <div

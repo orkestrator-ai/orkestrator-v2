@@ -71,58 +71,6 @@ afterAll(() => {
 });
 
 describe("compose draft persistence", () => {
-  test("records revisions created by an atomic external draft mutation", async () => {
-    const key = "draft:atomic-transfer";
-    saveComposeDraft.mockResolvedValueOnce({
-      draftKey: key,
-      ownerType: "environment",
-      ownerId: "env-1",
-      value: "edited",
-      updatedAt: "2026-07-29T00:00:00.000Z",
-      revision: 8,
-    });
-
-    compose.recordComposeDraftRevision(key, 7);
-    await compose.persistComposeDraft(key, "environment", "env-1", "edited");
-
-    expect(saveComposeDraft).toHaveBeenCalledWith(key, "environment", "env-1", "edited", 7);
-  });
-
-  test("recording a revision clears a conflict recorded against the old one", async () => {
-    /**
-     * A conflict latches every later save into failing until it is resolved.
-     * An atomic backend mutation that rewrites the draft has already settled
-     * the disagreement, so leaving the latch set would wedge the composer.
-     */
-    const key = "draft:conflict-then-transfer";
-    const state = compose.createDraftRevisionState();
-    saveComposeDraft.mockRejectedValueOnce(
-      Object.assign(new Error("Compose draft revision conflict"), {
-        message: "Compose draft revision conflict",
-      }),
-    );
-    getComposeDraft.mockResolvedValueOnce({
-      draftKey: key,
-      ownerType: "environment",
-      ownerId: "env-1",
-      value: "theirs",
-      updatedAt: "2026-07-29T00:00:00.000Z",
-      revision: 4,
-    });
-
-    await expect(
-      compose.persistComposeDraft(key, "environment", "env-1", "mine", state),
-    ).rejects.toThrow(compose.DraftRevisionConflictError);
-    expect(state.conflictRevision).toBe(4);
-
-    compose.recordComposeDraftRevision(key, 9, state);
-    expect(state.conflictRevision).toBeNull();
-
-    saveComposeDraft.mockResolvedValueOnce({ revision: 10 });
-    await compose.persistComposeDraft(key, "environment", "env-1", "mine", state);
-    expect(saveComposeDraft).toHaveBeenLastCalledWith(key, "environment", "env-1", "mine", 9);
-  });
-
   test("a hydrating read cannot roll back a revision a save advanced", async () => {
     /**
      * The read publishes `state.revision` for every later compare-and-swap. It

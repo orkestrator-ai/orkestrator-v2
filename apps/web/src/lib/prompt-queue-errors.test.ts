@@ -6,7 +6,6 @@ import {
   isWebAnnotationQueueItemFrozenError,
   WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE,
   webAnnotationQueueItemFrozenError,
-  isComposeDraftOccupiedBackendError,
   isPromptQueueActionError,
   PromptQueueActionError,
 } from "./prompt-queue-errors";
@@ -37,21 +36,6 @@ describe("prompt queue action errors", () => {
     expect(isPromptQueueActionError("Compose draft already exists")).toBe(false);
     expect(isPromptQueueActionError(null)).toBe(false);
     expect(isPromptQueueActionError(undefined)).toBe(false);
-  });
-
-  test("detects the backend's occupied-draft refusal regardless of wrapping text", () => {
-    expect(isComposeDraftOccupiedBackendError(new Error("Compose draft already exists"))).toBe(
-      true,
-    );
-    expect(
-      isComposeDraftOccupiedBackendError(
-        new Error("Backend command failed: compose draft already exists"),
-      ),
-    ).toBe(true);
-    expect(isComposeDraftOccupiedBackendError(new Error("Compose draft revision conflict"))).toBe(
-      false,
-    );
-    expect(isComposeDraftOccupiedBackendError("Compose draft already exists")).toBe(false);
   });
 });
 

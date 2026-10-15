@@ -174,8 +174,8 @@ export const claudeCatalogRequestGenerations = new Map<string, number>();
 
 /**
  * Prefer the live model list the Claude bridge fetched from the Agent SDK
- * (shared via the claude store) over the static fallback. The "default"
- * sentinel is guaranteed to be present either way.
+ * (shared via the agent model catalogue store) over the static fallback. The
+ * "default" sentinel is guaranteed to be present either way.
  */
 export function tmuxModelList(sdkModels: ClaudeModel[]): ClaudeModel[] {
   if (sdkModels.length === 0) return TMUX_FALLBACK_MODELS;

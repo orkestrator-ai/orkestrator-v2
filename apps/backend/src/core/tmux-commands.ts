@@ -14,7 +14,7 @@ import {
   asPositiveInt,
   asString,
   asStringArray,
-  isMissingTmuxSessionError,
+  confirmTmuxSessionGone,
   parseTmuxSessionNames,
   path,
   runtimeRootPrefixForContext,
@@ -130,12 +130,13 @@ export async function cleanupEnvironmentTmux(
     }
 
     let cleanupComplete = true;
-    for (const session of tmuxManager.removeEnvironment(environmentId)) {
+    for (const session of tmuxManager.environmentSessions(environmentId)) {
       const stopped = await session.stop().catch((error: unknown) => {
         console.warn("[tmux] session stop failed during environment cleanup", error);
         return false;
       });
       if (!stopped) cleanupComplete = false;
+      else tmuxManager.removeIfSame(environmentId, session.tabId, session);
     }
 
     let backend: TmuxBackend;
@@ -300,11 +301,12 @@ export function registerTmuxBackendCommands(
       // executables. Removing outside this lock lets stop kill "nothing" while
       // that start is paused, after which start can launch an untracked tmux
       // process. Serialize the complete stop transition with start/replace.
-      const session = tmuxManager.remove(envId, tab);
+      const session = tmuxManager.get(envId, tab);
       if (!session) {
         await killOrphanSession(context, envId, tab);
       } else {
-        await session.stop();
+        if (!(await session.stop())) throw new Error("claude-tmux session stop incomplete");
+        tmuxManager.removeIfSame(envId, tab, session);
       }
       if (session && tmuxManager.sessionsInEnvironment(envId) === 0) {
         await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch(
@@ -519,7 +521,11 @@ export function registerTmuxBackendCommands(
         .exec(["tmux", "list-sessions", "-F", "#{session_name}"])
         .catch(() => null);
       if (!listed) continue;
-      if (listed.status !== 0 && !isMissingTmuxSessionError(listed.stderr)) continue;
+      if (
+        listed.status !== 0 &&
+        !(await confirmTmuxSessionGone(listed.stderr, (args) => backend.exec(args)))
+      )
+        continue;
       const layout = paneLayouts.layouts[environment.id];
       const referenced = new Set<string>();
       if (layout) collectReferencedNames(environment.id, layout.root, referenced);

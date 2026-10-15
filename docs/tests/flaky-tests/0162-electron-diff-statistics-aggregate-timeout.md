@@ -17,6 +17,22 @@
   ACP disconnect detection, reconnect backoff) touches no diff-statistics
   code.
 
+## Recurrence — 2026-10-15 (tmux socket cleanup)
+
+`mise run test:logged -- --name full-tests -- mise run test` reserved 4/1/2/1
+workspace/root/bridge/protocol slots on a shared 18-slot host. The backend
+package used two isolated Bun workers. `computes counts for a tracked local
+environment and announces them` exceeded its five-second timeout at 5180.68 ms.
+The backend group reported 7711 passed, 39 skipped and 2 failed across 423 files;
+the other failure was a shutdown/deletion test that also failed alone.
+Evidence:
+`/tmp/orkestrator-test-run.VSQjnP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name diff-statistics-isolation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file alone (exit 0) in 28.9 seconds. The tmux change
+does not modify diff scanning. Host contention remains an unconfirmed
+hypothesis; no timeout, assertion or skip was changed.
+
 ## Recurrence 2026-10-12
 
 - **Tests:** `deleting an environment drops its counts from the snapshot`

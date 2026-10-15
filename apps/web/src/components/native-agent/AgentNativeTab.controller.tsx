@@ -25,6 +25,7 @@ import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
 import {
   NativeResumeSessionDialog,
   type ResumableSession,
@@ -68,6 +69,7 @@ import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
 import { findMultiReviewFixReport } from "@/lib/multi-review-fix-tab";
 import {
   applyClaudeBackgroundTaskStates,
+  childBackgroundTasksByParent,
   normalizeNativeMessages,
   rowlessBackgroundTaskMessages,
 } from "@/lib/chat/native-message-adapters";
@@ -759,6 +761,12 @@ export function SharedNativeAgentController({
    */
   const backgroundTaskRows = useMemo(
     () => rowlessBackgroundTaskMessages(projection?.backgroundTasks ?? [], displayMessages),
+    [displayMessages, projection?.backgroundTasks],
+  );
+  // The tasks an agent launched render inside that agent's card, wherever the
+  // transcript puts it; the rows above leave them out.
+  const childBackgroundTasks = useMemo(
+    () => childBackgroundTasksByParent(projection?.backgroundTasks ?? [], displayMessages),
     [displayMessages, projection?.backgroundTasks],
   );
   /*
@@ -2467,7 +2475,7 @@ export function SharedNativeAgentController({
     messageWindow?.truncated === true && messageWindow.truncationReason === "bytes";
   const showLoadEarlier = messageWindow?.canLoadEarlier === true;
 
-  return (
+  const chatShell = (
     <NativeChatShell
       agentExpansionScope={data.environmentId}
       agentLabel={label}
@@ -3132,6 +3140,11 @@ export function SharedNativeAgentController({
         />
       }
     />
+  );
+  return (
+    <BackgroundTaskChildrenContext.Provider value={childBackgroundTasks}>
+      {chatShell}
+    </BackgroundTaskChildrenContext.Provider>
   );
 }
 

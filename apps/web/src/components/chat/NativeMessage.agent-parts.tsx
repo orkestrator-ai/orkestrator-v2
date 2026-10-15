@@ -37,6 +37,7 @@ import {
 } from "@/lib/chat/native-message-types";
 import {
   AgentPlatformContext,
+  BackgroundTaskChildrenContext,
   BackgroundTaskStopContext,
   ModelLabelResolverContext,
   NativeMessagePartRenderer,
@@ -165,6 +166,7 @@ function useAgentRuntimeLabel(
   });
 }
 
+/** Wall time, matching the live clock; paused time is shown as a separate detail. */
 function backgroundTaskDurationMs(
   startedAt: string | undefined,
   settledAt: string | undefined,
@@ -174,7 +176,7 @@ function backgroundTaskDurationMs(
   if (startedAtMs === undefined || settledAtMs === undefined || settledAtMs < startedAtMs) {
     return undefined;
   }
-  return settledAtMs - startedAtMs;
+  return Math.max(0, settledAtMs - startedAtMs);
 }
 
 function RuntimeLabel({ value, className }: { value?: string; className?: string }) {
@@ -541,10 +543,20 @@ function backgroundTaskAgentType(task: NativeBackgroundTask): string | undefined
   return role && role !== MAIN_SESSION_AGENT_ROLE ? role : undefined;
 }
 
+const BACKGROUND_TASK_KIND_LABELS: Record<NonNullable<NativeBackgroundTask["kind"]>, string> = {
+  shell: "Shell",
+  agent: "Agent",
+  workflow: "Workflow",
+  "remote-agent": "Remote agent",
+  mcp: "MCP",
+  teammate: "Teammate",
+  other: "Task",
+};
+
 function backgroundTaskKind(task: NativeBackgroundTask): string {
   const role = task.agentRole?.trim();
-  if (!role) return "Task";
-  return role === MAIN_SESSION_AGENT_ROLE ? "Main session" : "Agent";
+  if (role) return role === MAIN_SESSION_AGENT_ROLE ? "Main session" : "Agent";
+  return (task.kind && BACKGROUND_TASK_KIND_LABELS[task.kind]) ?? "Task";
 }
 
 /*
@@ -555,6 +567,7 @@ function backgroundTaskKind(task: NativeBackgroundTask): string {
 function backgroundTaskLabel(task: NativeBackgroundTask): string {
   return (
     task.description?.trim() ||
+    task.workflowName?.trim() ||
     backgroundTaskAgentType(task) ||
     (task.agentRole?.trim() === MAIN_SESSION_AGENT_ROLE ? "Backgrounded conversation" : "") ||
     `Background task ${task.id}`
@@ -562,7 +575,7 @@ function backgroundTaskLabel(task: NativeBackgroundTask): string {
 }
 
 interface BackgroundTaskOutcomeLine {
-  label: "Error" | "Summary";
+  label: "Error" | "Summary" | "Ended";
   text: string;
 }
 
@@ -581,7 +594,37 @@ function backgroundTaskOutcome(task: NativeBackgroundTask): BackgroundTaskOutcom
   if (summary && summary !== error && summary !== task.description?.trim()) {
     lines.push({ label: "Summary", text: summary });
   }
+  if (task.endReason === "process-restart") {
+    lines.push({
+      label: "Ended",
+      text: "The agent process restarted while this task was running, so it was stopped.",
+    });
+  }
   return lines;
+}
+
+/**
+ * What a live task is doing right now, in the provider's words: its own status
+ * line, else the tool its agent last ran. Nothing once it has settled, when
+ * its outcome says more.
+ */
+function backgroundTaskLiveStatus(task: NativeBackgroundTask): string | undefined {
+  if (!backgroundTaskPresentation(task).live) return undefined;
+  const summary = task.progressSummary?.trim();
+  if (summary) return summary;
+  const tool = task.lastToolName?.trim();
+  return tool ? `Using ${tool}` : undefined;
+}
+
+/** The command a live child is running, for an agent card with nothing newer to say. */
+function liveChildTaskStatus(children: readonly NativeBackgroundTask[]): string | undefined {
+  for (let index = children.length - 1; index >= 0; index -= 1) {
+    const child = children[index]!;
+    if (!backgroundTaskPresentation(child).live) continue;
+    const doing = child.command?.trim() || child.description?.trim();
+    if (doing) return `${backgroundTaskKind(child)} · ${doing}`;
+  }
+  return undefined;
 }
 
 interface BackgroundTaskUsageCounts {
@@ -658,11 +701,107 @@ function BackgroundTaskRail({
   );
 }
 
-function backgroundTaskAgentTypeEntries(
+function backgroundTaskMetaEntries(
   task: NativeBackgroundTask,
 ): Array<{ label: string; value: string }> {
   const agentType = backgroundTaskAgentType(task);
-  return agentType ? [{ label: "Agent type", value: agentType }] : [];
+  const workflow = task.workflowName?.trim();
+  return [
+    ...(agentType ? [{ label: "Agent type", value: agentType }] : []),
+    ...(workflow && workflow !== task.description?.trim()
+      ? [{ label: "Workflow", value: workflow }]
+      : []),
+    ...(task.pausedMs && task.pausedMs > 0
+      ? [{ label: "Paused", value: formatAgentDurationMs(task.pausedMs) }]
+      : []),
+  ];
+}
+
+/** A labelled, bounded block of verbatim text: a command, a prompt, output. */
+function BackgroundTaskTextBlock({
+  label,
+  text,
+  mono = false,
+}: {
+  label: string;
+  text: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="mb-3 border-l border-border/30 pl-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        {label}
+      </div>
+      <pre
+        className={cn(
+          "max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground/90",
+          mono ? "font-mono" : "font-sans",
+        )}
+      >
+        {text}
+      </pre>
+    </div>
+  );
+}
+
+/** The tasks a task's agent launched, which the provider reports as their own. */
+function useBackgroundTaskChildren(taskId: string | undefined): readonly NativeBackgroundTask[] {
+  const children = useContext(BackgroundTaskChildrenContext);
+  return (taskId && children.get(taskId)) || NO_CHILD_TASKS;
+}
+
+const NO_CHILD_TASKS: readonly NativeBackgroundTask[] = [];
+
+function ChildBackgroundTask({
+  task,
+  containerId,
+}: {
+  task: NativeBackgroundTask;
+  containerId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <BackgroundTaskCard
+      task={task}
+      containerId={containerId}
+      open={open}
+      onOpenChange={setOpen}
+      embedded
+    />
+  );
+}
+
+/**
+ * An agent's own tasks — the commands it ran long enough to be tracked, and the
+ * agents it delegated to — inside its card, where they belong.
+ */
+function BackgroundTaskChildList({
+  tasks,
+  containerId,
+}: {
+  tasks: readonly NativeBackgroundTask[];
+  containerId?: string;
+}) {
+  if (tasks.length === 0) return null;
+  const live = tasks.filter((task) => backgroundTaskPresentation(task).live).length;
+  return (
+    <section aria-label={`${tasks.length} launched tasks`} className="mb-3">
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        <span>Launched tasks</span>
+        <span className="font-normal tabular-nums text-muted-foreground/50">{tasks.length}</span>
+        {live > 0 ? (
+          <span className="ml-auto font-medium normal-case tracking-normal text-amber-600 dark:text-amber-300">
+            {live} active
+          </span>
+        ) : null}
+      </div>
+      <div className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/50">
+        {tasks.map((task) => (
+          <ChildBackgroundTask key={task.id} task={task} containerId={containerId} />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function BackgroundTaskOutputFile({ path, containerId }: { path: string; containerId?: string }) {
@@ -755,8 +894,11 @@ function BackgroundTaskDetails({
           </pre>
         </div>
       ))}
+      {task.outputTail ? (
+        <BackgroundTaskTextBlock label="Output" text={task.outputTail} mono />
+      ) : null}
       <AgentMetaRows
-        entries={[...backgroundTaskAgentTypeEntries(task), { label: "Task ID", value: task.id }]}
+        entries={[...backgroundTaskMetaEntries(task), { label: "Task ID", value: task.id }]}
       />
       {task.outputFile ? (
         <BackgroundTaskOutputFile path={task.outputFile} containerId={containerId} />
@@ -868,9 +1010,10 @@ function BackgroundTaskActivitySlot({
  * A provider-owned background task, rendered as the agent card every other
  * long-running child uses.
  *
- * It says "Task" unless the provider names the agent running it. A live task's
- * activity icon doubles as its stop control, and whatever usage the task reports
- * sits in the header's right rail rather than behind an expansion.
+ * It is named for the work the provider says it is ("Shell", "Agent", …), else
+ * "Task". A live task's activity icon doubles as its stop control, whatever
+ * usage the task reports sits in the header's right rail rather than behind an
+ * expansion, and the tasks its own agent launched are listed inside it.
  */
 export function BackgroundTaskCard({
   task,
@@ -912,18 +1055,34 @@ export function BackgroundTaskCard({
     backgroundTaskDurationMs(startedAt, task.settledAt),
     task.id,
   );
+  const children = useBackgroundTaskChildren(task.id);
+  // The launch row's own arguments win; the snapshot's copy is what a command
+  // that has no row here (one a delegated agent ran) is known by.
+  const shownCommand = command ?? task.command?.trim();
+  const prompt = shownCommand ? undefined : task.prompt?.trim();
   const description = task.description?.trim();
   const outcome = backgroundTaskOutcome(task);
   const usage = backgroundTaskUsageCounts(task);
-  const agentType = backgroundTaskAgentType(task);
+  const metaEntries = backgroundTaskMetaEntries(task);
   // The header already carries the description, so the collapsed second line is
-  // for what it does not say: the command actually running, or — when no launch
-  // row supplied one — how the task ended.
-  const preview = command && command !== description ? command : undefined;
-  const outcomePreview = preview ? undefined : outcome[0];
-  const hasPreview = Boolean(preview || outcomePreview);
+  // for what it does not say: the command actually running, what a live task is
+  // doing now, or — when nothing else is known — how the task ended.
+  const preview = shownCommand && shownCommand !== description ? shownCommand : undefined;
+  const statusPreview = preview
+    ? undefined
+    : (backgroundTaskLiveStatus(task) ?? liveChildTaskStatus(children));
+  const outcomePreview = preview || statusPreview ? undefined : outcome[0];
+  const hasPreview = Boolean(preview || statusPreview || outcomePreview);
   const hasBody = Boolean(
-    command || result || resultPending || outcome.length > 0 || task.outputFile || agentType,
+    shownCommand ||
+    prompt ||
+    result ||
+    resultPending ||
+    outcome.length > 0 ||
+    task.outputTail ||
+    task.outputFile ||
+    metaEntries.length > 0 ||
+    children.length > 0,
   );
 
   // The failure belongs to the attempt, not the task: a later status change
@@ -975,6 +1134,8 @@ export function BackgroundTaskCard({
               <div className="mt-1 truncate font-mono text-xs text-muted-foreground/80">
                 {preview}
               </div>
+            ) : statusPreview ? (
+              <div className="mt-1 truncate text-xs text-muted-foreground/80">{statusPreview}</div>
             ) : outcomePreview ? (
               <div
                 className={cn(
@@ -1008,18 +1169,13 @@ export function BackgroundTaskCard({
 
       <CollapsibleContent>
         <div className="border-t border-border/40 px-3 py-3">
-          {command ? (
-            <div className="mb-3 border-l border-border/30 pl-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                Command
-              </div>
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground/90">
-                {command}
-              </pre>
-            </div>
+          {shownCommand ? (
+            <BackgroundTaskTextBlock label="Command" text={shownCommand} mono />
           ) : null}
+          {prompt ? <BackgroundTaskTextBlock label="Prompt" text={prompt} /> : null}
           <BackgroundTaskDetails task={task} containerId={containerId} />
           <AgentResultBlock result={result} />
+          <BackgroundTaskChildList tasks={children} containerId={containerId} />
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -1312,9 +1468,16 @@ export function TaskGroupPart({
     () => usefulAgentOutput(deferredResult.toolOutput) ?? deferredResult.toolError,
     [deferredResult.toolError, deferredResult.toolOutput],
   );
+  const childTasks = useBackgroundTaskChildren(backgroundAgentTask?.id);
   const preview = useMemo(() => {
     const latest = nativeAgentLatestActivity(part);
     if (latest) return latest;
+    // A background agent streams none of its own activity here; the provider's
+    // status line, or the command it is running, is all there is to say.
+    const live =
+      (backgroundAgentTask && backgroundTaskLiveStatus(backgroundAgentTask)) ??
+      liveChildTaskStatus(childTasks);
+    if (live) return live;
     if (hideCounts) {
       if (prompt && prompt !== displayName && prompt !== description) return prompt;
       if (description && description !== displayName) return description;
@@ -1326,7 +1489,7 @@ export function TaskGroupPart({
         ? (prompt ?? "No activity captured.")
         : "Waiting for activity.")
     );
-  }, [description, displayName, hideCounts, part, prompt, status]);
+  }, [backgroundAgentTask, childTasks, description, displayName, hideCounts, part, prompt, status]);
   const metaEntries = agentMetaEntries(part.task.toolArgs, displayName, {
     includeDuration: isTerminalAgentStatus(status),
     ...modelOptions,
@@ -1455,6 +1618,7 @@ export function TaskGroupPart({
             <BackgroundTaskDetails task={backgroundAgentTask} containerId={containerId} />
           ) : null}
           <AgentResultBlock result={result} />
+          <BackgroundTaskChildList tasks={childTasks} containerId={containerId} />
           <div className="space-y-1">
             {part.childTools.map((child, index) => (
               <NativeMessagePartRenderer
@@ -1464,7 +1628,7 @@ export function TaskGroupPart({
                 partKey={`${partKey}/task-child-${index}`}
               />
             ))}
-            {part.childTools.length === 0 && !hideCounts ? (
+            {part.childTools.length === 0 && childTasks.length === 0 && !hideCounts ? (
               <div className="px-3 py-2 text-xs text-muted-foreground/70">
                 No child actions yet.
               </div>

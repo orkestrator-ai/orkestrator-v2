@@ -1348,7 +1348,48 @@ export interface NativeAgentBackgroundTaskSummary {
    * Display text only: it is not an identifier and does not select behavior.
    */
   agentRole?: string;
+  /** What sort of work the task is, when the provider says. */
+  kind?: NativeAgentBackgroundTaskKind;
+  /**
+   * The task whose agent launched this one. Absent when the conversation's own
+   * agent launched it, or the launcher is not itself a task. The parent may
+   * have ended or fallen out of the snapshot, so an unknown id means no parent.
+   */
+  parentTaskId?: string;
+  /** The prompt an agent or workflow task was started with. */
+  prompt?: string;
+  /**
+   * The command a shell task runs. A shell launched by a delegated agent has
+   * no row in this transcript, so this is the only place it is named.
+   */
+  command?: string;
+  /** The last part of a shell task's output, when the provider reported it. */
+  outputTail?: string;
+  /** The workflow's own name, for a workflow task. */
+  workflowName?: string;
+  /** Housekeeping the provider asks hosts to keep out of the transcript. */
+  ambient?: boolean;
+  /** The tool the task's agent most recently ran. */
+  lastToolName?: string;
+  /** The provider's live one-line status for the task. */
+  progressSummary?: string;
+  /** Total time the task spent paused, in milliseconds. */
+  pausedMs?: number;
+  /**
+   * Why the task ended other than by completing, failing or being stopped:
+   * `process-restart` is a task orphaned when the provider process restarted.
+   */
+  endReason?: "process-restart";
 }
+
+export type NativeAgentBackgroundTaskKind =
+  | "shell"
+  | "agent"
+  | "workflow"
+  | "remote-agent"
+  | "mcp"
+  | "teammate"
+  | "other";
 
 export interface NativeAgentBackgroundTaskUsage {
   totalTokens: number;

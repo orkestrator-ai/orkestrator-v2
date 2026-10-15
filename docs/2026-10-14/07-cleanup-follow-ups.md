@@ -1,8 +1,8 @@
 # Cleanup follow-ups, decisions to confirm and watch items
 
 Status: Active — collected 2026-10-14. Done 2026-10-15: 1, 2, 3, 7. Decided
-2026-10-15: 4 (kept as is). Open: 5 (a deployment can mix versions; see the
-finding below). Pointers only, no action: 6, 8.
+2026-10-15: 4 (kept as is). Partly done: 5 (users are now told to update on a
+mismatch; no renderer guard for raw envelopes). Pointers only, no action: 6, 8.
 
 Smaller items left over from the OpenCode boundary cleanup branch
 (`opencode-bridge-a8c2ab5c85b9-r1`) and its validation. None is user-visible
@@ -132,8 +132,16 @@ Neither checks versions: `/__orkestrator/status` answers only `{ ok: true }`
 (`apps/backend/src/gateway-auth.ts:366`). The renderer compares versions only
 for the Settings Debug note. A gateway-served tab left open across a backend
 upgrade gives the reverse skew (old renderer, new backend), which is benign
-here. Still open: add a version or capability field to the status response,
-or a renderer guard for raw envelopes.
+here.
+
+**Update 2026-10-15: version reminder added.** The renderer now compares its
+bundled version with the backend's `get_app_version` on load and after every
+event-stream reconnect, and shows a warning toast naming the older side and
+how to update it (`apps/web/src/components/BackendVersionReminder.tsx`; see
+"Version reminders" in `docs/architecture/remote-gateway.md`). It does not
+block or translate anything, so a newer renderer on an older backend still
+shows near-empty OpenCode rows until the backend is updated. A renderer-side
+guard for raw envelopes remains open if that is not enough.
 
 ## 6. Flaky tests recorded that day
 

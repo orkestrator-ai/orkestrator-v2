@@ -25,7 +25,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
+import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
+import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
 import { getGatewayBaseUrl, isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { pickHostPath } from "@/lib/host-path-picker";
@@ -372,6 +373,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       cancelled = true;
     };
   }, [activeSection]);
+
+  const versionReminder =
+    backendVersion.state === "reported"
+      ? describeVersionReminder({
+          skew: appVersionSkew(BUNDLED_APP_VERSION, backendVersion.version),
+          clientVersion: BUNDLED_APP_VERSION,
+          backendVersion: backendVersion.version,
+          clientKind: versionClientKind(),
+        })
+      : null;
 
   // --- Section renderers ---
 
@@ -2010,10 +2021,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </span>
           </dd>
         </dl>
-        {backendVersion.state === "reported" && backendVersion.version !== BUNDLED_APP_VERSION ? (
-          <p className="mt-2 text-xs text-amber-500">
-            The client and backend versions differ. Update the older one if something misbehaves.
-          </p>
+        {versionReminder ? (
+          <p className="mt-2 text-xs text-amber-500">{versionReminder.description}</p>
         ) : null}
       </div>
       <div>

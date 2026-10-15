@@ -144,6 +144,9 @@ The browser runs turned up two more host problems, and both are fixed:
 - **Flake 0214 (open).** The first `mise run test` after these changes hit
   three backend load failures in files this change does not touch (two design
   timeouts and an annotation benchmark bound). All three files pass alone.
+- **Flake 0215 (open).** The second `mise run test` passed the 0214 cases
+  and every group except one backend timeout in
+  `commands-registry-environments.test.ts`, whose file passes alone.
 
 The startup dialog (doc 03) still blocks a Codex-only profile on this host: a
 manual `--agent-platforms codex` run had 9 failures behind "Claude Code Login

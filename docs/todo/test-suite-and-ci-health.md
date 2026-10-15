@@ -69,7 +69,9 @@ reliably green on `main`, and nothing requires it to be.
   - **Load flakes** recorded in the registry: 0160 (runtime-env-wiring, 5 of
     16 runs; its Claude setup block case now has the 15-second budget its
     Codex sibling already had), 0176 (InitializationLogs), 0232 (ACP close fixture) and the new
-    0240 (Cursor steering at capacity).
+    0240 (Cursor steering at capacity, resolved on 2026-10-15 with 0216: both
+    cases made hundreds of real fsyncs, which a loaded Linux runner could not
+    finish inside Bun's timeouts).
 
   A full backend run under CI emulation (one worker, `CI` and
   `GITHUB_ACTIONS` set) also exposed: `AgentRegistry > lists every

@@ -341,17 +341,28 @@ export async function readPersistedSessionMessages(session: SessionState): Promi
   if (!session.sdkSessionId) return undefined;
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return undefined;
-  const [persisted, commandChanges] = await Promise.all([
+  const [persisted, commandChanges, preferences] = await Promise.all([
     sdk.getSessionMessages(session.sdkSessionId, {
       dir: currentWorkingDirectory(),
       includeSystemMessages: true,
     }),
     commandChangeJournal(session.sdkSessionId)?.read(),
+    readSessionPreferences(session.sdkSessionId),
   ]);
   const normalized = normalizePersistedSessionMessages(persisted);
   // Claude's JSONL has no record of what a Bash call changed; the bridge's
   // own journal does.
   if (commandChanges) overlayCommandChanges(normalized.messages, commandChanges);
+  const shellDetails = new Map(
+    preferences?.shellTaskDetails?.map((entry) => [entry.toolUseId, entry]),
+  );
+  for (const task of Object.values(normalized.backgroundTasks ?? {})) {
+    const fields = task.toolUseId ? shellDetails.get(task.toolUseId) : undefined;
+    if (!fields) continue;
+    task.command ??= fields.command;
+    task.outputTail ??= fields.outputTail;
+    task.error ??= fields.error;
+  }
   return normalized;
 }
 

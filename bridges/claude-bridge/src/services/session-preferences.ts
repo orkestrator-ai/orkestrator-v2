@@ -52,6 +52,37 @@ export interface SessionPreferences {
    * preferences file or a remount / eviction would drop them.
    */
   localTranscript?: ClaudeLocalTranscriptEntry[];
+  /** Shell-hook enrichment by launching call (one run); updates upsert the newest 256 calls. */
+  shellTaskDetails?: ClaudeShellTaskDetails[];
+}
+
+export interface ClaudeShellTaskDetails {
+  toolUseId: string;
+  command?: string;
+  outputTail?: string;
+  error?: string;
+}
+
+export const MAX_SHELL_TASK_DETAILS = 256;
+
+function parseShellTaskDetails(value: unknown): ClaudeShellTaskDetails | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.toolUseId !== "string" ||
+    record.toolUseId.length === 0 ||
+    record.toolUseId.length > 512
+  )
+    return undefined;
+  const entry: ClaudeShellTaskDetails = { toolUseId: record.toolUseId };
+  for (const [key, limit] of [
+    ["command", 4001],
+    ["outputTail", 2001],
+    ["error", 256],
+  ] as const) {
+    if (typeof record[key] === "string" && record[key].length <= limit) entry[key] = record[key];
+  }
+  return entry;
 }
 
 export interface ClaudeSteerPreferenceEntry {
@@ -374,6 +405,12 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
       preferences.localTranscript = overlay.slice(-MAX_LOCAL_TRANSCRIPT_ENTRIES);
     }
   }
+  if (Array.isArray(record.shellTaskDetails)) {
+    preferences.shellTaskDetails = record.shellTaskDetails
+      .slice(-MAX_SHELL_TASK_DETAILS)
+      .map(parseShellTaskDetails)
+      .filter((entry): entry is ClaudeShellTaskDetails => entry !== undefined);
+  }
   return preferences;
 }
 
@@ -527,7 +564,19 @@ export async function updateSessionPreferences(
             "Session preferences are unreadable; refusing to overwrite the durable prompt journal",
           );
         }
-        await writePreferencesFile(path, { ...existing, ...update });
+        const next = { ...existing, ...update };
+        if (update.shellTaskDetails) {
+          const details = new Map(
+            existing.shellTaskDetails?.map((entry) => [entry.toolUseId, entry]),
+          );
+          for (const entry of update.shellTaskDetails) {
+            const previous = details.get(entry.toolUseId);
+            details.delete(entry.toolUseId);
+            details.set(entry.toolUseId, { ...previous, ...entry });
+          }
+          next.shellTaskDetails = Array.from(details.values()).slice(-MAX_SHELL_TASK_DETAILS);
+        }
+        await writePreferencesFile(path, next);
       });
     });
   pendingWrites.set(writeKey, write);

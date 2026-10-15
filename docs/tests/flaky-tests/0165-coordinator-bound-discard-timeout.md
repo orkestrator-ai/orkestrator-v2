@@ -58,3 +58,24 @@ passed the whole owning file (48 tests, exit 0, 19.4 seconds).
 The new canonical-key persistence test passed in every run. No branch-switch
 implementation, assertion, timeout or skip was changed. Host contention remains
 the hypothesis for this recurrence.
+
+## Held-send validation recurrence on 2026-10-15
+
+The unchanged case timed out at 5171.27 ms in
+`mise run test:logged -- --name repository-tests -- mise run test`, with four
+workspace worker slots and the component browser suite running concurrently.
+The backend package reported 7,887 passed, 39 skipped, one failed and one
+unhandled error; the workspace group took 386.6 seconds. After the timeout,
+the same test's pending nested-repository assertion rejected with `disk I/O
+error` instead of `nested repositories`. This is consistent with the timed-out
+fixture being cleaned up while its asynchronous work was still finishing. The failure is retained in
+`/tmp/orkestrator-test-run.LvVdAx/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The owning file passed unchanged, exit 0, in 12.2 seconds:
+
+```bash
+mise run test:logged -- --name coordinator-repro -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+The matching timeout and isolated pass support the existing load hypothesis.
+No coordinator implementation, assertion, timeout or skip was changed.

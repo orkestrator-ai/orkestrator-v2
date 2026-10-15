@@ -1,6 +1,6 @@
 # Environment deletion hits EPERM removing terminal history
 
-- **ID:** 0234
+- **ID:** 0235
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `Electron backend command registry > clears retained setup state when the environment is deleted`

@@ -6,7 +6,10 @@
  * not on Claude/OpenCode/Codex SDK payloads.
  */
 
-import type { NativeAgentBackgroundTaskUsage } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentBackgroundTaskKind,
+  NativeAgentBackgroundTaskUsage,
+} from "@orkestrator/protocol/native-agent";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -67,6 +70,25 @@ export interface NativeBackgroundTask {
    * `agentRole`. `main-session` is the conversation's own agent, backgrounded.
    */
   agentRole?: string;
+  /** What sort of work the task is; see the protocol summary's `kind`. */
+  kind?: NativeAgentBackgroundTaskKind;
+  /** The task whose agent launched this one; see the protocol summary. */
+  parentTaskId?: string;
+  /** The prompt an agent or workflow task was started with. */
+  prompt?: string;
+  /** The command a shell task runs, when the provider captured it. */
+  command?: string;
+  /** The last part of a shell task's output. */
+  outputTail?: string;
+  workflowName?: string;
+  /** The tool the task's agent most recently ran. */
+  lastToolName?: string;
+  /** The provider's live one-line status for the task. */
+  progressSummary?: string;
+  /** Total time the task spent paused, in milliseconds. */
+  pausedMs?: number;
+  /** See the protocol summary's `endReason`. */
+  endReason?: "process-restart";
 }
 
 /**

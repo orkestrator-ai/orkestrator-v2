@@ -73,3 +73,22 @@ changed in this task.
 The root group passed the subsequent `complete-tests-final` full-suite run in
 144.4 seconds with the same worker plan. That run's only failure was the
 existing backend Git/worktree timeout tracked as 0187.
+
+## Held-send validation recurrence (2026-10-15)
+
+`mise run test:logged -- --name repository-final -- mise run test` reproduced
+the same `exitCode` assertion at line 380: expected `0`, received `null`,
+test duration 20.55 ms. The root group used one worker; workspace used four,
+bridges requested two and protocol one, with groups queued by the shared host
+capacity scheduler. Root reported 2,978 passed, one skipped and one failed in
+160.04 seconds.
+
+The unchanged owning file passed alone, exit 0, in 0.3 seconds:
+
+```bash
+mise run test:logged -- --name opencode-probe-repro -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures
+```
+
+Evidence is retained in
+`/tmp/orkestrator-test-run.GWGZM4/root-and-agent-support-tests.log.gz`. This matches the existing setup-deadline assumption;
+no probe implementation, assertion, timeout or skip was changed.

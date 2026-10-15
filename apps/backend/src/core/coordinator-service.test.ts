@@ -1475,6 +1475,102 @@ describe("project coordinator", () => {
       );
     }
 
+    for (const restart of [false, true])
+      test(`held reports reach an already persisted replacement main (${restart ? "restart recovery" : "manual creation"})`, async () => {
+        const fixture = await delegationFixture();
+        const report = await workerSays(fixture, "held-before-close", "The actual worker report.");
+        await fixture.coordinator.closeConversation(fixture.projectId, fixture.conversation.id);
+        await storage.synchronizeAgentMailboxes();
+        let service = fixture.coordinator;
+        if (restart) {
+          await storage.mutateCoordinatorWorkspace(fixture.projectId, (current) => {
+            const old = current!.conversations[0]!;
+            return {
+              ...current!,
+              conversations: [
+                ...current!.conversations,
+                {
+                  ...old,
+                  id: "persisted-main",
+                  tabId: "persisted-main-tab",
+                  logicalSessionKey: "persisted-main-key",
+                  mailboxIncarnationId: "persisted-main-incarnation",
+                  closedAt: undefined,
+                  role: "main",
+                  agent: "codex",
+                },
+              ],
+            };
+          });
+          storage = new StorageService(path.join(root, "data"));
+          await storage.init();
+          service = new CoordinatorService(storage, () => ({
+            enabled: true,
+            running: true,
+            error: null,
+          }));
+          await service.reconcileWorkerDelegations();
+        } else {
+          const snapshot = await service.createConversation(fixture.projectId);
+          const main = snapshot.workspace.conversations.find(
+            (item) => !item.closedAt && item.role === "main",
+          )!;
+          await service.assignConversationAgent(fixture.projectId, main.id, "codex");
+        }
+        await service.settleWorkerDelegations({
+          environmentId: fixture.workerId,
+          tabId: "startup-agent",
+          state: "completed",
+        });
+        await service.reconcileWorkerDelegations();
+        const pending = await storage.listPendingAgentMailInjects();
+        expect(pending.map((item) => item.message.id)).toEqual([report.id]);
+        expect(pending[0]!.message.from.kind).toBe("tab");
+        expect(pending[0]!.mailbox.environmentId === fixture.runtimeId).toBe(false);
+        expect(await storage.listUnwokenCoordinatorDelegations()).toHaveLength(0);
+      });
+
+    test("a stopped worker with an undelivered request remains delegated through startup", async () => {
+      const fixture = await delegationFixture();
+      await storage.updateEnvironment(fixture.workerId, { status: "stopped" });
+      const request = await storage.sendAgentMail(
+        {
+          kind: "coordinator",
+          projectId: fixture.projectId,
+          coordinatorId: fixture.coordinatorId,
+          conversationId: fixture.conversation.id,
+          environmentId: fixture.runtimeId,
+          tabId: fixture.conversation.tabId,
+        },
+        {
+          requestId: "pending-start",
+          toEnvironmentId: fixture.workerId,
+          toTabId: "startup-agent",
+          body: "Work after startup.",
+        },
+      );
+      await fixture.coordinator.reconcileWorkerDelegations();
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        state: "stopped",
+      });
+      expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+      expect((await storage.listPendingAgentMailInjects()).map((item) => item.message.id)).toEqual([
+        request.id,
+      ]);
+      await storage.updateEnvironment(fixture.workerId, { status: "running" });
+      const mailbox = (await storage.getAgentMailMailbox(fixture.workerId, "startup-agent"))
+        .descriptor;
+      await storage.beginAgentMailInject(mailbox.mailboxId, request.id, mailbox.incarnationId);
+      await storage.finishAgentMailInject(mailbox.mailboxId, request.id, { outcome: "accepted" });
+      await workerSays(fixture, "finished-after-start", "Finished requested work.");
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        state: "completed",
+      });
+      expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+    });
     test("holds worker progress and releases it all on one completion", async () => {
       const fixture = await delegationFixture();
       const first = await workerSays(fixture, "progress-1", "Started reading the code.");

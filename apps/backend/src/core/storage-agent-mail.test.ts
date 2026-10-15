@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { AgentMailService } from "./agent-mail-service.js";
+import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +21,7 @@ import { StorageService } from "./storage.js";
 
 /** The persisted agent-mail store, as far as these tests edit it. */
 type StoredMail = {
-  mailboxes: Record<string, { messages: Array<{ createdAt: string }> }>;
+  mailboxes: Record<string, { messages: Array<{ createdAt: string; wakeAdmittedAt?: string }> }>;
   counterparts?: Record<string, { createdAt: string }>;
 };
 
@@ -997,17 +999,28 @@ describe("StorageService agent mail", () => {
       expect(notices[0]).toMatchObject({ route: "coordinator", placement: "pending-inject" });
 
       // A new coordinator request is a new delegation and a new budget.
-      const followUp = await storage.sendAgentMail(coordinator, {
-        requestId: "request-1",
-        toEnvironmentId: "e1",
-        toTabId: "agent",
-        body: "next question",
-      });
+      const followUp = await storage.sendAgentMail(
+        coordinator,
+        {
+          requestId: "request-1",
+          toEnvironmentId: "e1",
+          toTabId: "agent",
+          body: "next question",
+        },
+        { newDelegation: true },
+      );
       expect(followUp).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
       expect(await sendFromWorker(budget + 2)).toMatchObject({
         placement: "pending-inject",
         threadDepth: 1,
       });
+
+      for (let index = 2; index <= budget; index += 1) await sendFromWorker(budget + 1 + index);
+      const secondNotices = (
+        await storage.getAgentMailMailbox(coordinatorEnvironmentId, "coordinator-tab")
+      ).messages.filter((message) => message.from.kind === "system");
+      expect(secondNotices).toHaveLength(2);
+      expect(new Set(secondNotices.map((message) => message.requestId)).size).toBe(2);
 
       // Resume releases everything held for the tab in one action.
       const resumed = await storage.retryAgentMailInject(
@@ -1592,6 +1605,36 @@ describe("StorageService agent mail", () => {
 });
 
 describe("StorageService agent mail routes", () => {
+  async function peerFixture() {
+    const result = await fixture();
+    const config = await result.storage.loadConfig();
+    await result.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, wakePeers: true },
+    });
+    return result;
+  }
+  async function drainWithStoppedHook(
+    storage: StorageService,
+    hook: ReturnType<typeof stoppedWorkerMailHook>,
+  ) {
+    const service = new AgentMailService(
+      storage,
+      {
+        sessionActivitySnapshot: () => "idle",
+        reconcileMailInject: async () => "unknown",
+        dispatchMailInject: async (input) => ({ outcome: "accepted", requestId: input.requestId }),
+      },
+      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      { coordinatorMailForStoppedEnvironment: hook },
+    );
+    try {
+      await service.init();
+      await service.drainInjects();
+    } finally {
+      await service.shutdown();
+    }
+  }
   const tab = (environmentId: string) =>
     ({ kind: "tab", environmentId, projectId: "p1", tabId: "agent" }) as const;
   const coordinatorSender = (conversationId: string) =>
@@ -1606,7 +1649,7 @@ describe("StorageService agent mail routes", () => {
 
   /** Two coordinator conversations; conversation-1 launched e1, conversation-2 only messaged e2. */
   async function coordinatorFixture(options: { closeCreator?: boolean } = {}) {
-    const { storage, dataDir } = await fixture();
+    const { storage, dataDir } = await peerFixture();
     const now = new Date(0).toISOString();
     await storage.mutateCoordinatorWorkspace("p1", () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
@@ -1663,7 +1706,7 @@ describe("StorageService agent mail routes", () => {
   }
 
   test("peers wake each other, including a reply from an injected turn", async () => {
-    const { storage, dataDir } = await fixture();
+    const { storage, dataDir } = await peerFixture();
     try {
       const first = await storage.sendAgentMail(tab("e1"), {
         requestId: "peer-1",
@@ -1681,7 +1724,7 @@ describe("StorageService agent mail routes", () => {
   });
 
   test("Wake peers off stores peer mail under the default policy", async () => {
-    const { storage, dataDir } = await fixture();
+    const { storage, dataDir } = await peerFixture();
     try {
       const config = await storage.loadConfig();
       await storage.saveConfig({
@@ -1929,7 +1972,7 @@ describe("StorageService agent mail routes", () => {
   });
 
   test("a peer budget pauses unattended exchange until a user prompt resets it", async () => {
-    const { storage, dataDir } = await fixture();
+    const { storage, dataDir } = await peerFixture();
     try {
       const budget = DEFAULT_AGENT_MESSAGING_SETTINGS.autonomousWakeBudget;
       const send = (index: number) =>
@@ -1967,7 +2010,7 @@ describe("StorageService agent mail routes", () => {
   });
 
   test("the hourly limit holds mail and releases it as the hour passes", async () => {
-    const { storage, dataDir } = await fixture();
+    const { storage, dataDir } = await peerFixture();
     try {
       const config = await storage.loadConfig();
       await storage.saveConfig({
@@ -1993,7 +2036,9 @@ describe("StorageService agent mail routes", () => {
       const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
       for (const stored of persisted.mailboxes["e2\0agent"]!.messages) {
         if ((stored as { id?: string }).id !== held.id)
-          stored.createdAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+          stored.createdAt = stored.wakeAdmittedAt = new Date(
+            Date.now() - 2 * 3_600_000,
+          ).toISOString();
       }
       seedStore(dataDir, "agent-mail.json", persisted);
       const restarted = new StorageService(dataDir);
@@ -2002,6 +2047,239 @@ describe("StorageService agent mail routes", () => {
       expect(await restarted.getAgentMailMessage("e2", "agent", held.id)).toMatchObject({
         placement: "pending-inject",
       });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+  test("default peer mail stays stored until peer wake is enabled", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      expect((await storage.loadConfig()).global.agentMessaging?.wakePeers).toBe(false);
+      expect(
+        await storage.sendAgentMail(tab("e1"), {
+          requestId: "default-peer",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "hello",
+        }),
+      ).toMatchObject({ placement: "stored", placementReason: "inject-policy-off" });
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  for (const side of [false, true])
+    test(`alternating main/${side ? "side" : "worker"} mail consumes one shared budget`, async () => {
+      const { storage, dataDir } = await coordinatorFixture();
+      try {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, autonomousWakeBudget: 4 },
+        });
+        if (!side) await storage.openCoordinatorDelegation("launch-e1", "agent");
+        const main = coordinatorSender("conversation-1");
+        const other = side ? coordinatorSender("conversation-2") : tab("e1");
+        for (let index = 0; index < 6; index += 1) {
+          const sender = index % 2 === 0 ? main : other;
+          const recipient = index % 2 === 0 ? other : main;
+          const message = await storage.sendAgentMail(sender, {
+            requestId: `alternate-${index}`,
+            toEnvironmentId: recipient.environmentId,
+            toTabId: recipient.tabId,
+            body: `exchange ${index}`,
+          });
+          expect(message.threadDepth).toBe(index);
+          if (index >= 4)
+            expect(message).toMatchObject({
+              placement: "inject-held",
+              placementReason: "loop-budget-exhausted",
+            });
+          else
+            expect(message.placement).toBe(
+              !side && index % 2 === 1 ? "inject-held" : "pending-inject",
+            );
+        }
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+
+  test("omitted-tab resolution refreshes layout and idempotent replay survives replacement", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const layout = (ids: string[]) => ({
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane",
+        root: {
+          kind: "leaf" as const,
+          id: "pane",
+          tabs: ids.map((id) => ({
+            id,
+            type: "agent-native" as const,
+            nativeAgentData: { environmentId: "e2", platform: "claude" as const },
+          })),
+          activeTabId: ids[0]!,
+        },
+      });
+      await storage.savePaneLayout("e2", layout([]), 1);
+      await storage.synchronizeAgentMailboxes();
+      await storage.savePaneLayout("e2", layout(["new-agent"]), 2);
+      expect(await storage.resolveAgentMailRecipientTab(tab("e1"), "e2")).toBe("new-agent");
+      const input = {
+        requestId: "omitted-tab",
+        toEnvironmentId: "e2",
+        toTabId: "",
+        body: "same intent",
+      };
+      const original = await storage.sendAgentMail(tab("e1"), input);
+      await storage.savePaneLayout("e2", layout(["new-agent", "second-agent"]), 3);
+      await expect(storage.resolveAgentMailRecipientTab(tab("e1"), "e2")).rejects.toMatchObject({
+        code: "recipient-not-found",
+      });
+      await storage.savePaneLayout("e2", layout(["replacement-a", "replacement-b"]), 4);
+      await expect(storage.resolveAgentMailRecipientTab(tab("e1"), "e2")).rejects.toMatchObject({
+        code: "recipient-not-found",
+      });
+      expect((await storage.sendAgentMail(tab("e1"), input)).id).toBe(original.id);
+      await expect(
+        storage.sendAgentMail(tab("e1"), { ...input, body: "different" }),
+      ).rejects.toMatchObject({ code: "idempotency-conflict" });
+      await expect(
+        storage.sendAgentMail(tab("e1"), { ...input, requestId: "fresh" }),
+      ).rejects.toMatchObject({ code: "recipient-not-found" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("aged hourly backlog admits only one window of mail at a time", async () => {
+    const { storage, dataDir } = await peerFixture();
+    try {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 2 },
+      });
+      for (let i = 0; i < 6; i += 1)
+        await storage.sendAgentMail(tab("e1"), {
+          requestId: `aged-${i}`,
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: `backlog ${i}`,
+        });
+      const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
+      const old = new Date(Date.now() - 2 * 3_600_000).toISOString();
+      for (const message of persisted.mailboxes["e2\0agent"]!.messages)
+        message.createdAt = message.wakeAdmittedAt = old;
+      seedStore(dataDir, "agent-mail.json", persisted);
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      await restarted.releaseHourlyHeldAgentMail();
+      const messages = (await restarted.getAgentMailMailbox("e2", "agent")).messages;
+      expect(messages.filter((message) => message.placementReason === "hourly-limit")).toHaveLength(
+        2,
+      );
+      expect(
+        messages.filter(
+          (message) =>
+            message.wakeAdmittedAt && Date.parse(message.wakeAdmittedAt) > Date.parse(old),
+        ),
+      ).toHaveLength(2);
+      expect(await restarted.releaseHourlyHeldAgentMail()).toBe(0);
+      expect(
+        await restarted.sendAgentMail(tab("e1"), {
+          requestId: "after-release",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "must wait",
+        }),
+      ).toMatchObject({ placementReason: "hourly-limit" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("stopped-worker hook starts only local family workers once and preserves later stops", async () => {
+    const { storage, dataDir } = await coordinatorFixture();
+    try {
+      const starts: string[] = [];
+      const hook = stoppedWorkerMailHook(storage, async (id) => {
+        starts.push(id);
+      });
+      const send = (id: string, requestId: string) =>
+        storage.sendAgentMail(coordinatorSender("conversation-1"), {
+          requestId,
+          toEnvironmentId: id,
+          toTabId: "agent",
+          body: "request",
+        });
+      await storage.updateEnvironment("e1", { status: "stopped" });
+      await storage.updateEnvironment("e2", { status: "stopped" });
+      const unrelated = await send("e2", "non-worker");
+      await hook("e2", unrelated);
+      const first = await send("e1", "start-worker");
+      const sibling = await send("e1", "start-worker-sibling");
+      const now = Date.now();
+      const clock = spyOn(Date, "now");
+      try {
+        for (let i = 0; i < 3; i += 1) {
+          clock.mockReturnValue(now + i * 6 * 60_000);
+          await drainWithStoppedHook(storage, hook);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+      await hook("e1", sibling);
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      await stoppedWorkerMailHook(restarted, async (id) => {
+        starts.push(id);
+      })("e1", first);
+      expect(starts).toEqual(["e1"]);
+      // A queued request must not reverse a later deliberate stop.
+      await storage.updateEnvironment("e1", { status: "running" });
+      const beforeStop = await send("e1", "before-stop");
+      await storage.updateEnvironment("e1", { status: "stopped" });
+      await hook("e1", beforeStop);
+      expect(starts).toEqual(["e1"]);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("two stopped-container requests share one stable notice without idempotency conflicts", async () => {
+    const { storage, dataDir } = await coordinatorFixture();
+    try {
+      await storage.updateEnvironment("e1", {
+        status: "stopped",
+        environmentType: "containerized",
+      });
+      let starts = 0;
+      const hook = stoppedWorkerMailHook(storage, async () => {
+        starts += 1;
+      });
+      for (let i = 0; i < 2; i += 1) {
+        const message = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+          requestId: `container-${i}`,
+          toEnvironmentId: "e1",
+          toTabId: "agent",
+          body: `request ${i}`,
+        });
+        expect(message.route).toBe("coordinator");
+      }
+      await drainWithStoppedHook(storage, hook);
+      await drainWithStoppedHook(storage, hook);
+      expect(starts).toBe(0);
+      const notices = (
+        await storage.getAgentMailMailbox(
+          coordinatorRuntimeId("coordinator-1", "conversation-1"),
+          "tab-conversation-1",
+        )
+      ).messages.filter((message) => message.requestId.startsWith("worker-stopped:"));
+      expect(notices).toHaveLength(1);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

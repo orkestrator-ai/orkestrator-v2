@@ -1,6 +1,6 @@
 /**
- * Multi-actor mail scenarios, on default settings (automatic delivery off,
- * Wake peers on). Each asserts what reached which agent and that no message
+ * Multi-actor mail scenarios, with peer wake explicitly enabled where needed.
+ * Each asserts what reached which agent and that no message
  * needed a person to deliver it.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -72,6 +72,11 @@ describe("agent mail between many actors", () => {
   });
 
   test("peers hold a ten-message conversation unattended", async () => {
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, wakePeers: true },
+    });
     const left = await world.addEnvironment("left");
     const right = await world.addEnvironment("right");
     for (let turn = 0; turn < 10; turn += 1) {
@@ -161,6 +166,11 @@ describe("agent mail between many actors", () => {
   });
 
   test("a refused delivery is retried without anyone pressing Retry", async () => {
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, wakePeers: true },
+    });
     const left = await world.addEnvironment("left");
     const right = await world.addEnvironment("right");
     world.refuseNext.add(`${right.environmentId}\0${right.logicalSessionKey}`);
@@ -224,6 +234,11 @@ describe("agent mail between many actors", () => {
   });
 
   test("peer mail never starts a stopped environment", async () => {
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, wakePeers: true },
+    });
     const left = await world.addEnvironment("left");
     const right = await world.addEnvironment("right");
     await world.setEnvironmentStatus(right, "stopped");

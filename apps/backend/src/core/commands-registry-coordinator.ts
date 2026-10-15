@@ -360,66 +360,77 @@ export function registerCoordinatorCommands(
       if (!destination || destination.projectId !== project) {
         throw new Error("Coordinator messages must stay within their project");
       }
-      const destinationTabId =
-        typeof toTabId === "string" && toTabId.trim()
-          ? toTabId.trim()
-          : await context.storage.resolveAgentMailRecipientTab(sender, destination.id);
-      // A follow-up to a worker that is still on an earlier request joins
-      // that delegation rather than opening a second one. The open delegation
-      // does not close while this message is undelivered, so the worker reads
-      // it in its next turn and the coordinator is woken once, after both.
-      const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
-        (association) =>
-          association.coordinatorId === coordinator &&
-          association.kind === "environment" &&
-          association.resourceId === destination.id &&
-          association.delegation?.workerTabId === destinationTabId &&
-          association.requestId !== `delegation:${stableRequestId}`,
-      );
-      const message = await context.storage.sendAgentMail(sender, {
-        requestId: stableRequestId,
-        toEnvironmentId: destination.id,
-        toTabId: destinationTabId,
-        body: asNonBlankString(body, "body"),
-        ...(typeof subject === "string" ? { subject } : {}),
-        ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
-      });
-      // Asking a worker something is a delegation, so the coordinator is woken
-      // once when that worker's turn ends rather than on whatever it says
-      // along the way. A message the recipient bounced or that was never
-      // scheduled for delivery has asked nothing and opens nothing.
-      let coordinatorDelegationOpened = false;
-      if (message.placement === "pending-inject" && joining) {
-        coordinatorDelegationOpened = true;
-      } else if (message.placement === "pending-inject") {
-        try {
-          coordinatorDelegationOpened = await openWorkerDelegation(
-            context,
-            { projectId: project, coordinatorId: coordinator, conversationId: conversation },
-            destination.id,
-            destinationTabId,
-            stableRequestId,
-          );
-        } catch (error) {
-          console.warn(
-            "[coordinator] Failed to open a delegation for an outbound message:",
-            error instanceof Error ? error.message : error,
-          );
+      const requestedTabId = typeof toTabId === "string" ? toTabId.trim() : "";
+      return context.storage.withAgentMailWorkerAdmission(destination.id, async () => {
+        // A follow-up to a worker that is still on an earlier request joins
+        // that delegation rather than opening a second one. The open delegation
+        // does not close while this message is undelivered, so the worker reads
+        // it in its next turn and the coordinator is woken once, after both.
+        const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
+          (association) =>
+            association.coordinatorId === coordinator &&
+            association.kind === "environment" &&
+            association.resourceId === destination.id &&
+            (!requestedTabId || association.delegation?.workerTabId === requestedTabId) &&
+            association.requestId !== `delegation:${stableRequestId}`,
+        );
+        const message = await context.storage.sendAgentMail(
+          sender,
+          {
+            requestId: stableRequestId,
+            toEnvironmentId: destination.id,
+            toTabId: requestedTabId,
+            body: asNonBlankString(body, "body"),
+            ...(typeof subject === "string" ? { subject } : {}),
+            ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
+          },
+          { newDelegation: !joining },
+        );
+        const destinationTabId = message.toTabId;
+        // Asking a worker something is a delegation, so the coordinator is woken
+        // once when that worker's turn ends rather than on whatever it says
+        // along the way. A message the recipient bounced or that was never
+        // scheduled for delivery has asked nothing and opens nothing.
+        let coordinatorDelegationOpened = false;
+        if (message.placement === "pending-inject" && joining) {
+          coordinatorDelegationOpened = true;
+        } else if (message.placement === "pending-inject") {
+          try {
+            coordinatorDelegationOpened = await openWorkerDelegation(
+              context,
+              { projectId: project, coordinatorId: coordinator, conversationId: conversation },
+              destination.id,
+              destinationTabId,
+              stableRequestId,
+            );
+          } catch (error) {
+            console.warn(
+              "[coordinator] Failed to open a delegation for an outbound message:",
+              error instanceof Error ? error.message : error,
+            );
+          }
         }
-      }
-      // Say plainly when the worker cannot read it yet: "pending" alone reads
-      // as delivered to a coordinator deciding whether to wait.
-      const deliveryNote =
-        destination.status !== "stopped"
-          ? undefined
-          : destination.environmentType === "local"
-            ? "The worker's environment is stopped. Orkestrator is starting it; the message is delivered once it is running."
-            : "The worker's container is stopped and is not started automatically. Call start_environment to deliver this message, or ask the user.";
-      return {
-        ...message,
-        coordinatorDelegationOpened,
-        ...(deliveryNote ? { deliveryNote } : {}),
-      };
+        // Say plainly when the worker cannot read it yet: "pending" alone reads
+        // as delivered to a coordinator deciding whether to wait.
+        const recipientMailbox =
+          destination.status === "stopped"
+            ? await context.storage.getAgentMailMailbox(destination.id, destinationTabId)
+            : null;
+        const autoStarts =
+          destination.environmentType === "local" &&
+          recipientMailbox?.descriptor.coordinatorOrigin === sender.environmentId;
+        const deliveryNote =
+          destination.status !== "stopped"
+            ? undefined
+            : autoStarts
+              ? "The worker's environment is stopped. Orkestrator will attempt to start it once; the message is delivered once it is running."
+              : "The recipient environment is stopped and is not started automatically. Call start_environment to deliver this message, or ask the user.";
+        return {
+          ...message,
+          coordinatorDelegationOpened,
+          ...(deliveryNote ? { deliveryNote } : {}),
+        };
+      });
     },
   );
   register(

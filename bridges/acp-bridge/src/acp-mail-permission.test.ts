@@ -18,7 +18,7 @@ describe("Orkestrator mail permission requests", () => {
     }
     expect(
       orkestratorMailPermissionOption({
-        toolCall: { toolCallId: "2", title: "orkestrator__ack_message" },
+        toolCall: { toolCallId: "2", name: "orkestrator__ack_message" },
         options,
       }),
     ).toBe("allow");
@@ -52,6 +52,25 @@ describe("Orkestrator mail permission requests", () => {
         }),
       ).toBeUndefined();
     }
+  });
+
+  test("display titles, conflicting vendor identities, execute kinds and deny never grant mail permission", () => {
+    for (const toolCall of [
+      { title: "orkestrator__send_message" },
+      { name: "shell", title: "orkestrator__send_message" },
+      { name: "orkestrator__send_message", _meta: { "x.ai/tool": { name: "shell" } } },
+      { name: "orkestrator__send_message", kind: "execute" },
+      { title: "orkestrator__send_message", kind: "edit" },
+    ]) {
+      for (const policy of ["ask", "deny"])
+        expect(orkestratorMailPermissionOption({ toolCall, options }, policy)).toBeUndefined();
+    }
+    expect(
+      orkestratorMailPermissionOption(
+        { toolCall: { name: "orkestrator__send_message" }, options },
+        "deny",
+      ),
+    ).toBeUndefined();
   });
 
   test("no allow option means no answer", () => {

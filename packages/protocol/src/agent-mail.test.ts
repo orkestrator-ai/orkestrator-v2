@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
   agentMailRouteWakes,
+  normalizeAgentMessagingSettings,
   classifyAgentMailRoute,
   agentMailCapabilities,
   agentMailboxId,
@@ -12,6 +13,12 @@ import {
 } from "./agent-mail.js";
 
 describe("agent mail protocol", () => {
+  test("missing peer-wake consent stays off when normalizing existing settings", () => {
+    const settings = normalizeAgentMessagingSettings({ enabled: true, defaultInjectPolicy: "off" });
+    expect(settings.wakePeers).toBe(false);
+    expect(agentMailRouteWakes("peer", "inherit", settings)).toBe(false);
+    expect(normalizeAgentMessagingSettings({ wakePeers: true }).wakePeers).toBe(true);
+  });
   test("round trips opaque mailbox ids", () => {
     const id = agentMailboxId("env:one", "tab:two");
     expect(splitAgentMailboxId(id)).toEqual({ environmentId: "env:one", tabId: "tab:two" });

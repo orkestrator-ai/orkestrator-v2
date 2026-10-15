@@ -1,3 +1,5 @@
+import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext } from "./commands-context.js";
 /**
  * A small, real mail world for multi-actor tests.
  *
@@ -287,26 +289,20 @@ export class MailWorld {
    * joins (as `send_coordinator_agent_mail` does).
    */
   async delegate(from: MailActor, worker: MailActor, body: string): Promise<AgentMailMessage> {
-    const message = await this.send(from, worker, body);
-    const joining = (await this.storage.listOpenCoordinatorDelegations()).some(
-      (association) =>
-        association.resourceId === worker.environmentId &&
-        association.delegation?.workerTabId === message.toTabId,
-    );
-    if (message.placement === "pending-inject" && !joining) {
-      const association = await this.storage.saveCoordinatorWorkflowAssociation({
-        id: `delegation-${message.id}`,
+    this.requestCounter += 1;
+    const send = createCommandRegistry().get("send_coordinator_agent_mail")!;
+    return (await send(
+      {
         projectId: this.projectId,
         coordinatorId: this.coordinatorId,
         conversationId: from.conversationId!,
-        kind: "environment",
-        resourceId: worker.environmentId,
-        requestId: `delegation:${message.requestId}`,
-        createdAt: new Date().toISOString(),
-      });
-      await this.storage.openCoordinatorDelegation(association.id, message.toTabId);
-    }
-    return message;
+        requestId: `world-${this.requestCounter}`,
+        toEnvironmentId: worker.environmentId,
+        toTabId: worker.tabId,
+        body,
+      },
+      { storage: this.storage, coordinators: this.coordinator } as CommandContext,
+    )) as AgentMailMessage;
   }
 
   /** Run the injection drain until nothing more can be delivered. */

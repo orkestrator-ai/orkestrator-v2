@@ -314,6 +314,23 @@ describe("Orkestrator control MCP server", () => {
       projects: [{ id: "project-1" }],
     });
 
+    const registrySnapshot = {
+      revision: 7,
+      entries: [{ environmentId: "env-project-1", tabId: "agent", state: "working" }],
+      environments: [{ environmentId: "env-project-1", tabs: 1, working: 1 }],
+    };
+    overrides.set("get_agent_registry", () => registrySnapshot);
+    const agents = await rpc(credential.url, credential.token, "tools/call", {
+      name: "list_agents",
+      arguments: { environmentId: "env-project-1" },
+    });
+    expect(agents.body.result?.structuredContent).toEqual(registrySnapshot);
+    expect(invocations.filter((entry) => entry.command === "get_agent_registry")).toEqual([
+      {
+        command: "get_agent_registry",
+        args: { projectId: "project-1", environmentId: "env-project-1" },
+      },
+    ]);
     overrides.set("get_environment_snapshots", ({ projectId }) => [
       {
         id: `env-${projectId}`,

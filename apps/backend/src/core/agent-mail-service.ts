@@ -348,7 +348,12 @@ export class AgentMailService {
       verified.set(requestId, status);
     }
     const claimed = await this.applyInjectorMutation(() =>
-      this.storage.beginAgentMailInject(mailbox.mailboxId, message.id, mailbox.incarnationId),
+      this.storage.beginAgentMailInject(
+        mailbox.mailboxId,
+        message.id,
+        mailbox.incarnationId,
+        requestId,
+      ),
     );
     if (!claimed) return;
     const result =
@@ -420,7 +425,13 @@ export class AgentMailService {
     });
     // One journal read per ambiguous dispatch per pass, shared by its batch.
     const verified = new Map<string, "dispatched" | "not-dispatched" | "unknown">();
-    for (const { mailbox, message, deferredUntil, verifyRequestId, retryAttempts } of pending) {
+    for (const {
+      mailbox,
+      message,
+      deferredUntil,
+      verifyRequestId,
+      verificationAttempts,
+    } of pending) {
       if (!mayInjectMessage(mailbox, message, settings)) {
         this.noteSkip(message, mailbox, "not-eligible");
         continue;
@@ -473,7 +484,7 @@ export class AgentMailService {
           message,
           logicalSessionKey,
           verifyRequestId,
-          retryAttempts ?? 0,
+          verificationAttempts ?? 0,
           verified,
         );
         continue;
@@ -548,7 +559,8 @@ export class AgentMailService {
       for (const sibling of pending) {
         if (batched.length >= MAX_MAIL_INJECT_BATCH) break;
         if (sibling.mailbox.mailboxId !== mailbox.mailboxId) continue;
-        if (sibling.message.id === message.id || sibling.deferredUntil) continue;
+        if (sibling.message.id === message.id || sibling.deferredUntil || sibling.verifyRequestId)
+          continue;
         // Eligibility is per message, not merely per mailbox. A coordinator
         // exchange may bypass an inherited-off policy while a plain sibling in
         // the same pending snapshot must remain queued.

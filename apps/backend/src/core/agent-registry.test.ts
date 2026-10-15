@@ -1,3 +1,5 @@
+import { registerAgentMailCommands } from "./commands-registry-mail.js";
+import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -105,6 +107,21 @@ describe("AgentRegistry", () => {
               : "unknown",
         tmux: () => "waiting",
       });
+      const commands = new Map<string, CommandHandler>();
+      registerAgentMailCommands((name, handler) => {
+        commands.set(name, handler);
+      });
+      const context = { agentRegistry: registry } as CommandContext;
+      const command = commands.get("get_agent_registry")!;
+      const viaCommand = await command({ projectId: "p1", environmentId: "stopped-env" }, context);
+      expect(viaCommand).toEqual(
+        await registry.snapshot({ projectId: "p1", environmentId: "stopped-env" }),
+      );
+      const unfiltered = await command({ projectId: 1, environmentId: null }, context);
+      expect(unfiltered).toEqual(await registry.snapshot({}));
+      await expect(command({}, {} as CommandContext)).rejects.toThrow(
+        "Agent registry is unavailable",
+      );
       const snapshot = await registry.snapshot({ projectId: "p1" });
       const states = Object.fromEntries(
         snapshot.entries.map((entry) => [`${entry.environmentId}/${entry.tabId}`, entry.state]),

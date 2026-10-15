@@ -1,8 +1,11 @@
 import {
   AgentMailError,
   AGENT_MAIL_MAX_BODY_BYTES,
+  AGENT_MAIL_HOURLY_LIMIT_REASON,
+  AGENT_MAIL_LOOP_BUDGET_REASON,
   type AgentMailIdentity,
 } from "@orkestrator/protocol/agent-mail";
+import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { StorageService } from "./storage.js";
@@ -84,13 +87,22 @@ async function assertCallerMailbox(
   };
 }
 
-function deliveryHint(
+export function deliveryHint(
   placement: string,
   placementReason: string | undefined,
   injectPolicy: string,
 ): string {
   if (placement === "bounced" || placement === "undeliverable")
     return `bounced: ${placementReason ?? placement}`;
+  if (placement === "inject-held") {
+    if (placementReason === COORDINATOR_DELEGATION_HOLD_REASON)
+      return "queued, delivers when the worker turn ends";
+    if (placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON)
+      return "held by hourly limit, resumes automatically";
+    if (placementReason === AGENT_MAIL_LOOP_BUDGET_REASON)
+      return "held by unattended message budget, awaiting resume or a new delegation";
+    return "held, delivery pending";
+  }
   if (placement === "pending-inject") return "queued, delivers when idle";
   if (placement === "injected") return "delivered to recipient";
   return injectPolicy === "idle" ? "stored, delivery pending" : "stored, recipient pulls";

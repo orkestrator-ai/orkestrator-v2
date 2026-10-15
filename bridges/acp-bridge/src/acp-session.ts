@@ -21,7 +21,6 @@ import {
   MAX_APPROVALS_PER_SESSION,
   MAX_MESSAGES,
   MAX_MESSAGE_TEXT_BYTES,
-  MAX_MODEL_ID_BYTES,
   MAX_PARTS_PER_MESSAGE,
   MAX_SESSIONS,
   MAX_SESSION_LIST_PAGES,
@@ -55,8 +54,6 @@ import {
   supportsSessionCapability,
   workingDirectory,
   type AcpSpawnOptions,
-  type BridgeMessage,
-  type BridgeMessagePart,
   type BridgeTextPart,
   type JsonObject,
   type SessionState,
@@ -512,14 +509,19 @@ const ORKESTRATOR_MAIL_TOOL_IDS = new Set(
  *
  * Only a server-qualified name counts: a bare `send_message` could belong to
  * any server. Grok names tools in `_meta["x.ai/tool"].name`; other agents in
- * the tool call's own name or title.
+ * the tool call's own name. Display titles never identify tools.
  */
-export function orkestratorMailPermissionOption(params: JsonObject): string | undefined {
+export function orkestratorMailPermissionOption(
+  params: JsonObject,
+  approvals?: string,
+): string | undefined {
+  if (approvals === "deny") return undefined;
   const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
   if (!toolCall) return undefined;
   const meta = isObject(toolCall._meta) ? toolCall._meta : undefined;
   const xaiTool = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
-  const names = [xaiTool?.name, toolCall.name, toolCall.title].filter(
+  if (toolCall.kind === "execute" || toolCall.kind === "edit") return undefined;
+  const names = [xaiTool ? xaiTool.name : toolCall.name].filter(
     (value): value is string => typeof value === "string",
   );
   // Grok 1.0.46 names MCP tools `server__tool`, and its tool metadata also
@@ -563,9 +565,10 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
       return;
     }
-    // A worker can always report back: its Orkestrator mail tools are allowed
-    // whatever the ask/deny policy, without a card for a person to answer.
-    const mailAllow = orkestratorMailPermissionOption(params);
+    const mailAllow = orkestratorMailPermissionOption(
+      params,
+      effectiveTurnExecutionPolicy(state)?.approvals,
+    );
     if (mailAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: mailAllow } });
       return;

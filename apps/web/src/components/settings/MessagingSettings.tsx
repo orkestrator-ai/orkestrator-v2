@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, PauseCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,9 @@ export function MessagingSettings() {
 
   // Latest values for the unmount flush, which must not re-run on every edit.
   const latestRef = useRef({ loading, saving, changed, signature, settings });
-  latestRef.current = { loading, saving, changed, signature, settings };
+  useLayoutEffect(() => {
+    latestRef.current = { loading, saving, changed, signature, settings };
+  }, [loading, saving, changed, signature, settings]);
 
   // Auto-save on every change once the initial load has settled. A rejected
   // edit is not retried until it changes again, so a backend that keeps
@@ -103,7 +105,8 @@ export function MessagingSettings() {
         <h2 className="mt-2 text-xl font-semibold">Messaging</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           Messages are stored by Orkestrator before delivery. Automatic delivery places untrusted
-          text into an idle agent’s context and remains off until the recipient opts in.
+          text into an idle agent’s context. Coordinator mail wakes recipients automatically. Peer
+          wake is opt-in; other mail follows the recipient’s delivery policy.
         </p>
       </div>
       <div className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/40">

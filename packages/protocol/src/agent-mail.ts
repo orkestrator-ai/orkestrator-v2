@@ -134,7 +134,7 @@ export const DEFAULT_AGENT_MESSAGING_SETTINGS: Readonly<AgentMessagingSettings> 
   enabled: true,
   allowCrossProject: false,
   defaultInjectPolicy: "off",
-  wakePeers: true,
+  wakePeers: false,
   autonomousWakeBudget: AGENT_MAIL_DEFAULT_AUTONOMOUS_WAKE_BUDGET,
   hourlyWakeLimit: AGENT_MAIL_DEFAULT_HOURLY_WAKE_LIMIT,
   retentionDays: AGENT_MAIL_DEFAULT_RETENTION_DAYS,
@@ -251,6 +251,15 @@ export interface AgentMailMessage {
   threadDepth: number;
   /** Monotonic store sequence for coordinator/worker loop-budget lineage. */
   autonomousSequence?: number;
+  /** Pair budget generation established by a new delegation. */
+  autonomousBudgetEpoch?: number;
+  /** Time admitted for automatic delivery, distinct from message chronology. */
+  wakeAdmittedAt?: string;
+  /** Durable one-shot claim for starting a stopped family worker. */
+  workerStartAttemptedAt?: string;
+  /** Recipient was stopped when this request was admitted. */
+  recipientStoppedAtSend?: boolean;
+  recipientStopGeneration?: number;
   /** Sender/recipient relationship fixed at send time; absent on older mail. */
   route?: AgentMailRoute;
   /** A person asked for this one message to be delivered despite the policy. */

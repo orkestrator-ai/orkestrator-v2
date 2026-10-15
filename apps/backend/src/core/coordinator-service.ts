@@ -178,39 +178,46 @@ export class CoordinatorService {
       return { workspace, main, created: true };
     });
     await this.adoptLiveWork(result.workspace, result.main);
-    if (result.created) {
-      await this.storage.synchronizeAgentMailboxes();
-      // What was waiting in the closed main's inbox — a held report above
-      // all — belongs to the new one.
-      const owed = new Set(
-        [
-          ...(await this.storage.listOpenCoordinatorDelegations()),
-          ...(await this.storage.listUnwokenCoordinatorDelegations()),
-        ].map((association) => association.id),
-      );
-      await this.storage
-        .moveClosedCoordinatorMail(
-          result.workspace.id,
-          {
-            environmentId: coordinatorRuntimeId(result.workspace.id, result.main.id),
-            tabId: result.main.tabId,
-          },
-          owed,
-        )
-        .catch((error) => {
-          console.warn(
-            "[coordinator] Could not move mail to the new main coordinator:",
-            error instanceof Error ? error.message : error,
-          );
-        });
-    }
+    await this.reconcileMainMail(result.workspace, result.main);
     return { workspace: result.workspace, main: result.main };
+  }
+
+  private async reconcileMainMail(
+    workspace: CoordinatorWorkspace,
+    main: CoordinatorConversation,
+  ): Promise<void> {
+    await this.adoptLiveWork(workspace, main, true);
+    await this.storage.synchronizeAgentMailboxes();
+    // What was waiting in the closed main's inbox — a held report above
+    // all — belongs to the new one.
+    const owed = new Set(
+      [
+        ...(await this.storage.listOpenCoordinatorDelegations()),
+        ...(await this.storage.listUnwokenCoordinatorDelegations()),
+      ].map((association) => association.id),
+    );
+    await this.storage
+      .moveClosedCoordinatorMail(
+        workspace.id,
+        {
+          environmentId: coordinatorRuntimeId(workspace.id, main.id),
+          tabId: main.tabId,
+        },
+        owed,
+      )
+      .catch((error) => {
+        console.warn(
+          "[coordinator] Could not move mail to the new main coordinator:",
+          error instanceof Error ? error.message : error,
+        );
+      });
   }
 
   /** Move delegations and workflows other conversations still owe onto the main. */
   private async adoptLiveWork(
     workspace: CoordinatorWorkspace,
     main: CoordinatorConversation,
+    closedOnly = false,
   ): Promise<void> {
     for (const association of await this.storage.listCoordinatorWorkflowAssociations(
       workspace.projectId,
@@ -218,7 +225,11 @@ export class CoordinatorService {
       if (
         association.coordinatorId !== workspace.id ||
         association.conversationId === main.id ||
-        !liveWork(association)
+        !liveWork(association) ||
+        (closedOnly &&
+          workspace.conversations.some(
+            (item) => item.id === association.conversationId && !item.closedAt,
+          ))
       ) {
         continue;
       }
@@ -368,6 +379,8 @@ export class CoordinatorService {
     workspace: CoordinatorWorkspace,
     projectPath: string,
   ): Promise<CoordinatorSnapshot> {
+    const main = coordinatorMainConversation(workspace);
+    if (main) await this.reconcileMainMail(workspace, main);
     const availability = coordinatorProviderQualifications(await this.qualificationOptions());
     const mcp = this.controlMcp();
     return {
@@ -667,37 +680,39 @@ export class CoordinatorService {
     tabId?: string;
     state: "completed" | "failed" | "stopped";
   }): Promise<void> {
-    const open = await this.storage.listOpenCoordinatorDelegations();
-    for (const association of open) {
-      if (association.resourceId !== worker.environmentId) continue;
-      const delegation = association.delegation;
-      if (!delegation) continue;
-      if (worker.tabId && delegation.workerTabId !== worker.tabId) continue;
-      /*
-       * The turn that just ended cannot be the answer to a request the worker
-       * has not received yet. That happens when the coordinator messages a
-       * worker already mid-turn: the delegation opens, the in-flight turn ends
-       * moments later, and closing here would report "finished" for work that
-       * has not started. The request stays open; the turn that actually reads
-       * it is the one that settles it.
-       *
-       * Only for `completed` — a stopped or failed worker is never going to
-       * read it, and leaving the coordinator waiting on that would be worse.
-       */
-      if (
-        worker.state === "completed" &&
-        (await this.storage.hasUndeliveredCoordinatorRequest(
-          association.resourceId,
-          delegation.workerTabId,
-        ))
-      ) {
-        continue;
+    await this.storage.withAgentMailWorkerAdmission(worker.environmentId, async () => {
+      const open = await this.storage.listOpenCoordinatorDelegations();
+      for (const association of open) {
+        if (association.resourceId !== worker.environmentId) continue;
+        const delegation = association.delegation;
+        if (!delegation) continue;
+        if (worker.tabId && delegation.workerTabId !== worker.tabId) continue;
+        /*
+         * The turn that just ended cannot be the answer to a request the worker
+         * has not received yet. That happens when the coordinator messages a
+         * worker already mid-turn: the delegation opens, the in-flight turn ends
+         * moments later, and closing here would report "finished" for work that
+         * has not started. The request stays open; the turn that actually reads
+         * it is the one that settles it.
+         *
+         * A stopped worker with pending mail may still start and read it. A
+         * failed worker releases the coordinator through the failure path.
+         */
+        if (
+          worker.state !== "failed" &&
+          (await this.storage.hasUndeliveredCoordinatorRequest(
+            association.resourceId,
+            delegation.workerTabId,
+          ))
+        ) {
+          continue;
+        }
+        // A close that returns null lost the race to another observer of the same
+        // edge. Either way the delegation is now closed, and the wake below is
+        // idempotent, so there is nothing to do differently.
+        await this.storage.closeCoordinatorDelegation(association.id, worker.state);
       }
-      // A close that returns null lost the race to another observer of the same
-      // edge. Either way the delegation is now closed, and the wake below is
-      // idempotent, so there is nothing to do differently.
-      await this.storage.closeCoordinatorDelegation(association.id, worker.state);
-    }
+    });
     await this.deliverDelegationWakes();
   }
 
@@ -711,38 +726,57 @@ export class CoordinatorService {
    * from the environment record and a missed hook is a silent hang.
    */
   async reconcileWorkerDelegations(): Promise<void> {
+    for (const workspace of await this.storage.listCoordinatorWorkspaces()) {
+      const main = coordinatorMainConversation(workspace);
+      if (main) await this.reconcileMainMail(workspace, main);
+    }
     for (const association of await this.storage.listOpenCoordinatorDelegations()) {
-      const environment = await this.storage.getEnvironment(association.resourceId);
-      let state: "completed" | "failed" | "stopped" | null =
-        !environment || environment.deletionRequestedAt
-          ? ("stopped" as const)
-          : environment.status === "error"
-            ? ("failed" as const)
-            : environment.status === "stopped"
-              ? ("stopped" as const)
-              : null;
-      if (
-        !state &&
-        this.workerActivity &&
-        Date.now() - Date.parse(association.delegation!.requestedAt) >=
-          DELEGATION_IDLE_RECONCILE_GRACE_MS
-      ) {
-        const undelivered = await this.storage.hasUndeliveredCoordinatorRequest(
-          association.resourceId,
-          association.delegation!.workerTabId,
+      await this.storage.withAgentMailWorkerAdmission(association.resourceId, async () => {
+        const current = (await this.storage.listOpenCoordinatorDelegations()).find(
+          (item) => item.id === association.id,
         );
+        if (!current) return;
+        const environment = await this.storage.getEnvironment(association.resourceId);
         if (
-          !undelivered &&
-          (await this.workerActivity(
+          environment?.status === "stopped" &&
+          !environment.deletionRequestedAt &&
+          (await this.storage.hasUndeliveredCoordinatorRequest(
             association.resourceId,
             association.delegation!.workerTabId,
-          )) === "idle"
+          ))
+        )
+          return;
+        let state: "completed" | "failed" | "stopped" | null =
+          !environment || environment.deletionRequestedAt
+            ? ("stopped" as const)
+            : environment.status === "error"
+              ? ("failed" as const)
+              : environment.status === "stopped"
+                ? ("stopped" as const)
+                : null;
+        if (
+          !state &&
+          this.workerActivity &&
+          Date.now() - Date.parse(association.delegation!.requestedAt) >=
+            DELEGATION_IDLE_RECONCILE_GRACE_MS
         ) {
-          state = "completed";
+          const undelivered = await this.storage.hasUndeliveredCoordinatorRequest(
+            association.resourceId,
+            association.delegation!.workerTabId,
+          );
+          if (
+            !undelivered &&
+            (await this.workerActivity(
+              association.resourceId,
+              association.delegation!.workerTabId,
+            )) === "idle"
+          ) {
+            state = "completed";
+          }
         }
-      }
-      if (!state) continue;
-      await this.storage.closeCoordinatorDelegation(association.id, state);
+        if (!state) return;
+        await this.storage.closeCoordinatorDelegation(association.id, state);
+      });
     }
     await this.deliverDelegationWakes();
     const owed = new Set(

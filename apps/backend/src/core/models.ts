@@ -228,6 +228,8 @@ export interface StartupAgentSessionSnapshot {
 }
 
 export interface Environment {
+  /** Monotonic fence for mail-triggered starts across explicit stop transitions. */
+  stopGeneration?: number;
   id: string;
   projectId: string;
   /** Idempotency key for an externally requested environment launch. */

@@ -502,7 +502,7 @@ describe("CoordinatorPanel", () => {
     const side = screen.getByRole("button", { name: "Side 1, Codex" });
     expect(main.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "New side agent" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Start coordinator" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start coordinator" }) === null).toBe(true);
   });
 
   test("selects a conversation from the full tab shell and shows its agent brand", async () => {

@@ -567,6 +567,46 @@ describe("coordinator command registry", () => {
       placement: "pending-inject",
       coordinatorDelegationOpened: true,
     });
+    // Let the first request reach the worker, then pause the follow-up after
+    // joining has been read. Completion must wait for durable publication.
+    const mailbox = (await storage.getAgentMailMailbox(worker.id, "agent")).descriptor;
+    const initial = (await storage.listPendingAgentMailInjects())[0]!.message;
+    await storage.beginAgentMailInject(mailbox.mailboxId, initial.id, mailbox.incarnationId);
+    await storage.finishAgentMailInject(mailbox.mailboxId, initial.id, { outcome: "accepted" });
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const originalSend = storage.sendAgentMail.bind(storage);
+    storage.sendAgentMail = async (...args) => {
+      entered();
+      await released;
+      return originalSend(...args);
+    };
+    const followUp = send(
+      {
+        ...scope,
+        requestId: "racing-follow-up",
+        toEnvironmentId: worker.id,
+        body: "Finish this too.",
+      },
+      context,
+    );
+    await enteredPromise;
+    const completion = coordinator.settleWorkerDelegations({
+      environmentId: worker.id,
+      tabId: "agent",
+      state: "completed",
+    });
+    release();
+    await followUp;
+    storage.sendAgentMail = originalSend;
+    await completion;
+    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
     // A follow-up while the worker is still on the first request joins that
     // delegation: delivered, and one wake for both — never a second delegation.
     await expect(
@@ -585,6 +625,28 @@ describe("coordinator command registry", () => {
       coordinatorDelegationOpened: true,
     });
     expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    for (const item of await storage.listPendingAgentMailInjects()) {
+      await storage.beginAgentMailInject(
+        item.mailbox.mailboxId,
+        item.message.id,
+        item.mailbox.incarnationId,
+      );
+      await storage.finishAgentMailInject(item.mailbox.mailboxId, item.message.id, {
+        outcome: "accepted",
+      });
+    }
+    await coordinator.settleWorkerDelegations({
+      environmentId: worker.id,
+      tabId: "agent",
+      state: "completed",
+    });
+    await coordinator.settleWorkerDelegations({
+      environmentId: worker.id,
+      tabId: "agent",
+      state: "completed",
+    });
+    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+    expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
   });
 
   test("retires session, credential, bridge, and mailbox before closing a conversation", async () => {
